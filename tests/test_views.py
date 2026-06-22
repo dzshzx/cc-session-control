@@ -84,7 +84,7 @@ def test_sessions_cleanup_mode():
     view._cleanup_stats = {"total": 100, "empty": 10, "short": 5, "orphans": 3}
     view._enter_cleanup()
     assert view._mode == "cleanup"
-    assert len(view.walker) == 3
+    assert len(view._cleanup_walker) == 3
     view._exit_cleanup()
     assert view._mode == "list"
 

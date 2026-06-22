@@ -191,17 +191,10 @@ class SessionsView:
 
     def _rebuild_cleanup(self) -> None:
         s = self._cleanup_stats
-        focus_pos = self.walker.get_focus()[1] if self.walker else 0
-        self.walker.clear()
+        self._cleanup_walker.clear()
         for a in _CLEANUP_ACTIONS:
             count = s.get(a["stat"], 0)
-            self.walker.append(_ActionRow(a["key"], a["label"], count))
-        if focus_pos is not None and focus_pos < len(self.walker):
-            self.walker.set_focus(focus_pos)
-        total = s.get("total", 0)
-        empty = s.get("empty", 0)
-        orphans = s.get("orphans", 0)
-        self.status.original_widget.set_text(f" 总 {total} 会话 · 空壳 {empty} · 孤儿 {orphans}")
+            self._cleanup_walker.append(_ActionRow(a["key"], a["label"], count))
 
     def _selected(self) -> Session | None:
         if not self.walker:
