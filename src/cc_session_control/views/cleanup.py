@@ -12,23 +12,28 @@ if TYPE_CHECKING:
     from ..app import App
 
 
+class _StatRow(urwid.WidgetWrap):
+    def __init__(self, label: str, value: str) -> None:
+        cols = urwid.Columns([
+            ("weight", 1, urwid.Text(f"  {label}")),
+            (8, urwid.Text(value, align="right")),
+        ])
+        super().__init__(cols)
+
+    def selectable(self) -> bool:
+        return False
+
+
 class CleanupView:
     def __init__(self, app: App) -> None:
         self.app = app
         self._stats: dict[str, int] = {}
         self._pending_stats: dict[str, int] | None = None
 
-        self.stats_text = urwid.Text("扫描中…")
-        self.result_text = urwid.Text("")
-        self.widget = urwid.Filler(
-            urwid.Pile([
-                urwid.Text(""),
-                self.stats_text,
-                urwid.Text(""),
-                self.result_text,
-            ]),
-            valign="top",
-        )
+        self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
+        self.walker = urwid.SimpleFocusListWalker([])
+        self.listbox = urwid.ListBox(self.walker)
+        self.widget = urwid.Frame(self.listbox, header=self.status)
 
     def keyhints(self) -> str:
         return "p 清理空壳 · P 清理≤2提问"
@@ -36,7 +41,7 @@ class CleanupView:
     def load(self) -> None:
         sessions = scan()
         self._stats = cleanup_stats(sessions)
-        self._update_display()
+        self._rebuild()
 
     def refresh_data(self) -> None:
         sessions = scan()
@@ -46,26 +51,29 @@ class CleanupView:
         if self._pending_stats is not None:
             self._stats = self._pending_stats
             self._pending_stats = None
-            self._update_display()
+            self._rebuild()
 
-    def _update_display(self) -> None:
+    def _rebuild(self) -> None:
         s = self._stats
-        self.stats_text.set_text(
-            f"  会话统计\n"
-            f"    总会话:        {s.get('total', 0)}\n"
-            f"    空壳(0提问):   {s.get('empty', 0)}\n"
-            f"    短会话(≤2):    {s.get('short', 0)}\n"
-            f"    孤儿目录:      {s.get('orphans', 0)}\n\n"
-            f"  p 清理空壳 · P 清理≤2提问 · r 刷新"
+        self.walker.clear()
+        self.walker.append(urwid.Text(""))
+        self.walker.append(_StatRow("总会话", str(s.get("total", 0))))
+        self.walker.append(_StatRow("空壳(0提问)", str(s.get("empty", 0))))
+        self.walker.append(_StatRow("短会话(≤2)", str(s.get("short", 0))))
+        self.walker.append(_StatRow("孤儿目录", str(s.get("orphans", 0))))
+        self.walker.append(urwid.Text(""))
+        self.walker.append(urwid.Text("  p 清理空壳 · P 清理≤2提问 · r 刷新"))
+        self.status.original_widget.set_text(
+            f" 总 {s.get('total', 0)} · 空壳 {s.get('empty', 0)} · 孤儿 {s.get('orphans', 0)}"
         )
 
     def _do_prune(self, max_prompts: int) -> None:
         sessions = scan()
         targets = prune_sessions(sessions, max_prompts=max_prompts)
         count = len(targets)
-        for s in targets:
-            remove_session(s)
-        self.result_text.set_text(f"  已清理 {count} 条会话")
+        for t in targets:
+            remove_session(t)
+        self.app.notify(f"已清理 {count} 条会话")
         self.load()
 
     def handle_key(self, key: str) -> None:

@@ -12,15 +12,17 @@ from .views.rc import RCView
 from .views.sessions import SessionsView
 
 PALETTE = [
-    ("header", "white,bold", "dark blue"),
-    ("footer", "light gray", "dark blue"),
-    ("tab_on", "white,bold", "dark blue"),
-    ("tab_off", "light gray", "default"),
+    ("header", "white,bold", "default"),
+    ("footer", "dark gray", "default"),
+    ("tab_on", "white,bold,underline", "default"),
+    ("tab_off", "dark gray", "default"),
     ("alive", "light green", "default"),
-    ("dead", "light gray", "default"),
-    ("selected", "white,bold", "dark cyan"),
-    ("notify", "yellow,bold", "default"),
-    ("status", "light cyan", "dark blue"),
+    ("dead", "white", "default"),
+    ("selected", "standout", "default"),
+    ("notify", "yellow", "default"),
+    ("status", "dark gray", "default"),
+    ("rc_running", "light green", "default"),
+    ("rc_stopped", "white", "default"),
 ]
 
 TAB_NAMES = ["会话", "远程控制", "清理"]

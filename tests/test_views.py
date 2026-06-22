@@ -90,11 +90,10 @@ def test_cleanup_view_construct():
     assert view.widget is not None
 
 
-def test_cleanup_update_display():
+def test_cleanup_rebuild():
     app = FakeApp()
     view = CleanupView(app)
     view._stats = {"total": 100, "empty": 10, "short": 5, "orphans": 3}
-    view._update_display()
-    text = view.stats_text.get_text()[0]
-    assert "100" in text
-    assert "10" in text
+    view._rebuild()
+    status_text = view.status.original_widget.get_text()[0]
+    assert "100" in status_text

@@ -29,8 +29,8 @@ class RCRow(urwid.WidgetWrap):
             ("weight", 1, urwid.Text(project.directory, wrap="clip")),
         ], min_width=6)
 
-        attr = "alive" if project.status == "running" else "dead"
-        mapped = urwid.AttrMap(cols, attr, focus_map={"alive": "selected", "dead": "selected", None: "selected"})
+        attr = "rc_running" if project.status == "running" else "rc_stopped"
+        mapped = urwid.AttrMap(cols, attr, focus_map={"rc_running": "selected", "rc_stopped": "selected", None: "selected"})
         super().__init__(mapped)
 
     def selectable(self) -> bool:
