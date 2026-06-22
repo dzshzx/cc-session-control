@@ -115,13 +115,13 @@ class SessionsView:
         self._preview_sessions: list[Session] = []
 
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
-        self._col_header = urwid.WidgetPlaceholder(
-            urwid.AttrMap(_SESSION_HEADER, "col_header")
-        )
+        col_header = urwid.AttrMap(_SESSION_HEADER, "col_header")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
-        body = urwid.AttrMap(self.listbox, {None: "body"})
-        self.widget = urwid.Frame(body, header=self._col_header, footer=self.status)
+        self._list_body = urwid.AttrMap(self.listbox, {None: "body"})
+        self._body = urwid.WidgetPlaceholder(self._list_body)
+        self.widget = urwid.Frame(self._body, header=col_header, footer=self.status)
+        self._cleanup_walker = urwid.SimpleFocusListWalker([])
 
     def keyhints(self) -> str:
         if self._mode == "help":
@@ -240,24 +240,44 @@ class SessionsView:
 
     def _enter_cleanup(self) -> None:
         self._mode = "cleanup"
-        self._col_header.original_widget = urwid.AttrMap(_CLEANUP_HEADER, "col_header")
         self._rebuild_cleanup()
+        cleanup_list = urwid.ListBox(self._cleanup_walker)
+        title = urwid.AttrMap(urwid.Text(" 清理会话", align="center"), "col_header")
+        box_content = urwid.Frame(cleanup_list, header=title)
+        box = urwid.LineBox(box_content)
+        overlay = urwid.Overlay(
+            box, self._list_body,
+            align="center", width=("relative", 50),
+            valign="middle", height=min(len(self._cleanup_walker) + 4, 20),
+        )
+        self._body.original_widget = overlay
         self._update_footer()
 
     def _exit_cleanup(self) -> None:
         self._mode = "list"
-        self._col_header.original_widget = urwid.AttrMap(_SESSION_HEADER, "col_header")
-        self._apply_filter()
-        self._rebuild()
+        self._body.original_widget = self._list_body
         self._update_footer()
 
     def _selected_action(self) -> str | None:
-        if not self.walker:
+        if not self._cleanup_walker:
             return None
-        widget = self.walker.get_focus()[0]
+        widget = self._cleanup_walker.get_focus()[0]
         if isinstance(widget, _ActionRow):
             return widget.action_key
         return None
+
+    def _show_overlay(self, title: str, rows: list, height: int | None = None) -> None:
+        preview_walker = urwid.SimpleFocusListWalker(rows)
+        preview_list = urwid.ListBox(preview_walker)
+        header = urwid.AttrMap(urwid.Text(f" {title}", align="center"), "col_header")
+        box = urwid.LineBox(urwid.Frame(preview_list, header=header))
+        h = height or min(len(rows) + 4, 30)
+        overlay = urwid.Overlay(
+            box, self._list_body,
+            align="center", width=("relative", 70),
+            valign="middle", height=h,
+        )
+        self._body.original_widget = overlay
 
     def _enter_preview(self, action: str) -> None:
         sessions = scan()
@@ -275,10 +295,8 @@ class SessionsView:
             self._mode = "preview"
             self._preview_action = action
             self._preview_sessions = []
-            self.walker.clear()
-            for p in orphan_paths:
-                self.walker.append(_PreviewRow(p))
-            self.status.original_widget.set_text(f" 将清理 {len(orphan_paths)} 个孤儿目录")
+            rows = [_PreviewRow(p) for p in orphan_paths]
+            self._show_overlay(f"将清理 {len(orphan_paths)} 个孤儿目录", rows)
             self._update_footer()
             return
         else:
@@ -291,13 +309,13 @@ class SessionsView:
         self._mode = "preview"
         self._preview_action = action
         self._preview_sessions = targets
-        self.walker.clear()
+        rows = []
         for s in targets:
             when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
             cwd = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
             line = f"{when}  p{s.prompts}  {s.label[:60]}  ({cwd})"
-            self.walker.append(_PreviewRow(line))
-        self.status.original_widget.set_text(f" 将清理 {len(targets)} 条{label}")
+            rows.append(_PreviewRow(line))
+        self._show_overlay(f"将清理 {len(targets)} 条{label}", rows)
         self._update_footer()
 
     def _confirm_cleanup(self) -> None:
@@ -322,9 +340,7 @@ class SessionsView:
     def handle_key(self, key: str) -> None:
         if self._mode == "help":
             self._mode = "list"
-            self._apply_filter()
-            self._rebuild()
-            self._col_header.original_widget = urwid.AttrMap(_SESSION_HEADER, "col_header")
+            self._body.original_widget = self._list_body
             self._update_footer()
             return
 
@@ -415,11 +431,8 @@ class SessionsView:
             "导航:",
             "  Tab    切换标签页",
             "  q      退出",
-            "  ?      显示此帮助",
         ]
-        self.walker.clear()
-        for line in lines:
-            self.walker.append(_PreviewRow(line))
+        rows = [_PreviewRow(line) for line in lines]
         self._mode = "help"
-        self.status.original_widget.set_text(" 按任意键返回")
+        self._show_overlay("快捷键帮助", rows)
         self._update_footer()
