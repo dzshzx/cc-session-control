@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 import urwid
 
 from ..actions.rc_ops import start_all_listed, start_project, stop_all_rc, stop_project, toggle_autostart
-from ..data.rc import scan
 from ..models import RCProject
 
 if TYPE_CHECKING:
@@ -45,6 +44,7 @@ class RCView:
         self.app = app
         self._projects: list[RCProject] = []
         self._pending: list[RCProject] | None = None
+        self._loaded = False
 
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         self.walker = urwid.SimpleFocusListWalker([])
@@ -55,16 +55,19 @@ class RCView:
         return "Enter 启动 · s 停止 · a 切换自启 · A 全部启动 · S 全部停止"
 
     def load(self) -> None:
+        from ..data.rc import scan
         self._projects = scan()
+        self._loaded = True
         self._rebuild()
 
-    def refresh_data(self) -> None:
-        self._pending = scan()
+    def set_pending(self, projects: list[RCProject]) -> None:
+        self._pending = projects
 
     def apply_data(self) -> None:
         if self._pending is not None:
             self._projects = self._pending
             self._pending = None
+            self._loaded = True
             self._rebuild()
 
     def _rebuild(self) -> None:
@@ -95,23 +98,23 @@ class RCView:
                 return
             ok = start_project(p.name)
             self.app.notify(f"已启动 ws/{p.name}" if ok else "启动失败")
-            self.load()
+            self.app.trigger_async_refresh()
         elif key == "s" and p:
             ok = stop_project(p.name)
             self.app.notify(f"已停止 {p.name}" if ok else "未在运行")
-            self.load()
+            self.app.trigger_async_refresh()
         elif key == "a" and p:
             new = toggle_autostart(p.name)
             self.app.notify(f"{p.name} 自启: {'开' if new else '关'}")
-            self.load()
+            self.app.trigger_async_refresh()
         elif key == "A":
             count = start_all_listed()
             self.app.notify(f"已启动 {count} 个项目")
-            self.load()
+            self.app.trigger_async_refresh()
         elif key == "S":
             ok = stop_all_rc()
             self.app.notify("已停止全部" if ok else "本来就没在跑")
-            self.load()
+            self.app.trigger_async_refresh()
         elif key == "r":
-            self.load()
-            self.app.notify("已刷新")
+            self.app.trigger_async_refresh()
+            self.app.notify("刷新中…")

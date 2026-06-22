@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 import urwid
 
 from ..actions.session_ops import resume_cmd, terminate_session, to_clipboard
-from ..data.sessions import remove_session, scan
+from ..data.agents import invalidate_cache
+from ..data.sessions import remove_session
 from ..models import Session
 
 if TYPE_CHECKING:
@@ -49,6 +50,7 @@ class SessionsView:
         self._sessions: list[Session] = []
         self._all_sessions: list[Session] = []
         self._pending: list[Session] | None = None
+        self._loaded = False
         self._filtering = False
         self._filter_text = ""
 
@@ -61,18 +63,21 @@ class SessionsView:
         return "Enter 接回 · f 分叉 · t 终止 · d 删除 · y 复制 · / 过滤"
 
     def load(self) -> None:
+        from ..data.sessions import scan
         sessions = scan()
         self._all_sessions = sessions
         self._sessions = sessions
+        self._loaded = True
         self._rebuild()
 
-    def refresh_data(self) -> None:
-        self._pending = scan()
+    def set_pending(self, sessions: list[Session]) -> None:
+        self._pending = sessions
 
     def apply_data(self) -> None:
         if self._pending is not None:
             self._all_sessions = self._pending
             self._pending = None
+            self._loaded = True
             self._apply_filter()
             self._rebuild()
 
@@ -145,20 +150,21 @@ class SessionsView:
                 return
             ok = terminate_session(s)
             self.app.notify("已终止" if ok else "终止失败")
-            self.load()
+            invalidate_cache()
+            self.app.trigger_async_refresh()
         elif key == "d" and s:
             if s.alive:
                 self.app.notify("活会话不删，先终止")
                 return
             remove_session(s)
             self.app.notify("已删除")
-            self.load()
+            self.app.trigger_async_refresh()
         elif key == "y" and s:
             cmd = resume_cmd(s)
             ok = to_clipboard(cmd)
             self.app.notify("已复制" if ok else f"复制失败: {cmd}")
         elif key == "r":
-            self.load()
-            self.app.notify("已刷新")
+            self.app.trigger_async_refresh()
+            self.app.notify("刷新中…")
         elif key == "/":
             self._enter_filter()

@@ -8,6 +8,8 @@ import threading
 
 import urwid
 
+from .data.rc import scan as rc_scan
+from .data.sessions import cleanup_stats, scan as sessions_scan
 from .views.cleanup import CleanupView
 from .views.rc import RCView
 from .views.sessions import SessionsView
@@ -49,6 +51,7 @@ class App:
         self._exiting = False
         self._alarm_handle: object | None = None
         self._pipe_fd: int | None = None
+        self._refreshing = False
 
         self.views = [SessionsView(self), RCView(self), CleanupView(self)]
         self._active = 0
@@ -92,6 +95,8 @@ class App:
         self._update_tab_bar()
         hints = self.views[self._active].keyhints()
         self.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
+        if not self.views[self._active]._loaded:
+            self.trigger_async_refresh()
 
     def _input(self, key: str) -> None:
         if key == "tab":
@@ -118,13 +123,22 @@ class App:
     def _restore_footer(self) -> None:
         self.frame.footer = self.footer
 
-    def _schedule_refresh(self, loop: object = None, data: object = None) -> None:
-        if self._exiting:
+    def trigger_async_refresh(self) -> None:
+        if self._refreshing or self._exiting:
             return
-        view = self.views[self._active]
+        self._refreshing = True
 
         def worker() -> None:
-            view.refresh_data()
+            try:
+                sessions = sessions_scan()
+                stats = cleanup_stats(sessions)
+                rc_projects = rc_scan()
+                sv, rv, cv = self.views
+                sv.set_pending(sessions)
+                rv.set_pending(rc_projects)
+                cv.set_pending_stats(stats)
+            finally:
+                self._refreshing = False
             if self._pipe_fd is not None:
                 try:
                     os.write(self._pipe_fd, b"1")
@@ -132,16 +146,23 @@ class App:
                     pass
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _schedule_refresh(self, loop: object = None, data: object = None) -> None:
+        if self._exiting:
+            return
+        self.trigger_async_refresh()
         self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)
 
     def _on_pipe(self, data: bytes) -> bool:
         if not self._exiting:
-            self.views[self._active].apply_data()
+            for view in self.views:
+                view.apply_data()
         return True
 
     def run(self) -> tuple | None:
         self._pipe_fd = self.loop.watch_pipe(self._on_pipe)
         self.views[self._active].load()
+        self.trigger_async_refresh()
         self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)
         self.loop.run()
         return self.result
