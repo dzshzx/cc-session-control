@@ -1,5 +1,7 @@
 """View unit tests — construct widgets and verify basic behavior without MainLoop."""
 
+import urwid
+
 from cc_session_control.models import RCProject, Session
 from cc_session_control.views.sessions import SessionRow, SessionsView
 from cc_session_control.views.rc import RCRow, RCView
@@ -11,6 +13,7 @@ class FakeApp:
     def __init__(self):
         self.result = None
         self._notifications = []
+        self.footer_text = urwid.Text("")
 
     def notify(self, msg, seconds=3):
         self._notifications.append(msg)
