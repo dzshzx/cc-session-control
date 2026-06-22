@@ -124,11 +124,13 @@ class SessionsView:
         self.widget = urwid.Frame(body, header=self._col_header, footer=self.status)
 
     def keyhints(self) -> str:
+        if self._mode == "help":
+            return "按任意键返回"
         if self._mode == "cleanup":
-            return "Enter 预览 · Esc 返回 · r 刷新"
+            return "Enter 预览待清理项 · Esc 返回会话列表"
         if self._mode == "preview":
-            return "Enter 确认清理 · Esc 返回"
-        return "Enter 接回 · f 分叉 · t 终止 · d 删除 · y 复制 · c 清理 · / 过滤"
+            return "Enter 确认清理 · Esc 取消"
+        return "Enter 接回 · t 终止 · d 删除 · c 清理 · / 过滤 · ? 帮助"
 
     def _update_footer(self) -> None:
         if self.app.views[self.app._active] is not self:
@@ -318,6 +320,14 @@ class SessionsView:
     # --- Key dispatch ---
 
     def handle_key(self, key: str) -> None:
+        if self._mode == "help":
+            self._mode = "list"
+            self._apply_filter()
+            self._rebuild()
+            self._col_header.original_widget = urwid.AttrMap(_SESSION_HEADER, "col_header")
+            self._update_footer()
+            return
+
         if self._mode == "filter":
             if key == "enter":
                 self._exit_filter()
@@ -385,3 +395,31 @@ class SessionsView:
             self.app.notify("刷新中…")
         elif key == "/":
             self._enter_filter()
+        elif key == "?":
+            self._show_help()
+
+    def _show_help(self) -> None:
+        lines = [
+            "会话操作:",
+            "  Enter  接回选中的会话（在终端中恢复）",
+            "  f      分叉会话（创建副本后接回）",
+            "  t      终止活跃会话（发送 SIGTERM）",
+            "  d      删除已结束的会话记录",
+            "  y      复制接回命令到剪贴板",
+            "",
+            "清理与过滤:",
+            "  c      打开清理子菜单",
+            "  /      按关键词过滤会话列表",
+            "  r      刷新数据",
+            "",
+            "导航:",
+            "  Tab    切换标签页",
+            "  q      退出",
+            "  ?      显示此帮助",
+        ]
+        self.walker.clear()
+        for line in lines:
+            self.walker.append(_PreviewRow(line))
+        self._mode = "help"
+        self.status.original_widget.set_text(" 按任意键返回")
+        self._update_footer()

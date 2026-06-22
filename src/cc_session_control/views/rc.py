@@ -48,6 +48,7 @@ class RCView:
         self._projects: list[RCProject] = []
         self._pending: list[RCProject] | None = None
         self._loaded = False
+        self._help = False
 
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         col_header = urwid.AttrMap(urwid.Columns([
@@ -63,7 +64,9 @@ class RCView:
         self.widget = urwid.Frame(body, header=col_header, footer=self.status)
 
     def keyhints(self) -> str:
-        return "Enter 启动 · s 停止 · a 自启 · c 接管 · A 全启 · S 全停"
+        if self._help:
+            return "按任意键返回"
+        return "Enter 启动 · s 停止 · a 切换自启 · c 切换接管 · ? 帮助"
 
     def load(self) -> None:
         from ..data.rc import scan
@@ -102,7 +105,19 @@ class RCView:
             return widget.project
         return None
 
+    def _update_footer(self) -> None:
+        if self.app.views[self.app._active] is not self:
+            return
+        hints = self.keyhints()
+        self.app.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
+
     def handle_key(self, key: str) -> None:
+        if self._help:
+            self._help = False
+            self._rebuild()
+            self._update_footer()
+            return
+
         p = self._selected()
 
         if key == "enter" and p:
@@ -140,3 +155,27 @@ class RCView:
         elif key == "r":
             self.app.trigger_async_refresh()
             self.app.notify("刷新中…")
+        elif key == "?":
+            self._help = True
+            lines = [
+                "远程控制操作:",
+                "  Enter  启动选中项目的 RC 服务器",
+                "  s      停止选中项目的 RC 服务器",
+                "  a      切换自动启动（开机自启）",
+                "  c      切换远程接管（手机接管会话）",
+                "",
+                "批量操作:",
+                "  A      启动所有已加入列表的项目",
+                "  S      停止全部 RC 服务器",
+                "  r      刷新数据",
+                "",
+                "导航:",
+                "  Tab    切换标签页",
+                "  q      退出",
+            ]
+            self.walker.clear()
+            for line in lines:
+                w = urwid.AttrMap(urwid.Text(line), "dead")
+                self.walker.append(w)
+            self.status.original_widget.set_text(" 按任意键返回")
+            self._update_footer()
