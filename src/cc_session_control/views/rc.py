@@ -25,10 +25,10 @@ class RCRow(urwid.WidgetWrap):
 
         cols = urwid.Columns([
             (10, urwid.Text(status_text)),
-            (4, urwid.Text(auto, align="center")),
-            (4, urwid.Text(rc, align="center")),
-            ("weight", 1, urwid.Text(name, wrap="clip")),
-            ("weight", 1, urwid.Text(project.directory, wrap="clip")),
+            (6, urwid.Text(auto, align="center")),
+            (6, urwid.Text(rc, align="center")),
+            ("weight", 2, urwid.Text(name, wrap="clip")),
+            ("weight", 3, urwid.Text(project.directory, wrap="clip")),
         ], min_width=6)
 
         attr = "rc_running" if project.status == "running" else "rc_stopped"
@@ -52,10 +52,10 @@ class RCView:
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         col_header = urwid.AttrMap(urwid.Columns([
             (10, urwid.Text("状态")),
-            (4, urwid.Text("自启", align="center")),
-            (4, urwid.Text("接管", align="center")),
-            ("weight", 1, urwid.Text("项目")),
-            ("weight", 1, urwid.Text("目录")),
+            (6, urwid.Text("自启", align="center")),
+            (6, urwid.Text("接管", align="center")),
+            ("weight", 2, urwid.Text("项目")),
+            ("weight", 3, urwid.Text("目录")),
         ], min_width=6), "col_header")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
