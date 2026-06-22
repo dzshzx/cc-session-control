@@ -57,7 +57,8 @@ class SessionsView:
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
-        self.widget = urwid.Frame(self.listbox, header=self.status)
+        body = urwid.AttrMap(self.listbox, {None: "body"})
+        self.widget = urwid.Frame(body, header=self.status)
 
     def keyhints(self) -> str:
         return "Enter 接回 · f 分叉 · t 终止 · d 删除 · y 复制 · / 过滤"

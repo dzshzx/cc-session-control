@@ -27,6 +27,7 @@ PALETTE = [
     ("status",     "light gray",  "black", None,       "#aaa",       "#111"),
     ("rc_running", "light green", "black", None,       "#6d6",       "#111"),
     ("rc_stopped", "light gray",  "black", None,       "#ccc",       "#111"),
+    ("body",       "light gray",  "black", None,       "#ccc",       "#111"),
 ]
 
 TAB_NAMES = ["会话", "远程控制", "清理"]

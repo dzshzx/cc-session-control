@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import urwid
 
 from ..data.agents import invalidate_cache
-from ..data.sessions import cleanup_stats, prune_sessions, remove_session, scan
+from ..data.sessions import cleanup_stats, prune_sessions, remove_orphan_dirs, remove_session, scan
 
 if TYPE_CHECKING:
     from ..app import App
@@ -35,10 +35,11 @@ class CleanupView:
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
-        self.widget = urwid.Frame(self.listbox, header=self.status)
+        body = urwid.AttrMap(self.listbox, {None: "body"})
+        self.widget = urwid.Frame(body, header=self.status)
 
     def keyhints(self) -> str:
-        return "p 清理空壳 · P 清理≤2提问"
+        return "p 清理空壳 · P 清理≤2提问 · o 清理孤儿"
 
     def load(self) -> None:
         sessions = scan()
@@ -65,7 +66,7 @@ class CleanupView:
         self.walker.append(_StatRow("短会话(≤2)", str(s.get("short", 0))))
         self.walker.append(_StatRow("孤儿目录", str(s.get("orphans", 0))))
         self.walker.append(urwid.Text(""))
-        self.walker.append(urwid.Text("  p 清理空壳 · P 清理≤2提问 · r 刷新"))
+        self.walker.append(urwid.Text("  p 清理空壳 · P 清理≤2提问 · o 清理孤儿 · r 刷新"))
         self.status.original_widget.set_text(
             f" 总 {s.get('total', 0)} · 空壳 {s.get('empty', 0)} · 孤儿 {s.get('orphans', 0)}"
         )
@@ -80,11 +81,19 @@ class CleanupView:
         invalidate_cache()
         self.app.trigger_async_refresh()
 
+    def _do_orphan_cleanup(self) -> None:
+        sessions = scan()
+        count = remove_orphan_dirs(sessions)
+        self.app.notify(f"已清理 {count} 个孤儿目录")
+        self.app.trigger_async_refresh()
+
     def handle_key(self, key: str) -> None:
         if key == "p":
             self._do_prune(0)
         elif key == "P":
             self._do_prune(2)
+        elif key == "o":
+            self._do_orphan_cleanup()
         elif key == "r":
             self.app.trigger_async_refresh()
             self.app.notify("刷新中…")

@@ -155,6 +155,30 @@ def cleanup_stats(sessions: list[Session]) -> dict[str, int]:
     return {"total": total, "empty": empty, "short": short, "orphans": orphan_dirs}
 
 
+def remove_orphan_dirs(sessions: list[Session]) -> int:
+    claude_home = str(cfg.claude_home)
+    all_sids = {s.sid for s in sessions}
+    count = 0
+    for subdir in ("session-env", "file-history"):
+        path = os.path.join(claude_home, subdir)
+        if not os.path.isdir(path):
+            continue
+        for name in os.listdir(path):
+            if name in all_sids:
+                continue
+            target = os.path.join(path, name)
+            if os.path.isdir(target):
+                shutil.rmtree(target, ignore_errors=True)
+                count += 1
+            elif os.path.isfile(target):
+                try:
+                    os.remove(target)
+                    count += 1
+                except OSError:
+                    pass
+    return count
+
+
 def remove_session(s: Session) -> None:
     claude_home = str(cfg.claude_home)
     try:
