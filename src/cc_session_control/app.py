@@ -8,8 +8,6 @@ import threading
 
 import urwid
 
-from .data.rc import scan as rc_scan
-from .data.sessions import cleanup_stats, scan as sessions_scan
 from .views.rc import RCView
 from .views.sessions import SessionsView
 
@@ -131,13 +129,8 @@ class App:
 
         def worker() -> None:
             try:
-                sessions = sessions_scan()
-                stats = cleanup_stats(sessions)
-                rc_projects = rc_scan()
-                sv, rv = self.views
-                sv.set_pending(sessions)
-                sv.set_pending_stats(stats)
-                rv.set_pending(rc_projects)
+                for v in self.views:
+                    v.fetch_pending()
             finally:
                 self._refreshing = False
             if self._pipe_fd is not None:

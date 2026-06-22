@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import urwid
 
-from ..actions.rc_ops import start_all_listed, start_project, stop_all_rc, stop_project, toggle_autostart
+from ..data import rc
 from ..data.rc import set_rc_at_startup
 from ..models import RCProject
 
@@ -74,6 +74,10 @@ class RCView:
         self._loaded = True
         self._rebuild()
 
+    def fetch_pending(self) -> None:
+        """Worker-thread data fetch. Only sets pending fields — no widgets."""
+        self.set_pending(rc.scan())
+
     def set_pending(self, projects: list[RCProject]) -> None:
         self._pending = projects
 
@@ -127,15 +131,15 @@ class RCView:
             if p.status == "running":
                 self.app.notify("已在运行")
                 return
-            ok = start_project(p.name)
+            ok = rc.start_one(p.name)
             self.app.notify(f"已启动 ws/{p.name}" if ok else "启动失败")
             self.app.trigger_async_refresh()
         elif key == "s" and p:
-            ok = stop_project(p.name)
+            ok = rc.stop_one(p.name)
             self.app.notify(f"已停止 {p.name}" if ok else "未在运行")
             self.app.trigger_async_refresh()
         elif key == "a" and p:
-            new = toggle_autostart(p.name)
+            new = rc.toggle_autostart(p.name)
             self.app.notify(f"{p.name} 自启: {'开' if new else '关'}")
             self.app.trigger_async_refresh()
         elif key == "c" and p:
@@ -145,11 +149,11 @@ class RCView:
             self.app.notify(f"{p.name} 会话接管: {label}")
             self.app.trigger_async_refresh()
         elif key == "A":
-            count = start_all_listed()
+            count = rc.start_all_listed()
             self.app.notify(f"已启动 {count} 个项目")
             self.app.trigger_async_refresh()
         elif key == "S":
-            ok = stop_all_rc()
+            ok = rc.stop_all()
             self.app.notify("已停止全部" if ok else "本来就没在跑")
             self.app.trigger_async_refresh()
         elif key == "r":

@@ -146,6 +146,12 @@ class SessionsView:
         self._loaded = True
         self._rebuild()
 
+    def fetch_pending(self) -> None:
+        """Worker-thread data fetch. Only sets pending fields — no widgets."""
+        sessions = scan()
+        self.set_pending(sessions)
+        self.set_pending_stats(cleanup_stats(sessions))
+
     def set_pending(self, sessions: list[Session]) -> None:
         self._pending = sessions
 

@@ -52,6 +52,15 @@ def list_rm(proj: str) -> None:
         pass
 
 
+def toggle_autostart(proj: str) -> bool:
+    """Toggle project in the autostart list. Returns new state."""
+    if list_has(proj):
+        list_rm(proj)
+        return False
+    list_add(proj)
+    return True
+
+
 def trusted_projects() -> list[str]:
     ws = str(cfg.workspace)
     try:
@@ -79,26 +88,66 @@ def is_trusted(proj: str) -> bool:
         return False
 
 
-def _tmux_windows() -> list[str]:
+# --- tmux adapter ---------------------------------------------------------
+# Single seam over the tmux CLI. Only `_tmux_run` touches `subprocess`; every
+# other tmux call routes through a verb wrapper. Each wrapper keeps the
+# swallow-errors contract (return empty/False/None on any failure).
+
+
+def _tmux_run(args: list[str]) -> subprocess.CompletedProcess | None:
+    """Run one `tmux <args>` command; return the result, or None on failure."""
     try:
-        out = subprocess.run(
-            ["tmux", "list-windows", "-t", cfg.rc_session, "-F", "#W"],
+        return subprocess.run(
+            ["tmux", *args],
             capture_output=True, text=True, timeout=5,
-        ).stdout
-        return [line.strip() for line in out.splitlines() if line.strip()]
+        )
     except Exception:
+        return None
+
+
+def _tmux_list_windows() -> list[str]:
+    cp = _tmux_run(["list-windows", "-t", cfg.rc_session, "-F", "#W"])
+    if cp is None:
         return []
+    return [line.strip() for line in cp.stdout.splitlines() if line.strip()]
+
+
+def _tmux_pane_alive(target: str) -> bool:
+    cp = _tmux_run(["list-panes", "-t", target, "-F", "#{pane_dead}"])
+    if cp is None:
+        return False
+    return cp.stdout.strip().split("\n")[0] == "0"
+
+
+def _tmux_has_session(session: str) -> bool:
+    cp = _tmux_run(["has-session", "-t", session])
+    return cp is not None and cp.returncode == 0
+
+
+def _tmux_new_window(session: str, name: str, cmd: str) -> bool:
+    return _tmux_run(["new-window", "-t", session, "-n", name, cmd]) is not None
+
+
+def _tmux_new_session(session: str, name: str, cmd: str) -> bool:
+    return _tmux_run(["new-session", "-d", "-s", session, "-n", name, cmd]) is not None
+
+
+def _tmux_kill_window(target: str) -> bool:
+    cp = _tmux_run(["kill-window", "-t", target])
+    return cp is not None and cp.returncode == 0
+
+
+def _tmux_kill_session(session: str) -> bool:
+    cp = _tmux_run(["kill-session", "-t", session])
+    return cp is not None and cp.returncode == 0
+
+
+def _tmux_windows() -> list[str]:
+    return _tmux_list_windows()
 
 
 def _is_alive(proj: str) -> bool:
-    try:
-        out = subprocess.run(
-            ["tmux", "list-panes", "-t", f"{cfg.rc_session}:{proj}", "-F", "#{pane_dead}"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout
-        return out.strip().split("\n")[0] == "0"
-    except Exception:
-        return False
+    return _tmux_pane_alive(f"{cfg.rc_session}:{proj}")
 
 
 def _read_rc_at_startup(directory: str) -> bool | None:
@@ -178,44 +227,19 @@ def start_one(proj: str) -> bool:
     )
 
     session = cfg.rc_session
-    try:
-        has_session = subprocess.run(
-            ["tmux", "has-session", "-t", session],
-            capture_output=True, timeout=5,
-        ).returncode == 0
-    except Exception:
-        has_session = False
+    has_session = _tmux_has_session(session)
 
-    try:
-        if has_session:
-            subprocess.run(["tmux", "new-window", "-t", session, "-n", proj, cmd],
-                           capture_output=True, timeout=5)
-        else:
-            subprocess.run(["tmux", "new-session", "-d", "-s", session, "-n", proj, cmd],
-                           capture_output=True, timeout=5)
-        return True
-    except Exception:
-        return False
+    if has_session:
+        return _tmux_new_window(session, proj, cmd)
+    return _tmux_new_session(session, proj, cmd)
 
 
 def stop_one(proj: str) -> bool:
-    try:
-        return subprocess.run(
-            ["tmux", "kill-window", "-t", f"{cfg.rc_session}:{proj}"],
-            capture_output=True, timeout=5,
-        ).returncode == 0
-    except Exception:
-        return False
+    return _tmux_kill_window(f"{cfg.rc_session}:{proj}")
 
 
 def stop_all() -> bool:
-    try:
-        return subprocess.run(
-            ["tmux", "kill-session", "-t", cfg.rc_session],
-            capture_output=True, timeout=5,
-        ).returncode == 0
-    except Exception:
-        return False
+    return _tmux_kill_session(cfg.rc_session)
 
 
 def start_many(projects: list[str]) -> int:
@@ -226,3 +250,8 @@ def start_many(projects: list[str]) -> int:
         if start_one(proj):
             count += 1
     return count
+
+
+def start_all_listed() -> int:
+    """Start every project currently enabled in the autostart list."""
+    return start_many(list_enabled())

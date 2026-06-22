@@ -100,3 +100,34 @@ def test_rc_view_construct():
     app = FakeApp()
     view = RCView(app)
     assert view.widget is not None
+
+
+def test_sessions_view_fetch_pending(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+
+    fake = [_make_session(sid="x1")]
+    monkeypatch.setattr(sv_mod, "scan", lambda: fake)
+    monkeypatch.setattr(sv_mod, "cleanup_stats",
+                        lambda s: {"total": 1, "empty": 0, "short": 0, "orphans": 0})
+
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view.fetch_pending()
+
+    assert view._pending == fake
+    assert view._cleanup_stats == {"total": 1, "empty": 0, "short": 0, "orphans": 0}
+
+
+def test_rc_view_fetch_pending(monkeypatch):
+    from cc_session_control.data import rc as rc_mod
+
+    fake = [_make_project(name="p1")]
+    monkeypatch.setattr(rc_mod, "scan", lambda: fake)
+
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view.fetch_pending()
+
+    assert view._pending == fake
