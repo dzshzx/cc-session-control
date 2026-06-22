@@ -61,7 +61,7 @@ class App:
         self.body = urwid.WidgetPlaceholder(self.views[0].widget)
         self._tab_texts: list[urwid.Text] = []
         tab_bar = self._build_tab_bar()
-        title = urwid.AttrMap(urwid.Text("Claude Code 管理器", align="center"), "header")
+        title = urwid.AttrMap(urwid.Text("Claude Code 会话管理器", align="center"), "header")
         self.header = urwid.Pile([title, tab_bar])
 
         self._footer_default = " Tab 切换 · q 退出 · r 刷新"
