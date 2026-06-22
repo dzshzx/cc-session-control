@@ -1,4 +1,4 @@
-"""Cleanup view — session statistics and prune operations."""
+"""Cleanup view — selectable action list, consistent with sessions/RC tabs."""
 
 from __future__ import annotations
 
@@ -12,17 +12,29 @@ from ..data.sessions import cleanup_stats, prune_sessions, remove_orphan_dirs, r
 if TYPE_CHECKING:
     from ..app import App
 
+_ACTIONS = [
+    {"key": "empty",   "label": "清理空壳会话(0提问)",  "stat": "empty"},
+    {"key": "short",   "label": "清理短会话(≤2提问)",   "stat": "short"},
+    {"key": "orphans", "label": "清理孤儿目录",         "stat": "orphans"},
+]
 
-class _StatRow(urwid.WidgetWrap):
-    def __init__(self, label: str, value: str) -> None:
+
+class _ActionRow(urwid.WidgetWrap):
+    def __init__(self, action_key: str, label: str, count: int) -> None:
+        self.action_key = action_key
         cols = urwid.Columns([
             ("weight", 1, urwid.Text(f"  {label}")),
-            (8, urwid.Text(value, align="right")),
+            (8, urwid.Text(str(count), align="right")),
         ])
-        super().__init__(cols)
+        attr = "dead"
+        mapped = urwid.AttrMap(cols, attr, focus_map={"dead": "selected", None: "selected"})
+        super().__init__(mapped)
 
     def selectable(self) -> bool:
-        return False
+        return True
+
+    def keypress(self, size: tuple, key: str) -> str | None:
+        return key
 
 
 class CleanupView:
@@ -39,7 +51,7 @@ class CleanupView:
         self.widget = urwid.Frame(body, header=self.status)
 
     def keyhints(self) -> str:
-        return "p 清理空壳 · P 清理≤2提问 · o 清理孤儿"
+        return "Enter 执行 · r 刷新"
 
     def load(self) -> None:
         sessions = scan()
@@ -59,17 +71,25 @@ class CleanupView:
 
     def _rebuild(self) -> None:
         s = self._stats
+        focus_pos = self.walker.get_focus()[1] if self.walker else 0
         self.walker.clear()
-        self.walker.append(urwid.Text(""))
-        self.walker.append(_StatRow("总会话", str(s.get("total", 0))))
-        self.walker.append(_StatRow("空壳(0提问)", str(s.get("empty", 0))))
-        self.walker.append(_StatRow("短会话(≤2)", str(s.get("short", 0))))
-        self.walker.append(_StatRow("孤儿目录", str(s.get("orphans", 0))))
-        self.walker.append(urwid.Text(""))
-        self.walker.append(urwid.Text("  p 清理空壳 · P 清理≤2提问 · o 清理孤儿 · r 刷新"))
-        self.status.original_widget.set_text(
-            f" 总 {s.get('total', 0)} · 空壳 {s.get('empty', 0)} · 孤儿 {s.get('orphans', 0)}"
-        )
+        for a in _ACTIONS:
+            count = s.get(a["stat"], 0)
+            self.walker.append(_ActionRow(a["key"], a["label"], count))
+        if focus_pos is not None and focus_pos < len(self.walker):
+            self.walker.set_focus(focus_pos)
+        total = s.get("total", 0)
+        empty = s.get("empty", 0)
+        orphans = s.get("orphans", 0)
+        self.status.original_widget.set_text(f" 总 {total} 会话 · 空壳 {empty} · 孤儿 {orphans}")
+
+    def _selected(self) -> str | None:
+        if not self.walker:
+            return None
+        widget = self.walker.get_focus()[0]
+        if isinstance(widget, _ActionRow):
+            return widget.action_key
+        return None
 
     def _do_prune(self, max_prompts: int) -> None:
         sessions = scan()
@@ -88,12 +108,14 @@ class CleanupView:
         self.app.trigger_async_refresh()
 
     def handle_key(self, key: str) -> None:
-        if key == "p":
-            self._do_prune(0)
-        elif key == "P":
-            self._do_prune(2)
-        elif key == "o":
-            self._do_orphan_cleanup()
+        if key == "enter":
+            action = self._selected()
+            if action == "empty":
+                self._do_prune(0)
+            elif action == "short":
+                self._do_prune(2)
+            elif action == "orphans":
+                self._do_orphan_cleanup()
         elif key == "r":
             self.app.trigger_async_refresh()
             self.app.notify("刷新中…")
