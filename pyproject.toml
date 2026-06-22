@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cc-session-control"
+version = "0.1.0"
+description = "TUI manager for Claude Code sessions and Remote Control"
+requires-python = ">=3.12"
+license = "MIT"
+readme = "README.md"
+authors = [{ name = "dzshzx" }]
+keywords = ["claude-code", "session-manager", "tui", "remote-control", "textual"]
+dependencies = ["textual>=1.0.0"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Framework :: Textual",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: User Interfaces",
+]
+
+[project.urls]
+Homepage = "https://github.com/dzshzx/cc-session-control"
+Repository = "https://github.com/dzshzx/cc-session-control"
+Issues = "https://github.com/dzshzx/cc-session-control/issues"
+
+[project.scripts]
+csctl = "cc_session_control.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
