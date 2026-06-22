@@ -108,9 +108,10 @@ class CleanupView:
         empty = s.get("empty", 0)
         orphans = s.get("orphans", 0)
         self.status.original_widget.set_text(f" 总 {total} 会话 · 空壳 {empty} · 孤儿 {orphans}")
-        self._update_footer()
 
     def _update_footer(self) -> None:
+        if self.app.views[self.app._active] is not self:
+            return
         hints = self.keyhints()
         self.app.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
 
