@@ -51,11 +51,11 @@ class RCView:
 
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         col_header = urwid.AttrMap(urwid.Columns([
-            (10, urwid.Text(" 状态")),
+            (10, urwid.Text("状态")),
             (4, urwid.Text("自启", align="center")),
             (4, urwid.Text("接管", align="center")),
-            ("weight", 1, urwid.Text(" 项目")),
-            ("weight", 1, urwid.Text(" 目录")),
+            ("weight", 1, urwid.Text("项目")),
+            ("weight", 1, urwid.Text("目录")),
         ], min_width=6), "col_header")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)

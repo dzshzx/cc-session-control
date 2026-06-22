@@ -57,10 +57,10 @@ class SessionsView:
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         col_header = urwid.AttrMap(urwid.Columns([
             (3, urwid.Text("")),
-            (12, urwid.Text(" 时间")),
-            (5, urwid.Text(" 提问")),
-            ("weight", 3, urwid.Text(" 标题")),
-            ("weight", 1, urwid.Text(" 项目")),
+            (12, urwid.Text("时间")),
+            (5, urwid.Text("提问")),
+            ("weight", 3, urwid.Text("标题")),
+            ("weight", 1, urwid.Text("项目")),
         ], min_width=6), "col_header")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
