@@ -17,12 +17,12 @@ from ..models import Session
 
 class SessionsView(Container):
     BINDINGS = [
-        Binding("enter", "resume", "Resume", show=True),
-        Binding("f", "fork", "Fork resume", show=True),
-        Binding("t", "terminate", "Terminate", show=True),
-        Binding("d", "delete", "Delete", show=True),
-        Binding("y", "copy_cmd", "Copy cmd", show=True),
-        Binding("r", "refresh", "Refresh", show=True),
+        Binding("enter", "resume", "接回", show=True),
+        Binding("f", "fork", "分叉接回", show=True),
+        Binding("t", "terminate", "终止", show=True),
+        Binding("d", "delete", "删除", show=True),
+        Binding("y", "copy_cmd", "复制命令", show=True),
+        Binding("r", "refresh", "刷新", show=True),
     ]
 
     def __init__(self) -> None:
@@ -30,13 +30,13 @@ class SessionsView(Container):
         self._sessions: list[Session] = []
 
     def compose(self) -> ComposeResult:
-        yield Static("Scanning...", id="sessions-status")
+        yield Static("扫描中…", id="sessions-status")
         yield DataTable(id="sessions-table")
 
     def on_mount(self) -> None:
         table = self.query_one("#sessions-table", DataTable)
         table.cursor_type = "row"
-        table.add_columns("", "Time", "Prompts", "Title", "Directory")
+        table.add_columns("", "时间", "提问", "标题", "目录")
         self.load_data()
 
     @work(thread=True)
@@ -57,7 +57,7 @@ class SessionsView(Container):
             table.add_row(f"{cur}{mark}", when, f"p{s.prompts}", label, cwd, key=s.sid)
         status = self.query_one("#sessions-status", Static)
         alive_n = sum(1 for s in sessions if s.alive)
-        status.update(f"{len(sessions)} sessions · {alive_n} alive")
+        status.update(f"共 {len(sessions)} 条会话 · 活 {alive_n}")
 
     def _selected(self) -> Session | None:
         table = self.query_one("#sessions-table", DataTable)
@@ -71,7 +71,7 @@ class SessionsView(Container):
         if not s:
             return
         if s.current:
-            self.notify("Cannot resume current session", severity="warning")
+            self.notify("不能接回当前会话", severity="warning")
             return
         self.app.exit(("resume", s, False))
 
@@ -86,13 +86,13 @@ class SessionsView(Container):
         if not s:
             return
         if not s.alive:
-            self.notify("Session is not alive", severity="warning")
+            self.notify("会话不是活的", severity="warning")
             return
         if s.current:
-            self.notify("Cannot terminate current session", severity="warning")
+            self.notify("不能终止当前会话", severity="warning")
             return
         ok = terminate_session(s)
-        self.notify("Terminated" if ok else "Failed to terminate", severity="information" if ok else "error")
+        self.notify("已终止" if ok else "终止失败", severity="information" if ok else "error")
         self.load_data()
 
     def action_delete(self) -> None:
@@ -100,10 +100,10 @@ class SessionsView(Container):
         if not s:
             return
         if s.alive:
-            self.notify("Terminate first before deleting", severity="warning")
+            self.notify("活会话不删，先终止", severity="warning")
             return
         remove_session(s)
-        self.notify("Deleted")
+        self.notify("已删除")
         self.load_data()
 
     def action_copy_cmd(self) -> None:
@@ -112,7 +112,7 @@ class SessionsView(Container):
             return
         cmd = resume_cmd(s)
         ok = to_clipboard(cmd)
-        self.notify("Copied to clipboard" if ok else f"Copy failed: {cmd}")
+        self.notify("已复制" if ok else f"复制失败: {cmd}")
 
     def action_refresh(self) -> None:
         self.load_data()

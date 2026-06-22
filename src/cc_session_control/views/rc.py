@@ -15,12 +15,12 @@ from ..models import RCProject
 
 class RCView(Container):
     BINDINGS = [
-        Binding("enter", "start", "Start", show=True),
-        Binding("s", "stop", "Stop", show=True),
-        Binding("a", "toggle_auto", "Toggle auto", show=True),
-        Binding("shift+a", "start_all", "Start all", show=True),
-        Binding("shift+s", "stop_all", "Stop all", show=True),
-        Binding("r", "refresh", "Refresh", show=True),
+        Binding("enter", "start", "启动", show=True),
+        Binding("s", "stop", "停止", show=True),
+        Binding("a", "toggle_auto", "切换自启", show=True),
+        Binding("shift+a", "start_all", "全部启动", show=True),
+        Binding("shift+s", "stop_all", "全部停止", show=True),
+        Binding("r", "refresh", "刷新", show=True),
     ]
 
     def __init__(self) -> None:
@@ -28,13 +28,13 @@ class RCView(Container):
         self._projects: list[RCProject] = []
 
     def compose(self) -> ComposeResult:
-        yield Static("Scanning...", id="rc-status")
+        yield Static("扫描中…", id="rc-status")
         yield DataTable(id="rc-table")
 
     def on_mount(self) -> None:
         table = self.query_one("#rc-table", DataTable)
         table.cursor_type = "row"
-        table.add_columns("Status", "Auto", "Project", "Directory")
+        table.add_columns("状态", "自启", "项目", "目录")
         self.load_data()
 
     @work(thread=True)
@@ -47,14 +47,14 @@ class RCView(Container):
         table = self.query_one("#rc-table", DataTable)
         table.clear()
         for p in projects:
-            status_icon = {"running": "● running", "dead": "✖ dead", "stopped": "○ stopped"}.get(p.status, p.status)
+            status_icon = {"running": "● 运行中", "dead": "✖ 已崩溃", "stopped": "○ 已停止"}.get(p.status, p.status)
             auto = "✓" if p.auto_start else "✗"
             display_name = p.name if p.in_list or p.status == "running" else f"({p.name})"
             table.add_row(status_icon, auto, display_name, p.directory, key=p.name)
         status = self.query_one("#rc-status", Static)
         running = sum(1 for p in projects if p.status == "running")
         auto = sum(1 for p in projects if p.auto_start)
-        status.update(f"{len(projects)} projects · {running} running · {auto} auto-start")
+        status.update(f"共 {len(projects)} 项目 · 运行 {running} · 自启 {auto}")
 
     def _selected(self) -> RCProject | None:
         table = self.query_one("#rc-table", DataTable)
@@ -68,13 +68,13 @@ class RCView(Container):
         if not p:
             return
         if not p.trusted:
-            self.notify("Not trusted — run 'claude' in that directory first", severity="warning")
+            self.notify("未信任 — 先在该目录跑一次 claude", severity="warning")
             return
         if p.status == "running":
-            self.notify("Already running", severity="information")
+            self.notify("已在运行", severity="information")
             return
         ok = start_project(p.name)
-        self.notify(f"Started ws/{p.name}" if ok else "Failed to start", severity="information" if ok else "error")
+        self.notify(f"已启动 ws/{p.name}" if ok else "启动失败", severity="information" if ok else "error")
         self.load_data()
 
     def action_stop(self) -> None:
@@ -82,7 +82,7 @@ class RCView(Container):
         if not p:
             return
         ok = stop_project(p.name)
-        self.notify(f"Stopped {p.name}" if ok else "Not running")
+        self.notify(f"已停止 {p.name}" if ok else "未在运行")
         self.load_data()
 
     def action_toggle_auto(self) -> None:
@@ -90,17 +90,17 @@ class RCView(Container):
         if not p:
             return
         new_state = toggle_autostart(p.name)
-        self.notify(f"{p.name} auto-start: {'on' if new_state else 'off'}")
+        self.notify(f"{p.name} 自启: {'开' if new_state else '关'}")
         self.load_data()
 
     def action_start_all(self) -> None:
         count = start_all_listed()
-        self.notify(f"Started {count} project(s)")
+        self.notify(f"已启动 {count} 个项目")
         self.load_data()
 
     def action_stop_all(self) -> None:
         ok = stop_all_rc()
-        self.notify("Stopped all" if ok else "Nothing running")
+        self.notify("已停止全部" if ok else "本来就没在跑")
         self.load_data()
 
     def action_refresh(self) -> None:

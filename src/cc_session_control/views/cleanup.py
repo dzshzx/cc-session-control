@@ -13,9 +13,9 @@ from ..data.sessions import cleanup_stats, prune_sessions, remove_session, scan
 
 class CleanupView(Container):
     BINDINGS = [
-        Binding("p", "prune_empty", "Prune empty (0 prompts)", show=True),
-        Binding("shift+p", "prune_short", "Prune short (<=2)", show=True),
-        Binding("r", "refresh", "Refresh", show=True),
+        Binding("p", "prune_empty", "清理空壳(0提问)", show=True),
+        Binding("shift+p", "prune_short", "清理短会话(≤2)", show=True),
+        Binding("r", "refresh", "刷新", show=True),
     ]
 
     def __init__(self) -> None:
@@ -23,7 +23,7 @@ class CleanupView(Container):
         self._stats: dict[str, int] = {}
 
     def compose(self) -> ComposeResult:
-        yield Static("Scanning...", id="cleanup-stats")
+        yield Static("扫描中…", id="cleanup-stats")
         yield Static("", id="cleanup-result")
 
     def on_mount(self) -> None:
@@ -39,12 +39,12 @@ class CleanupView(Container):
         self._stats = stats
         panel = self.query_one("#cleanup-stats", Static)
         panel.update(
-            f"Session Statistics\n"
-            f"  Total sessions:     {stats['total']}\n"
-            f"  Empty (0 prompts):  {stats['empty']}\n"
-            f"  Short (<=2):        {stats['short']}\n"
-            f"  Orphan directories: {stats['orphans']}\n\n"
-            f"Press p to prune empty · P to prune <=2 · r to refresh"
+            f"会话统计\n"
+            f"  总会话:        {stats['total']}\n"
+            f"  空壳(0提问):   {stats['empty']}\n"
+            f"  短会话(≤2):    {stats['short']}\n"
+            f"  孤儿目录:      {stats['orphans']}\n\n"
+            f"p 清理空壳 · P 清理≤2提问 · r 刷新"
         )
 
     @work(thread=True)
@@ -59,7 +59,7 @@ class CleanupView(Container):
 
     def _show_result(self, count: int, stats: dict[str, int]) -> None:
         result = self.query_one("#cleanup-result", Static)
-        result.update(f"Pruned {count} session(s)")
+        result.update(f"已清理 {count} 条会话")
         self._update_stats(stats)
 
     def action_prune_empty(self) -> None:

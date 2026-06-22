@@ -12,12 +12,19 @@ from .views.sessions import SessionsView
 
 
 class CCMApp(App):
-    TITLE = "Claude Code Manager"
+    TITLE = "Claude Code 管理器"
+    NOTIFICATION_TIMEOUT = 3
     CSS = """
+    * {
+        transition: none !important;
+    }
     Screen {
         layout: vertical;
     }
     TabbedContent {
+        height: 1fr;
+    }
+    ContentSwitcher {
         height: 1fr;
     }
     #sessions-table, #rc-table {
@@ -35,20 +42,23 @@ class CCMApp(App):
         padding: 0 2;
         color: $success;
     }
+    DataTable {
+        scrollbar-size: 1 1;
+    }
     """
 
     BINDINGS = [
-        Binding("q", "quit", "Quit", show=True),
+        Binding("q", "quit", "退出", show=True),
     ]
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Header(show_clock=False)
         with TabbedContent():
-            with TabPane("Sessions", id="tab-sessions"):
+            with TabPane("会话", id="tab-sessions"):
                 yield SessionsView()
-            with TabPane("Remote Ctrl", id="tab-rc"):
+            with TabPane("远程控制", id="tab-rc"):
                 yield RCView()
-            with TabPane("Cleanup", id="tab-cleanup"):
+            with TabPane("清理", id="tab-cleanup"):
                 yield CleanupView()
         yield Footer()
 
