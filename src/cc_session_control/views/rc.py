@@ -72,9 +72,12 @@ class RCView:
             self._rebuild()
 
     def _rebuild(self) -> None:
+        focus_pos = self.walker.get_focus()[1] if self.walker else 0
         self.walker.clear()
         for p in self._projects:
             self.walker.append(RCRow(p))
+        if self.walker and focus_pos is not None:
+            self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
         running = sum(1 for p in self._projects if p.status == "running")
         auto = sum(1 for p in self._projects if p.auto_start)
         self.status.original_widget.set_text(f" 共 {len(self._projects)} 项目 · 运行 {running} · 自启 {auto}")

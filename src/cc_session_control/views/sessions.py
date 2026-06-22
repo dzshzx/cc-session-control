@@ -83,9 +83,12 @@ class SessionsView:
             self._rebuild()
 
     def _rebuild(self) -> None:
+        focus_pos = self.walker.get_focus()[1] if self.walker else 0
         self.walker.clear()
         for s in self._sessions:
             self.walker.append(SessionRow(s))
+        if self.walker and focus_pos is not None:
+            self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
         alive_n = sum(1 for s in self._all_sessions if s.alive)
         flt = f" · 过滤「{self._filter_text}」" if self._filter_text else ""
         self.status.original_widget.set_text(f" 共 {len(self._all_sessions)} 条会话 · 活 {alive_n} · 显示 {len(self._sessions)}{flt}")
