@@ -5,7 +5,6 @@ import urwid
 from cc_session_control.models import RCProject, Session
 from cc_session_control.views.sessions import SessionRow, SessionsView
 from cc_session_control.views.rc import RCRow, RCView
-from cc_session_control.views.cleanup import CleanupView
 
 
 class FakeApp:
@@ -14,6 +13,8 @@ class FakeApp:
         self.result = None
         self._notifications = []
         self.footer_text = urwid.Text("")
+        self.views = []
+        self._active = 0
 
     def notify(self, msg, seconds=3):
         self._notifications.append(msg)
@@ -54,6 +55,7 @@ def test_session_row_alive_vs_dead():
 def test_sessions_view_construct():
     app = FakeApp()
     view = SessionsView(app)
+    app.views = [view]
     assert view.widget is not None
     assert len(view.walker) == 0
 
@@ -61,6 +63,7 @@ def test_sessions_view_construct():
 def test_sessions_view_filter_logic():
     app = FakeApp()
     view = SessionsView(app)
+    app.views = [view]
     view._all_sessions = [
         _make_session(sid="a1", label="deploy fix"),
         _make_session(sid="a2", label="config change"),
@@ -74,6 +77,18 @@ def test_sessions_view_filter_logic():
     assert len(view._sessions) == 3
 
 
+def test_sessions_cleanup_mode():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._cleanup_stats = {"total": 100, "empty": 10, "short": 5, "orphans": 3}
+    view._enter_cleanup()
+    assert view._mode == "cleanup"
+    assert len(view.walker) == 3
+    view._exit_cleanup()
+    assert view._mode == "list"
+
+
 def test_rc_row_selectable():
     p = _make_project()
     row = RCRow(p)
@@ -85,18 +100,3 @@ def test_rc_view_construct():
     app = FakeApp()
     view = RCView(app)
     assert view.widget is not None
-
-
-def test_cleanup_view_construct():
-    app = FakeApp()
-    view = CleanupView(app)
-    assert view.widget is not None
-
-
-def test_cleanup_rebuild():
-    app = FakeApp()
-    view = CleanupView(app)
-    view._stats = {"total": 100, "empty": 10, "short": 5, "orphans": 3}
-    view._rebuild()
-    status_text = view.status.original_widget.get_text()[0]
-    assert "100" in status_text

@@ -10,7 +10,6 @@ import urwid
 
 from .data.rc import scan as rc_scan
 from .data.sessions import cleanup_stats, scan as sessions_scan
-from .views.cleanup import CleanupView
 from .views.rc import RCView
 from .views.sessions import SessionsView
 
@@ -31,7 +30,7 @@ PALETTE = [
     ("col_header", "dark cyan",   "black", None,       "#8aa",       "#181818"),
 ]
 
-TAB_NAMES = ["会话", "远程控制", "清理"]
+TAB_NAMES = ["会话", "远程控制"]
 
 
 def _make_screen() -> urwid.raw_display.Screen:
@@ -55,7 +54,7 @@ class App:
         self._pipe_fd: int | None = None
         self._refreshing = False
 
-        self.views = [SessionsView(self), RCView(self), CleanupView(self)]
+        self.views = [SessionsView(self), RCView(self)]
         self._active = 0
 
         self.body = urwid.WidgetPlaceholder(self.views[0].widget)
@@ -135,10 +134,10 @@ class App:
                 sessions = sessions_scan()
                 stats = cleanup_stats(sessions)
                 rc_projects = rc_scan()
-                sv, rv, cv = self.views
+                sv, rv = self.views
                 sv.set_pending(sessions)
+                sv.set_pending_stats(stats)
                 rv.set_pending(rc_projects)
-                cv.set_pending_stats(stats)
             finally:
                 self._refreshing = False
             if self._pipe_fd is not None:

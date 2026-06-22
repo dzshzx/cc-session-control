@@ -53,4 +53,4 @@ def test_app_instantiation():
     from cc_session_control.app import App
     app = App()
     assert app.result is None
-    assert len(app.views) == 3
+    assert len(app.views) == 2
