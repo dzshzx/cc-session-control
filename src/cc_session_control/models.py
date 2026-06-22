@@ -27,4 +27,5 @@ class RCProject:
     in_list: bool
     status: str  # "running" | "dead" | "stopped"
     auto_start: bool
+    rc_at_startup: bool | None = None  # per-project remoteControlAtStartup override
     environment_id: str = ""

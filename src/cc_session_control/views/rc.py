@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import urwid
 
 from ..actions.rc_ops import start_all_listed, start_project, stop_all_rc, stop_project, toggle_autostart
+from ..data.rc import set_rc_at_startup
 from ..models import RCProject
 
 if TYPE_CHECKING:
@@ -19,11 +20,13 @@ class RCRow(urwid.WidgetWrap):
         status_map = {"running": "● 运行中", "dead": "✖ 已崩溃", "stopped": "○ 已停止"}
         status_text = status_map.get(project.status, project.status)
         auto = "✓" if project.auto_start else "✗"
+        rc = "✓" if project.rc_at_startup is not False else "✗"
         name = project.name if project.in_list or project.status == "running" else f"({project.name})"
 
         cols = urwid.Columns([
             (10, urwid.Text(status_text)),
             (4, urwid.Text(auto, align="center")),
+            (4, urwid.Text(rc, align="center")),
             ("weight", 1, urwid.Text(name, wrap="clip")),
             ("weight", 1, urwid.Text(project.directory, wrap="clip")),
         ], min_width=6)
@@ -53,7 +56,7 @@ class RCView:
         self.widget = urwid.Frame(body, header=self.status)
 
     def keyhints(self) -> str:
-        return "Enter 启动 · s 停止 · a 切换自启 · A 全部启动 · S 全部停止"
+        return "Enter 启动 · s 停止 · a 自启 · c 接管 · A 全启 · S 全停"
 
     def load(self) -> None:
         from ..data.rc import scan
@@ -80,7 +83,9 @@ class RCView:
             self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
         running = sum(1 for p in self._projects if p.status == "running")
         auto = sum(1 for p in self._projects if p.auto_start)
-        self.status.original_widget.set_text(f" 共 {len(self._projects)} 项目 · 运行 {running} · 自启 {auto}")
+        rc_off = sum(1 for p in self._projects if p.rc_at_startup is False)
+        rc_text = f" · 接管关 {rc_off}" if rc_off else ""
+        self.status.original_widget.set_text(f" 共 {len(self._projects)} 项目 · 运行 {running} · 自启 {auto}{rc_text}")
 
     def _selected(self) -> RCProject | None:
         if not self.walker:
@@ -110,6 +115,12 @@ class RCView:
         elif key == "a" and p:
             new = toggle_autostart(p.name)
             self.app.notify(f"{p.name} 自启: {'开' if new else '关'}")
+            self.app.trigger_async_refresh()
+        elif key == "c" and p:
+            current = p.rc_at_startup is not False
+            set_rc_at_startup(p.directory, not current if current else None)
+            label = "关" if current else "开"
+            self.app.notify(f"{p.name} 会话接管: {label}")
             self.app.trigger_async_refresh()
         elif key == "A":
             count = start_all_listed()

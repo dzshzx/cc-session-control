@@ -101,6 +101,37 @@ def _is_alive(proj: str) -> bool:
         return False
 
 
+def _read_rc_at_startup(directory: str) -> bool | None:
+    for name in ("settings.local.json", "settings.json"):
+        path = os.path.join(directory, ".claude", name)
+        try:
+            with open(path) as f:
+                val = json.load(f).get("remoteControlAtStartup")
+            if val is not None:
+                return bool(val)
+        except Exception:
+            continue
+    return None
+
+
+def set_rc_at_startup(directory: str, value: bool | None) -> None:
+    settings_dir = os.path.join(directory, ".claude")
+    path = os.path.join(settings_dir, "settings.local.json")
+    os.makedirs(settings_dir, exist_ok=True)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    if value is None:
+        data.pop("remoteControlAtStartup", None)
+    else:
+        data["remoteControlAtStartup"] = value
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
 def scan() -> list[RCProject]:
     enabled = set(list_enabled())
     trusted = trusted_projects()
@@ -121,6 +152,7 @@ def scan() -> list[RCProject]:
             in_list=name in enabled,
             status=status,
             auto_start=name in enabled,
+            rc_at_startup=_read_rc_at_startup(directory),
         ))
     return result
 
