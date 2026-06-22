@@ -163,6 +163,8 @@ class App:
     def run(self) -> tuple | None:
         self._pipe_fd = self.loop.watch_pipe(self._on_pipe)
         self.views[self._active].load()
+        hints = self.views[self._active].keyhints()
+        self.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
         self.trigger_async_refresh()
         self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)
         self.loop.run()
