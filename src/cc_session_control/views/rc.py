@@ -52,16 +52,19 @@ class RCView:
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         col_header = urwid.AttrMap(urwid.Columns([
             (10, urwid.Text(" 状态")),
+            (1, urwid.Text("│")),
             (4, urwid.Text("自启", align="center")),
+            (1, urwid.Text("│")),
             (4, urwid.Text("接管", align="center")),
-            ("weight", 1, urwid.Text("项目")),
-            ("weight", 1, urwid.Text("目录")),
-        ], min_width=6), "status")
-        header = urwid.Pile([self.status, col_header])
+            (1, urwid.Text("│")),
+            ("weight", 1, urwid.Text(" 项目")),
+            (1, urwid.Text("│")),
+            ("weight", 1, urwid.Text(" 目录")),
+        ], min_width=4), "col_header")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
         body = urwid.AttrMap(self.listbox, {None: "body"})
-        self.widget = urwid.Frame(body, header=header)
+        self.widget = urwid.Frame(body, header=col_header, footer=self.status)
 
     def keyhints(self) -> str:
         return "Enter 启动 · s 停止 · a 自启 · c 接管 · A 全启 · S 全停"

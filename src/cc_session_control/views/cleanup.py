@@ -71,7 +71,7 @@ class CleanupView:
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
         body = urwid.AttrMap(self.listbox, {None: "body"})
-        self.widget = urwid.Frame(body, header=self.status)
+        self.widget = urwid.Frame(body, footer=self.status)
 
     def keyhints(self) -> str:
         if self._previewing:
