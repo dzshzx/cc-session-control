@@ -18,7 +18,7 @@ from .views.sessions import SessionsView
 PALETTE = [
     ("header",     "white,bold",  "black", "bold",     "#fff,bold",  "#111"),
     ("footer",     "light gray",  "black", None,       "#999",       "#111"),
-    ("tab_on",     "white,bold",  "black", "bold,underline", "#fff,bold,underline", "#111"),
+    ("tab_on",     "white,bold",  "dark cyan", "bold,standout", "#fff,bold", "#068"),
     ("tab_off",    "dark cyan",   "black", None,       "#688",       "#111"),
     ("alive",      "light green", "black", None,       "#6d6",       "#111"),
     ("dead",       "light gray",  "black", None,       "#ccc",       "#111"),
@@ -60,7 +60,7 @@ class App:
         self.body = urwid.WidgetPlaceholder(self.views[0].widget)
         self._tab_texts: list[urwid.Text] = []
         tab_bar = self._build_tab_bar()
-        title = urwid.AttrMap(urwid.Text(" Claude Code 管理器", align="left"), "header")
+        title = urwid.AttrMap(urwid.Text("Claude Code 管理器", align="center"), "header")
         self.header = urwid.Pile([title, tab_bar])
 
         self._footer_default = " Tab 切换 · q 退出 · r 刷新"
