@@ -58,13 +58,10 @@ class SessionsView:
         col_header = urwid.AttrMap(urwid.Columns([
             (3, urwid.Text("")),
             (12, urwid.Text(" 时间")),
-            (1, urwid.Text("│")),
-            (5, urwid.Text("提问")),
-            (1, urwid.Text("│")),
+            (5, urwid.Text(" 提问")),
             ("weight", 3, urwid.Text(" 标题")),
-            (1, urwid.Text("│")),
             ("weight", 1, urwid.Text(" 项目")),
-        ], min_width=4), "col_header")
+        ], min_width=6), "col_header")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
         body = urwid.AttrMap(self.listbox, {None: "body"})
