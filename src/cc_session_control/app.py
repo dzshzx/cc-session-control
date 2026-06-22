@@ -1,73 +1,128 @@
-"""CCM — Claude Code Manager Textual App."""
+"""CCM — Claude Code Manager urwid App."""
 
 from __future__ import annotations
 
-from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.widgets import Footer, Header, TabbedContent, TabPane
+import os
+import threading
+
+import urwid
 
 from .views.cleanup import CleanupView
 from .views.rc import RCView
 from .views.sessions import SessionsView
 
+PALETTE = [
+    ("header", "white,bold", "dark blue"),
+    ("footer", "white", "dark gray"),
+    ("tab_on", "white,bold", "dark blue"),
+    ("tab_off", "light gray", "default"),
+    ("alive", "light green", "default"),
+    ("dead", "dark gray", "default"),
+    ("selected", "white", "dark blue"),
+    ("notify", "yellow", "dark gray"),
+    ("status", "white", "dark gray"),
+]
 
-class CCMApp(App):
-    TITLE = "Claude Code 管理器"
-    NOTIFICATION_TIMEOUT = 3
-    CSS = """
-    * {
-        transition: none !important;
-    }
-    Screen {
-        layout: vertical;
-    }
-    TabbedContent {
-        height: 1fr;
-    }
-    ContentSwitcher {
-        height: 1fr;
-    }
-    #sessions-table, #rc-table {
-        height: 1fr;
-    }
-    #sessions-status, #rc-status {
-        height: 1;
-        padding: 0 1;
-        background: $surface;
-    }
-    #cleanup-stats {
-        padding: 1 2;
-    }
-    #cleanup-result {
-        padding: 0 2;
-        color: $success;
-    }
-    DataTable {
-        scrollbar-size: 1 1;
-    }
-    """
+TAB_NAMES = ["会话", "远程控制", "清理"]
 
-    BINDINGS = [
-        Binding("q", "quit", "退出", show=True),
-    ]
 
-    def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
-        with TabbedContent():
-            with TabPane("会话", id="tab-sessions"):
-                yield SessionsView()
-            with TabPane("远程控制", id="tab-rc"):
-                yield RCView()
-            with TabPane("清理", id="tab-cleanup"):
-                yield CleanupView()
-        yield Footer()
+class App:
+    def __init__(self) -> None:
+        self.result: tuple | None = None
+        self._exiting = False
+        self._alarm_handle: object | None = None
+        self._pipe_fd: int | None = None
 
-    def on_mount(self) -> None:
-        self.set_interval(10.0, self._auto_refresh)
+        self.views = [SessionsView(self), RCView(self), CleanupView(self)]
+        self._active = 0
 
-    def _auto_refresh(self) -> None:
-        active = self.query_one(TabbedContent).active
-        if active == "tab-sessions":
-            self.query_one(SessionsView).load_data()
-        elif active == "tab-rc":
-            self.query_one(RCView).load_data()
+        self.body = urwid.WidgetPlaceholder(self.views[0].widget)
+        self._tab_texts: list[urwid.Text] = []
+        tab_bar = self._build_tab_bar()
+        title = urwid.AttrMap(urwid.Text(" Claude Code 管理器", align="left"), "header")
+        self.header = urwid.Pile([title, tab_bar])
+
+        self._footer_default = " Tab 切换 · q 退出 · r 刷新"
+        self.footer_text = urwid.Text(self._footer_default)
+        self.footer = urwid.AttrMap(self.footer_text, "footer")
+
+        self.frame = urwid.Frame(self.body, header=self.header, footer=self.footer)
+        self.loop = urwid.MainLoop(
+            self.frame,
+            palette=PALETTE,
+            unhandled_input=self._input,
+        )
+
+    def _build_tab_bar(self) -> urwid.Columns:
+        self._tab_texts = []
+        cols = []
+        for i, name in enumerate(TAB_NAMES):
+            txt = urwid.Text(f" {name} ", align="center")
+            self._tab_texts.append(txt)
+            attr = "tab_on" if i == self._active else "tab_off"
+            cols.append(urwid.AttrMap(txt, attr))
+        return urwid.Columns(cols)
+
+    def _update_tab_bar(self) -> None:
+        tab_bar = self._build_tab_bar()
+        self.header.contents[1] = (tab_bar, self.header.options())
+
+    def _switch_tab(self) -> None:
+        self._active = (self._active + 1) % len(self.views)
+        self.body.original_widget = self.views[self._active].widget
+        self._update_tab_bar()
+        hints = self.views[self._active].keyhints()
+        self.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
+
+    def _input(self, key: str) -> None:
+        if key == "tab":
+            self._switch_tab()
+        elif key == "q":
+            self._exit()
+        else:
+            self.views[self._active].handle_key(key)
+
+    def _exit(self, result: tuple | None = None) -> None:
+        self._exiting = True
+        if self._alarm_handle:
+            self.loop.remove_alarm(self._alarm_handle)
+        self.result = result
+        raise urwid.ExitMainLoop()
+
+    def exit_with_resume(self, session: object, fork: bool = False) -> None:
+        self._exit(("resume", session, fork))
+
+    def notify(self, msg: str, seconds: float = 3) -> None:
+        self.frame.footer = urwid.AttrMap(urwid.Text(f" {msg}"), "notify")
+        self.loop.set_alarm_in(seconds, lambda *_: self._restore_footer())
+
+    def _restore_footer(self) -> None:
+        self.frame.footer = self.footer
+
+    def _schedule_refresh(self, loop: object = None, data: object = None) -> None:
+        if self._exiting:
+            return
+        view = self.views[self._active]
+
+        def worker() -> None:
+            view.refresh_data()
+            if self._pipe_fd is not None:
+                try:
+                    os.write(self._pipe_fd, b"1")
+                except OSError:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)
+
+    def _on_pipe(self, data: bytes) -> bool:
+        if not self._exiting:
+            self.views[self._active].apply_data()
+        return True
+
+    def run(self) -> tuple | None:
+        self._pipe_fd = self.loop.watch_pipe(self._on_pipe)
+        self.views[self._active].load()
+        self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)
+        self.loop.run()
+        return self.result

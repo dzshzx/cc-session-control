@@ -10,12 +10,11 @@ requires-python = ">=3.12"
 license = "MIT"
 readme = "README.md"
 authors = [{ name = "dzshzx" }]
-keywords = ["claude-code", "session-manager", "tui", "remote-control", "textual"]
-dependencies = ["textual>=1.0.0"]
+keywords = ["claude-code", "session-manager", "tui", "remote-control", "urwid"]
+dependencies = ["urwid>=2.0.0"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
-    "Framework :: Textual",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: User Interfaces",

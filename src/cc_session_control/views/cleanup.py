@@ -1,72 +1,78 @@
-"""Cleanup Tab — session statistics and prune/sweep operations."""
+"""Cleanup view — session statistics and prune operations."""
 
 from __future__ import annotations
 
-from textual import work
-from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Container
-from textual.widgets import Static
+from typing import TYPE_CHECKING
+
+import urwid
 
 from ..data.sessions import cleanup_stats, prune_sessions, remove_session, scan
 
+if TYPE_CHECKING:
+    from ..app import App
 
-class CleanupView(Container):
-    BINDINGS = [
-        Binding("p", "prune_empty", "清理空壳(0提问)", show=True),
-        Binding("shift+p", "prune_short", "清理短会话(≤2)", show=True),
-        Binding("r", "refresh", "刷新", show=True),
-    ]
 
-    def __init__(self) -> None:
-        super().__init__()
+class CleanupView:
+    def __init__(self, app: App) -> None:
+        self.app = app
         self._stats: dict[str, int] = {}
+        self._pending_stats: dict[str, int] | None = None
 
-    def compose(self) -> ComposeResult:
-        yield Static("扫描中…", id="cleanup-stats")
-        yield Static("", id="cleanup-result")
-
-    def on_mount(self) -> None:
-        self.load_stats()
-
-    @work(thread=True)
-    def load_stats(self) -> None:
-        sessions = scan()
-        stats = cleanup_stats(sessions)
-        self.app.call_from_thread(self._update_stats, stats)
-
-    def _update_stats(self, stats: dict[str, int]) -> None:
-        self._stats = stats
-        panel = self.query_one("#cleanup-stats", Static)
-        panel.update(
-            f"会话统计\n"
-            f"  总会话:        {stats['total']}\n"
-            f"  空壳(0提问):   {stats['empty']}\n"
-            f"  短会话(≤2):    {stats['short']}\n"
-            f"  孤儿目录:      {stats['orphans']}\n\n"
-            f"p 清理空壳 · P 清理≤2提问 · r 刷新"
+        self.stats_text = urwid.Text("扫描中…")
+        self.result_text = urwid.Text("")
+        self.widget = urwid.Filler(
+            urwid.Pile([
+                urwid.Text(""),
+                self.stats_text,
+                urwid.Text(""),
+                self.result_text,
+            ]),
+            valign="top",
         )
 
-    @work(thread=True)
+    def keyhints(self) -> str:
+        return "p 清理空壳 · P 清理≤2提问"
+
+    def load(self) -> None:
+        sessions = scan()
+        self._stats = cleanup_stats(sessions)
+        self._update_display()
+
+    def refresh_data(self) -> None:
+        sessions = scan()
+        self._pending_stats = cleanup_stats(sessions)
+
+    def apply_data(self) -> None:
+        if self._pending_stats is not None:
+            self._stats = self._pending_stats
+            self._pending_stats = None
+            self._update_display()
+
+    def _update_display(self) -> None:
+        s = self._stats
+        self.stats_text.set_text(
+            f"  会话统计\n"
+            f"    总会话:        {s.get('total', 0)}\n"
+            f"    空壳(0提问):   {s.get('empty', 0)}\n"
+            f"    短会话(≤2):    {s.get('short', 0)}\n"
+            f"    孤儿目录:      {s.get('orphans', 0)}\n\n"
+            f"  p 清理空壳 · P 清理≤2提问 · r 刷新"
+        )
+
     def _do_prune(self, max_prompts: int) -> None:
         sessions = scan()
         targets = prune_sessions(sessions, max_prompts=max_prompts)
         count = len(targets)
         for s in targets:
             remove_session(s)
-        stats = cleanup_stats(scan())
-        self.app.call_from_thread(self._show_result, count, stats)
+        self.result_text.set_text(f"  已清理 {count} 条会话")
+        self.load()
 
-    def _show_result(self, count: int, stats: dict[str, int]) -> None:
-        result = self.query_one("#cleanup-result", Static)
-        result.update(f"已清理 {count} 条会话")
-        self._update_stats(stats)
-
-    def action_prune_empty(self) -> None:
-        self._do_prune(0)
-
-    def action_prune_short(self) -> None:
-        self._do_prune(2)
-
-    def action_refresh(self) -> None:
-        self.load_stats()
+    def handle_key(self, key: str) -> None:
+        if key == "p":
+            self._do_prune(0)
+        elif key == "P":
+            self._do_prune(2)
+        elif key == "r":
+            self.load()
+            self.app.notify("已刷新")

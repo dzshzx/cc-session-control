@@ -134,9 +134,9 @@ def _cmd_prune(args: argparse.Namespace) -> None:
 
 def _cmd_tui(args: argparse.Namespace) -> None:
     from .actions.session_ops import do_resume
-    from .app import CCMApp
+    from .app import App
 
-    app = CCMApp()
+    app = App()
     result = app.run()
 
     if result and isinstance(result, tuple) and result[0] == "resume":

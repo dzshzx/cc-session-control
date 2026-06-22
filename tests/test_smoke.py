@@ -20,7 +20,7 @@ def test_help_flag():
         capture_output=True, text=True,
     )
     assert result.returncode == 0
-    assert "Remote Control" in result.stdout or "rc" in result.stdout
+    assert "rc" in result.stdout
 
 
 def test_config_detect_workspace():
@@ -42,3 +42,15 @@ def test_models_importable():
     p = RCProject(name="proj", directory="/tmp/proj", trusted=True,
                   in_list=False, status="stopped", auto_start=False)
     assert p.name == "proj"
+
+
+def test_urwid_importable():
+    import urwid
+    assert hasattr(urwid, "MainLoop")
+
+
+def test_app_instantiation():
+    from cc_session_control.app import App
+    app = App()
+    assert app.result is None
+    assert len(app.views) == 3
