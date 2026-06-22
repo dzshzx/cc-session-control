@@ -22,9 +22,9 @@ if TYPE_CHECKING:
     from ..app import App
 
 _ACTIONS = [
-    {"key": "empty",   "label": "清理空壳会话(0提问)",  "stat": "empty"},
-    {"key": "short",   "label": "清理短会话(≤2提问)",   "stat": "short"},
-    {"key": "orphans", "label": "清理孤儿目录",         "stat": "orphans"},
+    {"key": "empty",   "label": "空壳会话(0提问)",  "stat": "empty"},
+    {"key": "short",   "label": "短会话(≤2提问)",   "stat": "short"},
+    {"key": "orphans", "label": "孤儿目录",         "stat": "orphans"},
 ]
 
 
@@ -32,7 +32,7 @@ class _ActionRow(urwid.WidgetWrap):
     def __init__(self, action_key: str, label: str, count: int) -> None:
         self.action_key = action_key
         cols = urwid.Columns([
-            ("weight", 1, urwid.Text(f"  {label}")),
+            ("weight", 1, urwid.Text(label)),
             (8, urwid.Text(str(count), align="right")),
         ])
         mapped = urwid.AttrMap(cols, "dead", focus_map={"dead": "selected", None: "selected"})
@@ -47,7 +47,7 @@ class _ActionRow(urwid.WidgetWrap):
 
 class _PreviewRow(urwid.WidgetWrap):
     def __init__(self, text: str) -> None:
-        mapped = urwid.AttrMap(urwid.Text(f"  {text}"), "dead", focus_map={"dead": "selected", None: "selected"})
+        mapped = urwid.AttrMap(urwid.Text(text), "dead", focus_map={"dead": "selected", None: "selected"})
         super().__init__(mapped)
 
     def selectable(self) -> bool:
@@ -68,10 +68,14 @@ class CleanupView:
         self._preview_sessions: list[Session] = []
 
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
+        col_header = urwid.AttrMap(urwid.Columns([
+            ("weight", 1, urwid.Text("操作")),
+            (8, urwid.Text("数量", align="right")),
+        ]), "col_header")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
         body = urwid.AttrMap(self.listbox, {None: "body"})
-        self.widget = urwid.Frame(body, footer=self.status)
+        self.widget = urwid.Frame(body, header=col_header, footer=self.status)
 
     def keyhints(self) -> str:
         if self._previewing:
@@ -142,7 +146,7 @@ class CleanupView:
             self.walker.clear()
             for p in orphan_paths:
                 self.walker.append(_PreviewRow(p))
-            self.status.original_widget.set_text(f" 将清理 {len(orphan_paths)} 个孤儿目录 · Enter 确认 · Esc 返回")
+            self.status.original_widget.set_text(f" 将清理 {len(orphan_paths)} 个孤儿目录")
             self._update_footer()
             return
         else:
@@ -161,9 +165,7 @@ class CleanupView:
             cwd = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
             line = f"{when}  p{s.prompts}  {s.label[:60]}  ({cwd})"
             self.walker.append(_PreviewRow(line))
-        self.status.original_widget.set_text(
-            f" 将清理 {len(targets)} 条{label} · Enter 确认 · Esc 返回"
-        )
+        self.status.original_widget.set_text(f" 将清理 {len(targets)} 条{label}")
         self._update_footer()
 
     def _exit_preview(self) -> None:
@@ -171,6 +173,7 @@ class CleanupView:
         self._preview_action = None
         self._preview_sessions = []
         self._rebuild()
+        self._update_footer()
 
     def _confirm_cleanup(self) -> None:
         action = self._preview_action
