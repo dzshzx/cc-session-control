@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import curses
 import os
 import threading
 
@@ -11,21 +12,35 @@ from .views.cleanup import CleanupView
 from .views.rc import RCView
 from .views.sessions import SessionsView
 
+# 6-tuple: (name, fg_16, bg_16, mono, fg_256, bg_256)
 PALETTE = [
-    ("header", "white,bold", "default"),
-    ("footer", "dark gray", "default"),
-    ("tab_on", "white,bold,underline", "default"),
-    ("tab_off", "dark gray", "default"),
-    ("alive", "light green", "default"),
-    ("dead", "white", "default"),
-    ("selected", "standout", "default"),
-    ("notify", "yellow", "default"),
-    ("status", "dark gray", "default"),
-    ("rc_running", "light green", "default"),
-    ("rc_stopped", "white", "default"),
+    ("header",     "white,bold",  "black", "bold",     "#fff,bold",  "#111"),
+    ("footer",     "light gray",  "black", None,       "#999",       "#111"),
+    ("tab_on",     "white,bold",  "black", "bold,underline", "#fff,bold,underline", "#111"),
+    ("tab_off",    "dark cyan",   "black", None,       "#688",       "#111"),
+    ("alive",      "light green", "black", None,       "#6d6",       "#111"),
+    ("dead",       "light gray",  "black", None,       "#ccc",       "#111"),
+    ("selected",   "white,bold",  "dark cyan", "standout", "#fff,bold", "#068"),
+    ("notify",     "yellow,bold", "black", "bold",     "#ff0,bold",  "#111"),
+    ("status",     "light gray",  "black", None,       "#aaa",       "#111"),
+    ("rc_running", "light green", "black", None,       "#6d6",       "#111"),
+    ("rc_stopped", "light gray",  "black", None,       "#ccc",       "#111"),
 ]
 
 TAB_NAMES = ["会话", "远程控制", "清理"]
+
+
+def _make_screen() -> urwid.raw_display.Screen:
+    screen = urwid.raw_display.Screen()
+    try:
+        curses.setupterm()
+        term_colors = curses.tigetnum("colors")
+        if term_colors >= 256:
+            screen.set_terminal_properties(colors=256)
+    except Exception:
+        pass
+    screen.register_palette(PALETTE)
+    return screen
 
 
 class App:
@@ -49,9 +64,11 @@ class App:
         self.footer = urwid.AttrMap(self.footer_text, "footer")
 
         self.frame = urwid.Frame(self.body, header=self.header, footer=self.footer)
+
+        self._screen = _make_screen()
         self.loop = urwid.MainLoop(
             self.frame,
-            palette=PALETTE,
+            screen=self._screen,
             unhandled_input=self._input,
         )
 
