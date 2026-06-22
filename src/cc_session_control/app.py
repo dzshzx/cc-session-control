@@ -13,14 +13,14 @@ from .views.sessions import SessionsView
 
 PALETTE = [
     ("header", "white,bold", "dark blue"),
-    ("footer", "white", "dark gray"),
+    ("footer", "light gray", "dark blue"),
     ("tab_on", "white,bold", "dark blue"),
     ("tab_off", "light gray", "default"),
     ("alive", "light green", "default"),
-    ("dead", "dark gray", "default"),
-    ("selected", "white", "dark blue"),
-    ("notify", "yellow", "dark gray"),
-    ("status", "white", "dark gray"),
+    ("dead", "light gray", "default"),
+    ("selected", "white,bold", "dark cyan"),
+    ("notify", "yellow,bold", "default"),
+    ("status", "light cyan", "dark blue"),
 ]
 
 TAB_NAMES = ["会话", "远程控制", "清理"]
