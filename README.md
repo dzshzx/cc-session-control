@@ -10,7 +10,7 @@ TUI manager for [Claude Code](https://claude.ai/code) sessions and Remote Contro
 - **Remote Control Tab** — Start/stop RC servers per project, toggle auto-start, crash recovery with exponential backoff
 - **Cleanup Tab** — Prune empty/short sessions, sweep orphan artifact directories
 
-Built with [Textual](https://textual.textualize.io/).
+Built with [urwid](https://urwid.org/).
 
 > **UI language:** Simplified Chinese (notifications and status text). CLI output is in English.
 
