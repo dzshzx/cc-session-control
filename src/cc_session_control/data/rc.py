@@ -61,29 +61,37 @@ def toggle_autostart(proj: str) -> bool:
     return True
 
 
-def trusted_projects() -> list[str]:
-    ws = str(cfg.workspace)
+def _load_projects() -> dict:
+    """Read the `projects` map from ~/.claude.json, or {} on any failure.
+
+    Single source for the claude.json read shared by trusted_projects /
+    is_trusted, so the open+parse+swallow dance lives in one place.
+    """
     try:
         with open(cfg.claude_json) as f:
-            data = json.load(f)
-        prefix = ws + "/"
-        projects = []
-        for key, val in data.get("projects", {}).items():
+            return json.load(f).get("projects", {}) or {}
+    except Exception:
+        return {}
+
+
+def trusted_projects() -> list[str]:
+    prefix = str(cfg.workspace) + "/"
+    projects = []
+    try:
+        for key, val in _load_projects().items():
             if val.get("hasTrustDialogAccepted") and key.startswith(prefix):
                 name = key[len(prefix):]
                 if "/" not in name:
                     projects.append(name)
-        return sorted(projects)
     except Exception:
         return []
+    return sorted(projects)
 
 
 def is_trusted(proj: str) -> bool:
     try:
-        with open(cfg.claude_json) as f:
-            data = json.load(f)
         key = f"{cfg.workspace}/{proj}"
-        return data.get("projects", {}).get(key, {}).get("hasTrustDialogAccepted", False)
+        return bool(_load_projects().get(key, {}).get("hasTrustDialogAccepted", False))
     except Exception:
         return False
 

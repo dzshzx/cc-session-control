@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
+
+# Single source of truth for RC status values. The Chinese display labels
+# (views/rc.py) and the CLI icons (cli.py) are presentation-only maps keyed
+# off this vocabulary.
+Status = Literal["running", "dead", "stopped"]
 
 
 @dataclass
@@ -25,7 +31,7 @@ class RCProject:
     directory: str
     trusted: bool
     in_list: bool
-    status: str  # "running" | "dead" | "stopped"
+    status: Status
     auto_start: bool
     rc_at_startup: bool | None = None  # per-project remoteControlAtStartup override
     environment_id: str = ""

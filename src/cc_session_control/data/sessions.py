@@ -150,6 +150,19 @@ def scan() -> list[Session]:
     return rows
 
 
+# session-env/ and file-history/ hold one dir per full session id, and are
+# also what orphan-sweeping scans. jobs/ is keyed by the 8-char id prefix and
+# is intentionally NOT orphan-scanned — that asymmetry lives only here now.
+_ARTIFACT_DIRS = ("session-env", "file-history")
+
+
+def _session_artifact_paths(claude_home: str, sid: str) -> list[str]:
+    """All on-disk artifact paths owned by one session id."""
+    paths = [os.path.join(claude_home, d, sid) for d in _ARTIFACT_DIRS]
+    paths.append(os.path.join(claude_home, "jobs", sid[:8]))
+    return paths
+
+
 def cleanup_stats(sessions: list[Session]) -> dict[str, int]:
     claude_home = str(cfg.claude_home)
     total = len(sessions)
@@ -158,7 +171,7 @@ def cleanup_stats(sessions: list[Session]) -> dict[str, int]:
     orphan_dirs = 0
     all_sids = {s.sid for s in sessions}
     alive_sids = {s.sid for s in sessions if s.alive}
-    for subdir in ("session-env", "file-history"):
+    for subdir in _ARTIFACT_DIRS:
         path = os.path.join(claude_home, subdir)
         if os.path.isdir(path):
             for name in os.listdir(path):
@@ -171,7 +184,7 @@ def list_orphan_dirs(sessions: list[Session]) -> list[str]:
     claude_home = str(cfg.claude_home)
     all_sids = {s.sid for s in sessions}
     orphans: list[str] = []
-    for subdir in ("session-env", "file-history"):
+    for subdir in _ARTIFACT_DIRS:
         path = os.path.join(claude_home, subdir)
         if not os.path.isdir(path):
             continue
@@ -185,7 +198,7 @@ def remove_orphan_dirs(sessions: list[Session]) -> int:
     claude_home = str(cfg.claude_home)
     all_sids = {s.sid for s in sessions}
     count = 0
-    for subdir in ("session-env", "file-history"):
+    for subdir in _ARTIFACT_DIRS:
         path = os.path.join(claude_home, subdir)
         if not os.path.isdir(path):
             continue
@@ -214,11 +227,7 @@ def remove_session(s: Session) -> None:
     comp = s.file[:-6]
     if os.path.isdir(comp):
         shutil.rmtree(comp, ignore_errors=True)
-    for p in (
-        os.path.join(claude_home, "session-env", s.sid),
-        os.path.join(claude_home, "file-history", s.sid),
-        os.path.join(claude_home, "jobs", s.sid[:8]),
-    ):
+    for p in _session_artifact_paths(claude_home, s.sid):
         if os.path.isdir(p):
             shutil.rmtree(p, ignore_errors=True)
         elif os.path.isfile(p):
