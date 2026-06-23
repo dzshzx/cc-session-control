@@ -15,7 +15,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv tool install git+https://github.com/dzshzx/cc-session-control.git
 #   This machine pins it via mise (~/.config/mise/config.toml):
 #     "pipx:git+https://github.com/dzshzx/cc-session-control.git" = "latest"
-#   After pushing new commits, refresh the installed build with:  mise upgrade
+#   After pushing, refresh the installed build (NOTE: `mise upgrade` is a no-op for a
+#   git "latest" pin — it never re-resolves the HEAD). Force a rebuild instead:
+#     mise uninstall "pipx:git+https://github.com/dzshzx/cc-session-control.git@latest" && mise install
 
 # Run the installed TUI (the GitHub build)
 csctl
