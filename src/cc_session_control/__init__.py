@@ -1,3 +1,3 @@
 """cc-session-control — TUI manager for Claude Code sessions and Remote Control."""
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"

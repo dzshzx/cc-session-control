@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-session-control"
-version = "0.2.0"
+dynamic = ["version"]
 description = "TUI manager for Claude Code sessions and Remote Control"
 requires-python = ">=3.12"
 license = "MIT"
@@ -30,6 +30,9 @@ csctl = "cc_session_control.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+
+[tool.setuptools.dynamic]
+version = { attr = "cc_session_control.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

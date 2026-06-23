@@ -29,3 +29,21 @@ csctl --version
 - Keep each source file under 600 lines
 - Use type hints
 - Follow existing patterns in the codebase
+
+## Releasing / version bump
+
+The version lives in **one place**: `__version__` in `src/cc_session_control/__init__.py`.
+`pyproject.toml` derives its version from that attribute (setuptools `dynamic`), and
+`csctl --version` reads the same attribute, so there is nothing to keep in sync.
+
+Use the helper to bump it (never hand-edit two files):
+
+```bash
+python scripts/bump_version.py patch    # 0.2.1 -> 0.2.2
+python scripts/bump_version.py minor    # 0.2.1 -> 0.3.0
+python scripts/bump_version.py major    # 0.2.1 -> 1.0.0
+python scripts/bump_version.py --set 1.2.3   # explicit
+python scripts/bump_version.py --show        # print current, no change
+```
+
+It edits only `__init__.py` and prints the suggested commit + tag commands.
