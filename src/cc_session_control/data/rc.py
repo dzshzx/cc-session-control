@@ -158,6 +158,15 @@ def _is_alive(proj: str) -> bool:
     return _tmux_pane_alive(f"{cfg.rc_session}:{proj}")
 
 
+def run_in_tmux(session: str, window: str, cmd: str) -> bool:
+    """Run `cmd` in a tmux `window` under `session`, creating the session if
+    it doesn't exist yet. Public seam for relaunching a session outside the
+    rc backoff-loop machinery (no restart loop, no staggering)."""
+    if _tmux_has_session(session):
+        return _tmux_new_window(session, window, cmd)
+    return _tmux_new_session(session, window, cmd)
+
+
 def _read_rc_at_startup(directory: str) -> bool | None:
     for name in ("settings.local.json", "settings.json"):
         path = os.path.join(directory, ".claude", name)

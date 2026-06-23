@@ -125,6 +125,59 @@ def test_terminate_session_invalidates_cache(monkeypatch):
     assert calls["invalidate"] == 1
 
 
+# --- D3: relaunch_in_tmux (搬进 tmux + 远控) ---
+
+def test_tmux_resume_cmd_dead():
+    from cc_session_control.actions.session_ops import tmux_resume_cmd
+    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
+    assert tmux_resume_cmd(s) == (
+        "cd /tmp/proj && claude --resume abcdef0123456789 --remote-control proj-abcdef01"
+    )
+
+
+def test_tmux_resume_cmd_fork_includes_fork_flag():
+    from cc_session_control.actions.session_ops import tmux_resume_cmd
+    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
+    assert tmux_resume_cmd(s, fork=True) == (
+        "cd /tmp/proj && claude --resume abcdef0123456789 --fork-session "
+        "--remote-control proj-abcdef01"
+    )
+
+
+def test_relaunch_in_tmux_kills_live_non_current(monkeypatch):
+    import cc_session_control.actions.session_ops as so
+
+    calls = {"kill": 0, "invalidate": 0, "tmux": None}
+    monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
+    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(so, "invalidate_cache", lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1))
+    monkeypatch.setattr(so.rc, "run_in_tmux",
+                        lambda session, window, cmd: calls.__setitem__("tmux", (session, window, cmd)) or True)
+
+    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242)
+    assert so.relaunch_in_tmux(s) is True
+    assert calls["kill"] == 1
+    assert calls["invalidate"] == 1
+    _session, window, cmd = calls["tmux"]
+    assert window == "proj-abcdef01"
+    assert "--resume abcdef0123456789" in cmd
+    assert "--remote-control proj-abcdef01" in cmd
+
+
+def test_relaunch_in_tmux_dead_no_kill(monkeypatch):
+    import cc_session_control.actions.session_ops as so
+
+    calls = {"kill": 0}
+    monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
+    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(so, "invalidate_cache", lambda: None)
+    monkeypatch.setattr(so.rc, "run_in_tmux", lambda *a: True)
+
+    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
+    assert so.relaunch_in_tmux(s) is True
+    assert calls["kill"] == 0
+
+
 # --- D1: cleanup_stats ---
 
 def test_cleanup_stats_counts(tmp_path, monkeypatch):

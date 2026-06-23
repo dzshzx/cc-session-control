@@ -7,6 +7,8 @@ import signal
 import time
 
 from .. import clipboard
+from ..config import cfg
+from ..data import rc
 from ..data.agents import invalidate_cache
 from ..models import Session
 
@@ -73,6 +75,39 @@ def do_resume(s: Session, fork: bool = False) -> None:
     if cwd and os.path.isdir(cwd):
         os.chdir(cwd)
     os.execvp("claude", args)
+
+
+def _rc_name(s: Session) -> str:
+    """Remote-control label (shown in claude.ai/code) for a relaunched session."""
+    base = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
+    return f"{base or 'session'}-{s.sid[:8]}"
+
+
+def tmux_resume_cmd(s: Session, fork: bool = False) -> str:
+    """Shell command that resumes the session under remote control."""
+    cwd, args, _ = _resume_plan(s, fork)
+    args = args + ["--remote-control", _rc_name(s)]
+    line = " ".join(args)
+    return f"cd {cwd} && {line}" if cwd else line
+
+
+def relaunch_in_tmux(s: Session, fork: bool = False) -> bool:
+    """Relaunch a session as `claude --resume … --remote-control …` inside a
+    tmux window, so it outlives the terminal and is remotely controllable.
+
+    A live, non-current session is taken over (its old pid is killed first and
+    the liveness cache invalidated, like terminate); a fork leaves the original
+    running. csctl is NOT replaced — it just spawns the tmux window.
+    """
+    _, _, should_kill = _resume_plan(s, fork)
+    if should_kill and s.pid:
+        try:
+            os.kill(s.pid, signal.SIGTERM)
+        except Exception:
+            pass
+        time.sleep(1)
+        invalidate_cache()
+    return rc.run_in_tmux(cfg.tmux_session, _rc_name(s), tmux_resume_cmd(s, fork))
 
 
 def to_clipboard(text: str) -> bool:

@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING
 
 import urwid
 
-from ..actions.session_ops import resume_cmd, terminate_session, to_clipboard
+from ..actions.session_ops import (
+    relaunch_in_tmux,
+    resume_cmd,
+    terminate_session,
+    to_clipboard,
+)
 from ..data.sessions import (
     cleanup_stats,
     list_orphan_dirs,
@@ -129,7 +134,7 @@ class SessionsView:
             return "Enter 预览待清理项 · Esc 返回会话列表"
         if self._mode == "preview":
             return "Enter 确认清理 · Esc 取消"
-        return "Enter 接回 · t 终止 · d 删除 · c 清理 · / 过滤 · ? 帮助"
+        return "Enter 接回 · t 终止 · T tmux化 · d 删除 · c 清理 · / 过滤 · ? 帮助"
 
     def _update_footer(self) -> None:
         if self.app.views[self.app._active] is not self:
@@ -389,6 +394,13 @@ class SessionsView:
             ok = terminate_session(s)
             self.app.notify("已终止" if ok else "终止失败")
             self.app.trigger_async_refresh()
+        elif key == "T" and s:
+            if s.current:
+                self.app.notify("不能搬动当前会话")
+                return
+            ok = relaunch_in_tmux(s)
+            self.app.notify("已搬进 tmux + 远控（手机/网页可接管）" if ok else "搬入 tmux 失败")
+            self.app.trigger_async_refresh()
         elif key == "d" and s:
             if s.alive:
                 self.app.notify("活会话不删，先终止")
@@ -416,6 +428,7 @@ class SessionsView:
             "  Enter  接回选中的会话（在终端中恢复）",
             "  f      分叉会话（创建副本后接回）",
             "  t      终止活跃会话（发送 SIGTERM）",
+            "  T      搬进 tmux 并开启远程控制（脱离终端，手机/网页可接管）",
             "  d      删除已结束的会话记录",
             "  y      复制接回命令到剪贴板",
             "",

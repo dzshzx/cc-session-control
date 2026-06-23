@@ -16,6 +16,10 @@ class Config:
         self.rc_list: Path = self.config_dir / "rc-enabled"
         self.rc_session: str = os.environ.get("CSCTL_RC_SESSION", "rc")
         self.rc_stagger: int = int(os.environ.get("CSCTL_RC_STAGGER", "2"))
+        # Dedicated tmux session for interactive sessions relaunched under remote
+        # control (kept separate from rc_session, whose windows are supervised
+        # backoff-loop RC servers).
+        self.tmux_session: str = os.environ.get("CSCTL_TMUX_SESSION", "cc")
         self._workspace: Path | None = None
 
     @property
