@@ -23,27 +23,27 @@ def terminate_session(s: Session) -> bool:
     return True
 
 
-def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str]]:
-    """Shared resume recipe: the cwd to enter and the claude argv.
+def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
+    """Shared resume recipe: the cwd to enter, the claude argv, and whether
+    to kill the old session first.
 
-    Returns (cwd, args). The kill-when-alive decision is intentionally NOT
-    encoded here — see the divergence note on resume_cmd / do_resume below.
+    Returns (cwd, args, should_kill). Unified kill semantics: a fork is a copy
+    and leaves the original running, while a plain resume takes the session
+    over — so we kill only when it is alive, not the current session, and we
+    are NOT forking. `resume_cmd` and `do_resume` both obey this single
+    decision; they must not re-derive it.
     """
     args = ["claude", "--resume", s.sid]
     if fork:
         args.append("--fork-session")
-    return s.cwd, args
+    should_kill = s.alive and not s.current and not fork
+    return s.cwd, args, should_kill
 
 
 def resume_cmd(s: Session, fork: bool = False) -> str:
-    cwd, args = _resume_plan(s, fork)
+    cwd, args, should_kill = _resume_plan(s, fork)
     parts: list[str] = []
-    # DIVERGENCE (intentional-for-now): resume_cmd emits the kill prefix
-    # whenever the session is alive & not current, REGARDLESS of fork —
-    # while do_resume below skips the kill when fork=True. This latent
-    # inconsistency is preserved as-is to honor no-behavior-change; a
-    # follow-up task may unify it as a real behavior fix.
-    if s.alive and not s.current:
+    if should_kill:
         parts.append(f"kill {s.pid} && sleep 1")
     if cwd:
         parts.append(f"cd {cwd}")
@@ -53,10 +53,8 @@ def resume_cmd(s: Session, fork: bool = False) -> str:
 
 def do_resume(s: Session, fork: bool = False) -> None:
     """chdir + (kill if needed) + exec claude. Does not return."""
-    cwd, args = _resume_plan(s, fork)
-    # DIVERGENCE (intentional-for-now): do_resume only kills when NOT forking,
-    # whereas resume_cmd kills regardless of fork. See note on resume_cmd.
-    if s.alive and not s.current and not fork:
+    cwd, args, should_kill = _resume_plan(s, fork)
+    if should_kill:
         try:
             os.kill(s.pid, signal.SIGTERM)
         except Exception:

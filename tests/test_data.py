@@ -95,12 +95,12 @@ def test_resume_cmd_fork():
     assert cmd == "cd /tmp/proj && claude --resume sid1 --fork-session"
 
 
-def test_resume_cmd_fork_while_alive_keeps_kill_prefix():
-    # Divergence-preservation: resume_cmd kills whenever alive&!current,
-    # regardless of fork. This case must still emit the kill prefix.
+def test_resume_cmd_fork_while_alive_drops_kill_prefix():
+    # Unified semantics (decision A): fork is a copy and leaves the original
+    # running, so forking a live non-current session must NOT kill it.
     s = _make_session(sid="sid1", cwd="/tmp/proj", alive=True, current=False, pid=4242)
     cmd = resume_cmd(s, fork=True)
-    assert cmd == "kill 4242 && sleep 1 && cd /tmp/proj && claude --resume sid1 --fork-session"
+    assert cmd == "cd /tmp/proj && claude --resume sid1 --fork-session"
 
 
 def test_resume_cmd_current_no_kill():

@@ -70,7 +70,7 @@ A `self._refreshing` guard prevents overlapping refreshes. Auto-refresh re-arms 
 
 The TUI cannot run `claude` inside itself. To resume a session, `SessionsView` calls `app.exit_with_resume(session, fork)`, which exits the MainLoop returning a `("resume", session, fork)` tuple. Back in `cli._cmd_tui`, `do_resume` (in `actions/session_ops.py`) then `os.chdir`s to the session's cwd and `os.execvp("claude", ...)` — **replacing the csctl process**. This is why the final resume step lives in `cli.py`, not the view.
 
-**Gotcha — intentional divergence:** `resume_cmd` (the copy-to-clipboard string, `y` key) emits a `kill <pid> && sleep 1` prefix whenever the session is alive & not current, *regardless of fork*; `do_resume` (the actual exec) skips the kill when `fork=True`. This inconsistency is deliberately preserved (see the `DIVERGENCE` comments + `test_resume_cmd_fork_while_alive_keeps_kill_prefix`). Don't "fix" it casually — it's a known latent item awaiting a real behavior-change task.
+**Unified kill semantics:** `resume_cmd` (the `y`-key clipboard string) and `do_resume` (the actual exec) share one decision computed once in `_resume_plan`, which returns `should_kill = alive and not current and not fork`. A plain **resume takes over** a live session (kills the old pid first); a **fork is a copy** and leaves the original running. Both consumers must read `should_kill` rather than re-deriving the condition — that re-derivation was the old divergence (now removed).
 
 ### Session liveness — single source of truth
 
