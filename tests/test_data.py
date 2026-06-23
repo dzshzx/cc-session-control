@@ -109,6 +109,22 @@ def test_resume_cmd_current_no_kill():
     assert cmd == "cd /tmp/proj && claude --resume sid1"
 
 
+# --- D2: terminate_session owns liveness-cache invalidation ---
+
+def test_terminate_session_invalidates_cache(monkeypatch):
+    import cc_session_control.actions.session_ops as so
+
+    calls = {"kill": 0, "invalidate": 0}
+    monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
+    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(so, "invalidate_cache", lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1))
+
+    s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
+    assert so.terminate_session(s) is True
+    assert calls["kill"] == 1
+    assert calls["invalidate"] == 1
+
+
 # --- D1: cleanup_stats ---
 
 def test_cleanup_stats_counts(tmp_path, monkeypatch):

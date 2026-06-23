@@ -41,6 +41,12 @@ def _make_project(**overrides):
     return RCProject(**defaults)
 
 
+def test_views_satisfy_tabview_protocol():
+    from cc_session_control.app import TabView
+    assert isinstance(SessionsView(FakeApp()), TabView)
+    assert isinstance(RCView(FakeApp()), TabView)
+
+
 def test_session_row_selectable():
     s = _make_session()
     row = SessionRow(s)

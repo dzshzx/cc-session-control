@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 import urwid
 
 from ..actions.session_ops import resume_cmd, terminate_session, to_clipboard
-from ..data.agents import invalidate_cache
 from ..data.sessions import (
     cleanup_stats,
     list_orphan_dirs,
@@ -324,7 +323,6 @@ class SessionsView:
             for t in self._preview_sessions:
                 remove_session(t)
             self.app.notify(f"已清理 {count} 条会话")
-            invalidate_cache()
         elif action == "orphans":
             sessions = scan()
             count = remove_orphan_dirs(sessions)
@@ -390,7 +388,6 @@ class SessionsView:
                 return
             ok = terminate_session(s)
             self.app.notify("已终止" if ok else "终止失败")
-            invalidate_cache()
             self.app.trigger_async_refresh()
         elif key == "d" and s:
             if s.alive:

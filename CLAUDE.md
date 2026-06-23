@@ -44,7 +44,7 @@ The invariant is **import direction, not purity**: `views` import from `data` an
 
 ### The view contract (how `app.py` drives tabs generically)
 
-`App` holds `self.views = [SessionsView(self), RCView(self)]` and treats each via a duck-typed interface. To add/modify a tab, honor these members:
+`App` holds `self.views: list[TabView]` and drives each via the `TabView` `Protocol` (defined in `app.py`, `@runtime_checkable`). To add/modify a tab, satisfy that Protocol structurally — these members:
 
 - `.widget` — the urwid widget for the tab body
 - `._loaded` — bool; whether `load()` has run
@@ -74,7 +74,7 @@ The TUI cannot run `claude` inside itself. To resume a session, `SessionsView` c
 
 ### Session liveness — single source of truth
 
-`data/agents.py::alive_map()` is the **one authority** for which sessions are alive. It runs `claude agents --json` (cached 5s) → `{sessionId: pid}`. A session is "alive" iff its id appears there. After any operation that changes liveness (terminate/delete/cleanup), call `invalidate_cache()`.
+`data/agents.py::alive_map()` is the **one authority** for which sessions are alive. It runs `claude agents --json` (cached 5s) → `{sessionId: pid}`. A session is "alive" iff its id appears there. Terminating is the only session op that changes this liveness, and `terminate_session` (in `actions/session_ops.py`) **invalidates the cache itself** — callers don't call `invalidate_cache()` manually. (delete/cleanup only act on already-dead sessions, so they leave the cache alone.)
 
 `data/sessions.py::_ancestor_pids()` walks `/proc/<pid>/stat` up the parent chain to find csctl's own ancestor PIDs. A session whose pid is in that set is the **"current"** session (the one that launched csctl) and is protected — you cannot resume, terminate, or prune it. This `/proc` walk is **Linux/WSL only**; liveness degrades on macOS.
 

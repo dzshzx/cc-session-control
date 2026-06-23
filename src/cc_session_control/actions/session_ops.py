@@ -7,19 +7,29 @@ import signal
 import time
 
 from .. import clipboard
+from ..data.agents import invalidate_cache
 from ..models import Session
 
 
 def terminate_session(s: Session) -> bool:
+    """Send SIGTERM and own the liveness-cache invalidation.
+
+    Terminating is the one session op that changes `claude agents` liveness,
+    so it invalidates the alive_map cache itself — callers no longer have to
+    remember to. (delete/cleanup only touch already-dead sessions, so they
+    don't.)
+    """
     if not s.pid:
         return False
     try:
         os.kill(s.pid, signal.SIGTERM)
     except ProcessLookupError:
+        invalidate_cache()  # already gone — liveness changed
         return True
     except Exception:
         return False
     time.sleep(1)
+    invalidate_cache()
     return True
 
 

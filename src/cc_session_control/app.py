@@ -5,11 +5,32 @@ from __future__ import annotations
 import curses
 import os
 import threading
+from typing import Protocol, runtime_checkable
 
 import urwid
 
 from .views.rc import RCView
 from .views.sessions import SessionsView
+
+
+@runtime_checkable
+class TabView(Protocol):
+    """The contract App uses to drive each tab generically.
+
+    A tab satisfies this structurally — App never special-cases a concrete
+    view. `fetch_pending()` runs on the worker thread and must not touch
+    widgets; `apply_data()` runs on the main loop and swaps `_pending` into
+    the walker. Adding a tab means honoring every member below.
+    """
+
+    widget: urwid.Widget
+    _loaded: bool
+
+    def load(self) -> None: ...
+    def fetch_pending(self) -> None: ...
+    def apply_data(self) -> None: ...
+    def keyhints(self) -> str: ...
+    def handle_key(self, key: str) -> None: ...
 
 # 6-tuple: (name, fg_16, bg_16, mono, fg_256, bg_256)
 PALETTE = [
@@ -52,7 +73,7 @@ class App:
         self._pipe_fd: int | None = None
         self._refreshing = False
 
-        self.views = [SessionsView(self), RCView(self)]
+        self.views: list[TabView] = [SessionsView(self), RCView(self)]
         self._active = 0
 
         self.body = urwid.WidgetPlaceholder(self.views[0].widget)
