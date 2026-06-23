@@ -9,15 +9,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Dev install (editable, requires Python 3.12+)
-uv venv && uv pip install -e ".[dev]"
+# Install / upgrade csctl FOR USE — ALWAYS from the public GitHub repo, never a
+# local editable/direct install (keeps the tool you run decoupled from your checkout).
+# Requires Python 3.12+.
+uv tool install git+https://github.com/dzshzx/cc-session-control.git
+#   This machine pins it via mise (~/.config/mise/config.toml):
+#     "pipx:git+https://github.com/dzshzx/cc-session-control.git" = "latest"
+#   After pushing new commits, refresh the installed build with:  mise upgrade
 
-# Run the TUI
+# Run the installed TUI (the GitHub build)
 csctl
 
-# Tests
-python -m pytest tests/                                                # all
-python -m pytest tests/test_views.py::test_sessions_view_filter_logic  # single test
+# Dev/test ONLY — uv manages a transient .venv here; this is NOT how csctl is installed
+# for use. Do not treat the editable .venv as the csctl you run day-to-day.
+uv run --extra dev pytest tests/                                                # all
+uv run --extra dev pytest tests/test_views.py::test_sessions_view_filter_logic  # single test
+uv run csctl                                                                    # exercise local source changes
 
 # Guardrail enforced for contributions (must return nothing)
 grep -rn '/home/' src/      # no hardcoded paths

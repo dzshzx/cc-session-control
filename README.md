@@ -23,11 +23,15 @@ Built with [urwid](https://urwid.org/).
 
 ## Installation
 
+Install from the public GitHub repository:
+
 ```bash
-pipx install cc-session-control
+uv tool install git+https://github.com/dzshzx/cc-session-control.git
 # or
-uv tool install cc-session-control
+pipx install git+https://github.com/dzshzx/cc-session-control.git
 ```
+
+Upgrade later with `uv tool upgrade cc-session-control` (or `pipx upgrade cc-session-control`). For working *on* the code instead of using it, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Usage
 

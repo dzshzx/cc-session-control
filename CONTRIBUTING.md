@@ -8,8 +8,12 @@ Thanks for your interest in cc-session-control!
 git clone https://github.com/dzshzx/cc-session-control.git
 cd cc-session-control
 uv venv && uv pip install -e ".[dev]"
-csctl --version
+uv run csctl --version
 ```
+
+> This editable install is **for development only**. To *use* csctl, install it from the
+> public GitHub repo as shown in the [README](README.md) — don't rely on a local editable
+> install as your day-to-day `csctl`.
 
 ## Development
 
