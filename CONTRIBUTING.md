@@ -14,7 +14,7 @@ csctl --version
 ## Development
 
 - Run TUI: `csctl`
-- Run tests: `python -m pytest tests/`
+- Run tests: `uv run --extra dev pytest tests/` (or `python -m pytest tests/` inside the venv)
 - Check for hardcoded paths: `grep -rn '/home/' src/`
 
 ## Pull Requests
