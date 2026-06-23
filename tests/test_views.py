@@ -22,6 +22,9 @@ class FakeApp:
     def exit_with_resume(self, session, fork=False):
         self.result = ("resume", session, fork)
 
+    def trigger_async_refresh(self):
+        pass
+
 
 def _make_session(**overrides):
     defaults = dict(sid="abc123", cwd="/tmp/proj", label="test session",
@@ -131,3 +134,60 @@ def test_rc_view_fetch_pending(monkeypatch):
     view.fetch_pending()
 
     assert view._pending == fake
+
+
+def test_rc_view_keyhints_uses_new_labels():
+    view = RCView(FakeApp())
+    hints = view.keyhints()
+    assert "切换开机自启" in hints
+    assert "切换自动远控" in hints
+
+
+def test_rc_view_status_bar_counts_use_new_labels():
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [
+        _make_project(name="p1", auto_start=True, rc_at_startup=None),
+        _make_project(name="p2", auto_start=True, rc_at_startup=False),
+        _make_project(name="p3", auto_start=False, rc_at_startup=False),
+    ]
+    view.apply_data()
+    text = view.status.original_widget.get_text()[0]
+    assert "开机自启 2" in text
+    assert "自动远控关 2" in text
+
+
+def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
+    import cc_session_control.views.rc as rc_view_mod
+
+    writes = []
+    monkeypatch.setattr(rc_view_mod, "set_rc_at_startup",
+                        lambda directory, value: writes.append((directory, value)))
+
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [_make_project(name="p1", rc_at_startup=None)]
+    view.apply_data()
+
+    view.handle_key("c")
+
+    assert writes  # toggle routed through the seam, not real disk
+    assert any("自动远控" in m for m in app._notifications)
+
+
+def test_rc_view_a_key_notifies_with_new_label(monkeypatch):
+    from cc_session_control.data import rc as rc_mod
+
+    monkeypatch.setattr(rc_mod, "toggle_autostart", lambda name: True)
+
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [_make_project(name="p1")]
+    view.apply_data()
+
+    view.handle_key("a")
+
+    assert any("开机自启" in m for m in app._notifications)

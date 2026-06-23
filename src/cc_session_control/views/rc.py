@@ -25,8 +25,8 @@ class RCRow(urwid.WidgetWrap):
 
         cols = urwid.Columns([
             (10, urwid.Text(status_text)),
-            (6, urwid.Text(auto, align="center")),
-            (6, urwid.Text(rc, align="center")),
+            (10, urwid.Text(auto, align="center")),
+            (10, urwid.Text(rc, align="center")),
             ("weight", 2, urwid.Text(name, wrap="clip")),
             ("weight", 3, urwid.Text(project.directory, wrap="clip")),
         ], min_width=6)
@@ -53,8 +53,8 @@ class RCView:
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         col_header = urwid.AttrMap(urwid.Columns([
             (10, urwid.Text("状态")),
-            (6, urwid.Text("自启", align="center")),
-            (6, urwid.Text("接管", align="center")),
+            (10, urwid.Text("开机自启", align="center")),
+            (10, urwid.Text("自动远控", align="center")),
             ("weight", 2, urwid.Text("项目")),
             ("weight", 3, urwid.Text("目录")),
         ], min_width=6), "col_header")
@@ -66,7 +66,7 @@ class RCView:
     def keyhints(self) -> str:
         if self._help:
             return "按任意键返回"
-        return "Enter 启动 · s 停止 · a 切换自启 · c 切换接管 · ? 帮助"
+        return "Enter 启动 · s 停止 · a 切换开机自启 · c 切换自动远控 · ? 帮助"
 
     def load(self) -> None:
         from ..data.rc import scan
@@ -98,8 +98,8 @@ class RCView:
         running = sum(1 for p in self._projects if p.status == "running")
         auto = sum(1 for p in self._projects if p.auto_start)
         rc_off = sum(1 for p in self._projects if p.rc_at_startup is False)
-        rc_text = f" · 接管关 {rc_off}" if rc_off else ""
-        self.status.original_widget.set_text(f" 共 {len(self._projects)} 项目 · 运行 {running} · 自启 {auto}{rc_text}")
+        rc_text = f" · 自动远控关 {rc_off}" if rc_off else ""
+        self.status.original_widget.set_text(f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}{rc_text}")
 
     def _selected(self) -> RCProject | None:
         if not self.walker:
@@ -140,13 +140,13 @@ class RCView:
             self.app.trigger_async_refresh()
         elif key == "a" and p:
             new = rc.toggle_autostart(p.name)
-            self.app.notify(f"{p.name} 自启: {'开' if new else '关'}")
+            self.app.notify(f"{p.name} 开机自启: {'开' if new else '关'}")
             self.app.trigger_async_refresh()
         elif key == "c" and p:
             current = p.rc_at_startup is not False
             set_rc_at_startup(p.directory, not current if current else None)
             label = "关" if current else "开"
-            self.app.notify(f"{p.name} 会话接管: {label}")
+            self.app.notify(f"{p.name} 自动远控: {label}")
             self.app.trigger_async_refresh()
         elif key == "A":
             count = rc.start_all_listed()
@@ -163,15 +163,15 @@ class RCView:
             self._help = True
             lines = [
                 "远程控制操作:",
-                "  Enter  启动选中项目的 RC 服务器",
-                "  s      停止选中项目的 RC 服务器",
-                "  a      切换自动启动（开机自启）",
-                "  c      切换远程接管（手机接管会话）",
+                "  Enter  启动选中项目的远程控制服务",
+                "  s      停止选中项目的远程控制服务",
+                "  a      切换「开机自启」：A 键一键启动时是否带上本项目",
+                "  c      切换「自动远控」：claude 启动时自动开远程控制，手机即可接管",
                 "",
                 "批量操作:",
-                "  A      启动所有已加入列表的项目",
-                "  S      停止全部 RC 服务器",
-                "  r      刷新数据",
+                "  A      启动所有「开机自启」项目",
+                "  S      停止全部远程控制服务",
+                "  r      重新扫描刷新",
                 "",
                 "导航:",
                 "  Tab    切换标签页",
