@@ -13,6 +13,8 @@ class FakeApp:
         self.result = None
         self._notifications = []
         self.footer_text = urwid.Text("")
+        self.footer = urwid.AttrMap(self.footer_text, "footer")
+        self.frame = urwid.Frame(urwid.Text("body"), footer=self.footer)
         self.views = []
         self._active = 0
 
@@ -24,6 +26,9 @@ class FakeApp:
 
     def trigger_async_refresh(self):
         pass
+
+    def _restore_footer(self):
+        self.frame.footer = self.footer
 
 
 def _make_session(**overrides):
@@ -86,6 +91,17 @@ def test_sessions_view_filter_logic():
     assert len(view._sessions) == 3
 
 
+def test_sessions_view_filter_mode_routes_text_to_edit():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+
+    view.handle_key("/")
+    view.handle_key("d")
+
+    assert view._filter_edit.get_edit_text() == "d"
+
+
 def test_sessions_cleanup_mode():
     app = FakeApp()
     view = SessionsView(app)
@@ -96,6 +112,26 @@ def test_sessions_cleanup_mode():
     assert len(view._cleanup_walker) == 3
     view._exit_cleanup()
     assert view._mode == "list"
+
+
+def test_sessions_short_cleanup_preview_excludes_empty_sessions(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+
+    sessions = [
+        _make_session(sid="empty", prompts=0),
+        _make_session(sid="short1", prompts=1),
+        _make_session(sid="short2", prompts=2),
+        _make_session(sid="long", prompts=3),
+    ]
+    monkeypatch.setattr(sv_mod, "scan", lambda: sessions)
+
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+
+    view._enter_preview("short")
+
+    assert {s.sid for s in view._preview_sessions} == {"short1", "short2"}
 
 
 def test_rc_row_selectable():

@@ -3,6 +3,7 @@
 import time
 
 import json
+import subprocess
 
 from cc_session_control.actions.session_ops import resume_cmd
 from cc_session_control.config import cfg
@@ -109,6 +110,12 @@ def test_resume_cmd_current_no_kill():
     assert cmd == "cd /tmp/proj && claude --resume sid1"
 
 
+def test_resume_cmd_quotes_cwd_with_spaces():
+    s = _make_session(sid="sid1", cwd="/tmp/project with space", alive=False)
+    cmd = resume_cmd(s)
+    assert cmd == "cd '/tmp/project with space' && claude --resume sid1"
+
+
 # --- D2: terminate_session owns liveness-cache invalidation ---
 
 def test_terminate_session_invalidates_cache(monkeypatch):
@@ -144,6 +151,19 @@ def test_tmux_resume_cmd_fork_includes_fork_flag():
     )
 
 
+def test_tmux_resume_cmd_quotes_cwd_and_remote_name():
+    from cc_session_control.actions.session_ops import tmux_resume_cmd
+    s = _make_session(
+        sid="abcdef0123456789",
+        cwd="/tmp/project with space",
+        alive=False,
+    )
+    assert tmux_resume_cmd(s) == (
+        "cd '/tmp/project with space' && claude --resume abcdef0123456789 "
+        "--remote-control 'project with space-abcdef01'"
+    )
+
+
 def test_relaunch_in_tmux_kills_live_non_current(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
@@ -176,6 +196,58 @@ def test_relaunch_in_tmux_dead_no_kill(monkeypatch):
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
     assert so.relaunch_in_tmux(s) is True
     assert calls["kill"] == 0
+
+
+def test_run_in_tmux_reports_new_window_failure(monkeypatch):
+    from cc_session_control.data import rc
+
+    def fake_tmux(args):
+        if args[0] == "has-session":
+            return subprocess.CompletedProcess(["tmux", *args], 0, "", "")
+        if args[0] == "new-window":
+            return subprocess.CompletedProcess(["tmux", *args], 1, "", "failed")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(rc, "_tmux_run", fake_tmux)
+
+    assert rc.run_in_tmux("rc", "proj", "cmd") is False
+
+
+def test_run_in_tmux_reports_new_session_failure(monkeypatch):
+    from cc_session_control.data import rc
+
+    def fake_tmux(args):
+        if args[0] == "has-session":
+            return subprocess.CompletedProcess(["tmux", *args], 1, "", "missing")
+        if args[0] == "new-session":
+            return subprocess.CompletedProcess(["tmux", *args], 1, "", "failed")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(rc, "_tmux_run", fake_tmux)
+
+    assert rc.run_in_tmux("rc", "proj", "cmd") is False
+
+
+def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
+    from cc_session_control.data import rc
+
+    proj = "project with space"
+    (tmp_path / proj).mkdir()
+    calls = {}
+    monkeypatch.setattr(rc.cfg, "workspace", tmp_path)
+    monkeypatch.setattr(rc, "is_trusted", lambda name: True)
+    monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    monkeypatch.setattr(rc, "_tmux_has_session", lambda session: False)
+    monkeypatch.setattr(
+        rc,
+        "_tmux_new_session",
+        lambda session, window, cmd: calls.__setitem__("cmd", cmd) or True,
+    )
+
+    assert rc.start_one(proj) is True
+
+    assert f"cd '{tmp_path / proj}'" in calls["cmd"]
+    assert "--name 'ws/project with space'" in calls["cmd"]
 
 
 # --- D1: cleanup_stats ---

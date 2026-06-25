@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import time
 
@@ -133,11 +134,13 @@ def _tmux_has_session(session: str) -> bool:
 
 
 def _tmux_new_window(session: str, name: str, cmd: str) -> bool:
-    return _tmux_run(["new-window", "-t", session, "-n", name, cmd]) is not None
+    cp = _tmux_run(["new-window", "-t", session, "-n", name, cmd])
+    return cp is not None and cp.returncode == 0
 
 
 def _tmux_new_session(session: str, name: str, cmd: str) -> bool:
-    return _tmux_run(["new-session", "-d", "-s", session, "-n", name, cmd]) is not None
+    cp = _tmux_run(["new-session", "-d", "-s", session, "-n", name, cmd])
+    return cp is not None and cp.returncode == 0
 
 
 def _tmux_kill_window(target: str) -> bool:
@@ -232,14 +235,16 @@ def start_one(proj: str) -> bool:
     if proj in _tmux_windows():
         return False
 
+    remote_name = f"ws/{proj}"
+    echo_prefix = shlex.quote(f"[csctl] {remote_name} exited, restart in ")
     cmd = (
-        f"cd {directory} && delay=5; while true; do start=$(date +%s); "
-        f"claude remote-control --name ws/{proj} --spawn same-dir; "
+        f"cd {shlex.quote(str(directory))} && delay=5; while true; do start=$(date +%s); "
+        f"claude remote-control --name {shlex.quote(remote_name)} --spawn same-dir; "
         f"elapsed=$(( $(date +%s) - start )); "
         f"if [ $elapsed -ge 120 ]; then delay=5; "
         f"elif [ $delay -lt 60 ]; then delay=$(( delay * 2 )); fi; "
         f"[ $delay -gt 60 ] && delay=60; "
-        f'echo "[csctl] ws/{proj} exited, restart in ${{delay}}s..."; '
+        f"printf '%s%s\\n' {echo_prefix} \"${{delay}}s...\"; "
         f"sleep $delay; done"
     )
 

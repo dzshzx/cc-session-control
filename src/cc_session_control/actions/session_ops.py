@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import signal
 import time
 
@@ -58,8 +59,8 @@ def resume_cmd(s: Session, fork: bool = False) -> str:
     if should_kill:
         parts.append(f"kill {s.pid} && sleep 1")
     if cwd:
-        parts.append(f"cd {cwd}")
-    parts.append(" ".join(args))
+        parts.append(f"cd {shlex.quote(cwd)}")
+    parts.append(shlex.join(args))
     return " && ".join(parts)
 
 
@@ -87,8 +88,8 @@ def tmux_resume_cmd(s: Session, fork: bool = False) -> str:
     """Shell command that resumes the session under remote control."""
     cwd, args, _ = _resume_plan(s, fork)
     args = args + ["--remote-control", _rc_name(s)]
-    line = " ".join(args)
-    return f"cd {cwd} && {line}" if cwd else line
+    line = shlex.join(args)
+    return f"cd {shlex.quote(cwd)} && {line}" if cwd else line
 
 
 def relaunch_in_tmux(s: Session, fork: bool = False) -> bool:

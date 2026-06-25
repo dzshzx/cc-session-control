@@ -288,7 +288,7 @@ class SessionsView:
             targets = prune_sessions(sessions, max_prompts=0)
             label = "空壳会话"
         elif action == "short":
-            targets = prune_sessions(sessions, max_prompts=2)
+            targets = [s for s in prune_sessions(sessions, max_prompts=2) if s.prompts > 0]
             label = "短会话(≤2提问)"
         elif action == "orphans":
             orphan_paths = list_orphan_dirs(sessions)
@@ -352,7 +352,7 @@ class SessionsView:
             elif key == "esc":
                 self._exit_filter(cancel=True)
             else:
-                self.widget.keypress((80,), key)
+                self._filter_edit.keypress((80,), key)
             return
 
         if self._mode == "preview":
