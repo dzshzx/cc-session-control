@@ -46,6 +46,11 @@ def _make_project(**overrides):
     return RCProject(**defaults)
 
 
+def _row_text(row):
+    canvas = row.render((120,), focus=False)
+    return b"\n".join(canvas.text).decode()
+
+
 def test_views_satisfy_tabview_protocol():
     from cc_session_control.app import TabView
     assert isinstance(SessionsView(FakeApp()), TabView)
@@ -64,6 +69,12 @@ def test_session_row_alive_vs_dead():
     dead = SessionRow(_make_session(alive=False))
     assert alive.session.alive
     assert not dead.session.alive
+
+
+def test_session_row_labels_hidden_bridge_and_sdk_sessions():
+    row = SessionRow(_make_session(label="phone session", hidden={"bridge", "sdk"}))
+    text = _row_text(row)
+    assert "[桥接 SDK] phone session" in text
 
 
 def test_sessions_view_construct():
@@ -89,6 +100,65 @@ def test_sessions_view_filter_logic():
     view._filter_text = ""
     view._apply_filter()
     assert len(view._sessions) == 3
+
+
+def test_sessions_view_shows_hidden_sessions_by_default():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [
+        _make_session(sid="normal", hidden=set()),
+        _make_session(sid="bridge", hidden={"bridge"}),
+    ]
+
+    view._apply_filter()
+
+    assert [s.sid for s in view._sessions] == ["normal", "bridge"]
+
+
+def test_sessions_view_h_key_toggles_hidden_sessions():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [
+        _make_session(sid="normal", hidden=set()),
+        _make_session(sid="bridge", hidden={"bridge"}),
+    ]
+    view._apply_filter()
+    view._rebuild()
+
+    assert [s.sid for s in view._sessions] == ["normal", "bridge"]
+    assert "桥接/SDK 1" in view.status.original_widget.get_text()[0]
+
+    view.handle_key("h")
+
+    assert [s.sid for s in view._sessions] == ["normal"]
+    assert "桥接/SDK已隐藏 1" in view.status.original_widget.get_text()[0]
+    assert "h 显示桥接项" in app.footer_text.get_text()[0]
+
+    view.handle_key("h")
+
+    assert [s.sid for s in view._sessions] == ["normal", "bridge"]
+
+
+def test_sessions_view_filter_respects_hidden_toggle():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [
+        _make_session(sid="normal", label="plain deploy", hidden=set()),
+        _make_session(sid="bridge", label="mobile deploy", hidden={"bridge"}),
+    ]
+    view._filter_text = "deploy"
+
+    view._apply_filter()
+
+    assert [s.sid for s in view._sessions] == ["normal", "bridge"]
+
+    view._show_hidden = False
+    view._apply_filter()
+
+    assert [s.sid for s in view._sessions] == ["normal"]
 
 
 def test_sessions_view_filter_mode_routes_text_to_edit():

@@ -32,6 +32,17 @@ _CLEANUP_ACTIONS = [
     {"key": "orphans", "label": "孤儿目录",         "stat": "orphans"},
 ]
 
+_HIDDEN_MARKERS = {
+    "bridge": "桥接",
+    "sdk": "SDK",
+}
+
+
+def _hidden_marker(session: Session) -> str:
+    known = [label for key, label in _HIDDEN_MARKERS.items() if key in session.hidden]
+    unknown = sorted(key for key in session.hidden if key not in _HIDDEN_MARKERS)
+    return " ".join(known + unknown)
+
 
 class SessionRow(urwid.WidgetWrap):
     def __init__(self, session: Session) -> None:
@@ -39,7 +50,9 @@ class SessionRow(urwid.WidgetWrap):
         mark = "●" if session.alive else "○"
         cur = "▸" if session.current else " "
         when = time.strftime("%m-%d %H:%M", time.localtime(session.mtime))
-        label = session.label[:80]
+        hidden = _hidden_marker(session)
+        label = f"[{hidden}] {session.label}" if hidden else session.label
+        label = label[:80]
         cwd = session.cwd.rstrip("/").rsplit("/", 1)[-1] if session.cwd else ""
 
         cols = urwid.Columns([
@@ -117,6 +130,7 @@ class SessionsView:
         self._cleanup_stats: dict[str, int] = {}
         self._preview_action: str | None = None
         self._preview_sessions: list[Session] = []
+        self._show_hidden = True
 
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         col_header = urwid.AttrMap(_SESSION_HEADER, "col_header")
@@ -134,7 +148,8 @@ class SessionsView:
             return "Enter 预览待清理项 · Esc 返回会话列表"
         if self._mode == "preview":
             return "Enter 确认清理 · Esc 取消"
-        return "Enter 接回 · t 终止 · T tmux化 · d 删除 · c 清理 · / 过滤 · ? 帮助"
+        hidden = "h 隐藏桥接项" if self._show_hidden else "h 显示桥接项"
+        return f"Enter 接回 · t 终止 · T tmux化 · d 删除 · c 清理 · {hidden} · / 过滤 · ? 帮助"
 
     def _update_footer(self) -> None:
         if self.app.views[self.app._active] is not self:
@@ -145,9 +160,9 @@ class SessionsView:
     def load(self) -> None:
         sessions = scan()
         self._all_sessions = sessions
-        self._sessions = sessions
         self._cleanup_stats = cleanup_stats(sessions)
         self._loaded = True
+        self._apply_filter()
         self._rebuild()
 
     def fetch_pending(self) -> None:
@@ -186,6 +201,10 @@ class SessionsView:
         short = self._cleanup_stats.get("short", 0)
         orphans = self._cleanup_stats.get("orphans", 0)
         cleanup_text = ""
+        hidden_n = sum(1 for s in self._all_sessions if s.hidden)
+        hidden_text = ""
+        if hidden_n:
+            hidden_text = f" · 桥接/SDK {hidden_n}" if self._show_hidden else f" · 桥接/SDK已隐藏 {hidden_n}"
         if empty or short or orphans:
             parts = []
             if empty:
@@ -196,7 +215,7 @@ class SessionsView:
                 parts.append(f"孤儿 {orphans}")
             cleanup_text = f" · {' · '.join(parts)}"
         self.status.original_widget.set_text(
-            f" 共 {len(self._all_sessions)} 条会话 · 活 {alive_n} · 显示 {len(self._sessions)}{flt}{cleanup_text}"
+            f" 共 {len(self._all_sessions)} 条会话 · 活 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{cleanup_text}"
         )
 
     def _rebuild_cleanup(self) -> None:
@@ -215,13 +234,20 @@ class SessionsView:
         return None
 
     def _apply_filter(self) -> None:
+        visible = [
+            s for s in self._all_sessions
+            if self._show_hidden or not s.hidden
+        ]
         if not self._filter_text:
-            self._sessions = self._all_sessions
+            self._sessions = visible
         else:
             k = self._filter_text.lower()
             self._sessions = [
-                s for s in self._all_sessions
-                if k in (s.label + " " + s.cwd + " " + s.sid).lower()
+                s for s in visible
+                if k in (
+                    s.label + " " + s.cwd + " " + s.sid + " "
+                    + _hidden_marker(s) + " " + " ".join(sorted(s.hidden))
+                ).lower()
             ]
 
     def _enter_filter(self) -> None:
@@ -414,6 +440,11 @@ class SessionsView:
             self.app.notify("已复制" if ok else f"复制失败: {cmd}")
         elif key == "c":
             self._enter_cleanup()
+        elif key == "h":
+            self._show_hidden = not self._show_hidden
+            self._apply_filter()
+            self._rebuild()
+            self._update_footer()
         elif key == "r":
             self.app.trigger_async_refresh()
             self.app.notify("刷新中…")
@@ -431,6 +462,7 @@ class SessionsView:
             "  T      搬进 tmux 并开启远程控制（脱离终端，手机/网页可接管）",
             "  d      删除已结束的会话记录",
             "  y      复制接回命令到剪贴板",
+            "  h      显示/隐藏桥接、SDK 会话",
             "",
             "清理与过滤:",
             "  c      打开清理子菜单",
