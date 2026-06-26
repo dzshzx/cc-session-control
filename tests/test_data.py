@@ -247,7 +247,61 @@ def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
     assert rc.start_one(proj) is True
 
     assert f"cd '{tmp_path / proj}'" in calls["cmd"]
+    assert "while true" not in calls["cmd"]
+    assert "exec claude remote-control" in calls["cmd"]
     assert "--name 'ws/project with space'" in calls["cmd"]
+
+
+def test_start_one_refuses_running_window(tmp_path, monkeypatch):
+    from cc_session_control.data import rc
+
+    proj = "proj"
+    (tmp_path / proj).mkdir()
+    calls = {"kill": 0, "new": 0}
+    monkeypatch.setattr(rc.cfg, "workspace", tmp_path)
+    monkeypatch.setattr(rc, "is_trusted", lambda name: True)
+    monkeypatch.setattr(rc, "_tmux_windows", lambda: [proj])
+    monkeypatch.setattr(rc, "_is_alive", lambda name: True)
+    monkeypatch.setattr(
+        rc,
+        "stop_one",
+        lambda name: calls.__setitem__("kill", calls["kill"] + 1) or True,
+    )
+    monkeypatch.setattr(
+        rc,
+        "_tmux_new_window",
+        lambda *a: calls.__setitem__("new", calls["new"] + 1) or True,
+    )
+
+    assert rc.start_one(proj) is False
+    assert calls == {"kill": 0, "new": 0}
+
+
+def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
+    from cc_session_control.data import rc
+
+    proj = "proj"
+    (tmp_path / proj).mkdir()
+    calls = {"kill": 0, "cmd": None}
+    monkeypatch.setattr(rc.cfg, "workspace", tmp_path)
+    monkeypatch.setattr(rc, "is_trusted", lambda name: True)
+    monkeypatch.setattr(rc, "_tmux_windows", lambda: [proj])
+    monkeypatch.setattr(rc, "_is_alive", lambda name: False)
+    monkeypatch.setattr(
+        rc,
+        "stop_one",
+        lambda name: calls.__setitem__("kill", calls["kill"] + 1) or True,
+    )
+    monkeypatch.setattr(rc, "_tmux_has_session", lambda session: True)
+    monkeypatch.setattr(
+        rc,
+        "_tmux_new_window",
+        lambda session, window, cmd: calls.__setitem__("cmd", cmd) or True,
+    )
+
+    assert rc.start_one(proj) is True
+    assert calls["kill"] == 1
+    assert calls["cmd"] is not None
 
 
 # --- D1: cleanup_stats ---

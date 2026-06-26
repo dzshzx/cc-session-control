@@ -164,7 +164,7 @@ def _is_alive(proj: str) -> bool:
 def run_in_tmux(session: str, window: str, cmd: str) -> bool:
     """Run `cmd` in a tmux `window` under `session`, creating the session if
     it doesn't exist yet. Public seam for relaunching a session outside the
-    rc backoff-loop machinery (no restart loop, no staggering)."""
+    managed RC server machinery."""
     if _tmux_has_session(session):
         return _tmux_new_window(session, window, cmd)
     return _tmux_new_session(session, window, cmd)
@@ -233,19 +233,18 @@ def start_one(proj: str) -> bool:
     if not is_trusted(proj):
         return False
     if proj in _tmux_windows():
-        return False
+        if _is_alive(proj):
+            return False
+        if not stop_one(proj):
+            return False
 
     remote_name = f"ws/{proj}"
-    echo_prefix = shlex.quote(f"[csctl] {remote_name} exited, restart in ")
+    # Each fresh Remote Control process registers a distinct cloud environment.
+    # Keep restart explicit so transient exits do not pile up duplicate mobile
+    # environment entries with the same display name.
     cmd = (
-        f"cd {shlex.quote(str(directory))} && delay=5; while true; do start=$(date +%s); "
-        f"claude remote-control --name {shlex.quote(remote_name)} --spawn same-dir; "
-        f"elapsed=$(( $(date +%s) - start )); "
-        f"if [ $elapsed -ge 120 ]; then delay=5; "
-        f"elif [ $delay -lt 60 ]; then delay=$(( delay * 2 )); fi; "
-        f"[ $delay -gt 60 ] && delay=60; "
-        f"printf '%s%s\\n' {echo_prefix} \"${{delay}}s...\"; "
-        f"sleep $delay; done"
+        f"cd {shlex.quote(str(directory))} && exec claude remote-control "
+        f"--name {shlex.quote(remote_name)} --spawn same-dir"
     )
 
     session = cfg.rc_session

@@ -74,7 +74,7 @@ The TUI cannot run `claude` inside itself. To resume a session, `SessionsView` c
 
 **Unified kill semantics:** `resume_cmd` (the `y`-key clipboard string) and `do_resume` (the actual exec) share one decision computed once in `_resume_plan`, which returns `should_kill = alive and not current and not fork`. A plain **resume takes over** a live session (kills the old pid first); a **fork is a copy** and leaves the original running. Both consumers must read `should_kill` rather than re-deriving the condition — that re-derivation was the old divergence (now removed).
 
-**Relaunch into tmux (`T` key):** `relaunch_in_tmux` (in `actions/session_ops.py`) runs `claude --resume <sid> --remote-control <name>` in a tmux window (session `cfg.tmux_session`, default `cc`, created via `rc.run_in_tmux` — kept separate from the `rc` backoff-loop servers) so the session **outlives the terminal** and is controllable from phone / claude.ai/code. Unlike `do_resume` it does **not** replace the csctl process — it just spawns the window, reusing the same `should_kill` handoff (live non-current session → old pid killed first; current session refused). Gotcha learned from a spike: killing the tmux window does **not** reliably kill a `--remote-control` process (it survives orphaning), so stop a relaunched session via the `t` terminate-by-pid action, not by closing its window.
+**Relaunch into tmux (`T` key):** `relaunch_in_tmux` (in `actions/session_ops.py`) runs `claude --resume <sid> --remote-control <name>` in a tmux window (session `cfg.tmux_session`, default `cc`, created via `rc.run_in_tmux` — kept separate from the `rc` server windows) so the session **outlives the terminal** and is controllable from phone / claude.ai/code. Unlike `do_resume` it does **not** replace the csctl process — it just spawns the window, reusing the same `should_kill` handoff (live non-current session → old pid killed first; current session refused). Gotcha learned from a spike: killing the tmux window does **not** reliably kill a `--remote-control` process (it survives orphaning), so stop a relaunched session via the `t` terminate-by-pid action, not by closing its window.
 
 ### Session liveness — single source of truth
 
@@ -88,7 +88,7 @@ The TUI cannot run `claude` inside itself. To resume a session, `SessionsView` c
 
 ### Remote Control = tmux windows
 
-RC servers are **tmux windows** in a session named `rc` (env `CSCTL_RC_SESSION`). `rc.start_one` launches a bash loop that re-runs `claude remote-control --name ws/<proj> --spawn same-dir` with **exponential backoff** (5s→60s, reset to 5s if the process ran ≥120s). Status comes from tmux `#{pane_dead}`: `running` / `dead` / `stopped`.
+RC servers are **tmux windows** in a session named `rc` (env `CSCTL_RC_SESSION`). `rc.start_one` launches one `claude remote-control --name ws/<proj> --spawn same-dir` process. It deliberately does **not** auto-restart: every fresh Claude Remote Control process registers a new cloud environment, and automatic restarts can create duplicate mobile/web environment entries with the same display name. Status comes from tmux `#{pane_dead}`: `running` / `dead` / `stopped`; restart is an explicit user action.
 
 All tmux access goes through a single seam: only `_tmux_run` touches `subprocess`; every other tmux call is a thin verb wrapper (`_tmux_new_window`, `_tmux_kill_window`, …) that keeps the swallow-errors contract. Add new tmux operations as wrappers, not raw `subprocess` calls.
 
