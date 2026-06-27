@@ -4,6 +4,7 @@ import json
 
 from cc_session_control.config import cfg
 from cc_session_control.data import registry
+from cc_session_control.models import SessionProc
 
 
 def _write_json(path, obj):
@@ -78,7 +79,6 @@ def test_read_agent_jobs(tmp_path, monkeypatch):
     assert j.name == "关闭沙箱环境"
     assert j.env_suffix == "01DgeqMqXMrSFpW59uSZwK99"  # suffix of cse_*
     assert j.respawn_flags == ["--reply-on-resume", "--effort", "xhigh"]
-    assert j.backend == "daemon"
     # state.json carries NO pid -> these default until joined later (Phase 6)
     assert j.host_pid is None
     assert j.host_alive is False
@@ -93,6 +93,27 @@ def test_read_agent_jobs_missing_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     registry.invalidate_cache()
     assert registry.read_agent_jobs(max_age=0.0) == []
+
+
+# --- host_pid_for_sid: the single pure host-pid join (item 6) ---
+
+def _sp(pid, sid, proc_alive):
+    return SessionProc(pid=pid, sid=sid, proc_start=str(pid), proc_alive=proc_alive)
+
+
+def test_host_pid_for_sid_prefers_proc_alive_match():
+    # resume mints a new pid for the same sid; prefer the proc-alive one.
+    procs = [_sp(100, "sid-a", False), _sp(200, "sid-a", True), _sp(300, "other", True)]
+    assert registry.host_pid_for_sid("sid-a", procs) == (200, True)
+
+
+def test_host_pid_for_sid_falls_back_to_first_dead():
+    procs = [_sp(100, "sid-a", False), _sp(101, "sid-a", False)]
+    assert registry.host_pid_for_sid("sid-a", procs) == (100, False)
+
+
+def test_host_pid_for_sid_none_when_unknown():
+    assert registry.host_pid_for_sid("sid-missing", [_sp(100, "sid-a", True)]) == (None, False)
 
 
 def test_registry_cache_reuses_until_invalidated(tmp_path, monkeypatch):

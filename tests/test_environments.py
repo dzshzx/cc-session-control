@@ -8,6 +8,7 @@ first_seen/last_seen are deterministic. The observe() builder test monkeypatches
 
 import json
 import os
+import time
 
 from cc_session_control.config import cfg
 from cc_session_control.data import environments as env
@@ -45,14 +46,55 @@ def test_upsert_accumulates_with_injected_now(tmp_path, monkeypatch):
     assert rows[("session", "BBB")]["first_seen"] == 200.0
 
 
-def test_upsert_reobservation_advances_last_seen_keeps_first_seen(tmp_path, monkeypatch):
+def test_upsert_reobservation_identical_membership_no_rewrite_keeps_first_seen(tmp_path, monkeypatch):
+    # M2: re-observing the IDENTICAL membership at a later (pinned) clock must NOT
+    # rewrite the file — `last_seen` alone moving is not a membership change. So
+    # disk content/mtime are unchanged and the persisted last_seen stays at 100.
     _use_tmp_ledger(tmp_path, monkeypatch)
     env.upsert([EnvRecord("cse", "AAA", "sid-a")], now=100.0)
+    path = tmp_path / "environments.jsonl"
+    first_mtime = path.stat().st_mtime_ns
+    first_text = path.read_text()
+
     env.upsert([EnvRecord("cse", "AAA", "sid-a")], now=500.0)
 
     (row,) = _ledger_lines(tmp_path)
     assert row["first_seen"] == 100.0   # preserved
-    assert row["last_seen"] == 500.0    # advanced
+    assert row["last_seen"] == 100.0    # NOT advanced on disk (no rewrite)
+    assert path.stat().st_mtime_ns == first_mtime
+    assert path.read_text() == first_text
+
+
+def test_upsert_reobservation_real_clock_no_rewrite(tmp_path, monkeypatch):
+    # M2 with the REAL clock (now=None): two advancing wall-clock observations of
+    # the same membership leave the file byte- and mtime-identical (distinct from
+    # the pinned-now identical-upsert test, which never advanced the clock).
+    _use_tmp_ledger(tmp_path, monkeypatch)
+    env.upsert([EnvRecord("cse", "AAA", "sid-a")])
+    path = tmp_path / "environments.jsonl"
+    first_mtime = path.stat().st_mtime_ns
+    first_text = path.read_text()
+
+    time.sleep(0.01)  # ensure a rewrite WOULD bump mtime
+    env.upsert([EnvRecord("cse", "AAA", "sid-a")])
+
+    assert path.stat().st_mtime_ns == first_mtime
+    assert path.read_text() == first_text
+
+
+def test_upsert_membership_change_rewrites_and_advances_last_seen(tmp_path, monkeypatch):
+    # A real membership change (a new env appears) IS a rewrite, and the rewrite
+    # flushes the advanced last_seen for the continuously-observed env too.
+    _use_tmp_ledger(tmp_path, monkeypatch)
+    env.upsert([EnvRecord("cse", "AAA", "sid-a")], now=100.0)
+    env.upsert(
+        [EnvRecord("cse", "AAA", "sid-a"), EnvRecord("session", "BBB", "sid-b")],
+        now=300.0,
+    )
+    rows = {(r["prefix"], r["key"]): r for r in _ledger_lines(tmp_path)}
+    assert set(rows) == {("cse", "AAA"), ("session", "BBB")}
+    assert rows[("cse", "AAA")]["first_seen"] == 100.0
+    assert rows[("cse", "AAA")]["last_seen"] == 300.0   # flushed on the real write
 
 
 def test_upsert_reobservation_updates_bound_sid(tmp_path, monkeypatch):

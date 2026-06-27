@@ -7,6 +7,7 @@ import subprocess
 
 from cc_session_control.actions.session_ops import resume_cmd
 from cc_session_control.config import cfg
+from cc_session_control.data import liveness, registry
 from cc_session_control.data.cleanup import cleanup_stats, prune_sessions
 from cc_session_control.data.sessions import _parse_transcript
 from cc_session_control.models import LiveInfo, Session
@@ -107,6 +108,13 @@ def test_resume_cmd_current_no_kill():
     assert cmd == "cd /tmp/proj && claude --resume sid1"
 
 
+def test_resume_cmd_alive_no_pid_omits_kill():
+    # L7: should_kill is True (alive, non-current, not fork) but pid is unknown ->
+    # the kill segment must be omitted (never emit a bare `kill None`).
+    s = _make_session(sid="sid1", cwd="/tmp/proj", alive=True, current=False, pid=None)
+    assert resume_cmd(s) == "cd /tmp/proj && claude --resume sid1"
+
+
 def test_resume_cmd_quotes_cwd_with_spaces():
     s = _make_session(sid="sid1", cwd="/tmp/project with space", alive=False)
     cmd = resume_cmd(s)
@@ -193,6 +201,41 @@ def test_relaunch_in_tmux_dead_no_kill(monkeypatch):
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
     assert so.relaunch_in_tmux(s) is True
     assert calls["kill"] == 0
+
+
+# --- M1: resume/relaunch kill paths gated on R10 (no /proc => no kill) ---
+
+def test_relaunch_in_tmux_refuses_kill_without_proc(monkeypatch):
+    import cc_session_control.actions.session_ops as so
+
+    calls = {"kill": 0, "tmux": 0}
+    monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
+    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(so, "invalidate_cache", lambda: None)
+    monkeypatch.setattr(so.rc, "run_in_tmux",
+                        lambda *a: calls.__setitem__("tmux", calls["tmux"] + 1) or True)
+    monkeypatch.setattr(so.proc, "has_proc", lambda: False)
+
+    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242)
+    assert so.relaunch_in_tmux(s) is False  # refused: can't confirm current
+    assert calls["kill"] == 0               # no SIGTERM while current undeterminable
+    assert calls["tmux"] == 0               # and no relaunch either
+
+
+def test_do_resume_refuses_kill_without_proc(monkeypatch):
+    import cc_session_control.actions.session_ops as so
+
+    calls = {"kill": 0, "exec": 0, "chdir": 0}
+    monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
+    monkeypatch.setattr(so.os, "execvp", lambda *_: calls.__setitem__("exec", calls["exec"] + 1))
+    monkeypatch.setattr(so.os, "chdir", lambda *_: calls.__setitem__("chdir", calls["chdir"] + 1))
+    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(so.proc, "has_proc", lambda: False)
+
+    s = _make_session(sid="sid1", cwd="/tmp/proj", alive=True, current=False, pid=4242)
+    so.do_resume(s)
+    assert calls["kill"] == 0  # refused — never SIGTERM the (undeterminable) current
+    assert calls["exec"] == 0  # and does not take over
 
 
 def test_run_in_tmux_reports_new_window_failure(monkeypatch):
@@ -305,6 +348,9 @@ def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
 
 def test_cleanup_stats_counts(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    # H1 self-fetch reaches alive_map/registry; keep it hermetic (no subprocess).
+    monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
+    registry.invalidate_cache()
     sessions = [
         _make_session(sid="empty1", prompts=0),
         _make_session(sid="short1", prompts=1),
@@ -326,6 +372,8 @@ def test_cleanup_stats_counts(tmp_path, monkeypatch):
 
 def test_cleanup_stats_no_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
+    registry.invalidate_cache()
     sessions = [_make_session(sid="full1", prompts=5)]
     stats = cleanup_stats(sessions)
     assert stats == {"total": 1, "empty": 0, "short": 0, "orphans": 0}

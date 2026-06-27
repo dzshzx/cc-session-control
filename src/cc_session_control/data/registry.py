@@ -63,7 +63,6 @@ def _parse_session_proc(path: str) -> SessionProc | None:
         status=d.get("status", "") or "",
         proc_start=str(d.get("procStart", "") or ""),
         bridge=d.get("bridgeSessionId"),
-        version=d.get("version", "") or "",
     )
 
 
@@ -109,7 +108,6 @@ def _parse_agent_job(state_path: str) -> AgentJob | None:
         name=d.get("name", "") or "",
         env_suffix=_suffix(d.get("bridgeSessionId")),
         respawn_flags=[str(x) for x in flags],
-        backend=d.get("backend", "") or "",
     )
 
 
@@ -131,3 +129,27 @@ def read_agent_jobs(max_age: float = 5.0) -> list[AgentJob]:
     _jobs_cache = rows
     _jobs_time = now
     return rows
+
+
+def host_pid_for_sid(
+    sid: str, session_procs: list[SessionProc]
+) -> tuple[int | None, bool]:
+    """Join a sid to its host pid via the registry session files — PURE.
+
+    `jobs/<short>/state.json` carries NO pid, so a background/agent worker's host
+    pid is the `sessions/<pid>.json` entry sharing the sid. Prefers a proc-alive
+    match (so `alive=True` is trustworthy and defeats pid reuse); falls back to
+    the first sid match with `alive=False`. Relies on each `SessionProc.proc_alive`
+    already being injected by the caller (no IO here). Returns `(None, False)`
+    when no sessions file references the sid (that live worker is unstoppable).
+
+    The single host-pid join shared by `snapshot._enrich_jobs`,
+    `actions.agent_ops.job_host`, and `cleanup.remove_session` (M3 guard).
+    """
+    procs = [sp for sp in session_procs if sp.sid == sid]
+    if not procs:
+        return None, False
+    for sp in procs:
+        if sp.proc_alive:
+            return sp.pid, True
+    return procs[0].pid, False

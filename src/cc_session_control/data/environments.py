@@ -320,6 +320,17 @@ def _merge(
     return ledger
 
 
+def _membership(ledger: dict[tuple[str, str], BridgeEnv]) -> set[tuple[str, str, str | None, float]]:
+    """Durable identity of the ledger, EXCLUDING `last_seen` (M2).
+
+    Two ledgers with the same membership but different `last_seen` are
+    write-equivalent: re-observing the same envs must not rewrite the file just
+    because the clock advanced. `first_seen` and `bound_sid` ARE part of identity
+    (a new entry, a dropped entry, or a resume re-bind is a real change).
+    """
+    return {(e.prefix, e.key, e.bound_sid, e.first_seen) for e in ledger.values()}
+
+
 def _compact(
     ledger: dict[tuple[str, str], BridgeEnv], now: float
 ) -> dict[tuple[str, str], BridgeEnv]:
@@ -337,9 +348,16 @@ def upsert(records: list[EnvRecord], now: float | None = None) -> None:
     """Merge observed env records into the ledger (passive store, R6/D4).
 
     Sets `first_seen` on insert, advances `last_seen` to `now` on re-observation
-    (`now` injectable for deterministic tests), dedups within a namespace,
-    compacts, and writes ONLY if the canonical serialization changed — under an
-    advisory lock and via an atomic `tmp + replace`. Swallows all errors.
+    (`now` injectable for deterministic tests), dedups within a namespace, and
+    compacts — all under an advisory lock, via an atomic `tmp + replace`.
+
+    Write-on-change ignores `last_seen` (M2): the file is rewritten only when the
+    MEMBERSHIP changes (an env added/dropped, a re-bind, a new `first_seen`) or
+    when the on-disk text is not already canonical (corrupt / legacy line cleanup).
+    A pure clock advance on otherwise-identical membership does NOT rewrite, so a
+    steady-state refresh cycle leaves the file (and its mtime) untouched. The
+    persisted copy still carries the advanced `last_seen` whenever a real write
+    happens. Swallows all errors.
     """
     import time
 
@@ -348,11 +366,13 @@ def upsert(records: list[EnvRecord], now: float | None = None) -> None:
         with _write_lock():
             old_text = _read_raw()
             ledger = _parse_ledger(old_text)
+            # Snapshot identity BEFORE _merge mutates bound_sid/last_seen in place.
+            old_sig = _membership(ledger)
+            non_canonical = _serialize(list(ledger.values())) != old_text
             ledger = _merge(ledger, records, ts)
             ledger = _compact(ledger, ts)
-            new_text = _serialize(list(ledger.values()))
-            if new_text != old_text:
-                _atomic_write(new_text)
+            if _membership(ledger) != old_sig or non_canonical:
+                _atomic_write(_serialize(list(ledger.values())))
     except Exception:
         return
 

@@ -20,7 +20,6 @@ def _make_job(**overrides):
         respawn_flags=[],
         host_pid=None,
         host_alive=False,
-        backend="daemon",
     )
     defaults.update(overrides)
     return AgentJob(**defaults)

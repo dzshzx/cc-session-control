@@ -60,7 +60,6 @@ class SessionProc:
     proc_start: str = ""        # registry `procStart` (kernel starttime, as str)
     proc_alive: bool = False    # injected /proc liveness, never parsed from JSON
     bridge: str | None = None   # `bridgeSessionId` (session_* namespace)
-    version: str = ""
 
 
 @dataclass
@@ -81,7 +80,6 @@ class AgentJob:
     respawn_flags: list[str] = field(default_factory=list)
     host_pid: int | None = None
     host_alive: bool = False
-    backend: str = ""
 
 
 @dataclass
@@ -114,7 +112,6 @@ class RCProject:
     auto_start: bool
     rc_at_startup: bool | None = None  # per-project remoteControlAtStartup override
     spawn_mode: str | None = None      # per-project remoteControlSpawnMode (None=unset)
-    environment_id: str = ""
 
 
 @dataclass

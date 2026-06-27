@@ -47,24 +47,14 @@ def _enrich_jobs(
 
     `state.json` carries no pid, so a live worker's host pid is the proc-alive
     `sessions/<pid>.json` for the job's sid (falling back to the first match when
-    none is alive). Returns fresh copies so the cached registry objects are never
-    mutated. Mirrors `agent_ops.job_host` but stays in the data layer (snapshot
-    must not import actions).
+    none is alive). Uses the single `registry.host_pid_for_sid` join (shared with
+    `agent_ops.job_host`) and returns fresh copies so the cached registry objects
+    are never mutated. `session_procs` must already carry injected `proc_alive`
+    (build_world_snapshot does this).
     """
-    by_sid: dict[str, list[SessionProc]] = {}
-    for sp in session_procs:
-        by_sid.setdefault(sp.sid, []).append(sp)
     out: list[AgentJob] = []
     for job in jobs:
-        procs = by_sid.get(job.sid, [])
-        pid: int | None = None
-        alive = False
-        for sp in procs:
-            if sp.proc_alive:
-                pid, alive = sp.pid, True
-                break
-        if pid is None and procs:
-            pid = procs[0].pid
+        pid, alive = registry.host_pid_for_sid(job.sid, session_procs)
         out.append(replace(job, host_pid=pid, host_alive=alive))
     return out
 

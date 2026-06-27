@@ -9,10 +9,26 @@ path is forced by monkeypatching `proc.has_proc -> False` (so
 import json
 import os
 
+import pytest
+
 from cc_session_control.config import cfg
-from cc_session_control.data import cleanup
+from cc_session_control.data import cleanup, liveness, registry
 from cc_session_control.data import proc as proc_mod
-from cc_session_control.models import Session, SessionProc
+from cc_session_control.models import AgentJob, Session, SessionProc
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_liveness(monkeypatch):
+    """Keep the orphan protected-sid self-fetch (H1) off the network/subprocess.
+
+    `list_orphan_dirs` now consults `liveness.alive_map` (`claude agents --json`)
+    and the registry when not given injected data; stub the subprocess and reset
+    the registry TTL cache so cleanup tests stay hermetic and deterministic.
+    """
+    monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
+    registry.invalidate_cache()
+    yield
+    registry.invalidate_cache()
 
 
 def _make_session(**overrides) -> Session:
@@ -75,6 +91,64 @@ def test_remove_orphan_dirs_keeps_known(tmp_path, monkeypatch):
     assert os.path.isdir(os.path.join(tmp_path, "session-env", known))
     assert not os.path.exists(os.path.join(tmp_path, "session-env", "orphan-a"))
     assert not os.path.exists(os.path.join(tmp_path, "file-history", "orphan-b"))
+
+
+# --- H1: orphan sweep protects registry-known / live / current sids ---------
+
+def _job(sid, **kw):
+    base = dict(short=sid[:8], sid=sid, resume_sid=sid)
+    base.update(kw)
+    return AgentJob(**base)
+
+
+def test_orphan_sweep_keeps_live_bg_agent_artifacts(tmp_path, monkeypatch):
+    # (a) A LIVE background agent has no transcript Session, but its
+    # file-history/<sid> must NOT be swept (host_alive protects it).
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    live_sid = "live-bg-sid"
+    _mkdir(tmp_path, "file-history", live_sid)
+    job = _job(live_sid, host_alive=True)
+
+    inject = dict(session_procs=[], agent_jobs=[job], agents_map={}, cur=set())
+    assert cleanup.list_orphan_dirs([], **inject) == []
+    assert cleanup.remove_orphan_dirs([], **inject) == 0
+    assert os.path.isdir(os.path.join(tmp_path, "file-history", live_sid))
+
+
+def test_orphan_sweep_keeps_registry_known_sid_without_transcript(tmp_path, monkeypatch):
+    # (b) A sid known ONLY via sessions/<pid>.json (transcript dropped) must not
+    # be swept — even when its proc is dead (registry membership protects it).
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    reg_sid = "registry-only-sid"
+    _mkdir(tmp_path, "uploads", reg_sid)
+    sp = SessionProc(pid=4242, sid=reg_sid, proc_start="1", proc_alive=False)
+
+    inject = dict(session_procs=[sp], agent_jobs=[], agents_map={}, cur=set())
+    assert cleanup.list_orphan_dirs([], **inject) == []
+    assert cleanup.remove_orphan_dirs([], **inject) == 0
+    assert os.path.isdir(os.path.join(tmp_path, "uploads", reg_sid))
+
+
+def test_orphan_sweep_removes_genuinely_unknown_dead_sid(tmp_path, monkeypatch):
+    # (c) A sid in NONE of transcript/registry/live/current IS still swept.
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    _mkdir(tmp_path, "session-env", "ghost-sid")
+
+    inject = dict(session_procs=[], agent_jobs=[], agents_map={}, cur=set())
+    assert cleanup.list_orphan_dirs([], **inject) == ["session-env/ghost-sid"]
+    assert cleanup.remove_orphan_dirs([], **inject) == 1
+    assert not os.path.exists(os.path.join(tmp_path, "session-env", "ghost-sid"))
+
+
+def test_orphan_sweep_keeps_alive_map_sid(tmp_path, monkeypatch):
+    # A sid live only via `claude agents --json` (alive_map) is protected too.
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    live_sid = "agents-json-sid"
+    _mkdir(tmp_path, "tasks", live_sid)
+
+    inject = dict(session_procs=[], agent_jobs=[], agents_map={live_sid: 999}, cur=set())
+    assert cleanup.list_orphan_dirs([], **inject) == []
+    assert os.path.isdir(os.path.join(tmp_path, "tasks", live_sid))
 
 
 # --- Strategy A: pid-keyed zombie session files (multi-pid) -----------------
@@ -221,8 +295,49 @@ def test_remove_session_refuses_without_proc(tmp_path, monkeypatch):
     transcript = os.path.join(projects, "sid1.jsonl")
     open(transcript, "w").close()
     _degrade(monkeypatch)
-    cleanup.remove_session(_make_session(sid="sid1", file=transcript))
+    assert cleanup.remove_session(_make_session(sid="sid1", file=transcript)) is False
     assert os.path.exists(transcript)  # not deleted while degraded
+
+
+# --- M3: remove_session must not delete a LIVE agent's jobs dir -------------
+
+def test_remove_session_keeps_live_agents_jobs_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    sid = "abcdef0123456789"
+    projects = _mkdir(tmp_path, "projects", "proj1")
+    transcript = os.path.join(projects, f"{sid}.jsonl")
+    open(transcript, "w").close()
+    # A live host pid for this sid (registry sessions file + proc-alive).
+    sessions_dir = _mkdir(tmp_path, "sessions")
+    with open(os.path.join(sessions_dir, "5555.json"), "w") as fh:
+        json.dump({"pid": 5555, "sessionId": sid, "procStart": "999"}, fh)
+    monkeypatch.setattr(cleanup.proc, "pid_alive", lambda pid, ps: pid == 5555)
+    registry.invalidate_cache()
+    # Its jobs/<short> dir + a sid-keyed artifact dir.
+    jobs_dir = _mkdir(tmp_path, "jobs", sid[:8])
+    open(os.path.join(jobs_dir, "state.json"), "w").close()
+    se_dir = _mkdir(tmp_path, "session-env", sid)
+
+    assert cleanup.remove_session(_make_session(sid=sid, file=transcript)) is True
+    # The live agent's jobs dir is preserved (M3) ...
+    assert os.path.isdir(jobs_dir)
+    # ... while the transcript and ordinary sid artifacts are still removed.
+    assert not os.path.exists(transcript)
+    assert not os.path.exists(se_dir)
+
+
+def test_remove_session_removes_jobs_dir_when_no_live_host(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    sid = "fedcba9876543210"
+    projects = _mkdir(tmp_path, "projects", "proj1")
+    transcript = os.path.join(projects, f"{sid}.jsonl")
+    open(transcript, "w").close()
+    registry.invalidate_cache()  # no sessions/<pid>.json -> no live host
+    jobs_dir = _mkdir(tmp_path, "jobs", sid[:8])
+    open(os.path.join(jobs_dir, "state.json"), "w").close()
+
+    assert cleanup.remove_session(_make_session(sid=sid, file=transcript)) is True
+    assert not os.path.exists(jobs_dir)  # settled -> jobs dir removed
 
 
 def test_terminate_refuses_without_proc(monkeypatch):

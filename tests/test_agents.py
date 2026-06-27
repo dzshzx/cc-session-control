@@ -37,7 +37,6 @@ def _make_job(**overrides):
         short="abcdef01", sid="abcdef0123456789", resume_sid="abcdef0123456789",
         state="idle", tempo="fast", cwd="/tmp/proj", name="worker",
         env_suffix="XYZ", respawn_flags=[], host_pid=None, host_alive=False,
-        backend="daemon",
     )
     defaults.update(overrides)
     return AgentJob(**defaults)

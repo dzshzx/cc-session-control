@@ -62,7 +62,7 @@ def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
 def resume_cmd(s: Session, fork: bool = False) -> str:
     cwd, args, should_kill = _resume_plan(s, fork)
     parts: list[str] = []
-    if should_kill:
+    if should_kill and s.pid:  # never emit a bare `kill None` (L7)
         parts.append(f"kill {s.pid} && sleep 1")
     if cwd:
         parts.append(f"cd {shlex.quote(cwd)}")
@@ -71,9 +71,20 @@ def resume_cmd(s: Session, fork: bool = False) -> str:
 
 
 def do_resume(s: Session, fork: bool = False) -> None:
-    """chdir + (kill if needed) + exec claude. Does not return."""
+    """chdir + (kill if needed) + exec claude. Does not return on success.
+
+    R10: when a takeover kill is required but "current" can't be determined (no
+    `/proc`), refuse — print a message and return WITHOUT killing or exec'ing, so
+    we never SIGTERM the launching session (every pid looks dead off `/proc`).
+    """
     cwd, args, should_kill = _resume_plan(s, fork)
     if should_kill:
+        if not proc.current_determinable():
+            print(
+                "Refused: '/proc' unavailable — cannot determine the current "
+                "session, so the old process can't be safely killed (R10)."
+            )
+            return
         try:
             os.kill(s.pid, signal.SIGTERM)
         except Exception:
@@ -105,9 +116,15 @@ def relaunch_in_tmux(s: Session, fork: bool = False) -> bool:
     A live, non-current session is taken over (its old pid is killed first and
     the liveness cache invalidated, like terminate); a fork leaves the original
     running. csctl is NOT replaced — it just spawns the tmux window.
+
+    R10: when a takeover kill is required but "current" can't be determined (no
+    `/proc`), refuse (return False, do not kill or relaunch) — we can't prove `s`
+    is not the launching session.
     """
     _, _, should_kill = _resume_plan(s, fork)
     if should_kill and s.pid:
+        if not proc.current_determinable():
+            return False
         try:
             os.kill(s.pid, signal.SIGTERM)
         except Exception:

@@ -6,7 +6,12 @@ matching `remove_*` write, so the view can preview then confirm):
 - **Strategy A — key-typed orphan sweep.** Key semantics are PER DIRECTORY,
   never a blanket `uuid == sessionId` rule:
     * sid-keyed dirs (`session-env`, `file-history`, `tasks`, `uploads`):
-      orphan = an entry whose name (a sessionId) is not in the known sid set.
+      orphan = an entry whose name (a sessionId) is not in the PROTECTED sid set.
+      That set (H1 safety, `known_sids`) is the union of transcript sids,
+      registry `sessions/<pid>.json` + `jobs/<short>/state.json` sids, live sids
+      (`claude agents --json`, proc-alive, host-alive jobs), and the current
+      session — so the sweep never deletes artifacts of a registry-known, live,
+      or current session/agent even when its transcript was dropped.
     * pid-keyed dir (`sessions/<pid>.json`): remove only zombies
       (`not pid_alive`), excluding the current session's pid AND any live pid —
       for a resumed multi-pid sid we drop the dead pid files but keep the alive
@@ -32,10 +37,11 @@ from __future__ import annotations
 import os
 import shutil
 import time
+from dataclasses import replace
 
 from ..config import cfg
-from ..models import Session, SessionProc
-from . import proc
+from ..models import AgentJob, Session, SessionProc
+from . import liveness, proc, registry
 
 # Dirs keyed by full sessionId — orphan = name not in the known sid set.
 _SID_DIRS = ("session_env", "file_history", "tasks", "uploads")
@@ -57,16 +63,25 @@ def _age_dir_paths() -> list[tuple[str, str]]:
             for name in _AGE_DIRS]
 
 
+def _sid_keyed_paths(sid: str) -> list[str]:
+    """The sid-keyed artifact dirs (session-env/file-history/tasks/uploads)."""
+    return [os.path.join(p, sid) for _, p in _sid_dir_paths()]
+
+
+def _jobs_path(sid: str) -> str:
+    """The 8-char-prefixed `jobs/<short>` dir for a session id."""
+    return os.path.join(str(cfg.jobs_dir), sid[:8])
+
+
 def _session_artifact_paths(sid: str) -> list[str]:
     """All on-disk artifact paths owned by one session id (cfg-derived).
 
     Covers the sid-keyed dirs plus the 8-char-prefixed `jobs/<short>` dir for
-    this session. Used by `remove_session` (a full delete of one session), not
-    by the orphan sweep.
+    this session. Used by `agent_ops.remove_job` (which has already alive-gated
+    the job). `remove_session` does NOT use this — it guards the `jobs/<short>`
+    path separately so a LIVE agent worker's jobs dir is never deleted (M3).
     """
-    paths = [os.path.join(p, sid) for _, p in _sid_dir_paths()]
-    paths.append(os.path.join(str(cfg.jobs_dir), sid[:8]))
-    return paths
+    return _sid_keyed_paths(sid) + [_jobs_path(sid)]
 
 
 def _remove_path(path: str) -> bool:
@@ -83,16 +98,103 @@ def _remove_path(path: str) -> bool:
     return False
 
 
-# --- Strategy A: sid-keyed orphan dirs -------------------------------------
+# --- Strategy A: sid-keyed orphan dirs (H1 protected-sid set) --------------
 
-def list_orphan_dirs(sessions: list[Session]) -> list[str]:
+def _live_session_procs(max_age: float = 5.0) -> list[SessionProc]:
+    """Registry session files with `/proc` liveness injected (swallow-error)."""
+    try:
+        return [
+            replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
+            for sp in registry.read_session_procs(max_age=max_age)
+        ]
+    except Exception:
+        return []
+
+
+def known_sids(
+    sessions: list[Session],
+    session_procs: list[SessionProc],
+    agent_jobs: list[AgentJob],
+    agents_map: dict[str, int | None],
+    cur: set[int],
+) -> set[str]:
+    """Sids whose sid-keyed artifacts must NOT be swept (H1 safety) — PURE.
+
+    A sid-keyed dir is an orphan only when its sid is in NONE of these protected
+    sets, so the sweep never deletes artifacts of a registry-known, live, or
+    current session/agent (the old `{s.sid for s in sessions}` dropped no-cwd
+    bg/bridge stubs and ignored the registry + liveness entirely):
+      - transcript scan (`sessions`), incl. the current one
+      - registry `sessions/<pid>.json` sids (`session_procs`)
+      - registry `jobs/<short>/state.json` sids + resume sids (`agent_jobs`)
+      - live per `claude agents --json` (`agents_map`)
+      - proc-alive in `session_procs` (defeats pid reuse)
+      - host-alive agent jobs
+      - the current (csctl-launching) session (`s.current` / pid in `cur`)
+    Inputs injected so it stays unit-testable.
+    """
+    known: set[str] = {s.sid for s in sessions}
+    known |= {s.sid for s in sessions if s.current}
+    known |= {sp.sid for sp in session_procs}
+    known |= {sp.sid for sp in session_procs if sp.proc_alive}
+    known |= {sp.sid for sp in session_procs if sp.pid in cur}
+    for j in agent_jobs:
+        if j.sid:
+            known.add(j.sid)
+        if j.resume_sid:
+            known.add(j.resume_sid)
+        if j.host_alive and j.sid:
+            known.add(j.sid)
+    known |= {sid for sid in agents_map if sid}
+    return known
+
+
+def _gather_known(
+    sessions: list[Session],
+    session_procs: list[SessionProc] | None,
+    agent_jobs: list[AgentJob] | None,
+    agents_map: dict[str, int | None] | None,
+    cur: set[int] | None,
+) -> set[str]:
+    """Resolve the protected-sid set, self-fetching any omitted source.
+
+    Snapshot/view callers inject the shared world data (R11); CLI / no-snapshot
+    callers pass nothing and we read the (TTL-cached) registry + `alive_map`. Each
+    self-read swallows its own errors → safe empties.
+    """
+    if session_procs is None:
+        session_procs = _live_session_procs()
+    if agent_jobs is None:
+        try:
+            agent_jobs = registry.read_agent_jobs()
+        except Exception:
+            agent_jobs = []
+    if agents_map is None:
+        try:
+            agents_map = liveness.alive_map()
+        except Exception:
+            agents_map = {}
+    if cur is None:
+        cur = proc.ancestor_pids()
+    return known_sids(sessions, session_procs, agent_jobs, agents_map, cur)
+
+
+def list_orphan_dirs(
+    sessions: list[Session],
+    *,
+    session_procs: list[SessionProc] | None = None,
+    agent_jobs: list[AgentJob] | None = None,
+    agents_map: dict[str, int | None] | None = None,
+    cur: set[int] | None = None,
+) -> list[str]:
     """Orphan sid-keyed artifact entries (`<dir>/<sid>`), preview list.
 
+    An entry is an orphan only when its sid is NOT in the protected set (H1).
     Refuses (returns []) when current can't be determined (R10).
     """
     if not proc.current_determinable():
         return []
-    known = {s.sid for s in sessions}
+    known = _gather_known(sessions, session_procs, agent_jobs, agents_map, cur)
     orphans: list[str] = []
     for label, path in _sid_dir_paths():
         if not os.path.isdir(path):
@@ -103,11 +205,21 @@ def list_orphan_dirs(sessions: list[Session]) -> list[str]:
     return sorted(set(orphans))
 
 
-def remove_orphan_dirs(sessions: list[Session]) -> int:
-    """Delete orphan sid-keyed artifact entries. Refuses without `/proc`."""
+def remove_orphan_dirs(
+    sessions: list[Session],
+    *,
+    session_procs: list[SessionProc] | None = None,
+    agent_jobs: list[AgentJob] | None = None,
+    agents_map: dict[str, int | None] | None = None,
+    cur: set[int] | None = None,
+) -> int:
+    """Delete orphan sid-keyed artifact entries. Refuses without `/proc`.
+
+    Protects registry-known / live / current sids (H1) — see `known_sids`.
+    """
     if not proc.current_determinable():
         return 0
-    known = {s.sid for s in sessions}
+    known = _gather_known(sessions, session_procs, agent_jobs, agents_map, cur)
     count = 0
     for _label, path in _sid_dir_paths():
         if not os.path.isdir(path):
@@ -214,21 +326,37 @@ def prune_sessions(sessions: list[Session], max_prompts: int = 0) -> list[Sessio
     ]
 
 
-def remove_session(s: Session) -> None:
+def remove_session(s: Session) -> bool:
     """Delete one session: its `.jsonl`, companion dir, and sid artifacts.
 
-    Refuses (no-op) when current can't be determined (R10) — without `/proc` we
-    cannot prove `s` is not the launching session.
+    Returns True iff something was removed; False when it refused (R10) or there
+    was nothing to remove (L4 — the view reports honestly).
+
+    Refuses (no-op, False) when current can't be determined (R10) — without
+    `/proc` we cannot prove `s` is not the launching session.
+
+    M3: the `jobs/<short>` dir is removed ONLY when the sid has no LIVE host pid,
+    so a live background worker's jobs dir is protected exactly like
+    `agent_ops.remove_job` protects it (do not bypass the jobs/ guard).
     """
     if not proc.current_determinable():
-        return
+        return False
+    removed = False
     try:
         os.remove(s.file)
+        removed = True
     except OSError:
         pass
-    _remove_path(s.file[:-6])  # companion dir (drop the .jsonl suffix)
-    for p in _session_artifact_paths(s.sid):
-        _remove_path(p)
+    if _remove_path(s.file[:-6]):  # companion dir (drop the .jsonl suffix)
+        removed = True
+    for p in _sid_keyed_paths(s.sid):
+        if _remove_path(p):
+            removed = True
+    # M3: never delete a LIVE agent worker's jobs/<short> dir.
+    _, host_alive = registry.host_pid_for_sid(s.sid, _live_session_procs())
+    if not host_alive and _remove_path(_jobs_path(s.sid)):
+        removed = True
+    return removed
 
 
 # --- Classified counts -----------------------------------------------------
@@ -251,18 +379,24 @@ def cleanup_classified(
     sessions: list[Session],
     session_procs: list[SessionProc],
     cur: set[int],
+    agent_jobs: list[AgentJob] | None = None,
+    agents_map: dict[str, int | None] | None = None,
     now: float | None = None,
 ) -> dict[str, int]:
     """Per-category cleanup counts (D6). Deps injected so it stays unit-testable.
 
     Breaks the cleanup surface into its categories — empty/short sessions,
     sid-keyed orphan dirs, pid-keyed zombie session files, and age-swept global
-    entries — for the (Phase 7) workbench view to surface.
+    entries — for the (Phase 7) workbench view to surface. The shared world data
+    (`session_procs`/`agent_jobs`/`agents_map`/`cur`) feeds the H1 protected-sid
+    set so the orphan count never includes live/registry-known sids.
     """
     return {
         "empty": sum(1 for s in sessions if s.prompts == 0),
         "short": sum(1 for s in sessions if 0 < s.prompts <= 2),
-        "orphan_dirs": len(list_orphan_dirs(sessions)),
+        "orphan_dirs": len(list_orphan_dirs(
+            sessions, session_procs=session_procs, agent_jobs=agent_jobs,
+            agents_map=agents_map, cur=cur)),
         "zombie_procs": len(select_zombie_pids(session_procs, cur)),
         "aged_entries": len(list_aged_entries(now)),
     }

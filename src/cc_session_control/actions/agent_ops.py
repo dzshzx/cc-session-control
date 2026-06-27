@@ -25,6 +25,7 @@ import os
 import shlex
 import signal
 import time
+from dataclasses import replace
 
 from ..config import cfg
 from ..data import cleanup, liveness, proc, rc, registry
@@ -60,14 +61,15 @@ def job_host(job: AgentJob) -> tuple[int | None, bool]:
     and defeats pid reuse via `procStart`); falls back to the first sid match
     with `alive=False`. Returns `(None, False)` when no sessions file exists for
     the sid — that live worker is unstoppable (documented orphan risk).
+
+    Injects `/proc` liveness onto the registry rows, then defers to the single
+    pure join `registry.host_pid_for_sid` (shared with `snapshot._enrich_jobs`).
     """
-    procs = [sp for sp in registry.read_session_procs() if sp.sid == job.sid]
-    if not procs:
-        return None, False
-    for sp in procs:
-        if proc.pid_alive(sp.pid, sp.proc_start):
-            return sp.pid, True
-    return procs[0].pid, False
+    procs = [
+        replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
+        for sp in registry.read_session_procs()
+    ]
+    return registry.host_pid_for_sid(job.sid, procs)
 
 
 # --- respawn ------------------------------------------------------------------
