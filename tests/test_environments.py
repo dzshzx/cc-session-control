@@ -12,7 +12,7 @@ import os
 from cc_session_control.config import cfg
 from cc_session_control.data import environments as env
 from cc_session_control.data import registry
-from cc_session_control.models import EnvRecord
+from cc_session_control.models import AgentJob, EnvRecord, RCServer, SessionProc
 
 
 def _use_tmp_ledger(tmp_path, monkeypatch):
@@ -247,6 +247,59 @@ def test_observe_builds_from_registry(tmp_path, monkeypatch):
         ("cse", "01DgeqMqXMrSFpW59uSZwK99"),
     }
     assert records[("session", "016spR3Nkq2tJL2edM1exfuo")].bound_sid == "sid-s"
+
+
+# --- observe_live(): alive-gated CURRENT set (R3/R6, zombie not current) ----
+
+def _sp(pid, sid, bridge=None, proc_alive=False, proc_start="1"):
+    return SessionProc(pid=pid, sid=sid, bridge=bridge,
+                       proc_alive=proc_alive, proc_start=proc_start)
+
+
+def test_observe_live_excludes_dead_session_bridge():
+    # A zombie session proc with a stale bridge must NOT be reported (it would be
+    # an orphan, not current) — this is the bug the alive-gate fixes.
+    procs = [
+        _sp(1, "sid-alive", bridge="session_ALIVE", proc_alive=True),
+        _sp(2, "sid-dead", bridge="session_ZOMBIE", proc_alive=False),
+    ]
+    recs = {(r.prefix, r.key) for r in env.observe_live(procs, [])}
+    assert recs == {("session", "ALIVE")}
+
+
+def test_observe_live_zombie_not_current_via_classifier():
+    # End-to-end: feed observe_live's output into current_envs — the zombie's
+    # stale bridge must not land in the current set.
+    procs = [_sp(2, "sid-dead", bridge="session_ZOMBIE", proc_alive=False)]
+    observed = env.observe_live(procs, [])
+    current = env.current_envs(observed)
+    assert all(e.env_id != "session_ZOMBIE" for e in current)
+
+
+def test_observe_live_cse_gated_by_host_alive():
+    job_live = AgentJob(short="a", sid="sid-bg-live", resume_sid="sid-bg-live",
+                        env_suffix="LIVE", host_alive=True)
+    job_dead = AgentJob(short="b", sid="sid-bg-dead", resume_sid="sid-bg-dead",
+                        env_suffix="DEAD", host_alive=False)
+    recs = {(r.prefix, r.key) for r in env.observe_live([], [job_live, job_dead])}
+    assert recs == {("cse", "LIVE")}
+
+
+def test_observe_live_cse_gated_by_alive_sid_fallback():
+    # When jobs aren't host-enriched (host_alive=False), a proc-alive session
+    # sharing the job sid still makes the cse_ env current.
+    procs = [_sp(3, "sid-bg", proc_alive=True)]
+    job = AgentJob(short="c", sid="sid-bg", resume_sid="sid-bg",
+                   env_suffix="VIASID", host_alive=False)
+    recs = {(r.prefix, r.key) for r in env.observe_live(procs, [job])}
+    assert recs == {("cse", "VIASID")}
+
+
+def test_observe_live_env_gated_by_running_server():
+    running = RCServer(name="ws/a", env_id="env_RUN", status="running")
+    dead = RCServer(name="ws/b", env_id="env_DEAD", status="dead")
+    recs = {(r.prefix, r.key) for r in env.observe_live([], [], [running, dead])}
+    assert recs == {("env", "RUN")}
 
 
 def test_environments_does_not_import_rc():

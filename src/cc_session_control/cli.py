@@ -39,6 +39,12 @@ def _build_parser() -> argparse.ArgumentParser:
     prune_parser.add_argument("--apply", action="store_true", help="Actually delete (default: dry run)")
     prune_parser.add_argument("--sweep-orphans", action="store_true", help="Clean orphan artifact directories")
 
+    # agents subcommand
+    sub.add_parser("agents", help="List background agents")
+
+    # env subcommand
+    sub.add_parser("env", help="List bridge environments (current + orphan)")
+
     return parser
 
 
@@ -145,6 +151,46 @@ def _cmd_prune(args: argparse.Namespace) -> None:
     print(f"Pruned {len(targets)} session(s).")
 
 
+def _cmd_agents(args: argparse.Namespace) -> None:
+    from .actions.agent_ops import job_host
+    from .data.registry import read_agent_jobs
+
+    jobs = read_agent_jobs(max_age=0.0)
+    if not jobs:
+        print("No background agents found.")
+        return
+    for job in jobs:
+        _pid, alive = job_host(job)
+        state = "live" if alive else (job.state or "settled")
+        tempo = job.tempo or "-"
+        name = job.name or job.short
+        print(f"  {job.short}  [{state}]  tempo={tempo}  {name}  {job.cwd}")
+
+
+def _cmd_env(args: argparse.Namespace) -> None:
+    from .data import environments
+
+    # Alive-gated (R3/R6): a zombie session's stale bridge must not be counted as
+    # a current/bound environment. `observe_live` self-reads the registry + /proc.
+    observed = environments.observe_live(max_age=0.0)
+    current = environments.current_envs(observed)
+    orphans = environments.orphan_envs(observed)
+
+    print(f"Current bridge environments: {len(current)}")
+    for e in current:
+        print(f"  {e.env_id}  sid={e.bound_sid or '-'}")
+
+    print(f"Orphan environments (delete manually on claude.ai/code): {len(orphans)}")
+    for row in environments.manual_delete_list(observed):
+        print(f"  {row['env_id']}  sid={row['bound_sid'] or '-'}")
+
+    print(
+        "Note: csctl cannot deregister cloud environments; "
+        "the orphan list is inherently incomplete "
+        "(environments minted while csctl was not running are not tracked)."
+    )
+
+
 def _cmd_tui(args: argparse.Namespace) -> None:
     from .actions.session_ops import do_resume
     from .app import App
@@ -166,6 +212,10 @@ def main() -> None:
         _cmd_rc(args)
     elif args.command == "prune":
         _cmd_prune(args)
+    elif args.command == "agents":
+        _cmd_agents(args)
+    elif args.command == "env":
+        _cmd_env(args)
     elif args.command is None:
         _cmd_tui(args)
     else:

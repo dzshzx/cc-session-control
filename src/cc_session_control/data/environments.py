@@ -41,11 +41,12 @@ import contextlib
 import json
 import os
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 from ..config import cfg
-from ..models import BridgeEnv, EnvRecord
-from . import registry
+from ..models import AgentJob, BridgeEnv, EnvRecord, RCServer, SessionProc
+from . import proc, registry
 
 try:  # POSIX advisory locking; absent on Windows → degrade to no lock.
     import fcntl
@@ -94,6 +95,57 @@ def observe(max_age: float = 5.0) -> list[EnvRecord]:
     except Exception:
         return []
     return records
+
+
+def observe_live(
+    session_procs: list[SessionProc] | None = None,
+    agent_jobs: list[AgentJob] | None = None,
+    rc_servers: list[RCServer] | None = None,
+    max_age: float = 5.0,
+) -> list[EnvRecord]:
+    """Alive-gated "currently exposed" bridge envs (R3/R6) — the CURRENT set.
+
+    Where `observe()` is a bridge-truthy passive collector, this lifts the
+    `_is_rc_exposed` predicate to the env ledger: a bridge is CURRENT only when
+    its owner is alive — `session_*` gated by proc-alive, `cse_*` by a proc-alive
+    session sharing the job sid (host-alive), `env_*` by a running RC server. So a
+    zombie session's stale `bridgeSessionId` is NOT reported as current — it falls
+    through to `orphan_envs` (a manual-delete candidate) instead of overstating
+    the bound count.
+
+    Pure when `session_procs`/`agent_jobs` are supplied (the snapshot path passes
+    its already-liveness-resolved data — DI for tests); reads the registry +
+    `/proc` itself when they are None (CLI / no-snapshot view fallback). Swallows
+    errors → [].
+    """
+    try:
+        if session_procs is None:
+            session_procs = [
+                replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
+                for sp in registry.read_session_procs(max_age=max_age)
+            ]
+        if agent_jobs is None:
+            agent_jobs = registry.read_agent_jobs(max_age=max_age)
+        alive_sids = {sp.sid for sp in session_procs if sp.proc_alive}
+        records: list[EnvRecord] = []
+        for sp in session_procs:
+            if sp.bridge and sp.proc_alive:
+                prefix, key = _split_bridge(sp.bridge)
+                if prefix and key:
+                    records.append(EnvRecord(prefix=prefix, key=key, bound_sid=sp.sid))
+        for job in agent_jobs:
+            if job.env_suffix and (job.host_alive or job.sid in alive_sids):
+                records.append(
+                    EnvRecord(prefix="cse", key=job.env_suffix, bound_sid=job.sid)
+                )
+        for srv in rc_servers or []:
+            if srv.env_id and srv.status == "running":
+                prefix, sep, key = srv.env_id.partition("_")
+                if sep and prefix and key:
+                    records.append(EnvRecord(prefix=prefix, key=key, bound_sid=None))
+        return records
+    except Exception:
+        return []
 
 
 # --- ledger IO (parse / serialize / atomic write / lock) -------------------

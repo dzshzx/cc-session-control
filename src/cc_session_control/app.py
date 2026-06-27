@@ -9,6 +9,8 @@ from typing import Protocol, runtime_checkable
 
 import urwid
 
+from .data.snapshot import WorldSnapshot, build_world_snapshot
+from .views.agents import AgentsView
 from .views.rc import RCView
 from .views.sessions import SessionsView
 
@@ -18,16 +20,18 @@ class TabView(Protocol):
     """The contract App uses to drive each tab generically.
 
     A tab satisfies this structurally — App never special-cases a concrete
-    view. `fetch_pending()` runs on the worker thread and must not touch
-    widgets; `apply_data()` runs on the main loop and swaps `_pending` into
-    the walker. Adding a tab means honoring every member below.
+    view. `fetch_pending(snapshot)` runs on the worker thread and must not touch
+    widgets; `apply_data()` runs on the main loop and swaps `_pending` into the
+    walker. The `snapshot` is the shared per-cycle world (R11/D8); it is OPTIONAL
+    — a view called with `None` self-fetches (back-compat / tests). Adding a tab
+    means honoring every member below.
     """
 
     widget: urwid.Widget
     _loaded: bool
 
     def load(self) -> None: ...
-    def fetch_pending(self) -> None: ...
+    def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None: ...
     def apply_data(self) -> None: ...
     def keyhints(self) -> str: ...
     def handle_key(self, key: str) -> None: ...
@@ -49,7 +53,7 @@ PALETTE = [
     ("col_header", "dark cyan",   "black", None,       "#8aa",       "#181818"),
 ]
 
-TAB_NAMES = ["会话", "远程控制"]
+TAB_NAMES = ["会话", "后台", "远程控制"]
 
 
 def _make_screen() -> urwid.raw_display.Screen:
@@ -73,7 +77,7 @@ class App:
         self._pipe_fd: int | None = None
         self._refreshing = False
 
-        self.views: list[TabView] = [SessionsView(self), RCView(self)]
+        self.views: list[TabView] = [SessionsView(self), AgentsView(self), RCView(self)]
         self._active = 0
 
         self.body = urwid.WidgetPlaceholder(self.views[0].widget)
@@ -150,8 +154,15 @@ class App:
 
         def worker() -> None:
             try:
+                # Compute ONE shared world snapshot per cycle (R11/D8) so the
+                # three tabs don't each re-scan /proc + transcripts. A failed
+                # build degrades to per-view self-fetch (snapshot=None).
+                try:
+                    snapshot: WorldSnapshot | None = build_world_snapshot()
+                except Exception:
+                    snapshot = None
                 for v in self.views:
-                    v.fetch_pending()
+                    v.fetch_pending(snapshot)
             finally:
                 self._refreshing = False
             if self._pipe_fd is not None:

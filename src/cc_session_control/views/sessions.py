@@ -22,8 +22,17 @@ from ..data.cleanup import (
 )
 from ..data.sessions import scan
 from ..models import Session
+from ._session_row import (
+    _SESSION_HEADER,
+    SessionRow,
+    _ActionRow,
+    _hidden_marker,
+    _PreviewRow,
+)
 
 if TYPE_CHECKING:
+    from ..data.snapshot import WorldSnapshot
+
     from ..app import App
 
 _CLEANUP_ACTIONS = [
@@ -31,90 +40,6 @@ _CLEANUP_ACTIONS = [
     {"key": "short",   "label": "短会话(≤2提问)",   "stat": "short"},
     {"key": "orphans", "label": "孤儿目录",         "stat": "orphans"},
 ]
-
-_HIDDEN_MARKERS = {
-    "bridge": "桥接",
-    "sdk": "SDK",
-}
-
-
-def _hidden_marker(session: Session) -> str:
-    known = [label for key, label in _HIDDEN_MARKERS.items() if key in session.hidden]
-    unknown = sorted(key for key in session.hidden if key not in _HIDDEN_MARKERS)
-    return " ".join(known + unknown)
-
-
-class SessionRow(urwid.WidgetWrap):
-    def __init__(self, session: Session) -> None:
-        self.session = session
-        mark = "●" if session.alive else "○"
-        cur = "▸" if session.current else " "
-        when = time.strftime("%m-%d %H:%M", time.localtime(session.mtime))
-        hidden = _hidden_marker(session)
-        label = f"[{hidden}] {session.label}" if hidden else session.label
-        label = label[:80]
-        cwd = session.cwd.rstrip("/").rsplit("/", 1)[-1] if session.cwd else ""
-
-        cols = urwid.Columns([
-            (3, urwid.Text(f"{cur}{mark}")),
-            (12, urwid.Text(when)),
-            (5, urwid.Text(f"p{session.prompts}")),
-            ("weight", 3, urwid.Text(label, wrap="clip")),
-            ("weight", 1, urwid.Text(cwd, wrap="clip")),
-        ], min_width=6)
-
-        attr = "alive" if session.alive else "dead"
-        mapped = urwid.AttrMap(cols, attr, focus_map={"alive": "selected", "dead": "selected", None: "selected"})
-        super().__init__(mapped)
-
-    def selectable(self) -> bool:
-        return True
-
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
-
-
-class _ActionRow(urwid.WidgetWrap):
-    def __init__(self, action_key: str, label: str, count: int) -> None:
-        self.action_key = action_key
-        cols = urwid.Columns([
-            ("weight", 1, urwid.Text(label)),
-            (8, urwid.Text(str(count), align="right")),
-        ])
-        mapped = urwid.AttrMap(cols, "dead", focus_map={"dead": "selected", None: "selected"})
-        super().__init__(mapped)
-
-    def selectable(self) -> bool:
-        return True
-
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
-
-
-class _PreviewRow(urwid.WidgetWrap):
-    def __init__(self, text: str) -> None:
-        mapped = urwid.AttrMap(urwid.Text(text), "dead", focus_map={"dead": "selected", None: "selected"})
-        super().__init__(mapped)
-
-    def selectable(self) -> bool:
-        return True
-
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
-
-
-_SESSION_HEADER = urwid.Columns([
-    (3, urwid.Text("")),
-    (12, urwid.Text("时间")),
-    (5, urwid.Text("提问")),
-    ("weight", 3, urwid.Text("标题")),
-    ("weight", 1, urwid.Text("项目")),
-], min_width=6)
-
-_CLEANUP_HEADER = urwid.Columns([
-    ("weight", 1, urwid.Text("操作")),
-    (8, urwid.Text("数量", align="right")),
-])
 
 
 class SessionsView:
@@ -165,9 +90,14 @@ class SessionsView:
         self._apply_filter()
         self._rebuild()
 
-    def fetch_pending(self) -> None:
-        """Worker-thread data fetch. Only sets pending fields — no widgets."""
-        sessions = scan()
+    def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
+        """Worker-thread data fetch. Only sets pending fields — no widgets.
+
+        Projects the shared `snapshot` when given (R11/D8 — no per-view re-scan);
+        falls back to a self-contained `scan()` when called with no snapshot
+        (back-compat / tests).
+        """
+        sessions = snapshot.sessions if snapshot is not None else scan()
         self.set_pending(sessions)
         self.set_pending_stats(cleanup_stats(sessions))
 
@@ -201,7 +131,7 @@ class SessionsView:
         short = self._cleanup_stats.get("short", 0)
         orphans = self._cleanup_stats.get("orphans", 0)
         cleanup_text = ""
-        hidden_n = sum(1 for s in self._all_sessions if s.hidden)
+        hidden_n = sum(1 for s in self._all_sessions if s.bridge_or_sdk)
         hidden_text = ""
         if hidden_n:
             hidden_text = f" · 桥接/SDK {hidden_n}" if self._show_hidden else f" · 桥接/SDK已隐藏 {hidden_n}"
@@ -234,9 +164,13 @@ class SessionsView:
         return None
 
     def _apply_filter(self) -> None:
+        # D9: the hide filter unions the transcript `hidden` tags with the
+        # registry `source == "sdk"` signal (Session.bridge_or_sdk), so the
+        # badge and the `h` toggle stay consistent regardless of which signal
+        # flagged the session.
         visible = [
             s for s in self._all_sessions
-            if self._show_hidden or not s.hidden
+            if self._show_hidden or not s.bridge_or_sdk
         ]
         if not self._filter_text:
             self._sessions = visible
