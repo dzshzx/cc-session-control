@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import urwid
@@ -13,15 +14,20 @@ from ..actions.session_ops import (
     terminate_session,
     to_clipboard,
 )
+from ..data import liveness, proc, registry
 from ..data.cleanup import (
-    cleanup_stats,
+    cleanup_classified,
+    list_aged_entries,
     list_orphan_dirs,
     prune_sessions,
+    remove_aged_entries,
     remove_orphan_dirs,
     remove_session,
+    remove_zombie_session_files,
+    select_zombie_pids,
 )
 from ..data.sessions import scan
-from ..models import Session
+from ..models import AgentJob, Session, SessionProc
 from ._session_row import (
     _SESSION_HEADER,
     SessionRow,
@@ -35,11 +41,21 @@ if TYPE_CHECKING:
 
     from ..app import App
 
+# R10/D7: refusal shown when the "current" session can't be determined (no /proc)
+# — session-keyed destructive ops are disabled rather than silently doing nothing.
+_DEGRADED = "liveness 降级：破坏性操作已禁用"
+
+# Submenu actions. `stat` keys index `cleanup_classified`. The age sweep
+# (Strategy B) is mtime-only/session-agnostic, so it is NOT R10-gated; every
+# other action is.
 _CLEANUP_ACTIONS = [
-    {"key": "empty",   "label": "空壳会话(0提问)",  "stat": "empty"},
-    {"key": "short",   "label": "短会话(≤2提问)",   "stat": "short"},
-    {"key": "orphans", "label": "孤儿目录",         "stat": "orphans"},
+    {"key": "empty",   "label": "空壳会话(0提问)",      "stat": "empty",        "gated": True},
+    {"key": "short",   "label": "短会话(≤2提问)",       "stat": "short",        "gated": True},
+    {"key": "orphans", "label": "孤儿目录(sid 键)",      "stat": "orphan_dirs",  "gated": True},
+    {"key": "zombies", "label": "僵尸会话文件(pid 键)",  "stat": "zombie_procs", "gated": True},
+    {"key": "aged",    "label": "过期全局文件(按天)",    "stat": "aged_entries", "gated": False},
 ]
+_GATED_ACTIONS = {a["key"] for a in _CLEANUP_ACTIONS if a["gated"]}
 
 
 class SessionsView:
@@ -53,9 +69,17 @@ class SessionsView:
         self._mode = "list"
         self._filter_text = ""
         self._cleanup_stats: dict[str, int] = {}
+        self._classified: dict[str, int] = {}
         self._preview_action: str | None = None
         self._preview_sessions: list[Session] = []
         self._show_hidden = True
+        # Shared-snapshot liveness inputs for the pid-keyed zombie sweep + the
+        # classified counts (R11/D8 — projected, never re-scanned per view).
+        self._session_procs: list[SessionProc] = []
+        self._cur: set[int] = set()
+        self._pending_procs: list[SessionProc] | None = None
+        self._pending_cur: set[int] | None = None
+        self._pending_classified: dict[str, int] | None = None
 
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
         col_header = urwid.AttrMap(_SESSION_HEADER, "col_header")
@@ -84,22 +108,86 @@ class SessionsView:
 
     def load(self) -> None:
         sessions = scan()
+        procs, cur, jobs, agents = self._self_fetch_liveness()
         self._all_sessions = sessions
-        self._cleanup_stats = cleanup_stats(sessions)
+        self._session_procs = procs
+        self._cur = cur
+        self._classified = self._classify(sessions, procs, cur, jobs, agents)
+        self._cleanup_stats = self._derive_stats(sessions, self._classified)
         self._loaded = True
         self._apply_filter()
         self._rebuild()
+
+    def _self_fetch_liveness(
+        self,
+    ) -> tuple[list[SessionProc], set[int], list[AgentJob], dict[str, int | None]]:
+        """No-snapshot liveness inputs (back-compat / tests). Swallows errors.
+
+        Mirrors what `build_world_snapshot` computes so the submenu counts + the
+        zombie sweep work even without a shared snapshot. `proc_alive` is injected
+        here exactly as the snapshot path does it.
+        """
+        try:
+            procs = [
+                replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
+                for sp in registry.read_session_procs()
+            ]
+        except Exception:
+            procs = []
+        try:
+            jobs = registry.read_agent_jobs()
+        except Exception:
+            jobs = []
+        try:
+            agents = liveness.alive_map()
+        except Exception:
+            agents = {}
+        return procs, proc.ancestor_pids(), jobs, agents
+
+    def _classify(
+        self,
+        sessions: list[Session],
+        procs: list[SessionProc],
+        cur: set[int],
+        jobs: list[AgentJob],
+        agents: dict[str, int | None],
+    ) -> dict[str, int]:
+        try:
+            return cleanup_classified(sessions, procs, cur, jobs, agents)
+        except Exception:
+            return {}
+
+    def _derive_stats(self, sessions: list[Session], classified: dict[str, int]) -> dict[str, int]:
+        """The legacy 4-key status-bar shape, derived from the classified counts."""
+        return {
+            "total": len(sessions),
+            "empty": classified.get("empty", 0),
+            "short": classified.get("short", 0),
+            "orphans": classified.get("orphan_dirs", 0),
+        }
 
     def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
         """Worker-thread data fetch. Only sets pending fields — no widgets.
 
         Projects the shared `snapshot` when given (R11/D8 — no per-view re-scan);
-        falls back to a self-contained `scan()` when called with no snapshot
-        (back-compat / tests).
+        falls back to a self-contained scan when called with no snapshot
+        (back-compat / tests). The liveness inputs (`session_procs`/`cur` +
+        `agent_jobs`/`agents_map`) feed the pid-keyed zombie sweep and the
+        classified counts — taken straight from the snapshot, never re-scanned.
         """
-        sessions = snapshot.sessions if snapshot is not None else scan()
+        if snapshot is not None:
+            sessions = snapshot.sessions
+            procs, cur = snapshot.session_procs, snapshot.cur
+            jobs, agents = snapshot.agent_jobs, snapshot.agents_map
+        else:
+            sessions = scan()
+            procs, cur, jobs, agents = self._self_fetch_liveness()
+        classified = self._classify(sessions, procs, cur, jobs, agents)
         self.set_pending(sessions)
-        self.set_pending_stats(cleanup_stats(sessions))
+        self._pending_procs = procs
+        self._pending_cur = cur
+        self._pending_classified = classified
+        self.set_pending_stats(self._derive_stats(sessions, classified))
 
     def set_pending(self, sessions: list[Session]) -> None:
         self._pending = sessions
@@ -111,6 +199,15 @@ class SessionsView:
         if self._pending is not None:
             self._all_sessions = self._pending
             self._pending = None
+            if self._pending_procs is not None:
+                self._session_procs = self._pending_procs
+                self._pending_procs = None
+            if self._pending_cur is not None:
+                self._cur = self._pending_cur
+                self._pending_cur = None
+            if self._pending_classified is not None:
+                self._classified = self._pending_classified
+                self._pending_classified = None
             self._loaded = True
             if self._mode == "list" or self._mode == "filter":
                 self._apply_filter()
@@ -149,10 +246,10 @@ class SessionsView:
         )
 
     def _rebuild_cleanup(self) -> None:
-        s = self._cleanup_stats
+        c = self._classified
         self._cleanup_walker.clear()
         for a in _CLEANUP_ACTIONS:
-            count = s.get(a["stat"], 0)
+            count = c.get(a["stat"], 0)
             self._cleanup_walker.append(_ActionRow(a["key"], a["label"], count))
 
     def _selected(self) -> Session | None:
@@ -242,56 +339,80 @@ class SessionsView:
         )
         self._body.original_widget = overlay
 
+    def _open_preview(self, action: str, title: str, rows: list) -> None:
+        """Shared preview-overlay entry for a dir/file sweep (no session list)."""
+        self._mode = "preview"
+        self._preview_action = action
+        self._preview_sessions = []
+        self._show_overlay(title, rows)
+        self._update_footer()
+
     def _enter_preview(self, action: str) -> None:
-        sessions = scan()
-        if action == "empty":
-            targets = prune_sessions(sessions, max_prompts=0)
-            label = "空壳会话"
-        elif action == "short":
-            targets = [s for s in prune_sessions(sessions, max_prompts=2) if s.prompts > 0]
-            label = "短会话(≤2提问)"
-        elif action == "orphans":
-            orphan_paths = list_orphan_dirs(sessions)
-            if not orphan_paths:
-                self.app.notify("无孤儿目录需要清理")
+        # R10/D7: session-keyed destructive sweeps need a determinable "current"
+        # (without /proc every pid looks dead, so they'd nuke the live session).
+        # Refuse HONESTLY — never let the refusal read as "nothing to clean".
+        if action in _GATED_ACTIONS and not proc.current_determinable():
+            self.app.notify(_DEGRADED)
+            return
+
+        if action in ("empty", "short"):
+            sessions = scan()
+            if action == "empty":
+                targets = prune_sessions(sessions, max_prompts=0)
+                label = "空壳会话"
+            else:
+                targets = [s for s in prune_sessions(sessions, max_prompts=2) if s.prompts > 0]
+                label = "短会话(≤2提问)"
+            if not targets:
+                self.app.notify(f"无{label}需要清理")
                 return
             self._mode = "preview"
             self._preview_action = action
-            self._preview_sessions = []
-            rows = [_PreviewRow(p) for p in orphan_paths]
-            self._show_overlay(f"将清理 {len(orphan_paths)} 个孤儿目录", rows)
+            self._preview_sessions = targets
+            rows = []
+            for s in targets:
+                when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
+                cwd = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
+                line = f"{when}  p{s.prompts}  {s.label[:60]}  ({cwd})"
+                rows.append(_PreviewRow(line))
+            self._show_overlay(f"将清理 {len(targets)} 条{label}", rows)
             self._update_footer()
-            return
-        else:
-            return
-
-        if not targets:
-            self.app.notify(f"无{label}需要清理")
-            return
-
-        self._mode = "preview"
-        self._preview_action = action
-        self._preview_sessions = targets
-        rows = []
-        for s in targets:
-            when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
-            cwd = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
-            line = f"{when}  p{s.prompts}  {s.label[:60]}  ({cwd})"
-            rows.append(_PreviewRow(line))
-        self._show_overlay(f"将清理 {len(targets)} 条{label}", rows)
-        self._update_footer()
+        elif action == "orphans":
+            orphan_paths = list_orphan_dirs(scan())
+            if not orphan_paths:
+                self.app.notify("无孤儿目录需要清理")
+                return
+            rows = [_PreviewRow(p) for p in orphan_paths]
+            self._open_preview(action, f"将清理 {len(orphan_paths)} 个孤儿目录", rows)
+        elif action == "zombies":
+            pids = select_zombie_pids(self._session_procs, self._cur)
+            if not pids:
+                self.app.notify("无僵尸会话文件需要清理")
+                return
+            rows = [_PreviewRow(f"sessions/{pid}.json") for pid in pids]
+            self._open_preview(action, f"将清理 {len(pids)} 个僵尸会话文件", rows)
+        elif action == "aged":
+            entries = list_aged_entries()
+            if not entries:
+                self.app.notify("无过期文件需要清理")
+                return
+            rows = [_PreviewRow(e) for e in entries]
+            self._open_preview(action, f"将清理 {len(entries)} 个过期项", rows)
 
     def _confirm_cleanup(self) -> None:
         action = self._preview_action
         if action in ("empty", "short"):
-            count = len(self._preview_sessions)
-            for t in self._preview_sessions:
-                remove_session(t)
-            self.app.notify(f"已清理 {count} 条会话")
+            removed = sum(1 for t in self._preview_sessions if remove_session(t))
+            self.app.notify(f"已清理 {removed} 条会话")
         elif action == "orphans":
-            sessions = scan()
-            count = remove_orphan_dirs(sessions)
+            count = remove_orphan_dirs(scan())
             self.app.notify(f"已清理 {count} 个孤儿目录")
+        elif action == "zombies":
+            count = remove_zombie_session_files(self._session_procs, self._cur)
+            self.app.notify(f"已清理 {count} 个僵尸会话文件")
+        elif action == "aged":
+            count = remove_aged_entries()
+            self.app.notify(f"已清理 {count} 个过期项")
         self._preview_action = None
         self._preview_sessions = []
         self._enter_cleanup()
@@ -365,8 +486,15 @@ class SessionsView:
             if s.alive:
                 self.app.notify("活会话不删，先终止")
                 return
-            remove_session(s)
-            self.app.notify("已删除")
+            if not proc.current_determinable():
+                self.app.notify(_DEGRADED)
+                return
+            # L4: honour remove_session's bool — only claim success when it truly
+            # removed something; a False here means there was nothing to delete.
+            if remove_session(s):
+                self.app.notify("已删除")
+            else:
+                self.app.notify("无可删除内容")
             self.app.trigger_async_refresh()
         elif key == "y" and s:
             cmd = resume_cmd(s)

@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 
 from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
-from . import environments, proc, rc, registry, sessions
+from . import environments, liveness, proc, rc, registry, sessions
 
 
 @dataclass
@@ -31,6 +31,12 @@ class WorldSnapshot:
       - `observed_envs` — ALIVE-GATED (`observe_live`): the CURRENT/bound display.
       - `file_referenced_envs` — bridge-truthy (`observe`): ledger MEMBERSHIP, and
         the set orphans are computed against (`orphan = ledger − file-referenced`).
+
+    `session_procs` (with `/proc` liveness already injected), `agents_map`
+    (`claude agents --json`) and `cur` (the ancestor-pid set) are the raw liveness
+    inputs `build_world_snapshot` already computes for the scan; they are exposed
+    here so the Sessions cleanup submenu can feed `cleanup_classified` /
+    `select_zombie_pids` WITHOUT a second scan (R11/D8).
     """
     sessions: list[Session] = field(default_factory=list)
     agent_jobs: list[AgentJob] = field(default_factory=list)
@@ -38,6 +44,9 @@ class WorldSnapshot:
     rc_servers: list[RCServer] = field(default_factory=list)
     observed_envs: list[EnvRecord] = field(default_factory=list)
     file_referenced_envs: list[EnvRecord] = field(default_factory=list)
+    session_procs: list[SessionProc] = field(default_factory=list)
+    agents_map: dict[str, int | None] = field(default_factory=dict)
+    cur: set[int] = field(default_factory=set)
 
 
 def _enrich_jobs(
@@ -73,6 +82,10 @@ def build_world_snapshot() -> WorldSnapshot:
     ]
     all_sessions = sessions.scan()
     agent_jobs = _enrich_jobs(registry.read_agent_jobs(), session_procs)
+    # Cheap, cached/inexpensive liveness inputs surfaced for the cleanup submenu
+    # (the registry read above + scan() already warmed alive_map's 5s cache).
+    agents_map = liveness.alive_map()
+    cur = proc.ancestor_pids()
     rc_projects = rc.scan()
     rc_servers = rc.scan_servers()
     # R6 ledger persistence (the whole point of the ledger): record EVERY env an
@@ -96,4 +109,7 @@ def build_world_snapshot() -> WorldSnapshot:
         rc_servers=rc_servers,
         observed_envs=observed_envs,
         file_referenced_envs=file_referenced_envs,
+        session_procs=session_procs,
+        agents_map=agents_map,
+        cur=cur,
     )

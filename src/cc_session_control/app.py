@@ -9,10 +9,15 @@ from typing import Protocol, runtime_checkable
 
 import urwid
 
+from .data import proc
 from .data.snapshot import WorldSnapshot, build_world_snapshot
 from .views.agents import AgentsView
 from .views.rc import RCView
 from .views.sessions import SessionsView
+
+# D7/R10: shown across all tabs when `/proc` is unavailable (e.g. macOS), where
+# the "current" session can't be determined and destructive ops are refused.
+_DEGRADED_BANNER = "⚠ liveness 降级（无 /proc）：terminate/delete/cleanup 已受限"
 
 
 @runtime_checkable
@@ -84,7 +89,12 @@ class App:
         self._tab_texts: list[urwid.Text] = []
         tab_bar = self._build_tab_bar()
         title = urwid.AttrMap(urwid.Text("Claude Code 会话管理器", align="center"), "header")
-        self.header = urwid.Pile([title, tab_bar])
+        # Title at 0 and tab_bar at 1 are positional (see `_update_tab_bar`); the
+        # degraded banner, if any, is appended LAST so those indices are stable.
+        header_rows: list[urwid.Widget] = [title, tab_bar]
+        if not proc.has_proc():
+            header_rows.append(urwid.AttrMap(urwid.Text(f" {_DEGRADED_BANNER}"), "notify"))
+        self.header = urwid.Pile(header_rows)
 
         self._footer_default = " Tab 切换 · q 退出 · r 刷新"
         self.footer_text = urwid.Text(self._footer_default)
@@ -147,6 +157,23 @@ class App:
     def _restore_footer(self) -> None:
         self.frame.footer = self.footer
 
+    def _run_fetch_cycle(self) -> None:
+        """Worker-phase of a refresh — the synchronous, testable seam (R11/D8).
+
+        Computes ONE shared world snapshot per cycle so the three tabs don't each
+        re-scan /proc + transcripts, then projects it into every view's `_pending`
+        via `fetch_pending(snapshot)`. A failed build degrades to per-view
+        self-fetch (`snapshot=None`). Pure data side: it only sets `_pending`
+        fields and NEVER touches widgets, so it is safe on the worker thread and
+        can be driven directly in tests without a MainLoop.
+        """
+        try:
+            snapshot: WorldSnapshot | None = build_world_snapshot()
+        except Exception:
+            snapshot = None
+        for v in self.views:
+            v.fetch_pending(snapshot)
+
     def trigger_async_refresh(self) -> None:
         if self._refreshing or self._exiting:
             return
@@ -154,15 +181,7 @@ class App:
 
         def worker() -> None:
             try:
-                # Compute ONE shared world snapshot per cycle (R11/D8) so the
-                # three tabs don't each re-scan /proc + transcripts. A failed
-                # build degrades to per-view self-fetch (snapshot=None).
-                try:
-                    snapshot: WorldSnapshot | None = build_world_snapshot()
-                except Exception:
-                    snapshot = None
-                for v in self.views:
-                    v.fetch_pending(snapshot)
+                self._run_fetch_cycle()
             finally:
                 self._refreshing = False
             if self._pipe_fd is not None:

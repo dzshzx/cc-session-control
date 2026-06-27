@@ -176,14 +176,20 @@ def test_sessions_view_filter_mode_routes_text_to_edit():
     assert view._filter_edit.get_edit_text() == "d"
 
 
-def test_sessions_cleanup_mode():
+def test_sessions_cleanup_mode(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+
+    monkeypatch.setattr(sv_mod, "cleanup_classified", lambda *a, **k: {
+        "empty": 10, "short": 5, "orphan_dirs": 3,
+        "zombie_procs": 2, "aged_entries": 4,
+    })
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
-    view._cleanup_stats = {"total": 100, "empty": 10, "short": 5, "orphans": 3}
     view._enter_cleanup()
     assert view._mode == "cleanup"
-    assert len(view._cleanup_walker) == 3
+    # Five submenu actions now: empty/short/orphans/zombies/aged (CLI/TUI parity).
+    assert len(view._cleanup_walker) == 5
     view._exit_cleanup()
     assert view._mode == "list"
 
@@ -226,8 +232,14 @@ def test_sessions_view_fetch_pending(monkeypatch):
 
     fake = [_make_session(sid="x1")]
     monkeypatch.setattr(sv_mod, "scan", lambda: fake)
-    monkeypatch.setattr(sv_mod, "cleanup_stats",
-                        lambda s: {"total": 1, "empty": 0, "short": 0, "orphans": 0})
+    # The submenu counts (and the derived status-bar stats) now come from
+    # cleanup_classified; stub it so the self-fetch path does no real disk IO.
+    monkeypatch.setattr(sv_mod, "cleanup_classified", lambda *a, **k: {
+        "empty": 0, "short": 0, "orphan_dirs": 0, "zombie_procs": 0, "aged_entries": 0,
+    })
+    monkeypatch.setattr(sv_mod.registry, "read_session_procs", lambda *a, **k: [])
+    monkeypatch.setattr(sv_mod.registry, "read_agent_jobs", lambda *a, **k: [])
+    monkeypatch.setattr(sv_mod.liveness, "alive_map", lambda *a, **k: {})
 
     app = FakeApp()
     view = SessionsView(app)
@@ -236,6 +248,9 @@ def test_sessions_view_fetch_pending(monkeypatch):
 
     assert view._pending == fake
     assert view._cleanup_stats == {"total": 1, "empty": 0, "short": 0, "orphans": 0}
+    assert view._pending_classified == {
+        "empty": 0, "short": 0, "orphan_dirs": 0, "zombie_procs": 0, "aged_entries": 0,
+    }
 
 
 def test_rc_view_fetch_pending(monkeypatch):
@@ -348,16 +363,28 @@ def test_sessions_view_fetch_pending_uses_snapshot(monkeypatch):
 
     monkeypatch.setattr(sv_mod, "scan", lambda: (_ for _ in ()).throw(
         AssertionError("scan() must not run when a snapshot is provided")))
-    monkeypatch.setattr(sv_mod, "cleanup_stats",
-                        lambda s: {"total": len(s), "empty": 0, "short": 0, "orphans": 0})
+    # Classified is computed from the snapshot's own liveness inputs (no re-scan).
+    seen = {}
+    monkeypatch.setattr(sv_mod, "cleanup_classified",
+                        lambda s, procs, cur, jobs, agents: seen.update(
+                            n=len(s), procs=procs, cur=cur) or {
+                            "empty": 0, "short": 0, "orphan_dirs": 0,
+                            "zombie_procs": 0, "aged_entries": 0})
 
     fake = [_make_session(sid="snap1")]
-    snap = WorldSnapshot(sessions=fake)
+    from cc_session_control.models import SessionProc
+    snap = WorldSnapshot(sessions=fake,
+                         session_procs=[SessionProc(pid=9, sid="snap1")],
+                         cur={42})
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
     view.fetch_pending(snap)
     assert view._pending == fake
+    # Snapshot liveness inputs were projected straight through (no second scan).
+    assert view._pending_procs == snap.session_procs
+    assert view._pending_cur == {42}
+    assert seen["cur"] == {42}
 
 
 # === Phase 7: RC tri-state + spawn_mode + servers + env ledger ==============
@@ -507,3 +534,193 @@ def test_rc_view_source_carries_manual_delete_literal():
 
     with open(rc_view_mod.__file__) as fh:
         assert "云端需手动删除" in fh.read()
+
+
+# === Post-review fix B: RC ledger honesty + tri-state ========================
+
+def test_rc_view_env_section_shows_incomplete_caveat():
+    # Fix 1 (red line #5): the env-ledger panel itself must carry the "inherently
+    # incomplete" + manual-delete caveat, not only the `csctl env` CLI.
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = []
+    view._pending_servers = []
+    view._pending_current = []
+    view._pending_orphans = [BridgeEnv(prefix="env", key="O", status="orphan")]
+    view.apply_data()
+    blob = "\n".join(_row_text(view.walker[i]) for i in range(len(view.walker)))
+    assert "不完整" in blob
+    assert "未运行" in blob
+    assert "云端需手动删除" in blob
+
+
+def test_rc_view_help_warns_ledger_incomplete():
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._show_help()
+    blob = "\n".join(_row_text(view.walker[i]) for i in range(len(view.walker)))
+    assert "不完整" in blob
+    assert "未运行" in blob
+    assert "云端需手动删除" in blob
+
+
+def test_rc_view_c_key_full_tristate_cycle(monkeypatch):
+    # Fix 5: cycle must be None→True→False→None so explicit True is reachable.
+    import cc_session_control.views.rc as rc_view_mod
+
+    writes = []
+    monkeypatch.setattr(rc_view_mod, "set_rc_at_startup",
+                        lambda directory, value: writes.append(value))
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+
+    for start, expected in ((None, True), (True, False), (False, None)):
+        view._pending = [_make_project(name="p", rc_at_startup=start)]
+        view.apply_data()
+        view.handle_key("c")
+        assert writes[-1] is expected
+
+
+# === Post-review fix B: Sessions degraded honesty + cleanup parity ==========
+
+def _focus_dead_session(view, **overrides):
+    overrides.setdefault("alive", False)
+    view._all_sessions = [_make_session(**overrides)]
+    view._apply_filter()
+    view._rebuild()
+    view.walker.set_focus(0)
+
+
+def test_delete_honest_feedback_true_then_false(monkeypatch):
+    # Fix 3 / L4: only claim 已删除 when remove_session truly removed something.
+    import cc_session_control.views.sessions as sv_mod
+
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    _focus_dead_session(view)
+
+    monkeypatch.setattr(sv_mod, "remove_session", lambda s: True)
+    view.handle_key("d")
+    assert app._notifications[-1] == "已删除"
+
+    monkeypatch.setattr(sv_mod, "remove_session", lambda s: False)
+    view.handle_key("d")
+    assert app._notifications[-1] == "无可删除内容"
+
+
+def test_delete_refuses_when_current_undeterminable(monkeypatch):
+    # Fix 2a / R10: no /proc -> the delete must refuse honestly, not "delete".
+    import cc_session_control.views.sessions as sv_mod
+
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    removed = {"n": 0}
+    monkeypatch.setattr(sv_mod, "remove_session",
+                        lambda s: removed.__setitem__("n", removed["n"] + 1) or True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    _focus_dead_session(view)
+
+    view.handle_key("d")
+    assert removed["n"] == 0
+    assert app._notifications[-1] == sv_mod._DEGRADED
+
+
+def test_cleanup_preview_refuses_when_undeterminable_not_nothing(monkeypatch):
+    # Fix 2a: a degraded refusal must NOT read as "无…需要清理".
+    import cc_session_control.views.sessions as sv_mod
+
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._enter_preview("empty")
+    assert view._mode == "list"  # never opened a preview
+    assert app._notifications[-1] == sv_mod._DEGRADED
+    assert "需要清理" not in app._notifications[-1]
+
+
+def test_cleanup_submenu_exposes_zombie_and_aged_actions(monkeypatch):
+    # Fix 4: CLI/TUI parity — the submenu offers the pid-keyed zombie sweep and
+    # the age sweep, with counts from cleanup_classified.
+    import cc_session_control.views.sessions as sv_mod
+
+    monkeypatch.setattr(sv_mod, "cleanup_classified", lambda *a, **k: {
+        "empty": 1, "short": 2, "orphan_dirs": 3, "zombie_procs": 4, "aged_entries": 5,
+    })
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._classified = sv_mod.cleanup_classified()
+    view._enter_cleanup()
+    keys = [w.action_key for w in view._cleanup_walker]
+    assert keys == ["empty", "short", "orphans", "zombies", "aged"]
+    blob = "\n".join(_row_text(w) for w in view._cleanup_walker)
+    assert "4" in blob and "5" in blob  # zombie + aged counts surfaced
+
+
+def test_zombie_sweep_preview_and_confirm(monkeypatch):
+    # Fix 4: zombie sweep previews the dead pid files (from the shared snapshot's
+    # session_procs/cur) and confirm routes to remove_zombie_session_files.
+    import cc_session_control.views.sessions as sv_mod
+    from cc_session_control.models import SessionProc
+
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._session_procs = [SessionProc(pid=111, sid="z", proc_alive=False)]
+    view._cur = set()
+
+    view._enter_preview("zombies")
+    assert view._mode == "preview"
+    assert view._preview_action == "zombies"
+
+    swept = {"n": 0}
+    monkeypatch.setattr(sv_mod, "remove_zombie_session_files",
+                        lambda procs, cur: swept.__setitem__("n", len(procs)) or 1)
+    view._confirm_cleanup()
+    assert swept["n"] == 1
+    assert any("僵尸会话文件" in m for m in app._notifications)
+
+
+def test_zombie_sweep_gated_when_undeterminable(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+    from cc_session_control.models import SessionProc
+
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._session_procs = [SessionProc(pid=111, sid="z", proc_alive=False)]
+    view._cur = set()
+    view._enter_preview("zombies")
+    assert view._mode == "list"
+    assert app._notifications[-1] == sv_mod._DEGRADED
+
+
+def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
+    # Fix 4: the age sweep is mtime-only -> NOT R10-gated; works even with no /proc.
+    import cc_session_control.views.sessions as sv_mod
+
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    monkeypatch.setattr(sv_mod, "list_aged_entries", lambda *a, **k: ["shell-snapshots/old.sh"])
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+
+    view._enter_preview("aged")
+    assert view._mode == "preview"
+    assert view._preview_action == "aged"
+
+    swept = {"n": 0}
+    monkeypatch.setattr(sv_mod, "remove_aged_entries",
+                        lambda *a, **k: swept.__setitem__("n", 1) or 1)
+    view._confirm_cleanup()
+    assert swept["n"] == 1
+    assert any("过期项" in m for m in app._notifications)

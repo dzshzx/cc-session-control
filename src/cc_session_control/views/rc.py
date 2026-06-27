@@ -31,9 +31,20 @@ if TYPE_CHECKING:
 
 _STATUS_MAP = {"running": "● 运行中", "dead": "✖ 已崩溃", "stopped": "○ 已停止"}
 _RC_TRISTATE = {True: "开", False: "关", None: "未设置"}
+# `c` cycles the per-project remoteControlAtStartup tri-state in full so the user
+# can return to an explicit True (the old 2-cycle could never set True again).
+_NEXT_TRISTATE = {None: True, True: False, False: None}
 
 # Literal required in the UI by AC9 — the manual-delete red line.
 _MANUAL_DELETE = "云端需手动删除"
+
+# Red-line #5 honesty: the orphan ledger can only see envs minted while csctl was
+# running, and csctl can never deregister a cloud env. Surfaced in the env-ledger
+# section AND the help so the incompleteness is never silently implied as complete.
+_LEDGER_CAVEAT = (
+    "  注：孤儿清单不完整——csctl 未运行期间铸造的环境无法追踪；"
+    "且 csctl 不能注销云端环境，需在 claude.ai/code 手动删除。"
+)
 
 
 class RCRow(urwid.WidgetWrap):
@@ -232,6 +243,7 @@ class RCView:
                 self.walker.append(ServerRow(s))
         if self._current or self._orphans:
             self.walker.append(_DividerRow(f"── 环境台账（{_MANUAL_DELETE}）──"))
+            self.walker.append(_DividerRow(_LEDGER_CAVEAT))
             for e in self._current:
                 self.walker.append(EnvRow(e))
             for e in self._orphans:
@@ -292,10 +304,10 @@ class RCView:
             self.app.notify(f"{p.name} 开机自启: {'开' if new else '关'}")
             self.app.trigger_async_refresh()
         elif key == "c" and p:
-            current = p.rc_at_startup is not False
-            set_rc_at_startup(p.directory, not current if current else None)
-            label = "关" if current else "开"
-            self.app.notify(f"{p.name} 自动远控: {label}")
+            # Full 3-cycle so explicit True is reachable again: None→True→False→None.
+            new = _NEXT_TRISTATE[p.rc_at_startup]
+            set_rc_at_startup(p.directory, new)
+            self.app.notify(f"{p.name} 自动远控: {_RC_TRISTATE[new]}")
             self.app.trigger_async_refresh()
         elif key == "A":
             count = rc.start_all_listed()
@@ -328,6 +340,7 @@ class RCView:
             "RC 服务 / 环境台账（只读）:",
             "  外部服务只展示，不接管、不重启。",
             f"  孤儿环境无法本地注销：{_MANUAL_DELETE}（claude.ai/code）。",
+            "  孤儿清单不完整：csctl 未运行期间铸造的环境无法追踪。",
             "",
             "导航:",
             "  Tab    切换标签页",
