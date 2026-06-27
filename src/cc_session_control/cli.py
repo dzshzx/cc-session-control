@@ -37,7 +37,9 @@ def _build_parser() -> argparse.ArgumentParser:
     prune_parser = sub.add_parser("prune", help="Clean up sessions")
     prune_parser.add_argument("--max-prompts", type=int, default=0, help="Max prompt count to prune (default: 0)")
     prune_parser.add_argument("--apply", action="store_true", help="Actually delete (default: dry run)")
-    prune_parser.add_argument("--sweep-orphans", action="store_true", help="Clean orphan artifact directories")
+    prune_parser.add_argument("--sweep-orphans", action="store_true", help="Clean orphan sid-keyed artifact directories")
+    prune_parser.add_argument("--sweep-zombies", action="store_true", help="Remove zombie sessions/<pid>.json files (dead procs; keeps current + alive pids)")
+    prune_parser.add_argument("--sweep-aged", action="store_true", help="Remove age-keyed global entries older than cleanup_age_days")
 
     # agents subcommand
     sub.add_parser("agents", help="List background agents")
@@ -139,6 +141,14 @@ def _cmd_prune(args: argparse.Namespace) -> None:
         print(f"Swept {count} orphan dir(s).")
         return
 
+    if args.sweep_zombies:
+        _cmd_prune_zombies(args)
+        return
+
+    if args.sweep_aged:
+        _cmd_prune_aged(args)
+        return
+
     targets = prune_sessions(sessions, max_prompts=args.max_prompts)
     print(f"Would prune {len(targets)} session(s) (<={args.max_prompts} prompts)")
 
@@ -149,6 +159,55 @@ def _cmd_prune(args: argparse.Namespace) -> None:
     for s in targets:
         remove_session(s)
     print(f"Pruned {len(targets)} session(s).")
+
+
+def _cmd_prune_zombies(args: argparse.Namespace) -> None:
+    """Strategy A pid-keyed sweep of `sessions/<pid>.json` (R7.1) via the CLI.
+
+    Reuses the already-gated `data/cleanup` helpers: `select_zombie_pids` keeps
+    the current session's pid and any alive pid of a resumed multi-pid sid, and
+    `remove_zombie_session_files` refuses without `/proc`. The dry-run preview is
+    gated here too — off `/proc` every pid looks dead, so `current` can't be
+    determined and we must not even claim the files are sweepable (R10).
+    """
+    from dataclasses import replace
+
+    from .data import proc, registry
+    from .data.cleanup import remove_zombie_session_files, select_zombie_pids
+
+    if not proc.current_determinable():
+        print("Refused: '/proc' unavailable — cannot determine the current session (R10).")
+        return
+    procs = [
+        replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
+        for sp in registry.read_session_procs(max_age=0.0)
+    ]
+    cur = proc.ancestor_pids()
+    zombies = select_zombie_pids(procs, cur)
+    print(f"Would sweep {len(zombies)} zombie session file(s)")
+    if not args.apply:
+        print("Dry run. Add --apply to execute.")
+        return
+    count = remove_zombie_session_files(procs, cur)
+    print(f"Swept {count} zombie session file(s).")
+
+
+def _cmd_prune_aged(args: argparse.Namespace) -> None:
+    """Strategy B age sweep of time/global-keyed dirs (R7.2) via the CLI.
+
+    `remove_aged_entries` is mtime-only and session-agnostic, so (unlike the
+    zombie sweep) it is not gated on `/proc`.
+    """
+    from .config import cfg
+    from .data.cleanup import list_aged_entries, remove_aged_entries
+
+    aged = list_aged_entries()
+    print(f"Would sweep {len(aged)} aged entr(y/ies) older than {cfg.cleanup_age_days}d")
+    if not args.apply:
+        print("Dry run. Add --apply to execute.")
+        return
+    count = remove_aged_entries()
+    print(f"Swept {count} aged entr(y/ies).")
 
 
 def _cmd_agents(args: argparse.Namespace) -> None:

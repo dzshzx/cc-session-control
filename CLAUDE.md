@@ -134,11 +134,11 @@ A project must be **trusted** (`hasTrustDialogAccepted` in `~/.claude.json`) bef
 
 ### Cleanup — two strategies, preview-first (`data/cleanup.py`, R7)
 
-Cleanup is a Sessions submenu (not a tab) and the `csctl prune` CLI; both go through `data/cleanup.py`. Keys are **typed by directory, never assumed uuid==sid**:
+Cleanup logic lives entirely in `data/cleanup.py`; both the Sessions submenu and the `csctl prune` CLI drive it. Keys are **typed by directory, never assumed uuid==sid**:
 - **Strategy A — per-dir key semantics.** `session-env`/`file-history`/`tasks`/`uploads` are **sid-keyed** → orphan = sid not in the known-session set. `sessions/` is **pid-keyed** → sweep zombies (`pid_alive` false), but **keep the current-bound pid and any current session's pid file**, and when one sid has multiple pids keep the alive ones. `debug/` is **debug-run-id-keyed** (NOT sid) → its own semantics.
 - **Strategy B — age sweep.** `shell-snapshots`/`telemetry`/`plans`/`backups`/`paste-cache` are time/global-keyed → drop by mtime past `cfg.cleanup_age_days`.
 
-All cleanup is **preview-first**, **excludes live + current**, and **refuses when current can't be determined** (no `/proc`, R10). `jobs/` is never swept automatically (only the explicit `agent_ops.remove_job` on a settled agent removes a job dir).
+Surface map: the Sessions submenu exposes empty/short session prune + sid-keyed orphan dirs; `csctl prune` exposes the same (`--sweep-orphans`) **plus** the pid-keyed zombie sweep (`--sweep-zombies`) and the age sweep (`--sweep-aged`). All cleanup is **preview-first** (CLI dry-run unless `--apply`), **excludes live + current**, and **refuses when current can't be determined** (no `/proc`, R10) — except the age sweep, which is mtime-only and session-agnostic. `jobs/` is never swept automatically (only the explicit `agent_ops.remove_job` on a settled agent removes a job dir).
 
 ## Conventions
 
