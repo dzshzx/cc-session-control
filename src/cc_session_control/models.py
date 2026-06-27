@@ -114,3 +114,41 @@ class RCProject:
     auto_start: bool
     rc_at_startup: bool | None = None  # per-project remoteControlAtStartup override
     environment_id: str = ""
+
+
+@dataclass(frozen=True)
+class EnvRecord:
+    """One live observation of a bridge environment (R6, D4).
+
+    `prefix` is the namespace (`session` / `cse` / `env`); `key` is the suffix
+    that is the canonical environment id WITHIN that namespace. `bound_sid` is
+    the session this observation is bound to (None for namespaces with no sid).
+    Frozen so it is hashable for set membership when splitting current/orphan.
+    Built by `environments.observe()` (registry) and, in Phase 5, pushed in by
+    `rc` for the `env_*` namespace — environments never imports rc.
+    """
+    prefix: str
+    key: str
+    bound_sid: str | None = None
+
+
+@dataclass
+class BridgeEnv:
+    """A ledger entry for one bridge environment (R6, D4).
+
+    `status` is NOT persisted — it is recomputed against the current observation
+    by `current_envs`/`orphan_envs` (an orphan is a manual-delete candidate on
+    claude.ai/code; there is no local deregister). `first_seen`/`last_seen` are
+    epoch seconds. The full namespaced id is `prefix_key`.
+    """
+    prefix: str
+    key: str
+    bound_sid: str | None = None
+    first_seen: float = 0.0
+    last_seen: float = 0.0
+    status: Literal["current", "orphan"] = "orphan"
+
+    @property
+    def env_id(self) -> str:
+        """Full namespaced id (`cse_<key>` / `session_<key>` / `env_<key>`)."""
+        return f"{self.prefix}_{self.key}"

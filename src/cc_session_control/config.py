@@ -39,6 +39,15 @@ class Config:
     def projects_root(self) -> Path:
         return self.claude_home / "projects"
 
+    @property
+    def environments_ledger(self) -> Path:
+        """csctl's own append-only bridge-environment ledger (R6).
+
+        Lives under `config_dir` (csctl state, NOT Claude Code's `claude_home`).
+        A property so tests that monkeypatch `cfg.config_dir` flow through.
+        """
+        return self.config_dir / "environments.jsonl"
+
     # --- Claude Code state directories (single path authority) ---
     # All derive from claude_home so tests that monkeypatch cfg.claude_home flow
     # through. Never inline `claude_home / "..."` elsewhere — add it here.
