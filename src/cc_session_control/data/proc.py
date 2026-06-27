@@ -9,8 +9,24 @@ phases) refuse destructive ops when the "current" session can't be determined.
 from __future__ import annotations
 
 import os
+import shlex
+from dataclasses import dataclass
 
 _PROC = "/proc"
+
+
+@dataclass
+class ProcRC:
+    """A /proc-discovered Claude project RC server (`claude remote-control`).
+
+    Internal to this module — the public, view-facing model is `RCServer`
+    (assembled in `data/rc.py` after classifying managed vs external). `pid` is
+    0 when produced by the pure matcher (the scanner fills it); `cwd` comes from
+    `readlink(/proc/<pid>/cwd)`.
+    """
+    pid: int
+    name: str = ""
+    cwd: str = ""
 
 
 def has_proc() -> bool:
@@ -93,3 +109,106 @@ def ancestor_pids() -> set[int]:
         pids.add(ppid)
         pid = ppid
     return pids
+
+
+# --- project RC server discovery (R5 / D5) ---------------------------------
+# A real `claude remote-control --name <name>` server's /proc cmdline shows the
+# FULL argv (verified live: a bare interactive `claude` instead collapses its
+# cmdline to just `claude`), so we match on the argv SHAPE, not on `comm` (a
+# node-launched claude can have comm `node`). Other tools are excluded — codex
+# runs `--remote-control` as a FLAG with argv0 `codex` and no `remote-control`
+# subcommand token, so it never matches.
+
+
+def _split_cmdline(cmdline: str) -> list[str]:
+    """Split a `/proc/<pid>/cmdline` string into argv.
+
+    Real cmdlines are NUL-separated (with a trailing NUL). A space-joined string
+    (test convenience / odd launchers) is tolerated by falling back to a shell
+    split when no NUL boundaries are present.
+    """
+    parts = [p for p in cmdline.split("\0") if p]
+    if len(parts) <= 1 and cmdline.strip() and " " in cmdline.strip():
+        try:
+            parts = shlex.split(cmdline)
+        except ValueError:
+            parts = cmdline.split()
+    return parts
+
+
+def _flag_value(argv: list[str], flag: str) -> str | None:
+    """Value of `--flag value` or `--flag=value` in argv; None if absent/empty."""
+    prefix = flag + "="
+    for i, tok in enumerate(argv):
+        if tok == flag:
+            return argv[i + 1] if i + 1 < len(argv) else None
+        if tok.startswith(prefix):
+            return tok[len(prefix):] or None
+    return None
+
+
+def _match_rc_cmdline(comm: str, cmdline: str) -> ProcRC | None:
+    """PURE matcher (no IO): is this argv a Claude project RC server? (AC5)
+
+    Matches iff the program basename is `claude` AND a bare `remote-control`
+    subcommand token is present AND a `--name <name>` flag is parseable. `comm`
+    is accepted for signature completeness but deliberately NOT trusted on its
+    own. Returns a `ProcRC` (pid=0, filled by the scanner) or None.
+    """
+    argv = _split_cmdline(cmdline)
+    if not argv:
+        return None
+    if os.path.basename(argv[0]) != "claude":
+        return None
+    if "remote-control" not in argv[1:]:
+        return None
+    name = _flag_value(argv, "--name")
+    if not name:
+        return None
+    return ProcRC(pid=0, name=name)
+
+
+def _read_text(path: str) -> str:
+    try:
+        with open(path, errors="ignore") as fh:
+            return fh.read()
+    except Exception:
+        return ""
+
+
+def _read_link(path: str) -> str:
+    try:
+        return os.readlink(path)
+    except Exception:
+        return ""
+
+
+def scan_rc_servers() -> list[ProcRC]:
+    """Walk `/proc` for Claude project RC server processes (R5).
+
+    Reads each pid's `comm` + `cmdline`, runs the pure `_match_rc_cmdline`, and
+    fills `pid` + `cwd` (`readlink /proc/<pid>/cwd`) for matches. Degrades to
+    `[]` off Linux (no `/proc`) and swallows all per-pid errors.
+    """
+    if not has_proc():
+        return []
+    servers: list[ProcRC] = []
+    try:
+        entries = os.listdir(_PROC)
+    except Exception:
+        return []
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            pid = int(entry)
+            comm = _read_text(f"{_PROC}/{pid}/comm").strip()
+            cmdline = _read_text(f"{_PROC}/{pid}/cmdline")
+            match = _match_rc_cmdline(comm, cmdline)
+            if match is None:
+                continue
+            cwd = _read_link(f"{_PROC}/{pid}/cwd")
+            servers.append(ProcRC(pid=pid, name=match.name, cwd=cwd or match.cwd))
+        except Exception:
+            continue
+    return servers

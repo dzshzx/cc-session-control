@@ -113,7 +113,26 @@ class RCProject:
     status: Status
     auto_start: bool
     rc_at_startup: bool | None = None  # per-project remoteControlAtStartup override
+    spawn_mode: str | None = None      # per-project remoteControlSpawnMode (None=unset)
     environment_id: str = ""
+
+
+@dataclass
+class RCServer:
+    """A project RC server process (`claude remote-control --name`) — R5/D5.
+
+    Discovered from tmux (managed) and/or `/proc` (external). `managed` is True
+    when the pid belongs to a csctl-managed tmux pane; otherwise the server was
+    started outside csctl and is READ-ONLY (no takeover/restart — review gate).
+    `env_id` is the full cloud bridge id (`env_*`) captured from a managed
+    server's pane output, or None when unknown / external.
+    """
+    name: str
+    cwd: str = ""
+    managed: bool = False
+    pid: int | None = None
+    env_id: str | None = None
+    status: Status = "stopped"
 
 
 @dataclass(frozen=True)

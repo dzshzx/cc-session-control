@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import time
 
 from ..config import cfg
-from ..models import RCProject
+from ..models import EnvRecord, RCProject, RCServer
+from . import environments, proc
+
+# Cloud bridge env id printed to a managed server's pane (`environment=env_…`).
+_ENV_ID_RE = re.compile(r"env_[A-Za-z0-9]+")
 
 
 def _ensure_list() -> None:
@@ -128,6 +133,43 @@ def _tmux_pane_alive(target: str) -> bool:
     return cp.stdout.strip().split("\n")[0] == "0"
 
 
+def _tmux_window_pids() -> dict[str, int]:
+    """{window_name: pane_pid} for the rc session; {} on failure.
+
+    The pane pid IS the RC server pid because `start_one` runs `exec claude …`
+    (the shell is replaced). Used to classify /proc-discovered servers as
+    managed (pid in this set) vs external.
+    """
+    cp = _tmux_run(
+        ["list-windows", "-t", cfg.rc_session, "-F", "#W\t#{pane_pid}"]
+    )
+    if cp is None:
+        return {}
+    out: dict[str, int] = {}
+    for line in cp.stdout.splitlines():
+        name, _, pid_s = line.partition("\t")
+        name = name.strip()
+        try:
+            pid = int(pid_s.strip())
+        except ValueError:
+            continue
+        if name:
+            out[name] = pid
+    return out
+
+
+def _tmux_capture_pane(target: str) -> str:
+    """Full scrollback of a tmux pane as text; "" on failure.
+
+    Captures from the start of history (`-S -`) so an `env_*` id printed at
+    server startup is still grep-able after it scrolls off the visible region.
+    """
+    cp = _tmux_run(["capture-pane", "-p", "-S", "-", "-t", target])
+    if cp is None:
+        return ""
+    return cp.stdout
+
+
 def _tmux_has_session(session: str) -> bool:
     cp = _tmux_run(["has-session", "-t", session])
     return cp is not None and cp.returncode == 0
@@ -183,6 +225,20 @@ def _read_rc_at_startup(directory: str) -> bool | None:
     return None
 
 
+def _read_spawn_mode(proj: str) -> str | None:
+    """Project `remoteControlSpawnMode` from ~/.claude.json, or None if unset.
+
+    Lives in the same `projects` map as `hasTrustDialogAccepted` (verified on
+    disk), so it reuses `_load_projects` rather than re-opening claude.json.
+    """
+    try:
+        key = f"{cfg.workspace}/{proj}"
+        val = _load_projects().get(key, {}).get("remoteControlSpawnMode")
+        return str(val) if val else None
+    except Exception:
+        return None
+
+
 def set_rc_at_startup(directory: str, value: bool | None) -> None:
     settings_dir = os.path.join(directory, ".claude")
     path = os.path.join(settings_dir, "settings.local.json")
@@ -222,8 +278,85 @@ def scan() -> list[RCProject]:
             status=status,
             auto_start=name in enabled,
             rc_at_startup=_read_rc_at_startup(directory),
+            spawn_mode=_read_spawn_mode(name),
         ))
     return result
+
+
+def _split_env(env_id: str) -> tuple[str, str]:
+    """`env_abc` -> (`env`, `abc`); ("", "") when not a namespaced id."""
+    prefix, sep, suffix = env_id.partition("_")
+    if not sep or not prefix or not suffix:
+        return "", ""
+    return prefix, suffix
+
+
+def _capture_env_id(target: str) -> str:
+    """Grep an `env_*` cloud id from a managed server's pane output, or "".
+
+    The project RC server leaves zero structured footprint; its cloud env id is
+    only printed to stdout (`environment=env_…`). This is the single signal we
+    can capture locally for the ledger.
+    """
+    m = _ENV_ID_RE.search(_tmux_capture_pane(target))
+    return m.group(0) if m else ""
+
+
+def scan_servers() -> list[RCServer]:
+    """All project RC servers: managed (csctl tmux) ∪ external (/proc) — R5/D5.
+
+    Managed = tmux windows in `cfg.rc_session` (their pane pid IS the server
+    pid); external = `/proc`-discovered `claude remote-control --name` processes
+    NOT owned by a managed pane. External servers are READ-ONLY (no
+    takeover/restart — review gate; sustains the "no auto-restart RC" rule).
+
+    For managed servers the captured `env_*` cloud id is pushed one-way into the
+    ledger via `environments.upsert` (rc → environments only; environments never
+    imports rc). Swallows errors → returns whatever it assembled.
+    """
+    try:
+        window_pids = _tmux_window_pids()
+        discovered = proc.scan_rc_servers()
+    except Exception:
+        return []
+
+    by_pid = {p.pid: p for p in discovered}
+    managed_pid_set = set(window_pids.values())
+
+    servers: list[RCServer] = []
+    env_records: list[EnvRecord] = []
+
+    # Managed windows first — tmux is the authority for "managed".
+    for window, pid in window_pids.items():
+        target = f"{cfg.rc_session}:{window}"
+        status = "running" if _tmux_pane_alive(target) else "dead"
+        found = by_pid.get(pid)
+        env_id = _capture_env_id(target)
+        if env_id:
+            prefix, key = _split_env(env_id)
+            if prefix and key:
+                env_records.append(EnvRecord(prefix=prefix, key=key, bound_sid=None))
+        servers.append(RCServer(
+            name=found.name if found else window,
+            cwd=found.cwd if found else "",
+            managed=True,
+            pid=pid or None,
+            env_id=env_id or None,
+            status=status,
+        ))
+
+    # External — discovered procs not owned by any managed pane.
+    for p in discovered:
+        if p.pid in managed_pid_set:
+            continue
+        servers.append(RCServer(
+            name=p.name, cwd=p.cwd, managed=False,
+            pid=p.pid or None, env_id=None, status="running",
+        ))
+
+    if env_records:
+        environments.upsert(env_records)
+    return servers
 
 
 def start_one(proj: str) -> bool:
