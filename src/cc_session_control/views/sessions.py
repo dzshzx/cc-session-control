@@ -13,14 +13,14 @@ from ..actions.session_ops import (
     terminate_session,
     to_clipboard,
 )
-from ..data.sessions import (
+from ..data.cleanup import (
     cleanup_stats,
     list_orphan_dirs,
     prune_sessions,
     remove_orphan_dirs,
     remove_session,
-    scan,
 )
+from ..data.sessions import scan
 from ..models import Session
 
 if TYPE_CHECKING:

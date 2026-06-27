@@ -110,14 +110,27 @@ def _cmd_rc(args: argparse.Namespace) -> None:
 
 
 def _cmd_prune(args: argparse.Namespace) -> None:
-    from .data.sessions import cleanup_stats, prune_sessions, remove_session, scan
+    from .data.cleanup import (
+        cleanup_stats,
+        list_orphan_dirs,
+        prune_sessions,
+        remove_orphan_dirs,
+        remove_session,
+    )
+    from .data.sessions import scan
 
     sessions = scan()
     stats = cleanup_stats(sessions)
     print(f"Total: {stats['total']}  Empty: {stats['empty']}  Short(<=2): {stats['short']}  Orphans: {stats['orphans']}")
 
     if args.sweep_orphans:
-        print("(sweep-orphans: use TUI for now)")
+        orphans = list_orphan_dirs(sessions)
+        print(f"Would sweep {len(orphans)} orphan artifact dir(s)")
+        if not args.apply:
+            print("Dry run. Add --apply to execute.")
+            return
+        count = remove_orphan_dirs(sessions)
+        print(f"Swept {count} orphan dir(s).")
         return
 
     targets = prune_sessions(sessions, max_prompts=args.max_prompts)

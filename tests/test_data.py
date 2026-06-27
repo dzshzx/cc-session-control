@@ -7,12 +7,9 @@ import subprocess
 
 from cc_session_control.actions.session_ops import resume_cmd
 from cc_session_control.config import cfg
-from cc_session_control.data.sessions import (
-    _parse_transcript,
-    cleanup_stats,
-    prune_sessions,
-)
-from cc_session_control.models import Session
+from cc_session_control.data.cleanup import cleanup_stats, prune_sessions
+from cc_session_control.data.sessions import _parse_transcript
+from cc_session_control.models import LiveInfo, Session
 
 
 def _make_session(**overrides):
@@ -352,7 +349,7 @@ def test_parse_transcript_basic_fields(tmp_path):
         {"type": "user", "message": {"content": "hello world"}},
         {"type": "user", "message": {"content": "second prompt"}},
     ])
-    s = _parse_transcript(path, alive={}, cur=set())
+    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s is not None
     assert s.sid == "sid1"
     assert s.cwd == "/tmp/proj"
@@ -367,7 +364,7 @@ def test_parse_transcript_none_when_no_cwd(tmp_path):
     path = _write_jsonl(tmp_path, "sid1", [
         {"type": "user", "message": {"content": "hello"}},
     ])
-    assert _parse_transcript(path, alive={}, cur=set()) is None
+    assert _parse_transcript(path, idx={}, cur=set(), job_shorts=set()) is None
 
 
 def test_parse_transcript_label_priority_aititle(tmp_path):
@@ -377,7 +374,7 @@ def test_parse_transcript_label_priority_aititle(tmp_path):
         {"lastPrompt": "the last prompt"},
         {"type": "user", "message": {"content": "first prompt"}},
     ])
-    s = _parse_transcript(path, alive={}, cur=set())
+    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s.label == "The Title"
 
 
@@ -387,7 +384,7 @@ def test_parse_transcript_label_priority_first_prompt(tmp_path):
         {"lastPrompt": "the last prompt"},
         {"type": "user", "message": {"content": "first real prompt"}},
     ])
-    s = _parse_transcript(path, alive={}, cur=set())
+    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s.label == "first real prompt"
 
 
@@ -398,7 +395,7 @@ def test_parse_transcript_label_priority_last_prompt(tmp_path):
         {"lastPrompt": "the last prompt"},
         {"type": "user", "message": {"content": "<system-reminder>noise</system-reminder>"}},
     ])
-    s = _parse_transcript(path, alive={}, cur=set())
+    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s.label == "the last prompt"
 
 
@@ -406,7 +403,7 @@ def test_parse_transcript_label_untitled(tmp_path):
     path = _write_jsonl(tmp_path, "sid1", [
         {"cwd": "/tmp/proj"},
     ])
-    s = _parse_transcript(path, alive={}, cur=set())
+    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s.label == "(untitled)"
 
 
@@ -415,10 +412,69 @@ def test_parse_transcript_alive_and_current(tmp_path):
         {"cwd": "/tmp/proj"},
         {"type": "user", "message": {"content": "hi"}},
     ])
-    s = _parse_transcript(path, alive={"sid1": 4242}, cur={4242})
+    idx = {"sid1": LiveInfo(sid="sid1", pid=4242, alive=True)}
+    s = _parse_transcript(path, idx=idx, cur={4242}, job_shorts=set())
     assert s.pid == 4242
     assert s.alive is True
     assert s.current is True
+
+
+def test_parse_transcript_current_via_older_alive_pid(tmp_path):
+    # Flag ① — multi-pid under-protection. A resumed sid has two alive pids;
+    # the NEWEST (710575) is chosen for display, but csctl was launched by the
+    # OLDER one (700772). `current` must still be True so the session stays
+    # protected — the old `pid in cur` check (pid==710575) would miss it.
+    path = _write_jsonl(tmp_path, "sid1", [
+        {"cwd": "/tmp/proj"},
+        {"type": "user", "message": {"content": "hi"}},
+    ])
+    idx = {
+        "sid1": LiveInfo(
+            sid="sid1", pid=710575, pids=[700772, 710575], alive=True
+        )
+    }
+    s = _parse_transcript(path, idx=idx, cur={700772}, job_shorts=set())
+    assert s.pid == 710575          # newest chosen for display
+    assert s.current is True        # older ancestor pid still protects it
+
+
+def test_parse_transcript_rc_exposed_requires_proc_alive(tmp_path):
+    path = _write_jsonl(tmp_path, "sid1", [
+        {"cwd": "/tmp/proj"},
+        {"type": "user", "message": {"content": "hi"}},
+    ])
+    idx = {
+        "sid1": LiveInfo(
+            sid="sid1",
+            pid=4242,
+            alive=True,
+            proc_alive=False,
+            bridge="session_env",
+        )
+    }
+    s = _parse_transcript(path, idx=idx, cur=set(), job_shorts=set())
+    assert s.alive is True
+    assert s.rc_exposed is False
+    assert s.env_id is None
+
+
+def test_parse_transcript_sets_rc_exposed_when_proc_alive(tmp_path):
+    path = _write_jsonl(tmp_path, "sid1", [
+        {"cwd": "/tmp/proj"},
+        {"type": "user", "message": {"content": "hi"}},
+    ])
+    idx = {
+        "sid1": LiveInfo(
+            sid="sid1",
+            pid=4242,
+            alive=True,
+            proc_alive=True,
+            bridge="session_env",
+        )
+    }
+    s = _parse_transcript(path, idx=idx, cur=set(), job_shorts=set())
+    assert s.rc_exposed is True
+    assert s.env_id == "session_env"
 
 
 def test_parse_transcript_hidden_tags(tmp_path):
@@ -427,5 +483,5 @@ def test_parse_transcript_hidden_tags(tmp_path):
         {"note": "bridge-session"},
         {"type": "user", "message": {"content": "hi"}},
     ])
-    s = _parse_transcript(path, alive={}, cur=set())
+    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s.hidden == {"sdk", "bridge"}

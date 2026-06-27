@@ -20,6 +20,8 @@ class Config:
         # control (kept separate from rc_session, whose windows are managed RC
         # server processes).
         self.tmux_session: str = os.environ.get("CSCTL_TMUX_SESSION", "cc")
+        # Age threshold (days) for the time/global-keyed cleanup strategy.
+        self.cleanup_age_days: int = int(os.environ.get("CSCTL_CLEANUP_AGE_DAYS", "14"))
         self._workspace: Path | None = None
 
     @property
@@ -36,6 +38,62 @@ class Config:
     @property
     def projects_root(self) -> Path:
         return self.claude_home / "projects"
+
+    # --- Claude Code state directories (single path authority) ---
+    # All derive from claude_home so tests that monkeypatch cfg.claude_home flow
+    # through. Never inline `claude_home / "..."` elsewhere — add it here.
+
+    @property
+    def sessions_dir(self) -> Path:
+        """Per-pid session registry files (`sessions/<pid>.json`)."""
+        return self.claude_home / "sessions"
+
+    @property
+    def jobs_dir(self) -> Path:
+        """Background agent job state (`jobs/<short>/state.json`)."""
+        return self.claude_home / "jobs"
+
+    @property
+    def session_env_dir(self) -> Path:
+        """Per-session env artifacts (`session-env/<sid>`)."""
+        return self.claude_home / "session-env"
+
+    @property
+    def file_history_dir(self) -> Path:
+        """Per-session file-edit history (`file-history/<sid>`)."""
+        return self.claude_home / "file-history"
+
+    @property
+    def shell_snapshots_dir(self) -> Path:
+        return self.claude_home / "shell-snapshots"
+
+    @property
+    def telemetry_dir(self) -> Path:
+        return self.claude_home / "telemetry"
+
+    @property
+    def plans_dir(self) -> Path:
+        return self.claude_home / "plans"
+
+    @property
+    def backups_dir(self) -> Path:
+        return self.claude_home / "backups"
+
+    @property
+    def paste_cache_dir(self) -> Path:
+        return self.claude_home / "paste-cache"
+
+    @property
+    def debug_dir(self) -> Path:
+        return self.claude_home / "debug"
+
+    @property
+    def uploads_dir(self) -> Path:
+        return self.claude_home / "uploads"
+
+    @property
+    def tasks_dir(self) -> Path:
+        return self.claude_home / "tasks"
 
 
 def _detect_workspace(claude_json: Path) -> Path:

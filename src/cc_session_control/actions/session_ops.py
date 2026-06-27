@@ -9,8 +9,8 @@ import time
 
 from .. import clipboard
 from ..config import cfg
-from ..data import rc
-from ..data.agents import invalidate_cache
+from ..data import proc, rc
+from ..data.liveness import invalidate_cache
 from ..models import Session
 
 
@@ -21,7 +21,13 @@ def terminate_session(s: Session) -> bool:
     so it invalidates the alive_map cache itself — callers no longer have to
     remember to. (delete/cleanup only touch already-dead sessions, so they
     don't.)
+
+    R10: refuses (returns False) when "current" can't be determined (no
+    `/proc`) — we can't prove `s` is not the launching session, so a SIGTERM
+    here could hit csctl's own session.
     """
+    if not proc.current_determinable():
+        return False
     if not s.pid:
         return False
     try:

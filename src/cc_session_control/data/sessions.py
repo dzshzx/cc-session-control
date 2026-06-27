@@ -5,12 +5,14 @@ from __future__ import annotations
 import glob
 import json
 import os
-import shutil
-import time
+from dataclasses import replace
 
 from ..config import cfg
-from ..models import Session
-from .agents import alive_map
+from ..models import LiveInfo, Session
+from . import registry
+from .liveness import _is_rc_exposed, alive_map, live_index
+from .proc import ancestor_pids as _ancestor_pids  # /proc walk moved to proc.py
+from .proc import pid_alive
 
 _NOISE = (
     "<command-message>", "<command-name>", "<command-args>",
@@ -34,29 +36,18 @@ def _clean_text(t: str) -> str:
     return t.strip()
 
 
-def _ancestor_pids() -> set[int]:
-    pids = {os.getpid()}
-    pid = os.getpid()
-    for _ in range(40):
-        try:
-            with open(f"/proc/{pid}/stat") as fh:
-                data = fh.read()
-            ppid = int(data[data.rfind(")") + 2:].split()[1])
-        except Exception:
-            break
-        if ppid <= 1:
-            break
-        pids.add(ppid)
-        pid = ppid
-    return pids
-
-
-def _parse_transcript(path: str, alive: dict[str, int], cur: set[int]) -> Session | None:
+def _parse_transcript(
+    path: str,
+    idx: dict[str, LiveInfo],
+    cur: set[int],
+    job_shorts: set[str],
+) -> Session | None:
     """Parse one transcript .jsonl into a Session, or None if it has no cwd.
 
-    `alive` is the {sid: pid} map and `cur` the ancestor-pid set; both are
-    injected so this stays unit-testable. The substring-pre-check before
-    json.loads is kept intact for performance.
+    `idx` is the joined live index (sid -> LiveInfo from `live_index()`), `cur`
+    the ancestor-pid set, and `job_shorts` the set of background-agent short ids
+    (`sid[:8]`); all injected so this stays unit-testable. The substring
+    pre-check before json.loads is kept intact for performance.
     """
     sid = os.path.basename(path)[:-6]
     try:
@@ -124,127 +115,74 @@ def _parse_transcript(path: str, alive: dict[str, int], cur: set[int]) -> Sessio
 
     lp = "" if _is_noise(last_prompt) else last_prompt
     label = title or first_prompt or lp or "(untitled)"
-    pid = alive.get(sid)
+
+    # Join the merged liveness/identity for this sid. Missing => dead, no
+    # registry data (transcript-only): liveness stays False and the registry-
+    # derived fields stay empty.
+    info = idx.get(sid)
+    if info is not None:
+        pid = info.pid
+        alive = info.alive
+        kind = info.kind
+        entrypoint = info.entrypoint
+        source = info.source
+        status = info.status
+        bridge = info.bridge
+        # "current" must protect ANY of the sid's alive pids: a resumed session
+        # has several pids and csctl may have been launched by an older one that
+        # is NOT the newest `pid` chosen for display. Fall back to the single
+        # chosen pid for hand-constructed LiveInfo with no `pids` list.
+        cand = info.pids if info.pids else ([pid] if pid else [])
+        current = any(p in cur for p in cand)
+        proc_alive = info.proc_alive
+    else:
+        pid = None
+        alive = False
+        kind = entrypoint = source = status = ""
+        bridge = None
+        current = False
+        proc_alive = False
+
+    rc_exposed = _is_rc_exposed(bridge, proc_alive)
 
     return Session(
         sid=sid, cwd=cwd, label=label, mtime=st.st_mtime,
         prompts=prompts, pid=pid,
-        alive=pid is not None,
-        current=pid in cur if pid else False,
+        alive=alive,
+        current=current,
         hidden=hidden, file=path,
+        kind=kind, entrypoint=entrypoint, source=source,
+        rc_exposed=rc_exposed,
+        env_id=bridge if rc_exposed else None,
+        agent_short=sid[:8] if sid[:8] in job_shorts else None,
+        status=status,
     )
 
 
 def scan() -> list[Session]:
+    """Unified transcript-driven session scan.
+
+    Merges the three liveness/identity sources once per scan — registry
+    `sessions/<pid>.json`, `claude agents --json`, and `jobs/*/state.json` — then
+    projects each transcript through `live_index()` to fill source/liveness/
+    rc-exposure. Scan stays transcript-driven: an agent-only sid (present in the
+    live index but with no transcript) is surfaced by the Agents tab, not here.
+    """
     root = str(cfg.projects_root)
-    alive = alive_map()
+    session_procs = [
+        replace(sp, proc_alive=pid_alive(sp.pid, sp.proc_start))
+        for sp in registry.read_session_procs()
+    ]
+    agents = alive_map()
+    idx = live_index(session_procs, agents)
+    job_shorts = {j.short for j in registry.read_agent_jobs()}
     cur = _ancestor_pids()
     rows: list[Session] = []
 
     for f in glob.glob(os.path.join(root, "*", "*.jsonl")):
-        row = _parse_transcript(f, alive, cur)
+        row = _parse_transcript(f, idx, cur, job_shorts)
         if row is not None:
             rows.append(row)
 
     rows.sort(key=lambda r: r.mtime, reverse=True)
     return rows
-
-
-# session-env/ and file-history/ hold one dir per full session id, and are
-# also what orphan-sweeping scans. jobs/ is keyed by the 8-char id prefix and
-# is intentionally NOT orphan-scanned — that asymmetry lives only here now.
-_ARTIFACT_DIRS = ("session-env", "file-history")
-
-
-def _session_artifact_paths(claude_home: str, sid: str) -> list[str]:
-    """All on-disk artifact paths owned by one session id."""
-    paths = [os.path.join(claude_home, d, sid) for d in _ARTIFACT_DIRS]
-    paths.append(os.path.join(claude_home, "jobs", sid[:8]))
-    return paths
-
-
-def cleanup_stats(sessions: list[Session]) -> dict[str, int]:
-    claude_home = str(cfg.claude_home)
-    total = len(sessions)
-    empty = sum(1 for s in sessions if s.prompts == 0)
-    short = sum(1 for s in sessions if 0 < s.prompts <= 2)
-    orphan_dirs = 0
-    all_sids = {s.sid for s in sessions}
-    alive_sids = {s.sid for s in sessions if s.alive}
-    for subdir in _ARTIFACT_DIRS:
-        path = os.path.join(claude_home, subdir)
-        if os.path.isdir(path):
-            for name in os.listdir(path):
-                if name not in all_sids and name not in alive_sids:
-                    orphan_dirs += 1
-    return {"total": total, "empty": empty, "short": short, "orphans": orphan_dirs}
-
-
-def list_orphan_dirs(sessions: list[Session]) -> list[str]:
-    claude_home = str(cfg.claude_home)
-    all_sids = {s.sid for s in sessions}
-    orphans: list[str] = []
-    for subdir in _ARTIFACT_DIRS:
-        path = os.path.join(claude_home, subdir)
-        if not os.path.isdir(path):
-            continue
-        for name in os.listdir(path):
-            if name not in all_sids:
-                orphans.append(os.path.join(subdir, name))
-    return sorted(set(orphans))
-
-
-def remove_orphan_dirs(sessions: list[Session]) -> int:
-    claude_home = str(cfg.claude_home)
-    all_sids = {s.sid for s in sessions}
-    count = 0
-    for subdir in _ARTIFACT_DIRS:
-        path = os.path.join(claude_home, subdir)
-        if not os.path.isdir(path):
-            continue
-        for name in os.listdir(path):
-            if name in all_sids:
-                continue
-            target = os.path.join(path, name)
-            if os.path.isdir(target):
-                shutil.rmtree(target, ignore_errors=True)
-                count += 1
-            elif os.path.isfile(target):
-                try:
-                    os.remove(target)
-                    count += 1
-                except OSError:
-                    pass
-    return count
-
-
-def remove_session(s: Session) -> None:
-    claude_home = str(cfg.claude_home)
-    try:
-        os.remove(s.file)
-    except OSError:
-        pass
-    comp = s.file[:-6]
-    if os.path.isdir(comp):
-        shutil.rmtree(comp, ignore_errors=True)
-    for p in _session_artifact_paths(claude_home, s.sid):
-        if os.path.isdir(p):
-            shutil.rmtree(p, ignore_errors=True)
-        elif os.path.isfile(p):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
-
-
-def prune_sessions(sessions: list[Session], max_prompts: int = 0) -> list[Session]:
-    """Return prunable sessions (not alive, not current, prompts <= max_prompts, not recently active)."""
-    alive_sids = {s.sid for s in sessions if s.alive}
-    now = time.time()
-    return [
-        s for s in sessions
-        if s.prompts <= max_prompts
-        and s.sid not in alive_sids
-        and not s.current
-        and (now - s.mtime) > 600
-    ]
