@@ -10,6 +10,7 @@ warning surfaced on `stop` is a capability red line (R4.5 / AC4).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import urwid
@@ -97,12 +98,15 @@ class AgentsView:
         return f"{agent_ops.KEYHINTS} · ? 帮助"
 
     def _enrich(self, jobs: list[AgentJob]) -> list[AgentJob]:
-        """Fill host liveness for the self-fetch path (snapshot already enriched)."""
+        """Fill host liveness for the self-fetch path (snapshot already enriched).
+
+        Returns fresh copies via `dataclasses.replace` (like `snapshot._enrich_jobs`)
+        so the registry's ~5s-TTL cached AgentJob objects are never mutated.
+        """
         out: list[AgentJob] = []
         for job in jobs:
             pid, alive = agent_ops.job_host(job)
-            job.host_pid, job.host_alive = pid, alive
-            out.append(job)
+            out.append(replace(job, host_pid=pid, host_alive=alive))
         return out
 
     def load(self) -> None:

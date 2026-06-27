@@ -58,7 +58,7 @@ def _cmd_rc(args: argparse.Namespace) -> None:
     from .data import rc
 
     if not args.rc_command:
-        print("用法: csctl rc <status|add|rm|up|stop|list>")
+        print("Usage: csctl rc <status|add|rm|up|stop|list>")
         sys.exit(1)
 
     sub = args.rc_command
@@ -168,20 +168,27 @@ def _cmd_agents(args: argparse.Namespace) -> None:
 
 
 def _cmd_env(args: argparse.Namespace) -> None:
-    from .data import environments
+    from .data import environments, rc
 
-    # Alive-gated (R3/R6): a zombie session's stale bridge must not be counted as
-    # a current/bound environment. `observe_live` self-reads the registry + /proc.
-    observed = environments.observe_live(max_age=0.0)
+    # Scan RC servers so the env_* namespace is covered too (it has no state
+    # file — only a running server references it).
+    servers = rc.scan_servers()
+    # CURRENT is alive-gated (R3/R6): a zombie session's stale bridge must not be
+    # counted as bound. FILE-REFERENCED is the bridge-truthy membership set.
+    observed = environments.observe_live(rc_servers=servers, max_age=0.0)
+    file_referenced = environments.observe(rc_servers=servers, max_age=0.0)
+    # Record every file-referenced env so a later run (after RC toggled off / a job
+    # removed) reports it as an orphan = ledger − file-referenced (R6 persistence).
+    environments.upsert(file_referenced)
     current = environments.current_envs(observed)
-    orphans = environments.orphan_envs(observed)
+    orphans = environments.orphan_envs(file_referenced)
 
     print(f"Current bridge environments: {len(current)}")
     for e in current:
         print(f"  {e.env_id}  sid={e.bound_sid or '-'}")
 
     print(f"Orphan environments (delete manually on claude.ai/code): {len(orphans)}")
-    for row in environments.manual_delete_list(observed):
+    for row in environments.manual_delete_list(file_referenced):
         print(f"  {row['env_id']}  sid={row['bound_sid'] or '-'}")
 
     print(

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from ..models import AgentJob, RCProject, RCServer, Session, SessionProc
+from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
 from . import environments, proc, rc, registry, sessions
 
 
@@ -26,13 +26,18 @@ class WorldSnapshot:
 
     `sessions` is the full transcript-driven scan (SessionsView), `agent_jobs`
     the background jobs enriched with host liveness (AgentsView), and
-    `rc_projects`/`rc_servers`/`observed_envs` the Remote Control world (RCView).
+    `rc_projects`/`rc_servers` the Remote Control world (RCView). The two env
+    sets are the bridge-environment ledger's two tiers (R6):
+      - `observed_envs` — ALIVE-GATED (`observe_live`): the CURRENT/bound display.
+      - `file_referenced_envs` — bridge-truthy (`observe`): ledger MEMBERSHIP, and
+        the set orphans are computed against (`orphan = ledger − file-referenced`).
     """
     sessions: list[Session] = field(default_factory=list)
     agent_jobs: list[AgentJob] = field(default_factory=list)
     rc_projects: list[RCProject] = field(default_factory=list)
     rc_servers: list[RCServer] = field(default_factory=list)
     observed_envs: list[EnvRecord] = field(default_factory=list)
+    file_referenced_envs: list[EnvRecord] = field(default_factory=list)
 
 
 def _enrich_jobs(
@@ -80,6 +85,16 @@ def build_world_snapshot() -> WorldSnapshot:
     agent_jobs = _enrich_jobs(registry.read_agent_jobs(), session_procs)
     rc_projects = rc.scan()
     rc_servers = rc.scan_servers()
+    # R6 ledger persistence (the whole point of the ledger): record EVERY env an
+    # on-disk file references THIS cycle — session_* + cse_* + the env_* captured
+    # from rc servers — using the bridge-truthy (NOT alive-gated) set for
+    # membership. When one of these later toggles away (RC turned off / job
+    # removed / server stopped) it stays in the ledger but drops out of the
+    # file-referenced set, surfacing as an orphan / manual-delete candidate. Cheap
+    # and safe on the worker thread: the ledger is write-on-change + flock +
+    # compacted, so re-observing the same set is a no-op rewrite.
+    file_referenced_envs = environments.observe(session_procs, agent_jobs, rc_servers)
+    environments.upsert(file_referenced_envs)
     # CURRENT must be alive-gated (R3/R6): pass the already-liveness-resolved
     # session_procs + host-enriched agent_jobs + running servers so a zombie's
     # stale bridge is NOT counted as a bound (current) environment.
@@ -90,4 +105,5 @@ def build_world_snapshot() -> WorldSnapshot:
         rc_projects=rc_projects,
         rc_servers=rc_servers,
         observed_envs=observed_envs,
+        file_referenced_envs=file_referenced_envs,
     )

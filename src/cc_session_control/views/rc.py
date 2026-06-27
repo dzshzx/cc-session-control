@@ -171,12 +171,20 @@ class RCView:
     def _scan_extras(self) -> tuple[list[RCServer], list[BridgeEnv], list[BridgeEnv]]:
         """Self-fetch the servers + environment ledger (no-snapshot path).
 
-        Uses the alive-gated `observe_live` (not the bridge-truthy `observe`) so a
-        zombie session's stale bridge is not shown as a current/bound env (R3/R6).
+        CURRENT uses the alive-gated `observe_live` so a zombie session's stale
+        bridge is not shown as bound (R3/R6); ORPHAN uses the bridge-truthy,
+        FILE-REFERENCED `observe` so it is precisely `ledger − file-referenced`
+        (an env still referenced by a file is NOT an orphan, even if its owner is
+        currently dead).
         """
         servers = rc.scan_servers()
         observed = environments.observe_live(rc_servers=servers)
-        return servers, environments.current_envs(observed), environments.orphan_envs(observed)
+        file_referenced = environments.observe(rc_servers=servers)
+        return (
+            servers,
+            environments.current_envs(observed),
+            environments.orphan_envs(file_referenced),
+        )
 
     def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
         """Worker-thread data fetch. Only sets pending fields — no widgets."""
@@ -184,7 +192,7 @@ class RCView:
             self.set_pending(snapshot.rc_projects)
             self._pending_servers = snapshot.rc_servers
             self._pending_current = environments.current_envs(snapshot.observed_envs)
-            self._pending_orphans = environments.orphan_envs(snapshot.observed_envs)
+            self._pending_orphans = environments.orphan_envs(snapshot.file_referenced_envs)
         else:
             self.set_pending(rc.scan())
             servers, current, orphans = self._scan_extras()

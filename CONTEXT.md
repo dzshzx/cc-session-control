@@ -72,10 +72,15 @@ random snapshot usually shows only absent-or-string); re-enabling mints
 (single field, overwritten), so toggled-away environments vanish from structured
 state and survive only as noisy mentions in transcripts. Consequences:
 - csctl can reliably enumerate **currently bound** environments (bridge truthy
-  AND the owning pid alive, verified by `procStart`).
-- csctl **cannot** reliably enumerate historically minted / orphaned
-  environments from existing local state; only a csctl-maintained append-only
-  ledger (watcher) could make them traceable.
+  AND the owning pid alive, verified by `procStart`) — the alive-gated `observe_live`.
+- To make toggled-away / orphaned environments traceable, csctl maintains its own
+  **append-only ledger** (`$XDG_CONFIG_HOME/csctl/environments.jsonl`): every
+  refresh records the **file-referenced** set (any env a `sessions/*.json` /
+  `jobs/*/state.json` / running RC server references now, alive or not), so an env
+  that later drops out of that set surfaces as an **orphan = ledger − file-referenced**
+  (the manual-delete checklist). The ledger still **cannot back-fill** environments
+  minted while csctl was not running (no `null`/history on disk), so the orphan
+  list is inherently incomplete.
 - Claude Code exposes **no local command to deregister** a cloud / mobile entry;
   deletion stays manual on claude.ai/code.
 _Avoid_: claiming csctl can delete a cloud environment, or that file presence /

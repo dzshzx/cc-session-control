@@ -249,11 +249,70 @@ def test_observe_builds_from_registry(tmp_path, monkeypatch):
     assert records[("session", "016spR3Nkq2tJL2edM1exfuo")].bound_sid == "sid-s"
 
 
-# --- observe_live(): alive-gated CURRENT set (R3/R6, zombie not current) ----
+# --- observe(): bridge-truthy FILE-REFERENCED set (R6 ledger membership) -----
 
 def _sp(pid, sid, bridge=None, proc_alive=False, proc_start="1"):
     return SessionProc(pid=pid, sid=sid, bridge=bridge,
                        proc_alive=proc_alive, proc_start=proc_start)
+
+
+def test_observe_includes_zombie_bridge_unlike_observe_live():
+    # observe() is MEMBERSHIP (file-referenced), NOT alive-gated: a zombie
+    # session's stale bridge is still part of the cloud and stays in the ledger.
+    procs = [
+        _sp(1, "sid-alive", bridge="session_ALIVE", proc_alive=True),
+        _sp(2, "sid-dead", bridge="session_ZOMBIE", proc_alive=False),
+    ]
+    file_ref = {(r.prefix, r.key) for r in env.observe(procs, [])}
+    assert file_ref == {("session", "ALIVE"), ("session", "ZOMBIE")}
+    live = {(r.prefix, r.key) for r in env.observe_live(procs, [])}
+    assert live == {("session", "ALIVE")}
+
+
+def test_observe_includes_env_from_rc_servers_regardless_of_status():
+    # env_* has no state file; membership = referenced by a server passed in,
+    # running OR dead (orphan-ing is handled by it dropping out next cycle).
+    servers = [
+        RCServer(name="ws/a", env_id="env_RUN", status="running"),
+        RCServer(name="ws/b", env_id="env_DEADSRV", status="dead"),
+    ]
+    file_ref = {(r.prefix, r.key) for r in env.observe([], [], servers)}
+    assert file_ref == {("env", "RUN"), ("env", "DEADSRV")}
+
+
+def test_orphan_appears_after_env_toggles_away(tmp_path, monkeypatch):
+    # The whole point of R6: cycle 1 a file references env X (persist it); cycle 2
+    # the file no longer references it -> X becomes an orphan / manual-delete.
+    _use_tmp_ledger(tmp_path, monkeypatch)
+    file_ref1 = env.observe([_sp(1, "sid-x", bridge="session_X", proc_alive=True)], [])
+    env.upsert(file_ref1, now=100.0)
+
+    file_ref2 = env.observe([_sp(1, "sid-x", bridge=None, proc_alive=True)], [])
+    env.upsert(file_ref2, now=200.0)
+
+    assert file_ref2 == []
+    orphans = env.orphan_envs(file_ref2)
+    assert [e.env_id for e in orphans] == ["session_X"]
+    assert {r["env_id"] for r in env.manual_delete_list(file_ref2)} == {"session_X"}
+
+
+def test_file_referenced_zombie_is_neither_current_nor_orphan(tmp_path, monkeypatch):
+    # A zombie's bridge is still file-referenced: alive-gated CURRENT excludes it,
+    # but it is NOT an orphan either (a file still references it) — it sits in the
+    # middle tier active(alive) ⊆ file-referenced ⊆ ledger.
+    _use_tmp_ledger(tmp_path, monkeypatch)
+    procs = [_sp(2, "sid-dead", bridge="session_ZOMBIE", proc_alive=False)]
+    file_ref = env.observe(procs, [])
+    env.upsert(file_ref, now=100.0)
+    observed = env.observe_live(procs, [])
+
+    current = env.current_envs(observed)
+    orphans = env.orphan_envs(file_ref)
+    assert all(e.env_id != "session_ZOMBIE" for e in current)   # not current (dead)
+    assert all(e.env_id != "session_ZOMBIE" for e in orphans)   # not orphan (referenced)
+
+
+# --- observe_live(): alive-gated CURRENT set (R3/R6, zombie not current) ----
 
 
 def test_observe_live_excludes_dead_session_bridge():

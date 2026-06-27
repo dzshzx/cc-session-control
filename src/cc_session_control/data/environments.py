@@ -12,7 +12,14 @@ Design invariants:
     module never reaches up to collect them. It must NOT import `rc`
     (`environments` is below `rc` in the import DAG; `rc` calls `upsert` one-way
     in Phase 5 for the `env_*` namespace). `observe()` is a convenience builder
-    that reads the lower-level `registry` only.
+    that reads the lower-level `registry` (and accepts `env_*` records passed in,
+    never collected here).
+  - **Two observation tiers.** `observe()` is the bridge-truthy FILE-REFERENCED
+    set — what defines ledger MEMBERSHIP (an env exists in the cloud while any
+    on-disk file references it, alive or zombie). `observe_live()` alive-gates the
+    same sources for the CURRENT/bound DISPLAY. Orphans (manual-delete
+    candidates) are `ledger − file-referenced`: an env the ledger remembers but no
+    file references anymore (RC toggled off, job removed, server stopped).
   - **Three namespaces, namespace-scoped dedup.** The merge key is
     `(prefix, key)`: within `cse_*` a resume pair shares one suffix → one env;
     `session_*` and `cse_*` never merge (their suffixes never coincide in
@@ -70,31 +77,51 @@ def _split_bridge(bridge: str) -> tuple[str, str]:
 
 # --- observation builder (reads registry only, never rc) -------------------
 
-def observe(max_age: float = 5.0) -> list[EnvRecord]:
-    """Build env records from the currently observable registries (R6).
+def observe(
+    session_procs: list[SessionProc] | None = None,
+    agent_jobs: list[AgentJob] | None = None,
+    rc_servers: list[RCServer] | None = None,
+    max_age: float = 5.0,
+) -> list[EnvRecord]:
+    """FILE-REFERENCED bridge envs — the ledger MEMBERSHIP set (R6).
 
-    `session_*` from `sessions/<pid>.json` bridges (truthy), `cse_*` from job
-    env suffixes. The `env_*` namespace (project RC server) has no state file
-    and is pushed in by `rc` in Phase 5 — never collected here. This is a coarse
-    "bridge present" view; stricter liveness (pid alive) is the caller's job (it
-    holds `live_index`), so it may pass a filtered `observed` to the queries.
+    Every env an on-disk file references right now: a session's truthy
+    `bridgeSessionId` (`session_*`, alive OR zombie), a job's `cse_*` env suffix,
+    plus any `env_*` captured from the `rc_servers` passed in. This is the set
+    that DEFINES ledger membership — an env exists in the cloud as long as a file
+    references it, regardless of liveness. Contrast `observe_live()`, which
+    alive-gates the same sources for the CURRENT/bound display; orphans are
+    `ledger − file-referenced`.
+
+    Pure when the sources are supplied (snapshot path / tests); self-reads the
+    registry when they are None (CLI / no-snapshot fallback). `env_*` is only ever
+    passed in (this module never imports rc). Swallows errors → [].
     """
-    records: list[EnvRecord] = []
     try:
-        for sp in registry.read_session_procs(max_age=max_age):
+        if session_procs is None:
+            session_procs = registry.read_session_procs(max_age=max_age)
+        if agent_jobs is None:
+            agent_jobs = registry.read_agent_jobs(max_age=max_age)
+        records: list[EnvRecord] = []
+        for sp in session_procs:
             if not sp.bridge:
                 continue
             prefix, key = _split_bridge(sp.bridge)
             if prefix and key:
                 records.append(EnvRecord(prefix=prefix, key=key, bound_sid=sp.sid))
-        for job in registry.read_agent_jobs(max_age=max_age):
+        for job in agent_jobs:
             if job.env_suffix:
                 records.append(
                     EnvRecord(prefix="cse", key=job.env_suffix, bound_sid=job.sid)
                 )
+        for srv in rc_servers or []:
+            if srv.env_id:
+                prefix, sep, key = srv.env_id.partition("_")
+                if sep and prefix and key:
+                    records.append(EnvRecord(prefix=prefix, key=key, bound_sid=None))
+        return records
     except Exception:
         return []
-    return records
 
 
 def observe_live(
@@ -358,11 +385,14 @@ def current_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
 
 
 def orphan_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
-    """Ledger entries NOT currently observed (status='orphan').
+    """Ledger entries NOT in the current observation (status='orphan').
 
-    These are the manual-delete candidates: csctl cannot deregister a cloud
-    environment, so the user removes them on claude.ai/code. Sorted newest-seen
-    first. (Inherently incomplete — see the module docstring's red line.)
+    Pass the FILE-REFERENCED set (`observe()`) here so orphans are precisely
+    `ledger − file-referenced`: envs the ledger remembers but no on-disk file
+    references anymore (RC toggled off, job removed, server stopped). These are
+    the manual-delete candidates: csctl cannot deregister a cloud environment, so
+    the user removes them on claude.ai/code. Sorted newest-seen first.
+    (Inherently incomplete — see the module docstring's red line.)
     """
     obs_keys = {(r.prefix, r.key) for r in observed if r.prefix and r.key}
     out: list[BridgeEnv] = []

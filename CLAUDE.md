@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`cc-session-control` (CLI: `csctl`) is a terminal UI that manages **Claude Code's own** sessions and Remote Control servers on the local machine. It reads Claude Code's on-disk state (`~/.claude/projects/*/*.jsonl` transcripts, `~/.claude.json`) and shells out to the `claude` CLI and `tmux` — it is an operator tool *for* Claude Code, not a general app. The TUI has two tabs: **会话 (Sessions)** and **远程控制 (Remote Control)**; cleanup is a submenu inside Sessions, not a tab.
+`cc-session-control` (CLI: `csctl`) is a machine-wide operator panel for **Claude Code's own** sessions, background agents, and Remote Control servers. It reads Claude Code's on-disk state (`~/.claude/projects/*/*.jsonl` transcripts, `~/.claude/sessions/*.json` + `~/.claude/jobs/*/state.json` registries, `~/.claude.json`), walks `/proc`, and shells out to the `claude` CLI and `tmux` — it is an operator tool *for* Claude Code, not a general app. The TUI has three tabs: **会话 (Sessions)**, **后台 (Background agents)**, and **远程控制 (Remote Control)**; cleanup is a submenu inside Sessions, not a tab.
 
 ## Commands
 
@@ -38,11 +38,17 @@ Constraints from `CONTRIBUTING.md`: keep each source file **under 600 lines**, u
 
 The UI toolkit is **urwid** (the only runtime dependency is `urwid>=2.0.0`). Three layers under `src/cc_session_control/`:
 
-- **`data/`** — everything that touches external state, both reads *and* writes: `sessions.py` (parse transcripts, prune/remove), `rc.py` (tmux + trust state, start/stop RC), `agents.py` (liveness). Returns the dataclasses in `models.py` (`Session`, `RCProject`).
-- **`actions/session_ops.py`** — a small set of session-level operations that don't belong in `data/`: `terminate_session`, `resume_cmd`/`do_resume`, `to_clipboard`.
-- **`views/`** — urwid widgets per tab (`sessions.py`, `rc.py`). `app.py` orchestrates them; `cli.py` is the argparse entry point; `config.py` holds the global `cfg` singleton.
+- **`data/`** — everything that touches external state, both reads *and* writes. It has an internal **bottom→top DAG** (no cycles):
+  - bottom (pure IO + parse): `proc.py` (the ONLY `/proc` seam — `proc_starttime`/`pid_alive`/`ancestor_pids`/`scan_rc_servers`), `registry.py` (`sessions/*.json` + `jobs/*/state.json`, ~5s TTL cache).
+  - middle: `liveness.py` (the ONE liveness authority — `alive_map`/`invalidate_cache`/pure `live_index`), `environments.py` (the bridge-environment ledger — **must never import `rc`**), `cleanup.py` (per-dir-key + age cleanup strategies).
+  - top (assemble): `sessions.py` (parse transcripts → `Session`), `rc.py` (tmux + trust + `/proc` server discovery → `RCProject`/`RCServer`; calls `environments.upsert` one-way).
+  - `agents.py` is a **zero-logic re-export shim** for `liveness.alive_map`/`invalidate_cache` (kept so old imports + the `session_ops.invalidate_cache` monkeypatch keep working).
+  - `snapshot.py` sits ABOVE the rest (composes them into one `WorldSnapshot`); nothing in `data/` imports it (only `app`/`views` do).
+  Returns the dataclasses in `models.py` (`Session`, `SessionProc`, `AgentJob`, `LiveInfo`, `RCProject`, `RCServer`, `EnvRecord`, `BridgeEnv`).
+- **`actions/`** — operations that don't belong in `data/`: `session_ops.py` (`terminate_session`, `resume_cmd`/`do_resume`, `relaunch_in_tmux`, `to_clipboard`) and `agent_ops.py` (background-agent lifecycle: `respawn`/`remove_job`/`watch`/`resume_takeover`/`stop_job`, with `job_host` joining sid→`sessions/<pid>.json`).
+- **`views/`** — urwid widgets per tab (`sessions.py` + `_session_row.py`, `agents.py`, `rc.py`). `app.py` orchestrates them; `cli.py` is the argparse entry point; `config.py` holds the global `cfg` singleton **and is the single path authority** (`cfg.sessions_dir`/`jobs_dir`/`environments_ledger`/the cleanup dirs/`cleanup_age_days`) — never inline `claude_home / "..."` elsewhere.
 
-The invariant is **import direction, not purity**: `views` import from `data` and `actions`; `data`/`actions` never import upward. There is no separate "pure read vs side effect" split — `data/` holds both.
+The invariant is **import direction, not purity**: `views` import from `data`/`actions`; `data`/`actions` never import upward; within `data` the DAG above is one-way (notably `environments` never imports `rc`). There is no separate "pure read vs side effect" split — `data/` holds both.
 
 ### The view contract (how `app.py` drives tabs generically)
 
@@ -51,22 +57,22 @@ The invariant is **import direction, not purity**: `views` import from `data` an
 - `.widget` — the urwid widget for the tab body
 - `._loaded` — bool; whether `load()` has run
 - `load()` — synchronous initial scan + first render (called once in `run()` for the startup tab; switching to an as-yet-unloaded tab triggers an async refresh instead)
-- `fetch_pending()` — **runs on the worker thread**; scans and stashes results in `self._pending` (never touches widgets)
+- `fetch_pending(snapshot=None)` — **runs on the worker thread**; projects the shared `WorldSnapshot` into `self._pending` (never touches widgets). The `snapshot` arg is **optional**: called with `None` (build failed, or a unit test) the view self-fetches its own slice — so every view stays back-compatible and testable in isolation.
 - `apply_data()` — **runs on the main loop**; swaps `_pending` into the live walker
 - `keyhints() -> str` — footer hint string for the current mode
 - `handle_key(key)` — handles every key except `Tab` and `q`
 
-`App._input` handles only `tab` (switch) and `q` (quit); everything else is forwarded to the active view's `handle_key`.
+`App._input` handles only `tab` (switch) and `q` (quit); everything else is forwarded to the active view's `handle_key`. Adding a tab means updating `self.views` **and** `TAB_NAMES` **and** the `_switch_tab` cycle together (they index in lockstep).
 
-### Async refresh (the threading model)
+### Async refresh + shared world snapshot (the threading model)
 
-Scanning hits the filesystem and subprocesses, so it must not block the urwid loop. The pattern (`App.trigger_async_refresh`):
+Scanning hits the filesystem, `/proc`, and subprocesses, so it must not block the urwid loop, and the three tabs must not each re-scan it (R11/D8). The pattern (`App.trigger_async_refresh`):
 
-1. A daemon thread calls `view.fetch_pending()` on each view — these write into each view's `_pending` field and **never touch widgets directly**.
+1. A daemon thread computes **one** `data/snapshot.py::build_world_snapshot()` for the whole cycle (transcripts, registries, `/proc` walk, RC servers — each scanned ONCE), then calls `view.fetch_pending(snapshot)` on each view. A failed build degrades to `fetch_pending(None)` (per-view self-fetch). Views write only their `_pending` field and **never touch widgets directly**.
 2. The thread writes one byte to a pipe registered via `loop.watch_pipe(self._on_pipe)`.
 3. `_on_pipe` runs on the main loop and calls `apply_data()` on each view, which swaps `_pending` into the live walker.
 
-A `self._refreshing` guard prevents overlapping refreshes. Auto-refresh re-arms every 10s via `set_alarm_in`. **Never mutate urwid widgets from the worker thread** — only set `_pending`.
+A `self._refreshing` guard prevents overlapping refreshes. Auto-refresh re-arms every 10s via `set_alarm_in`. **Never mutate urwid widgets from the worker thread** — only set `_pending`. (`build_world_snapshot` also persists the bridge-environment ledger on the worker thread — that is IO on shared data, which is fine; the widget rule is the hard line.)
 
 ### Resume happens *outside* the UI loop (process replacement)
 
@@ -76,27 +82,63 @@ The TUI cannot run `claude` inside itself. To resume a session, `SessionsView` c
 
 **Relaunch into tmux (`T` key):** `relaunch_in_tmux` (in `actions/session_ops.py`) runs `claude --resume <sid> --remote-control <name>` in a tmux window (session `cfg.tmux_session`, default `cc`, created via `rc.run_in_tmux` — kept separate from the `rc` server windows) so the session **outlives the terminal** and is controllable from phone / claude.ai/code. Unlike `do_resume` it does **not** replace the csctl process — it just spawns the window, reusing the same `should_kill` handoff (live non-current session → old pid killed first; current session refused). Gotcha learned from a spike: killing the tmux window does **not** reliably kill a `--remote-control` process (it survives orphaning), so stop a relaunched session via the `t` terminate-by-pid action, not by closing its window.
 
-### Session liveness — single source of truth
+### Liveness & identity — sessionId is the primary key
 
-`data/agents.py::alive_map()` is the **one authority** for which sessions are alive. It runs `claude agents --json` (cached 5s) → `{sessionId: pid}`. A session is "alive" iff its id appears there. Terminating is the only session op that changes this liveness, and `terminate_session` (in `actions/session_ops.py`) **invalidates the cache itself** — callers don't call `invalidate_cache()` manually. (delete/cleanup only act on already-dead sessions, so they leave the cache alone.)
+The **primary key is `sessionId`**, never pid. Liveness is a **multi-source merge** with `data/liveness.py` as the **one authority** (NOT `agents.py`, which is just a re-export shim):
 
-`data/sessions.py::_ancestor_pids()` walks `/proc/<pid>/stat` up the parent chain to find csctl's own ancestor PIDs. A session whose pid is in that set is the **"current"** session (the one that launched csctl) and is protected — you cannot resume, terminate, or prune it. This `/proc` walk is **Linux/WSL only**; liveness degrades on macOS.
+- `data/liveness.py::alive_map()` runs `claude agents --json` (cached 5s) → `{sessionId: pid}` (agent sessions only — it does NOT list RC servers or reflect RC exposure).
+- `data/registry.py::read_session_procs()` reads `sessions/<pid>.json` for richer per-runtime state (`status`/`procStart`/`kind`/`entrypoint`/`bridgeSessionId`). **A file existing ≠ alive** (most are zombies).
+- `data/proc.py::pid_alive(pid, procStart)` confirms a pid is real: `/proc/<pid>` exists **and** its stat starttime (the 22nd field — parsed AFTER the last `)` because `comm` can contain spaces/parens) equals the recorded `procStart` (this defeats pid reuse).
+- `data/liveness.py::live_index(session_procs, agents_map)` is a **pure, dependency-injected** function that merges the two sources by sid, handles **resume's multi-pid** (one sid → many `sessions/<pid>.json`; pick the proc-alive pid, keep ALL alive pids in `pids`), and returns `{sid: LiveInfo}`. `scan()` fetches the data, then calls it (so the merge is unit-testable without IO).
+
+A sid is **alive** iff `pid_alive` holds for one of its pids OR it appears in `alive_map()`. Terminating is the only session op that changes liveness, and `terminate_session` / `stop_job` **invalidate the cache themselves** — callers don't call `invalidate_cache()` manually. (delete/cleanup only act on already-dead sessions.)
+
+**"current" = self-protection.** `data/proc.py::ancestor_pids()` walks `/proc/<pid>/stat` up the parent chain to csctl's own ancestors. A session is **current** if ANY of its alive pids is in that set (multi-pid aware) — the session that launched csctl, protected: you cannot resume, terminate, or prune it.
+
+**Cross-platform safety (R10).** `/proc` is **Linux/WSL only**. With no `/proc`, `pid_alive`/`ancestor_pids` return empty and liveness degrades to `alive_map()` — and because **"current" then cannot be determined**, destructive ops (terminate/delete/clean/stop/remove) **refuse** (`proc.current_determinable()` guards them) rather than risk hitting csctl's own session; the UI flags the degrade.
 
 ### Session model & transcript parsing
 
-`sessions.scan()` globs `~/.claude/projects/*/*.jsonl` and line-scans each (a cheap substring pre-check guards every `json.loads` for speed — keep this pattern). Display `label` priority: `aiTitle` → first non-noise user prompt → `lastPrompt` → `(untitled)`. `_NOISE` / `_clean_text` strip command/system-reminder wrapper tags so prompts read cleanly. `hidden` flags sdk-ts / bridge-session transcripts.
+`sessions.scan()` globs `~/.claude/projects/*/*.jsonl` and line-scans each (a cheap substring pre-check guards every `json.loads` for speed — keep this pattern), then enriches each `Session` from `live_index()` + the registry: `kind`/`entrypoint`/`source` (cli/vscode/sdk/bg), `rc_exposed`, `env_id`, `agent_short`, `status`. Display `label` priority: `aiTitle` → first non-noise user prompt → `lastPrompt` → `(untitled)`. `_NOISE` / `_clean_text` strip command/system-reminder wrapper tags so prompts read cleanly. The 桥接/SDK hide filter keys off `Session.bridge_or_sdk` (D9: union of the transcript `hidden` tags and registry `source == "sdk"`) so the badge and the `h` toggle never disagree.
 
-### Remote Control = tmux windows
+**RC exposure is a pure predicate.** `sessions._is_rc_exposed(bridge, pid_alive) = bool(bridge) and pid_alive` — a session's *session remote control* is "exposed" only when its `bridgeSessionId` is truthy AND its proc is alive (a zombie's stale bridge does NOT count). Unit-tested across the full missing/null/string × alive/dead matrix.
 
-RC servers are **tmux windows** in a session named `rc` (env `CSCTL_RC_SESSION`). `rc.start_one` launches one `claude remote-control --name ws/<proj> --spawn same-dir` process. It deliberately does **not** auto-restart: every fresh Claude Remote Control process registers a new cloud environment, and automatic restarts can create duplicate mobile/web environment entries with the same display name. Status comes from tmux `#{pane_dead}`: `running` / `dead` / `stopped`; restart is an explicit user action.
+### Background agents (后台 tab)
+
+The persistent truth for a background agent is `jobs/<short>/state.json` (`registry.read_agent_jobs` → `AgentJob`), NOT `sessions/`. `state.json` carries **no pid**, so `actions/agent_ops.py::job_host` JOINs `job.sid → sessions/<pid>.json` to find a stoppable host pid (a live worker with no sessions file is unstoppable — a documented orphan risk). Lifecycle ops: `respawn` (`claude --resume <resume_sid> <flags> --bg` via `shlex.join`, spawned in tmux — never replaces csctl), `resume_takeover` (adapts the job into a `Session` for the existing resume path), `watch` (read-only `timeline.jsonl`), `remove_job` (settled-only), `stop_job` (live-only, signals the joined host pid; killing a `--remote-control`/bg worker may not fully reap it — orphan risk surfaced in the UI).
+
+### Remote Control: tmux servers, /proc discovery, three namespaces
+
+**Managed RC servers are tmux windows** in a session named `rc` (env `CSCTL_RC_SESSION`). `rc.start_one` launches one `claude remote-control --name ws/<proj> --spawn same-dir` process. It deliberately does **not** auto-restart: every fresh Remote Control process registers a new cloud environment, and automatic restarts pile up duplicate mobile/web environment entries with the same display name. Status comes from tmux `#{pane_dead}`: `running` / `dead` / `stopped`; restart is an explicit user action.
 
 All tmux access goes through a single seam: only `_tmux_run` touches `subprocess`; every other tmux call is a thin verb wrapper (`_tmux_new_window`, `_tmux_kill_window`, …) that keeps the swallow-errors contract. Add new tmux operations as wrappers, not raw `subprocess` calls.
 
-**Two independent "start" concepts — do not conflate them** (both are columns in the RC tab):
-- `auto_start` ("自启") — project is in csctl's own list at `$XDG_CONFIG_HOME/csctl/rc-enabled`; controls what `csctl rc up` / the `A` key starts.
-- `rc_at_startup` ("接管") — the per-project `remoteControlAtStartup` flag in `<proj>/.claude/settings.local.json`; controls whether **`claude` itself** enables Remote Control on launch. Tri-state (`True`/`False`/`None`=unset).
+**Discovery beyond tmux (`rc.scan_servers()`).** RC servers are also found by walking `/proc` (`proc.scan_rc_servers` + the pure `proc._match_rc_cmdline`: argv0 basename `claude` AND a `remote-control` subcommand token AND `--name` — codex, which uses a `--remote-control` *flag*, is excluded). A discovered pid that belongs to a csctl-managed tmux pane is **managed**; otherwise it's **external** and **read-only** (csctl never takes over / restarts it). Managed servers' `env_*` cloud id is grepped from the pane and pushed one-way into the ledger.
+
+**Three Remote Control namespaces — independent, never linked by suffix:**
+- **session remote control** → `bridgeSessionId: session_*` in `sessions/<pid>.json` (a foreground session exposing itself). Tri-state: key missing (never on) / `null` (transient — re-opening overwrites it) / string (exposed). "Exposed now" = the `_is_rc_exposed` predicate above.
+- **background agent env** → `bridgeSessionId: cse_*` in `jobs/<short>/state.json`. A `cse_*` resume pair shares one suffix (same env); `session_*` and `cse_*` suffixes never coincide → only ever deduped *within* a namespace.
+- **project rc server env** → `env_*`, printed only to the server's stdout/QR, with **zero** state file — the only local signal is the running process + its pane output.
+
+**Bridge-environment ledger (`data/environments.py`, R6).** Claude Code keeps only the *current* binding for each session/agent (one overwritten field), so toggled-away or historically-minted cloud environments vanish from disk. csctl keeps its own append-only ledger (`$XDG_CONFIG_HOME/csctl/environments.jsonl`) so they stay traceable. It is a **passive store**: callers push observations in via `upsert(records)` — it **never imports `rc`** (the DAG is one-way `rc → environments`). Two observation tiers:
+- `observe()` — bridge-truthy **FILE-REFERENCED** set (every env any on-disk file references right now, alive or zombie, + `env_*` passed in from rc servers). This defines ledger **membership**.
+- `observe_live()` — **alive-gated** CURRENT/bound set (used for display; a zombie's stale bridge is NOT shown as bound).
+
+`build_world_snapshot` (and `csctl env`) `upsert(observe(...))` **every cycle**, so an env that later toggles away stays in the ledger but drops out of the file-referenced set. Three coherent tiers: `active(alive) ⊆ file-referenced(in ledger now) ⊆ ledger(history)`, and **`orphan = ledger − file-referenced`** — those orphans are the manual-delete candidates. The ledger write is **write-on-change + `tmp+rename` atomic + `fcntl` advisory lock + retention/compaction**. **Capability red line:** csctl has **no deregister** — it can only forget locally and print a checklist; orphan lists are inherently incomplete (envs minted while csctl wasn't running can't be back-filled). The RC view labels orphans "云端需手动删除".
+
+**Two independent "start" concepts — do not conflate them** (columns in the RC tab):
+- `auto_start` ("开机自启") — project is in csctl's own list at `$XDG_CONFIG_HOME/csctl/rc-enabled`; controls what `csctl rc up` / the `A` key starts.
+- `rc_at_startup` ("自动远控") — the per-project `remoteControlAtStartup` flag in `<proj>/.claude/settings.local.json`; controls whether **`claude` itself** enables Remote Control on launch. Tri-state (`True`/`False`/`None`=unset). `remoteControlSpawnMode` (also tri-state-ish, `None`=unset) rides alongside on `RCProject.spawn_mode`.
 
 A project must be **trusted** (`hasTrustDialogAccepted` in `~/.claude.json`) before RC can start.
+
+### Cleanup — two strategies, preview-first (`data/cleanup.py`, R7)
+
+Cleanup is a Sessions submenu (not a tab) and the `csctl prune` CLI; both go through `data/cleanup.py`. Keys are **typed by directory, never assumed uuid==sid**:
+- **Strategy A — per-dir key semantics.** `session-env`/`file-history`/`tasks`/`uploads` are **sid-keyed** → orphan = sid not in the known-session set. `sessions/` is **pid-keyed** → sweep zombies (`pid_alive` false), but **keep the current-bound pid and any current session's pid file**, and when one sid has multiple pids keep the alive ones. `debug/` is **debug-run-id-keyed** (NOT sid) → its own semantics.
+- **Strategy B — age sweep.** `shell-snapshots`/`telemetry`/`plans`/`backups`/`paste-cache` are time/global-keyed → drop by mtime past `cfg.cleanup_age_days`.
+
+All cleanup is **preview-first**, **excludes live + current**, and **refuses when current can't be determined** (no `/proc`, R10). `jobs/` is never swept automatically (only the explicit `agent_ops.remove_job` on a settled agent removes a job dir).
 
 ## Conventions
 
