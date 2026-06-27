@@ -13,11 +13,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # local editable/direct install (keeps the tool you run decoupled from your checkout).
 # Requires Python 3.12+.
 uv tool install git+https://github.com/dzshzx/cc-session-control.git
-#   This machine pins it via mise (~/.config/mise/config.toml):
-#     "pipx:git+https://github.com/dzshzx/cc-session-control.git" = "latest"
-#   After pushing, refresh the installed build (NOTE: `mise upgrade` is a no-op for a
-#   git "latest" pin — it never re-resolves the HEAD). Force a rebuild instead:
-#     mise uninstall "pipx:git+https://github.com/dzshzx/cc-session-control.git@latest" && mise install
+#   On this machine csctl is a uv tool at ~/.local/bin/csctl — it is NOT mise-managed
+#   (there is no mise pin for it; `mise install`/`mise uninstall …pipx…` are no-ops here).
+#   After pushing, refresh the installed build from the latest GitHub HEAD with a FORCED
+#   rebuild (plain `uv tool upgrade` may keep the cached git ref and skip the new HEAD):
+#     uv tool install --reinstall git+https://github.com/dzshzx/cc-session-control.git
+#   Verify the running build: csctl --version
 
 # Run the installed TUI (the GitHub build)
 csctl
