@@ -151,6 +151,41 @@ def test_full_cycle_drives_real_views(monkeypatch):
     assert app.views[0]._pending is None
 
 
+# --- Confirm modal: App-level y/n routing shared by all tabs ---
+
+def test_confirm_y_runs_callback_and_closes():
+    app, _views = _app_with_recorders()
+    ran = {"n": 0}
+    app.confirm("终止？", lambda: ran.__setitem__("n", ran["n"] + 1))
+
+    assert app._confirm_yes is not None
+    assert isinstance(app.body.original_widget, urwid.Overlay)  # modal is up
+
+    app._input("y")
+    assert ran["n"] == 1                       # callback fired
+    assert app._confirm_yes is None            # modal closed
+    assert not isinstance(app.body.original_widget, urwid.Overlay)
+
+
+def test_confirm_n_and_esc_cancel_without_callback():
+    for cancel_key in ("n", "esc"):
+        app, _views = _app_with_recorders()
+        ran = {"n": 0}
+        app.confirm("停止全部？", lambda: ran.__setitem__("n", ran["n"] + 1))
+        app._input(cancel_key)
+        assert ran["n"] == 0                    # callback NOT fired
+        assert app._confirm_yes is None         # modal closed
+
+
+def test_confirm_swallows_other_keys():
+    app, _views = _app_with_recorders()
+    app.confirm("终止？", lambda: None)
+    before = app._active
+    app._input("tab")                          # tab must NOT switch while modal up
+    assert app._active == before
+    assert app._confirm_yes is not None        # still modal
+
+
 # --- Fix 2b: degraded-mode header banner (D7/R10) ---
 
 def test_degraded_banner_in_header_when_no_proc(monkeypatch):

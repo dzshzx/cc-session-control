@@ -128,14 +128,36 @@ def test_keyhints_reuse_agent_ops_constants():
 
 # --- key dispatch: respawn / takeover / watch / remove / stop ---
 
-def test_r_key_respawns(monkeypatch):
+def test_R_key_respawns(monkeypatch):
+    # Unified verb table: respawn moved off `r` (now refresh) onto `R`.
     called = {}
     monkeypatch.setattr(av_mod.agent_ops, "respawn",
                         lambda job: called.setdefault("job", job) or "claude --resume x --bg")
     app, view = _make_view([_make_job()])
-    view.handle_key("r")
+    view.handle_key("R")
     assert "job" in called
     assert any("已重启" in m for m in app._notifications)
+
+
+def test_r_key_refreshes_not_respawn(monkeypatch):
+    # `r` is refresh on EVERY tab now; it must NOT respawn.
+    respawned = {"n": 0}
+    monkeypatch.setattr(av_mod.agent_ops, "respawn",
+                        lambda job: respawned.__setitem__("n", respawned["n"] + 1) or "x")
+    app, view = _make_view([_make_job()])
+    view.handle_key("r")
+    assert respawned["n"] == 0
+    assert any("刷新" in m for m in app._notifications)
+
+
+def test_enter_key_takeover_like_o(monkeypatch):
+    # Enter is the unified primary action; on this tab that is takeover (= `o`).
+    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
+                        lambda job: _takeover_session(current=False))
+    app, view = _make_view([_make_job()])
+    view.handle_key("enter")
+    assert app.result is not None
+    assert app.result[0] == "resume"
 
 
 def test_o_key_takeover_routes_to_exit_with_resume(monkeypatch):

@@ -1,9 +1,9 @@
 """Row widgets + presentation helpers for the Sessions tab.
 
 Split out of `views/sessions.py` so that file stays under the 600-line budget.
-Holds the selectable `SessionRow` (with the D9 source / 📱-exposure / agent-link
-badges), the cleanup-submenu rows (`_ActionRow`, `_PreviewRow`), and the column
-header constants. Rows never handle keys — `keypress` returns the key so the
+Holds the selectable `SessionRow` (with the D9 source badge + the 📱 remote-
+control-exposure marker), the cleanup-submenu rows (`_ActionRow`, `_PreviewRow`),
+and the column header constants. Rows never handle keys — `keypress` returns the key so the
 view's single dispatcher sees it (see frontend/widget-patterns.md).
 """
 
@@ -43,13 +43,33 @@ def _source_badge(session: Session) -> str:
 
 
 def _flags(session: Session) -> str:
-    """Row flags: 📱 when session remote control is exposed, ⚙ when agent-linked."""
-    flags = ""
-    if session.rc_exposed:
-        flags += "📱"
-    if session.agent_short:
-        flags += "⚙"
-    return flags
+    """Remote-control exposure marker for the 远控 column: 📱 when this session
+    exposes its own session-level remote control (phone / claude.ai/code can take
+    it over), else "". 📱 is Emoji_Presentation=Yes so its width is stable across
+    terminals (the old ⚙ agent glyph was the width-unstable one — text-default,
+    needs VS16 — and is the only thing P5 actually needed to drop). Agent-link is
+    deliberately NOT shown here: it is orthogonal to remote control and already
+    covered by the 来源 `BG` badge plus the dedicated 后台 tab."""
+    return "📱" if session.rc_exposed else ""
+
+
+def _rel_time(mtime: float) -> str:
+    """Human relative time: 刚刚 / N 分钟前 / N 小时前 / N 天前; falls back to an
+    absolute %m-%d date past a week (and for a missing or future mtime)."""
+    if not mtime:
+        return "-"
+    delta = time.time() - mtime
+    if delta < 0:
+        return time.strftime("%m-%d %H:%M", time.localtime(mtime))
+    if delta < 60:
+        return "刚刚"
+    if delta < 3600:
+        return f"{int(delta // 60)} 分钟前"
+    if delta < 86400:
+        return f"{int(delta // 3600)} 小时前"
+    if delta < 7 * 86400:
+        return f"{int(delta // 86400)} 天前"
+    return time.strftime("%m-%d %H:%M", time.localtime(mtime))
 
 
 class SessionRow(urwid.WidgetWrap):
@@ -57,10 +77,11 @@ class SessionRow(urwid.WidgetWrap):
         self.session = session
         mark = "●" if session.alive else "○"
         cur = "▸" if session.current else " "
-        when = time.strftime("%m-%d %H:%M", time.localtime(session.mtime))
+        when = _rel_time(session.mtime)
         hidden = _hidden_marker(session)
         label = f"[{hidden}] {session.label}" if hidden else session.label
-        label = label[:80]
+        if len(label) > 80:
+            label = label[:79] + "…"
         cwd = session.cwd.rstrip("/").rsplit("/", 1)[-1] if session.cwd else ""
 
         cols = urwid.Columns([

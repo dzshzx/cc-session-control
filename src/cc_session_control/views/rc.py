@@ -106,7 +106,9 @@ class ServerRow(urwid.WidgetWrap):
         super().__init__(mapped)
 
     def selectable(self) -> bool:
-        return True
+        # P4: display-only — focus SKIPS it (like _DividerRow) so the user never
+        # lands on a highlighted row whose keys are all silently inert.
+        return False
 
     def keypress(self, size: tuple, key: str) -> str | None:
         return key
@@ -134,7 +136,8 @@ class EnvRow(urwid.WidgetWrap):
         super().__init__(mapped)
 
     def selectable(self) -> bool:
-        return True
+        # P4: display-only ledger row — focus SKIPS it (csctl has no deregister).
+        return False
 
     def keypress(self, size: tuple, key: str) -> str | None:
         return key
@@ -248,6 +251,8 @@ class RCView:
                 self.walker.append(EnvRow(e))
             for e in self._orphans:
                 self.walker.append(EnvRow(e))
+        if not self.walker:
+            self.walker.append(urwid.AttrMap(urwid.Text(" 暂无远控项目"), "dead"))
         if self.walker and focus_pos is not None:
             self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
 
@@ -314,14 +319,18 @@ class RCView:
             self.app.notify(f"已启动 {count} 个项目")
             self.app.trigger_async_refresh()
         elif key == "S":
-            ok = rc.stop_all()
-            self.app.notify("已停止全部" if ok else "本来就没在跑")
-            self.app.trigger_async_refresh()
+            self.app.confirm("停止全部远控服务？", self._do_stop_all)
         elif key == "r":
             self.app.trigger_async_refresh()
             self.app.notify("刷新中…")
         elif key == "?":
             self._show_help()
+
+    def _do_stop_all(self) -> None:
+        """Stop-all body, run only after the y/n confirm accepts."""
+        ok = rc.stop_all()
+        self.app.notify("已停止全部" if ok else "本来就没在跑")
+        self.app.trigger_async_refresh()
 
     def _show_help(self) -> None:
         self._help = True

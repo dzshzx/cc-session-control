@@ -16,6 +16,8 @@ class FakeApp:
     def __init__(self):
         self.result = None
         self._notifications = []
+        self._confirm_messages = []
+        self._last_confirm = None
         self.footer_text = urwid.Text("")
         self.footer = urwid.AttrMap(self.footer_text, "footer")
         self.frame = urwid.Frame(urwid.Text("body"), footer=self.footer)
@@ -24,6 +26,12 @@ class FakeApp:
 
     def notify(self, msg, seconds=3):
         self._notifications.append(msg)
+
+    def confirm(self, message, on_yes):
+        # Mirror App.confirm: record the prompt and capture the callback so a test
+        # can simulate pressing `y` via `app._last_confirm()`.
+        self._confirm_messages.append(message)
+        self._last_confirm = on_yes
 
     def exit_with_resume(self, session, fork=False):
         self.result = ("resume", session, fork)
@@ -324,6 +332,67 @@ def test_rc_view_a_key_notifies_with_new_label(monkeypatch):
     assert any("开机自启" in m for m in app._notifications)
 
 
+def test_rc_S_key_confirms_then_stops_all(monkeypatch):
+    from cc_session_control.data import rc as rc_mod
+
+    stopped = {"n": 0}
+    monkeypatch.setattr(rc_mod, "stop_all",
+                        lambda: stopped.__setitem__("n", stopped["n"] + 1) or True)
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [_make_project(name="p1")]
+    view.apply_data()
+
+    view.handle_key("S")
+    assert stopped["n"] == 0  # nothing stopped until the confirm is accepted
+    assert app._confirm_messages and "停止全部" in app._confirm_messages[0]
+
+    app._last_confirm()  # simulate pressing y
+    assert stopped["n"] == 1
+    assert any("已停止全部" in m for m in app._notifications)
+
+
+# === Unified-keys: Sessions terminate now `s` + confirms ====================
+
+def test_sessions_s_key_confirms_then_terminates(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+
+    killed = {"n": 0}
+    monkeypatch.setattr(sv_mod, "terminate_session",
+                        lambda s: killed.__setitem__("n", killed["n"] + 1) or True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [_make_session(sid="live", alive=True, current=False)]
+    view._apply_filter()
+    view._rebuild()
+
+    view.handle_key("s")
+    assert killed["n"] == 0  # a confirm is requested, nothing killed yet
+    assert app._confirm_messages and "终止" in app._confirm_messages[0]
+
+    app._last_confirm()  # simulate pressing y
+    assert killed["n"] == 1
+    assert any("已终止" in m for m in app._notifications)
+
+
+def test_sessions_s_key_guards_before_confirm(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+
+    monkeypatch.setattr(sv_mod, "terminate_session", lambda s: True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [_make_session(sid="dead", alive=False)]
+    view._apply_filter()
+    view._rebuild()
+
+    view.handle_key("s")
+    assert app._confirm_messages == []  # guard fires BEFORE any confirm
+    assert any("不是活的" in m for m in app._notifications)
+
+
 # === Phase 7: D9 session badges + hide-filter union =========================
 
 def test_session_row_renders_source_and_flag_badges():
@@ -331,8 +400,11 @@ def test_session_row_renders_source_and_flag_badges():
         source="cli", rc_exposed=True, agent_short="abcd1234"))
     text = _row_text(row)
     assert "CLI" in text       # source badge
-    assert "📱" in text         # exposure marker
-    assert "⚙" in text          # agent-link marker
+    assert "📱" in text         # RC-exposure marker (phone; Emoji_Presentation, width-stable)
+    # Agent-link is intentionally NOT a row marker anymore: orthogonal to 远控,
+    # already covered by the 来源 BG badge + the 后台 tab. Lock that it is gone.
+    assert "代" not in text
+    assert "⚙" not in text
 
 
 def test_session_row_source_badge_maps_vscode_to_ide():

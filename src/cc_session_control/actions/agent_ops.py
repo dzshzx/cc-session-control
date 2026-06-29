@@ -35,15 +35,17 @@ from ..models import AgentJob, Session
 
 TAKEOVER_LABEL = "接管"
 
-KEYHINTS = "r 重启  o 接管  w 查看  d 删除(仅已结束)  s 停止(仅活)"
+# Unified verb table (matches Sessions/RC): Enter/o=接管(primary), s=停止(kill a
+# live thing), d=删除, R=重启(respawn), r=刷新. `r` is refresh on every tab.
+KEYHINTS = "Enter/o 接管  s 停止(仅活)  d 删除(仅已结束)  w 查看  R 重启  r 刷新"
 
 # Orphan-process risk (R4.5 red line): stop only kills the host pid joined from
 # the sessions registry, killing a --remote-control/bg worker does not always
 # fully reap it, and a live worker with no sessions file can't be located at all.
 HELP = (
     "后台 agent 生命周期：\n"
-    "  r 重启(respawn)  o 接管(拉回前台，复用 resume)  w 查看 timeline(只读)\n"
-    "  d 删除(仅已结束的 agent)  s 停止(仅活的 worker)\n"
+    "  Enter/o 接管(拉回前台，复用 resume)  w 查看 timeline(只读)\n"
+    "  R 重启(respawn)  d 删除(仅已结束)  s 停止(仅活)  r 刷新\n"
     "停止/孤儿风险：停止只能杀经 sessions 文件 join 到的 host pid；"
     "杀 --remote-control/后台 worker 不一定彻底回收，可能残留孤儿进程，需手动确认；"
     "找不到 host pid 的活 worker 无法停止。"

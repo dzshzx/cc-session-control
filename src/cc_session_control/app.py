@@ -5,6 +5,7 @@ from __future__ import annotations
 import curses
 import os
 import threading
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 import urwid
@@ -81,6 +82,11 @@ class App:
         self._alarm_handle: object | None = None
         self._pipe_fd: int | None = None
         self._refreshing = False
+        # When set, a y/n confirm modal is up: `_input` routes y/n/esc here and
+        # swallows every other key (App-level so all tabs share it — D8 view files
+        # stay small). `_confirm_base` is the widget restored on close.
+        self._confirm_yes: Callable[[], None] | None = None
+        self._confirm_base: urwid.Widget | None = None
 
         self.views: list[TabView] = [SessionsView(self), AgentsView(self), RCView(self)]
         self._active = 0
@@ -133,12 +139,50 @@ class App:
             self.trigger_async_refresh()
 
     def _input(self, key: str) -> None:
+        if self._confirm_yes is not None:
+            # Modal: only y/n/esc are live; tab/q/everything else is swallowed so
+            # a destructive confirm can't be skipped past by an accidental key.
+            if key == "y":
+                cb = self._confirm_yes
+                self._close_confirm()
+                cb()
+            elif key in ("n", "esc"):
+                self._close_confirm()
+            return
         if key == "tab":
             self._switch_tab()
         elif key == "q":
             self._exit()
         else:
             self.views[self._active].handle_key(key)
+
+    def confirm(self, message: str, on_yes: Callable[[], None]) -> None:
+        """Show a y/n modal over the active tab; run `on_yes` only on `y`.
+
+        App-level (not a per-view mode) so every tab gets confirmation for free
+        and the view files stay under budget. While up, `_input` routes y/n/esc
+        and swallows the rest. The overlay sits ABOVE the view widget in
+        `self.body`, so a worker-thread refresh (which only rebuilds a view's own
+        walker) never disturbs it.
+        """
+        self._confirm_yes = on_yes
+        self._confirm_base = self.body.original_widget
+        text = urwid.Text(f"  {message}\n\n  y 确认    n / Esc 取消")
+        box = urwid.AttrMap(urwid.LineBox(urwid.Filler(text)), "notify")
+        self.body.original_widget = urwid.Overlay(
+            box, self._confirm_base,
+            align="center", width=("relative", 50),
+            valign="middle", height=7,
+        )
+        self.footer_text.set_text(" y 确认 · n/Esc 取消")
+
+    def _close_confirm(self) -> None:
+        if self._confirm_base is not None:
+            self.body.original_widget = self._confirm_base
+        self._confirm_base = None
+        self._confirm_yes = None
+        hints = self.views[self._active].keyhints()
+        self.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
 
     def _exit(self, result: tuple | None = None) -> None:
         self._exiting = True

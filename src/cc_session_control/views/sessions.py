@@ -98,7 +98,10 @@ class SessionsView:
         if self._mode == "preview":
             return "Enter 确认清理 · Esc 取消"
         hidden = "h 隐藏桥接项" if self._show_hidden else "h 显示桥接项"
-        return f"Enter 接回 · t 终止 · T tmux化 · d 删除 · c 清理 · {hidden} · / 过滤 · ? 帮助"
+        return (
+            f"Enter 接回 · s 终止 · f 分叉 · d 删除 · y 复制 · R tmux化 · "
+            f"c 清理 · {hidden} · / 过滤 · ? 帮助"
+        )
 
     def _update_footer(self) -> None:
         if self.app.views[self.app._active] is not self:
@@ -220,6 +223,9 @@ class SessionsView:
         self.walker.clear()
         for s in self._sessions:
             self.walker.append(SessionRow(s))
+        if not self._sessions:
+            empty = "无匹配会话（按 / 清空过滤）" if self._filter_text else "暂无会话"
+            self.walker.append(urwid.AttrMap(urwid.Text(f" {empty}"), "dead"))
         if self.walker and focus_pos is not None:
             self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
         alive_n = sum(1 for s in self._all_sessions if s.alive)
@@ -418,6 +424,12 @@ class SessionsView:
         self._enter_cleanup()
         self.app.trigger_async_refresh()
 
+    def _do_terminate(self, s: Session) -> None:
+        """Terminate body, run only after the y/n confirm accepts."""
+        ok = terminate_session(s)
+        self.app.notify("已终止" if ok else "终止失败")
+        self.app.trigger_async_refresh()
+
     # --- Key dispatch ---
 
     def handle_key(self, key: str) -> None:
@@ -465,17 +477,18 @@ class SessionsView:
             self.app.exit_with_resume(s, fork=False)
         elif key == "f" and s:
             self.app.exit_with_resume(s, fork=True)
-        elif key == "t" and s:
+        elif key == "s" and s:
+            # Guards run BEFORE the confirm — never ask to confirm an invalid op.
             if not s.alive:
                 self.app.notify("会话不是活的")
                 return
             if s.current:
                 self.app.notify("不能终止当前会话")
                 return
-            ok = terminate_session(s)
-            self.app.notify("已终止" if ok else "终止失败")
-            self.app.trigger_async_refresh()
-        elif key == "T" and s:
+            self.app.confirm(
+                f"终止会话「{s.label[:30]}」？", lambda: self._do_terminate(s)
+            )
+        elif key == "R" and s:
             if s.current:
                 self.app.notify("不能搬动当前会话")
                 return
@@ -520,8 +533,8 @@ class SessionsView:
             "会话操作:",
             "  Enter  接回选中的会话（在终端中恢复）",
             "  f      分叉会话（创建副本后接回）",
-            "  t      终止活跃会话（发送 SIGTERM）",
-            "  T      搬进 tmux 并开启远程控制（脱离终端，手机/网页可接管）",
+            "  s      终止活跃会话（发送 SIGTERM，需二次确认）",
+            "  R      搬进 tmux 并开启远程控制（脱离终端，手机/网页可接管）",
             "  d      删除已结束的会话记录",
             "  y      复制接回命令到剪贴板",
             "  h      显示/隐藏桥接、SDK 会话",

@@ -136,6 +136,8 @@ class AgentsView:
         self.walker.clear()
         for job in self._jobs:
             self.walker.append(AgentRow(job))
+        if not self._jobs:
+            self.walker.append(urwid.AttrMap(urwid.Text(" 暂无后台 agent"), "dead"))
         if self.walker and focus_pos is not None:
             self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
         alive_n = sum(1 for j in self._jobs if j.host_alive)
@@ -185,11 +187,15 @@ class AgentsView:
 
         job = self._selected()
 
-        if key == "r" and job:
+        if key == "r":
+            # Unified verb table: `r` is refresh on EVERY tab (respawn moved to R).
+            self.app.trigger_async_refresh()
+            self.app.notify("刷新中…")
+        elif key == "R" and job:
             cmd = agent_ops.respawn(job)
             self.app.notify(f"已重启：{cmd}")
             self.app.trigger_async_refresh()
-        elif key == "o" and job:
+        elif key in ("enter", "o") and job:
             self._takeover(job)
         elif key == "w" and job:
             self._watch(job)
