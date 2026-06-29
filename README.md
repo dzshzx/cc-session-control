@@ -23,15 +23,34 @@ Built with [urwid](https://urwid.org/).
 
 ## Installation
 
-Install from the public GitHub repository:
+> **Coming soon to PyPI.** The package is not published yet. Until the first
+> release lands, install from GitHub (see *Latest `master` build* below). Once
+> published, the commands below will work.
+
+Install the latest published release:
 
 ```bash
-uv tool install git+https://github.com/dzshzx/cc-session-control.git
+uv tool install cc-session-control
 # or
-pipx install git+https://github.com/dzshzx/cc-session-control.git
+pipx install cc-session-control
 ```
 
-Upgrade later with `uv tool upgrade cc-session-control` (or `pipx upgrade cc-session-control`). For working *on* the code instead of using it, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Upgrade later with `uv tool upgrade cc-session-control` (or `pipx upgrade
+cc-session-control`).
+
+### Latest `master` build
+
+Until the package is on PyPI — or to try the newest `master` before it is
+released — install from GitHub:
+
+```bash
+uv tool install --reinstall git+https://github.com/dzshzx/cc-session-control.git
+```
+
+`csctl` manages the Claude Code state on the machine where it is installed: the
+local `~/.claude`, local `tmux`, and local workspace. Install it separately on
+each machine whose sessions you want to manage. For working *on* the code
+instead of using it, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Usage
 

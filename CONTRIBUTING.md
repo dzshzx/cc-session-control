@@ -11,15 +11,15 @@ uv venv && uv pip install -e ".[dev]"
 uv run csctl --version
 ```
 
-> This editable install is **for development only**. To *use* csctl, install it from the
-> public GitHub repo as shown in the [README](README.md) — don't rely on a local editable
-> install as your day-to-day `csctl`.
+> This editable install is **for development only**. To *use* csctl, install it as shown in
+> the [README](README.md) — don't rely on a local editable install as your day-to-day
+> `csctl`.
 
 ## Development
 
 - Run TUI: `csctl`
 - Run tests: `uv run --extra dev pytest tests/` (or `python -m pytest tests/` inside the venv)
-- Check for hardcoded paths: `grep -rn '/home/' src/`
+- Check for hardcoded paths: `grep -rn --include='*.py' '/home/' src/`
 
 ## Pull Requests
 

@@ -30,7 +30,7 @@ uv run --extra dev pytest tests/test_views.py::test_sessions_view_filter_logic  
 uv run csctl                                                                    # exercise local source changes
 
 # Guardrail enforced for contributions (must return nothing)
-grep -rn '/home/' src/      # no hardcoded paths
+grep -rn --include='*.py' '/home/' src/      # no hardcoded paths in product source
 ```
 
 Constraints from `CONTRIBUTING.md`: keep each source file **under 600 lines**, use type hints, no hardcoded paths.
