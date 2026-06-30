@@ -48,8 +48,8 @@ HELP = (
     "  Enter/o 接回(拉回前台，复用 resume；接运行中的 agent 会先确认接管)  w 查看 timeline(只读)\n"
     "  R 重启(respawn)  d 删除(仅已结束)  s 停止(仅运行中，需确认)  r 刷新\n"
     "停止/孤儿风险：停止只能杀经 sessions 文件 join 到的 host pid；"
-    "杀 --remote-control/后台 worker 不一定彻底回收，可能残留孤儿进程，需手动确认；"
-    "找不到运行中 worker 的 host pid 时无法停止。"
+    "杀 --remote-control/后台 agent 不一定彻底回收，可能残留孤儿进程，需手动确认；"
+    "找不到运行中的后台 agent 的 host pid 时无法停止。"
 )
 
 
