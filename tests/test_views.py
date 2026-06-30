@@ -39,6 +39,9 @@ class FakeApp:
     def trigger_async_refresh(self):
         pass
 
+    def set_hints(self, hints):
+        self.footer_text.set_text(hints)
+
     def _restore_footer(self):
         self.frame.footer = self.footer
 
@@ -146,7 +149,7 @@ def test_sessions_view_h_key_toggles_hidden_sessions():
 
     assert [s.sid for s in view._sessions] == ["normal"]
     assert "桥接/SDK已隐藏 1" in view.status.original_widget.get_text()[0]
-    assert "h 显示桥接项" in app.footer_text.get_text()[0]
+    # `h` moved into `?` help (D3 footer slim-down) — no longer in the footer hint.
 
     view.handle_key("h")
 
@@ -278,8 +281,9 @@ def test_rc_view_fetch_pending(monkeypatch):
 def test_rc_view_keyhints_uses_new_labels():
     view = RCView(FakeApp())
     hints = view.keyhints()
-    assert "切换开机自启" in hints
-    assert "切换自动远控" in hints
+    assert "开机自启" in hints
+    assert "自动远控" in hints
+    assert "A/S" in hints  # batch keys are discoverable in the footer now
 
 
 def test_rc_view_status_bar_counts_use_new_labels():
@@ -341,7 +345,7 @@ def test_rc_S_key_confirms_then_stops_all(monkeypatch):
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1")]
+    view._pending = [_make_project(name="p1", status="running")]
     view.apply_data()
 
     view.handle_key("S")
@@ -361,6 +365,7 @@ def test_sessions_s_key_confirms_then_terminates(monkeypatch):
     killed = {"n": 0}
     monkeypatch.setattr(sv_mod, "terminate_session",
                         lambda s: killed.__setitem__("n", killed["n"] + 1) or True)
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -370,17 +375,18 @@ def test_sessions_s_key_confirms_then_terminates(monkeypatch):
 
     view.handle_key("s")
     assert killed["n"] == 0  # a confirm is requested, nothing killed yet
-    assert app._confirm_messages and "终止" in app._confirm_messages[0]
+    assert app._confirm_messages and "停止" in app._confirm_messages[0]
 
     app._last_confirm()  # simulate pressing y
     assert killed["n"] == 1
-    assert any("已终止" in m for m in app._notifications)
+    assert any("已停止" in m for m in app._notifications)
 
 
 def test_sessions_s_key_guards_before_confirm(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
 
     monkeypatch.setattr(sv_mod, "terminate_session", lambda s: True)
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -390,7 +396,148 @@ def test_sessions_s_key_guards_before_confirm(monkeypatch):
 
     view.handle_key("s")
     assert app._confirm_messages == []  # guard fires BEFORE any confirm
-    assert any("不是活的" in m for m in app._notifications)
+    assert any("未在运行" in m for m in app._notifications)
+
+
+# === Unified confirm: takeover/relaunch live + degrade gate + f guard =======
+
+def test_would_take_over_matches_resume_plan():
+    from cc_session_control.actions.session_ops import _resume_plan, would_take_over
+    live = _make_session(alive=True, current=False)
+    dead = _make_session(alive=False)
+    assert would_take_over(live) is _resume_plan(live)[2] is True
+    assert would_take_over(dead) is _resume_plan(dead)[2] is False
+    # fork is a copy — never a takeover.
+    assert would_take_over(live, fork=True) is False
+
+
+def test_sessions_enter_live_confirms_takeover(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [_make_session(sid="live", alive=True, current=False, pid=999)]
+    view._apply_filter(); view._rebuild()
+
+    view.handle_key("enter")
+    assert app.result is None  # not resumed until confirmed
+    assert app._confirm_messages and "接回会话" in app._confirm_messages[0]
+    assert "终止原进程" in app._confirm_messages[0]
+
+    app._last_confirm()
+    assert app.result is not None and app.result[0] == "resume"
+
+
+def test_sessions_enter_dead_resumes_directly():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [_make_session(sid="dead", alive=False, current=False)]
+    view._apply_filter(); view._rebuild()
+
+    view.handle_key("enter")
+    assert app._confirm_messages == []  # dead: no takeover, no confirm
+    assert app.result is not None and app.result[0] == "resume"
+
+
+def test_sessions_R_live_confirms_relaunch(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    relaunched = {"n": 0}
+    monkeypatch.setattr(sv_mod, "relaunch_in_tmux",
+                        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [_make_session(sid="live", alive=True, current=False)]
+    view._apply_filter(); view._rebuild()
+
+    view.handle_key("R")
+    assert relaunched["n"] == 0
+    assert app._confirm_messages and "转入后台" in app._confirm_messages[0]
+
+    app._last_confirm()
+    assert relaunched["n"] == 1
+    assert any("已转入后台" in m for m in app._notifications)
+
+
+def test_sessions_R_degraded_still_relaunches_dead(monkeypatch):
+    # B3: relaunching a DEAD session kills nothing — must NOT be blocked off /proc.
+    import cc_session_control.views.sessions as sv_mod
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    relaunched = {"n": 0}
+    monkeypatch.setattr(sv_mod, "relaunch_in_tmux",
+                        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [_make_session(sid="dead", alive=False, current=False)]
+    view._apply_filter(); view._rebuild()
+
+    view.handle_key("R")
+    assert relaunched["n"] == 1  # dead relaunch is not gated by degrade
+
+
+def test_sessions_R_degraded_refuses_live_takeover(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    relaunched = {"n": 0}
+    monkeypatch.setattr(sv_mod, "relaunch_in_tmux",
+                        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [_make_session(sid="live", alive=True, current=False)]
+    view._apply_filter(); view._rebuild()
+
+    view.handle_key("R")
+    assert relaunched["n"] == 0
+    assert app._confirm_messages == []
+    assert any("降级" in m for m in app._notifications)
+
+
+def test_sessions_f_refuses_current():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [_make_session(sid="cur", alive=True, current=True)]
+    view._apply_filter(); view._rebuild()
+
+    view.handle_key("f")
+    assert app.result is None
+    assert any("不能分叉当前会话" in m for m in app._notifications)
+
+
+def test_rc_s_running_confirms_stop(monkeypatch):
+    from cc_session_control.data import rc as rc_mod
+    stopped = {"n": 0}
+    monkeypatch.setattr(rc_mod, "stop_one",
+                        lambda name: stopped.__setitem__("n", stopped["n"] + 1) or True)
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [_make_project(name="p1", status="running")]
+    view.apply_data()
+
+    view.handle_key("s")
+    assert stopped["n"] == 0
+    assert app._confirm_messages and "停止远控服务" in app._confirm_messages[0]
+
+    app._last_confirm()
+    assert stopped["n"] == 1
+
+
+def test_rc_s_not_running_no_confirm():
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [_make_project(name="p1", status="stopped")]
+    view.apply_data()
+
+    view.handle_key("s")
+    assert app._confirm_messages == []
+    assert any("未在运行" in m for m in app._notifications)
 
 
 # === Phase 7: D9 session badges + hide-filter union =========================

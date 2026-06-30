@@ -61,6 +61,11 @@ PALETTE = [
 
 TAB_NAMES = ["会话", "后台", "远程控制"]
 
+# D1: all three tabs share ONE footer prefix — the universal verbs (Tab/q/r) live
+# here exactly once so `r 刷新` shows identically on every tab. View-specific keys
+# come from each view's `keyhints()` and are appended via `App.set_hints`.
+FOOTER_PREFIX = " Tab 切换 · q 退出 · r 刷新 · "
+
 
 def _make_screen() -> urwid.raw_display.Screen:
     screen = urwid.raw_display.Screen()
@@ -102,8 +107,7 @@ class App:
             header_rows.append(urwid.AttrMap(urwid.Text(f" {_DEGRADED_BANNER}"), "notify"))
         self.header = urwid.Pile(header_rows)
 
-        self._footer_default = " Tab 切换 · q 退出 · r 刷新"
-        self.footer_text = urwid.Text(self._footer_default)
+        self.footer_text = urwid.Text(FOOTER_PREFIX)
         self.footer = urwid.AttrMap(self.footer_text, "footer")
 
         self.frame = urwid.Frame(self.body, header=self.header, footer=self.footer)
@@ -133,8 +137,7 @@ class App:
         self._active = (self._active + 1) % len(self.views)
         self.body.original_widget = self.views[self._active].widget
         self._update_tab_bar()
-        hints = self.views[self._active].keyhints()
-        self.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
+        self.set_hints(self.views[self._active].keyhints())
         if not self.views[self._active]._loaded:
             self.trigger_async_refresh()
 
@@ -181,8 +184,7 @@ class App:
             self.body.original_widget = self._confirm_base
         self._confirm_base = None
         self._confirm_yes = None
-        hints = self.views[self._active].keyhints()
-        self.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
+        self.set_hints(self.views[self._active].keyhints())
 
     def _exit(self, result: tuple | None = None) -> None:
         self._exiting = True
@@ -193,6 +195,10 @@ class App:
 
     def exit_with_resume(self, session: object, fork: bool = False) -> None:
         self._exit(("resume", session, fork))
+
+    def set_hints(self, hints: str) -> None:
+        """Footer = shared prefix + the active tab's keyhints (D1 single source)."""
+        self.footer_text.set_text(FOOTER_PREFIX + hints)
 
     def notify(self, msg: str, seconds: float = 3) -> None:
         self.frame.footer = urwid.AttrMap(urwid.Text(f" {msg}"), "notify")
@@ -251,8 +257,7 @@ class App:
     def run(self) -> tuple | None:
         self._pipe_fd = self.loop.watch_pipe(self._on_pipe)
         self.views[self._active].load()
-        hints = self.views[self._active].keyhints()
-        self.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
+        self.set_hints(self.views[self._active].keyhints())
         self.trigger_async_refresh()
         self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)
         self.loop.run()

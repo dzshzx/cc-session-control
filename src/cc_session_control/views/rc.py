@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
     from ..app import App
 
-_STATUS_MAP = {"running": "● 运行中", "dead": "✖ 已崩溃", "stopped": "○ 已停止"}
+_STATUS_MAP = {"running": "● 运行中", "dead": "✖ 已退出", "stopped": "○ 已停止"}
 _RC_TRISTATE = {True: "开", False: "关", None: "未设置"}
 # `c` cycles the per-project remoteControlAtStartup tri-state in full so the user
 # can return to an explicit True (the old 2-cycle could never set True again).
@@ -174,7 +174,7 @@ class RCView:
     def keyhints(self) -> str:
         if self._help:
             return "按任意键返回"
-        return "Enter 启动 · s 停止 · a 切换开机自启 · c 切换自动远控 · ? 帮助"
+        return "Enter 启动 · s 停止 · a 开机自启 · c 自动远控 · A/S 批量 · ? 帮助"
 
     def load(self) -> None:
         self._projects = rc.scan()
@@ -241,7 +241,7 @@ class RCView:
         for p in self._projects:
             self.walker.append(RCRow(p))
         if self._servers:
-            self.walker.append(_DividerRow("── RC 服务（外部只读）──"))
+            self.walker.append(_DividerRow("── RC 服务（仅展示 · 托管见项目行 · 外部不可接管）──"))
             for s in self._servers:
                 self.walker.append(ServerRow(s))
         if self._current or self._orphans:
@@ -278,8 +278,7 @@ class RCView:
     def _update_footer(self) -> None:
         if self.app.views[self.app._active] is not self:
             return
-        hints = self.keyhints()
-        self.app.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
+        self.app.set_hints(self.keyhints())
 
     def handle_key(self, key: str) -> None:
         if self._help:
@@ -301,9 +300,13 @@ class RCView:
             self.app.notify(f"已启动 ws/{p.name}" if ok else "启动失败")
             self.app.trigger_async_refresh()
         elif key == "s" and p:
-            ok = rc.stop_one(p.name)
-            self.app.notify(f"已停止 {p.name}" if ok else "未在运行")
-            self.app.trigger_async_refresh()
+            if p.status != "running":
+                self.app.notify("未在运行")
+                return
+            self.app.confirm(
+                f"停止远控服务「{p.name}」？将终止其进程。",
+                lambda: self._do_stop_one(p.name),
+            )
         elif key == "a" and p:
             new = rc.toggle_autostart(p.name)
             self.app.notify(f"{p.name} 开机自启: {'开' if new else '关'}")
@@ -319,12 +322,21 @@ class RCView:
             self.app.notify(f"已启动 {count} 个项目")
             self.app.trigger_async_refresh()
         elif key == "S":
+            if not any(p.status == "running" for p in self._projects):
+                self.app.notify("本来就没在跑")
+                return
             self.app.confirm("停止全部远控服务？", self._do_stop_all)
         elif key == "r":
             self.app.trigger_async_refresh()
             self.app.notify("刷新中…")
         elif key == "?":
             self._show_help()
+
+    def _do_stop_one(self, name: str) -> None:
+        """Stop-one body, run only after the y/n confirm accepts."""
+        ok = rc.stop_one(name)
+        self.app.notify(f"已停止 {name}" if ok else "未在运行")
+        self.app.trigger_async_refresh()
 
     def _do_stop_all(self) -> None:
         """Stop-all body, run only after the y/n confirm accepts."""
@@ -337,13 +349,13 @@ class RCView:
         lines = [
             "远程控制操作（仅对「项目」行生效）:",
             "  Enter  启动选中项目的远程控制服务",
-            "  s      停止选中项目的远程控制服务",
+            "  s      停止选中项目的远程控制服务（需确认）",
             "  a      切换「开机自启」：A 键一键启动时是否带上本项目",
             "  c      切换「自动远控」：claude 启动时自动开远程控制，手机即可接管",
             "",
             "批量操作:",
             "  A      启动所有「开机自启」项目",
-            "  S      停止全部远程控制服务",
+            "  S      停止全部远程控制服务（需确认）",
             "  r      重新扫描刷新",
             "",
             "RC 服务 / 环境台账（只读）:",

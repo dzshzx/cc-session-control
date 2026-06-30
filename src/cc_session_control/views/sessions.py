@@ -13,6 +13,7 @@ from ..actions.session_ops import (
     resume_cmd,
     terminate_session,
     to_clipboard,
+    would_take_over,
 )
 from ..data import liveness, proc, registry
 from ..data.cleanup import (
@@ -97,17 +98,14 @@ class SessionsView:
             return "Enter 预览待清理项 · Esc 返回会话列表"
         if self._mode == "preview":
             return "Enter 确认清理 · Esc 取消"
-        hidden = "h 隐藏桥接项" if self._show_hidden else "h 显示桥接项"
-        return (
-            f"Enter 接回 · s 终止 · f 分叉 · d 删除 · y 复制 · R tmux化 · "
-            f"c 清理 · {hidden} · / 过滤 · ? 帮助"
-        )
+        # High-frequency keys only; y/R/c/h move to `?` help to keep one line
+        # (D3). `r 刷新` is in the App-level footer prefix, not here.
+        return "Enter 接回 · s 停止 · f 分叉 · d 删除 · / 过滤 · ? 帮助"
 
     def _update_footer(self) -> None:
         if self.app.views[self.app._active] is not self:
             return
-        hints = self.keyhints()
-        self.app.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
+        self.app.set_hints(self.keyhints())
 
     def load(self) -> None:
         sessions = scan()
@@ -224,7 +222,7 @@ class SessionsView:
         for s in self._sessions:
             self.walker.append(SessionRow(s))
         if not self._sessions:
-            empty = "无匹配会话（按 / 清空过滤）" if self._filter_text else "暂无会话"
+            empty = "无匹配 · 按 / 改过滤 · Esc 清空" if self._filter_text else "暂无会话"
             self.walker.append(urwid.AttrMap(urwid.Text(f" {empty}"), "dead"))
         if self.walker and focus_pos is not None:
             self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
@@ -248,7 +246,7 @@ class SessionsView:
                 parts.append(f"孤儿 {orphans}")
             cleanup_text = f" · {' · '.join(parts)}"
         self.status.original_widget.set_text(
-            f" 共 {len(self._all_sessions)} 条会话 · 活 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{cleanup_text}"
+            f" 共 {len(self._all_sessions)} 条会话 · 运行 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{cleanup_text}"
         )
 
     def _rebuild_cleanup(self) -> None:
@@ -425,10 +423,32 @@ class SessionsView:
         self.app.trigger_async_refresh()
 
     def _do_terminate(self, s: Session) -> None:
-        """Terminate body, run only after the y/n confirm accepts."""
+        """Stop body, run only after the y/n confirm accepts."""
         ok = terminate_session(s)
-        self.app.notify("已终止" if ok else "终止失败")
+        self.app.notify("已停止" if ok else "停止失败")
         self.app.trigger_async_refresh()
+
+    def _do_relaunch(self, s: Session) -> None:
+        """Relaunch-into-tmux body (after confirm when it takes over a live one)."""
+        ok = relaunch_in_tmux(s)
+        self.app.notify(
+            "已转入后台 + 远控（手机/网页可接管）" if ok else "转入后台失败"
+        )
+        self.app.trigger_async_refresh()
+
+    def _resume_or_confirm(self, s: Session, fork: bool) -> None:
+        """Resume now, or confirm first when it would take over a live session.
+
+        Reads `would_take_over` (= should_kill, the single source) so the confirm
+        gate never re-derives the takeover condition (CLAUDE.md invariant).
+        """
+        if would_take_over(s, fork):
+            self.app.confirm(
+                f"接回会话「{s.label[:30]}」？将先终止原进程。",
+                lambda: self.app.exit_with_resume(s, fork),
+            )
+        else:
+            self.app.exit_with_resume(s, fork)
 
     # --- Key dispatch ---
 
@@ -474,30 +494,48 @@ class SessionsView:
             if s.current:
                 self.app.notify("不能接回当前会话")
                 return
-            self.app.exit_with_resume(s, fork=False)
+            self._resume_or_confirm(s, fork=False)
         elif key == "f" and s:
+            if s.current:
+                self.app.notify("不能分叉当前会话")
+                return
             self.app.exit_with_resume(s, fork=True)
         elif key == "s" and s:
-            # Guards run BEFORE the confirm — never ask to confirm an invalid op.
+            # Degrade gate FIRST (R2): off /proc every pid looks dead, so a stop
+            # could hit csctl's own session — refuse honestly before confirming.
+            if not proc.current_determinable():
+                self.app.notify(_DEGRADED)
+                return
             if not s.alive:
-                self.app.notify("会话不是活的")
+                self.app.notify("会话未在运行")
                 return
             if s.current:
-                self.app.notify("不能终止当前会话")
+                self.app.notify("不能停止当前会话")
                 return
             self.app.confirm(
-                f"终止会话「{s.label[:30]}」？", lambda: self._do_terminate(s)
+                f"停止会话「{s.label[:30]}」？将终止其进程。",
+                lambda: self._do_terminate(s),
             )
         elif key == "R" and s:
             if s.current:
-                self.app.notify("不能搬动当前会话")
+                self.app.notify("不能转入后台当前会话")
                 return
-            ok = relaunch_in_tmux(s)
-            self.app.notify("已搬进 tmux + 远控（手机/网页可接管）" if ok else "搬入 tmux 失败")
-            self.app.trigger_async_refresh()
+            # Degrade gate only for a takeover (live): relaunching a DEAD session
+            # kills nothing and data refuses nothing, so it stays usable off
+            # /proc (B3). `would_take_over` is the single should_kill source.
+            if would_take_over(s) and not proc.current_determinable():
+                self.app.notify(_DEGRADED)
+                return
+            if would_take_over(s):
+                self.app.confirm(
+                    f"转入后台「{s.label[:30]}」？将先终止原进程。",
+                    lambda: self._do_relaunch(s),
+                )
+            else:
+                self._do_relaunch(s)
         elif key == "d" and s:
             if s.alive:
-                self.app.notify("活会话不删，先终止")
+                self.app.notify("运行中的会话不删，先停止")
                 return
             if not proc.current_determinable():
                 self.app.notify(_DEGRADED)
@@ -530,11 +568,14 @@ class SessionsView:
 
     def _show_help(self) -> None:
         lines = [
+            "（footer 未列的键也可用）",
+            "",
             "会话操作:",
-            "  Enter  接回选中的会话（在终端中恢复）",
-            "  f      分叉会话（创建副本后接回）",
-            "  s      终止活跃会话（发送 SIGTERM，需二次确认）",
-            "  R      搬进 tmux 并开启远程控制（脱离终端，手机/网页可接管）",
+            "  Enter  接回选中的会话（在终端中恢复；接运行中的会话会先确认接管）",
+            "  f      分叉会话（创建副本后接回，不影响原会话）",
+            "  s      停止运行中的会话（发送 SIGTERM，需二次确认）",
+            "  R      转入 tmux 后台并开启远控（脱离终端，手机/网页可接管；",
+            "         接运行中的会话会先确认接管）",
             "  d      删除已结束的会话记录",
             "  y      复制接回命令到剪贴板",
             "  h      显示/隐藏桥接、SDK 会话",
@@ -542,7 +583,7 @@ class SessionsView:
             "清理与过滤:",
             "  c      打开清理子菜单",
             "  /      按关键词过滤会话列表",
-            "  r      刷新数据",
+            "  r      刷新",
             "",
             "导航:",
             "  Tab    切换标签页",

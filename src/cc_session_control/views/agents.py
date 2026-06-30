@@ -16,13 +16,19 @@ from typing import TYPE_CHECKING
 import urwid
 
 from ..actions import agent_ops
-from ..data import registry
+from ..actions.session_ops import would_take_over
+from ..data import proc, registry
 from ..models import AgentJob
 
 if TYPE_CHECKING:
     from ..data.snapshot import WorldSnapshot
 
     from ..app import App
+
+
+# R10/D7: refusal shown when "current" can't be determined (no /proc) — the
+# destructive ops are gated honestly BEFORE any confirm (mirrors SessionsView).
+_DEGRADED = "liveness 降级：破坏性操作已禁用"
 
 
 _AGENTS_HEADER = urwid.Columns([
@@ -142,7 +148,7 @@ class AgentsView:
             self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
         alive_n = sum(1 for j in self._jobs if j.host_alive)
         self.status.original_widget.set_text(
-            f" 共 {len(self._jobs)} 个后台 agent · 活 {alive_n}"
+            f" 共 {len(self._jobs)} 个后台 agent · 运行 {alive_n}"
         )
 
     def _selected(self) -> AgentJob | None:
@@ -156,8 +162,7 @@ class AgentsView:
     def _update_footer(self) -> None:
         if self.app.views[self.app._active] is not self:
             return
-        hints = self.keyhints()
-        self.app.footer_text.set_text(f" Tab 切换 · q 退出 · {hints}")
+        self.app.set_hints(self.keyhints())
 
     def _show_overlay(self, title: str, rows: list, height: int | None = None) -> None:
         walker = urwid.SimpleFocusListWalker(rows)
@@ -209,9 +214,17 @@ class AgentsView:
     def _takeover(self, job: AgentJob) -> None:
         s = agent_ops.resume_takeover(job)
         if s.current:
-            self.app.notify("不能接管当前会话")
+            self.app.notify("不能接回当前会话")
             return
-        self.app.exit_with_resume(s, fork=False)
+        # B1: takeover of a RUNNING worker kills its host pid (should_kill) — same
+        # as Sessions Enter-live. Confirm first; a dead worker resumes directly.
+        if would_take_over(s):
+            self.app.confirm(
+                f"接回后台 agent「{(job.name or job.short)[:30]}」？将先终止原进程。",
+                lambda: self.app.exit_with_resume(s, fork=False),
+            )
+        else:
+            self.app.exit_with_resume(s, fork=False)
 
     def _watch(self, job: AgentJob) -> None:
         path = agent_ops.watch(job)
@@ -232,21 +245,41 @@ class AgentsView:
 
     def _remove(self, job: AgentJob) -> None:
         if job.host_alive:
-            self.app.notify("活的 agent 不能删除，先停止")
+            self.app.notify("运行中的后台 agent 不能删除，先停止")
+            return
+        if not proc.current_determinable():
+            self.app.notify(_DEGRADED)
             return
         ok = agent_ops.remove_job(job)
-        self.app.notify("已删除" if ok else "删除失败（liveness 降级时拒绝）")
+        self.app.notify("已删除" if ok else "删除失败")
         self.app.trigger_async_refresh()
 
     def _stop(self, job: AgentJob) -> None:
-        if not job.host_alive:
-            self.app.notify("没有活的 worker 可停止")
+        # Degrade gate FIRST (R2): off /proc we can't prove this isn't csctl's own
+        # session — refuse honestly before confirming.
+        if not proc.current_determinable():
+            self.app.notify(_DEGRADED)
             return
+        if not job.host_alive:
+            self.app.notify("后台 agent 未在运行")
+            return
+        self.app.confirm(
+            f"停止后台 agent「{(job.name or job.short)[:30]}」？将终止其进程。",
+            lambda: self._do_stop(job),
+        )
+
+    def _do_stop(self, job: AgentJob) -> None:
+        """Stop body, run only after the y/n confirm accepts.
+
+        Reached only when "current" is determinable, so a False from `stop_job`
+        means no joined host pid (an unstoppable orphan) — surfaced honestly,
+        separate from the degrade refusal above (R2 split).
+        """
         ok = agent_ops.stop_job(job)
         if ok:
             self.app.notify("已发送停止信号（可能残留孤儿进程，请手动确认）")
         else:
-            self.app.notify("停止失败（无 host pid 或 liveness 降级）")
+            self.app.notify("找不到该后台 agent 的进程，无法停止")
         self.app.trigger_async_refresh()
 
     def _show_help(self) -> None:

@@ -59,6 +59,18 @@ def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
     return s.cwd, args, should_kill
 
 
+def would_take_over(s: Session, fork: bool = False) -> bool:
+    """Whether resuming/relaunching `s` would first kill a live process (takeover).
+
+    The single source of the "needs confirmation" decision for the UI: it reads
+    `_resume_plan`'s `should_kill` so views never re-derive `s.alive and not
+    s.current` themselves (CLAUDE.md: should_kill is single-point — re-derivation
+    was the old divergence). `do_resume`/`relaunch_in_tmux` and the confirm gate
+    thus agree by construction.
+    """
+    return _resume_plan(s, fork)[2]
+
+
 def resume_cmd(s: Session, fork: bool = False) -> str:
     cwd, args, should_kill = _resume_plan(s, fork)
     parts: list[str] = []

@@ -13,6 +13,8 @@ class FakeApp:
     def __init__(self):
         self.result = None
         self._notifications = []
+        self._confirm_messages = []
+        self._last_confirm = None
         self.footer_text = urwid.Text("")
         self.footer = urwid.AttrMap(self.footer_text, "footer")
         self.frame = urwid.Frame(urwid.Text("body"), footer=self.footer)
@@ -22,11 +24,20 @@ class FakeApp:
     def notify(self, msg, seconds=3):
         self._notifications.append(msg)
 
+    def confirm(self, message, on_yes):
+        # Mirror App.confirm: record the prompt and capture the callback so a test
+        # can simulate pressing `y` via `app._last_confirm()`.
+        self._confirm_messages.append(message)
+        self._last_confirm = on_yes
+
     def exit_with_resume(self, session, fork=False):
         self.result = ("resume", session, fork)
 
     def trigger_async_refresh(self):
         pass
+
+    def set_hints(self, hints):
+        self.footer_text.set_text(hints)
 
     def _restore_footer(self):
         self.frame.footer = self.footer
@@ -176,13 +187,35 @@ def test_o_key_takeover_refuses_current(monkeypatch):
     app, view = _make_view([_make_job()])
     view.handle_key("o")
     assert app.result is None
-    assert any("不能接管当前会话" in m for m in app._notifications)
+    assert any("不能接回当前会话" in m for m in app._notifications)
 
 
-def _takeover_session(current):
+def _takeover_session(current, alive=False):
     from cc_session_control.models import Session
     return Session(sid="x", cwd="/tmp", label="x", mtime=0.0, prompts=0,
-                   pid=None, alive=False, current=current, source="bg")
+                   pid=999 if alive else None, alive=alive, current=current, source="bg")
+
+
+def test_o_key_live_worker_confirms_takeover(monkeypatch):
+    # B1: takeover of a RUNNING worker kills its host pid → must confirm first.
+    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
+                        lambda job: _takeover_session(current=False, alive=True))
+    app, view = _make_view([_make_job(host_alive=True)])
+    view.handle_key("o")
+    assert app.result is None  # not resumed yet
+    assert app._confirm_messages and "接回后台 agent" in app._confirm_messages[0]
+    assert "终止原进程" in app._confirm_messages[0]
+    app._last_confirm()  # simulate pressing y
+    assert app.result is not None and app.result[0] == "resume"
+
+
+def test_o_key_dead_worker_takes_over_directly(monkeypatch):
+    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
+                        lambda job: _takeover_session(current=False, alive=False))
+    app, view = _make_view([_make_job(host_alive=False)])
+    view.handle_key("o")
+    assert app._confirm_messages == []  # dead worker: no takeover, no confirm
+    assert app.result is not None and app.result[0] == "resume"
 
 
 def test_d_key_refuses_live_job(monkeypatch):
@@ -192,7 +225,7 @@ def test_d_key_refuses_live_job(monkeypatch):
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("d")
     assert removed["n"] == 0
-    assert any("活的 agent 不能删除" in m for m in app._notifications)
+    assert any("运行中的后台 agent 不能删除" in m for m in app._notifications)
 
 
 def test_d_key_removes_settled_job(monkeypatch):
@@ -203,20 +236,27 @@ def test_d_key_removes_settled_job(monkeypatch):
 
 
 def test_s_key_stops_live_with_orphan_warning(monkeypatch):
+    # Unified confirm: `s` on a live worker confirms first, then `_last_confirm()`
+    # runs the stop body whose notify carries the orphan-risk warning.
+    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(av_mod.agent_ops, "stop_job", lambda job: True)
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("s")
+    assert app._confirm_messages  # a confirm is requested first
+    app._last_confirm()           # simulate pressing y
     assert any("孤儿" in m for m in app._notifications)
 
 
 def test_s_key_refuses_dead_worker(monkeypatch):
+    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: True)
     stopped = {"n": 0}
     monkeypatch.setattr(av_mod.agent_ops, "stop_job",
                         lambda job: stopped.__setitem__("n", stopped["n"] + 1) or True)
     app, view = _make_view([_make_job(host_alive=False)])
     view.handle_key("s")
     assert stopped["n"] == 0
-    assert any("没有活的 worker" in m for m in app._notifications)
+    assert app._confirm_messages == []  # guard fires before any confirm
+    assert any("后台 agent 未在运行" in m for m in app._notifications)
 
 
 def test_help_mode_and_return():

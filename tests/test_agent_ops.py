@@ -214,11 +214,11 @@ def test_job_host_dead_when_no_live_match(monkeypatch):
     assert ao.job_host(_make_job(sid="sid-a")) == (100, False)
 
 
-# --- AC4: help/keyhints carry orphan-risk warning + "接管" label ---
+# --- AC4: help/keyhints carry orphan-risk warning + "接回" label ---
 
 def test_keyhints_contains_takeover_label():
-    assert "接管" in ao.KEYHINTS
-    assert ao.TAKEOVER_LABEL == "接管"
+    assert "接回" in ao.KEYHINTS
+    assert ao.TAKEOVER_LABEL == "接回"
 
 
 def test_help_contains_orphan_risk_warning():
