@@ -23,10 +23,6 @@ Built with [urwid](https://urwid.org/).
 
 ## Installation
 
-> **Coming soon to PyPI.** The package is not published yet. Until the first
-> release lands, install from GitHub (see *Latest `master` build* below). Once
-> published, the commands below will work.
-
 Install the latest published release:
 
 ```bash
@@ -40,8 +36,7 @@ cc-session-control`).
 
 ### Latest `master` build
 
-Until the package is on PyPI — or to try the newest `master` before it is
-released — install from GitHub:
+To try the newest `master` before it is released, install from GitHub:
 
 ```bash
 uv tool install --reinstall git+https://github.com/dzshzx/cc-session-control.git
