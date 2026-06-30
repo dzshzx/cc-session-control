@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 (2026-06-30)
+
+- Docs: drop the "Coming soon to PyPI" banner from the README now that the
+  package is published, and reword the "Latest `master` build" section. This
+  release exists mainly to refresh the rendered project description on PyPI; no
+  runtime changes since 0.4.0.
+
 ## 0.4.0 (2026-06-30)
 
 Major rework into a machine-wide operator panel for Claude Code's own
