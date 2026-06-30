@@ -9,21 +9,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# End users install the published release from PyPI (live since 0.4.0):
-#   uv tool install cc-session-control      # or: pipx install cc-session-control
-# On THIS machine the maintainer instead runs the public GitHub HEAD build to
-# exercise unreleased master — ALWAYS from the public repo, never a local
-# editable/direct install (keeps the tool you run decoupled from your checkout).
-# Requires Python 3.12+.
-uv tool install git+https://github.com/dzshzx/cc-session-control.git
-#   On this machine csctl is a uv tool at ~/.local/bin/csctl — it is NOT mise-managed
-#   (there is no mise pin for it; `mise install`/`mise uninstall …pipx…` are no-ops here).
-#   After pushing, refresh the installed build from the latest GitHub HEAD with a FORCED
-#   rebuild (plain `uv tool upgrade` may keep the cached git ref and skip the new HEAD):
+# csctl is a uv tool. Install / refresh it FROM PyPI — the package is published
+# and this machine now tracks the PyPI release (not GitHub HEAD). Requires Python 3.12+.
+uv tool install cc-session-control          # first install (or: pipx install cc-session-control)
+uv tool upgrade cc-session-control          # refresh to the latest published release
+#   csctl is a uv tool at ~/.local/bin/csctl — it is NOT mise-managed (no mise pin;
+#   `mise install`/`mise uninstall …pipx…` are no-ops here). Verify: csctl --version
+#   ESCAPE HATCH — to run UNRELEASED master before a tag, install the GitHub HEAD
+#   build with a FORCED rebuild (plain `uv tool upgrade` keeps the cached git ref):
 #     uv tool install --reinstall git+https://github.com/dzshzx/cc-session-control.git
-#   Verify the running build: csctl --version
+#   This is no longer the default — prefer the PyPI release above.
 
-# Run the installed TUI (the GitHub build)
+# Run the installed TUI
 csctl
 
 # Dev/test ONLY — uv manages a transient .venv here; this is NOT how csctl is installed
