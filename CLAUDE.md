@@ -9,8 +9,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install / upgrade csctl FOR USE — ALWAYS from the public GitHub repo, never a
-# local editable/direct install (keeps the tool you run decoupled from your checkout).
+# End users install the published release from PyPI (live since 0.4.0):
+#   uv tool install cc-session-control      # or: pipx install cc-session-control
+# On THIS machine the maintainer instead runs the public GitHub HEAD build to
+# exercise unreleased master — ALWAYS from the public repo, never a local
+# editable/direct install (keeps the tool you run decoupled from your checkout).
 # Requires Python 3.12+.
 uv tool install git+https://github.com/dzshzx/cc-session-control.git
 #   On this machine csctl is a uv tool at ~/.local/bin/csctl — it is NOT mise-managed
@@ -149,6 +152,16 @@ Surface map: the Sessions submenu exposes empty/short session prune + sid-keyed 
 - Data functions swallow errors and return safe empties (`[]`, `{}`, `False`, `None`) rather than raising — the TUI must never crash on a malformed transcript or missing tmux/claude.
 - Destructive cleanup always previews first: `_enter_preview` shows targets in an `Overlay`, `_confirm_cleanup` executes on a second `Enter`.
 - Config is a single global `cfg = Config()` in `config.py`; tests override paths by monkeypatching `cfg` attributes (e.g. `cfg.claude_home`, `cfg.workspace`).
+
+## Releasing & CI
+
+Full maintainer guide: `docs/releasing.md`. The non-obvious bits:
+
+- **Version is single-sourced** in `src/cc_session_control/__init__.py` (`pyproject.toml` derives it via setuptools dynamic). Bump it ONLY through `python scripts/bump_version.py {patch|minor|major}` or `--set X.Y.Z` — it edits that one file. Then add a `CHANGELOG.md` entry.
+- **Tagging publishes.** Pushing an annotated `vX.Y.Z` tag (matching `__version__`) triggers `.github/workflows/release.yml`, which re-runs the checks, builds, smoke-tests the wheel + sdist, and publishes to **PyPI via Trusted Publishing** (GitHub environment `pypi`, OIDC — no API token stored). The PyPI trusted publisher is already configured (owner `dzshzx`, repo `cc-session-control`, workflow `release.yml`, env `pypi`).
+- **CI** (`.github/workflows/ci.yml`) runs the same test + `/home/` grep + build + smoke gate on every push to `master` and PR.
+- **TestPyPI dry run** (`.github/workflows/release-testpypi.yml`) is a manual `workflow_dispatch` that publishes to TestPyPI (env `testpypi`) without touching the real index — optional rehearsal before a real tag.
+- **Gotchas:** a published version is immutable — never overwrite it, bump to the next patch instead. `dist/` is gitignored; the local pre-release sequence mirrors the workflow (`uv run --extra dev pytest tests/`, the `/home/` grep, `uv build --no-sources`, wheel/sdist `csctl --version`, `uvx twine check dist/*`). Right after a publish, `uv` may not see the new version until you bust its index cache with `uv ... --refresh`.
 
 ## Trellis
 
