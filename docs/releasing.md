@@ -39,13 +39,37 @@ Workflow name: release.yml
 Environment name: pypi
 ```
 
-For a dry run on TestPyPI, create a separate workflow or temporarily change the
-publish step to use:
+### TestPyPI dry run (recommended before the first real publish)
 
-```yaml
-with:
-  repository-url: https://test.pypi.org/legacy/
+A dedicated workflow, `.github/workflows/release-testpypi.yml`, publishes the
+full pipeline to TestPyPI on a manual `workflow_dispatch`. TestPyPI is a
+separate index from PyPI, so uploading a version there does **not** consume that
+version on the real PyPI — you can dry-run `0.4.0` on TestPyPI and still publish
+`0.4.0` to PyPI afterward.
+
+One-time setup, mirroring the PyPI steps above but on TestPyPI:
+
+1. Create a pending publisher (or the project) for `cc-session-control` on
+   <https://test.pypi.org>.
+2. Create a GitHub environment named `testpypi` in this repository.
+3. Add a trusted publisher on the TestPyPI project:
+
+```text
+Publisher: GitHub Actions
+Owner: dzshzx
+Repository: cc-session-control
+Workflow name: release-testpypi.yml
+Environment name: testpypi
 ```
+
+Then trigger it from the Actions tab, or:
+
+```bash
+gh workflow run release-testpypi.yml --ref master
+```
+
+Verify the package page at <https://test.pypi.org/project/cc-session-control/>
+before tagging a real release.
 
 Do not store a long-lived PyPI token in GitHub secrets for the normal release
 path.
