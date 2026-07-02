@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `cc-session-control` (CLI: `csctl`) is a machine-wide operator panel for **Claude Code's own** sessions, background agents, and Remote Control servers. It reads Claude Code's on-disk state (`~/.claude/projects/*/*.jsonl` transcripts, `~/.claude/sessions/*.json` + `~/.claude/jobs/*/state.json` registries, `~/.claude.json`), walks `/proc`, and shells out to the `claude` CLI and `tmux` — it is an operator tool *for* Claude Code, not a general app. The TUI has three tabs: **会话 (Sessions)**, **后台 (Background agents)**, and **远程控制 (Remote Control)**; cleanup is a submenu inside Sessions, not a tab.
 
+`CONTEXT.md` is the **domain glossary / ubiquitous language** for this codebase — read it first for the precise definitions (and `_Avoid_:` anti-examples) of *Live Session*, *Bridge Environment*, and especially the *Session Remote Control* vs *Project RC Server* distinction that the architecture below assumes.
+
 ## Commands
 
 ```bash
@@ -33,7 +35,19 @@ uv run csctl                                                                    
 grep -rn --include='*.py' '/home/' src/      # no hardcoded paths in product source
 ```
 
-Constraints from `CONTRIBUTING.md`: keep each source file **under 600 lines**, use type hints, no hardcoded paths.
+`csctl` is more than the TUI — running it with no subcommand launches the TUI, but `cli.py` also exposes a headless CLI (subcommand output is English; see the Conventions note):
+
+```bash
+csctl rc status                              # RC status for all projects
+csctl rc add <proj> | rc rm <proj>           # add/remove a project from the auto-start list (and start/stop it)
+csctl rc up                                  # start every project on the auto-start list
+csctl rc stop <proj> | rc list               # stop one project / show the enabled list
+csctl prune [--sweep-orphans] [--sweep-zombies] [--sweep-aged] [--apply]  # cleanup; dry-run unless --apply
+csctl agents                                 # list background agents
+csctl env                                    # list bridge environments (current + orphan)
+```
+
+Constraints from `CONTRIBUTING.md`: keep each source file **under 600 lines**, use type hints, no hardcoded paths. (`views/sessions.py` is the largest at ~595 lines — near the limit, so growing it likely means splitting first.)
 
 ## Architecture
 
@@ -48,6 +62,8 @@ The UI toolkit is **urwid** (the only runtime dependency is `urwid>=2.0.0`). Thr
   Returns the dataclasses in `models.py` (`Session`, `SessionProc`, `AgentJob`, `LiveInfo`, `RCProject`, `RCServer`, `EnvRecord`, `BridgeEnv`).
 - **`actions/`** — operations that don't belong in `data/`: `session_ops.py` (`terminate_session`, `resume_cmd`/`do_resume`, `relaunch_in_tmux`, `to_clipboard`) and `agent_ops.py` (background-agent lifecycle: `respawn`/`remove_job`/`watch`/`resume_takeover`/`stop_job`, with `job_host` joining sid→`sessions/<pid>.json`).
 - **`views/`** — urwid widgets per tab (`sessions.py` + `_session_row.py`, `agents.py`, `rc.py`). `app.py` orchestrates them; `cli.py` is the argparse entry point; `config.py` holds the global `cfg` singleton **and is the single path authority** (`cfg.sessions_dir`/`jobs_dir`/`environments_ledger`/the cleanup dirs/`cleanup_age_days`) — never inline `claude_home / "..."` elsewhere.
+
+Two top-level helpers sit outside those packages: `clipboard.py` is the **cross-platform clipboard seam** (auto-detects a backend: WSL `clip.exe` → `pbcopy` → `wl-copy` → `xclip`, returns `False` when none is available); `session_ops.to_clipboard` is a one-line delegate to it, so put clipboard backend changes here, not in `actions/`. `__main__.py` makes `python -m cc_session_control` equivalent to the `csctl` entry point.
 
 The invariant is **import direction, not purity**: `views` import from `data`/`actions`; `data`/`actions` never import upward; within `data` the DAG above is one-way (notably `environments` never imports `rc`). There is no separate "pure read vs side effect" split — `data/` holds both.
 
