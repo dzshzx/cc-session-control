@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0 (2026-07-02)
+
+Absorbs the standalone "claude-session-doctor" skill scripts into csctl proper.
+
+- **`csctl resume [keyword]`** — headless resume rescue: lists sessions across
+  all project directories (including sdk-ts/bridge sessions the native
+  `/resume` picker hides) and prints ready-to-copy resume commands with the
+  correct `cd` prefix. Dead sessions get `cd … && claude --resume <id>`; live
+  sessions get the takeover form (`kill <pid> && sleep 1 && …`); the session
+  csctl runs inside is flagged and never given a kill command. Keyword matches
+  sid/cwd/title first, then falls back to scanning the transcript body.
+  Paged (`--page` / `--limit`, default 20 per page) with `--all` to disable.
+- **`csctl skill install|uninstall`** — the package now bundles a Claude Code
+  agent skill (SKILL.md with the session mental model, resume rules, and
+  cleanup guidance, routed to csctl subcommands). Install is explicit — no
+  postinstall side effects; an existing skill directory is only replaced with
+  `--force`.
+
 ## 0.4.1 (2026-06-30)
 
 - Docs: drop the "Coming soon to PyPI" banner from the README now that the

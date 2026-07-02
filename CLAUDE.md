@@ -43,6 +43,8 @@ csctl rc add <proj> | rc rm <proj>           # add/remove a project from the aut
 csctl rc up                                  # start every project on the auto-start list
 csctl rc stop <proj> | rc list               # stop one project / show the enabled list
 csctl prune [--sweep-orphans] [--sweep-zombies] [--sweep-aged] [--apply]  # cleanup; dry-run unless --apply
+csctl resume [keyword] [--page N] [--limit N] [--all]  # cross-directory resume commands (incl. hidden sessions; body-search fallback)
+csctl skill install [--force] | skill uninstall        # bundled Claude Code skill -> ~/.claude/skills/claude-session-doctor
 csctl agents                                 # list background agents
 csctl env                                    # list bridge environments (current + orphan)
 ```
@@ -60,7 +62,7 @@ The UI toolkit is **urwid** (the only runtime dependency is `urwid>=2.0.0`). Thr
   - `agents.py` is a **zero-logic re-export shim** for `liveness.alive_map`/`invalidate_cache` (kept so old imports + the `session_ops.invalidate_cache` monkeypatch keep working).
   - `snapshot.py` sits ABOVE the rest (composes them into one `WorldSnapshot`); nothing in `data/` imports it (only `app`/`views` do).
   Returns the dataclasses in `models.py` (`Session`, `SessionProc`, `AgentJob`, `LiveInfo`, `RCProject`, `RCServer`, `EnvRecord`, `BridgeEnv`).
-- **`actions/`** — operations that don't belong in `data/`: `session_ops.py` (`terminate_session`, `resume_cmd`/`do_resume`, `relaunch_in_tmux`, `to_clipboard`) and `agent_ops.py` (background-agent lifecycle: `respawn`/`remove_job`/`watch`/`resume_takeover`/`stop_job`, with `job_host` joining sid→`sessions/<pid>.json`).
+- **`actions/`** — operations that don't belong in `data/`: `session_ops.py` (`terminate_session`, `resume_cmd`/`do_resume`, `relaunch_in_tmux`, `to_clipboard`), `agent_ops.py` (background-agent lifecycle: `respawn`/`remove_job`/`watch`/`resume_takeover`/`stop_job`, with `job_host` joining sid→`sessions/<pid>.json`), `resume_list.py` (headless `csctl resume` selection/paging/formatting — command synthesis stays in `session_ops.resume_cmd`, never re-derived here), and `skill_ops.py` (bundled-skill install/uninstall; the skill source ships as package data `skill/SKILL.md`).
 - **`views/`** — urwid widgets per tab (`sessions.py` + `_session_row.py`, `agents.py`, `rc.py`). `app.py` orchestrates them; `cli.py` is the argparse entry point; `config.py` holds the global `cfg` singleton **and is the single path authority** (`cfg.sessions_dir`/`jobs_dir`/`environments_ledger`/the cleanup dirs/`cleanup_age_days`) — never inline `claude_home / "..."` elsewhere.
 
 Two top-level helpers sit outside those packages: `clipboard.py` is the **cross-platform clipboard seam** (auto-detects a backend: WSL `clip.exe` → `pbcopy` → `wl-copy` → `xclip`, returns `False` when none is available); `session_ops.to_clipboard` is a one-line delegate to it, so put clipboard backend changes here, not in `actions/`. `__main__.py` makes `python -m cc_session_control` equivalent to the `csctl` entry point.

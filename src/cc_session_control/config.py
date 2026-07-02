@@ -104,6 +104,11 @@ class Config:
     def tasks_dir(self) -> Path:
         return self.claude_home / "tasks"
 
+    @property
+    def skills_dir(self) -> Path:
+        """User-level Claude Code agent skills (`skills/<name>/SKILL.md`)."""
+        return self.claude_home / "skills"
+
 
 def _detect_workspace(claude_json: Path) -> Path:
     env = os.environ.get("CSCTL_WORKSPACE")

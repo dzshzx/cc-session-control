@@ -66,6 +66,19 @@ csctl rc list            # Show auto-start list
 csctl prune                          # Dry run: show stats
 csctl prune --max-prompts 1 --apply  # Delete sessions with ≤1 prompt
 
+# Resume rescue (headless): list sessions across directories with
+# ready-to-copy resume commands (native /resume only searches the cwd
+# and hides sdk-ts/bridge sessions)
+csctl resume                 # Page 1, 20 per page
+csctl resume mybug           # Keyword: sid/cwd/title, then transcript body
+csctl resume --page 2        # Next page
+csctl resume --all           # Everything, no paging
+
+# Bundled Claude Code skill (session-doctor knowledge for the agent)
+csctl skill install          # Write SKILL.md to ~/.claude/skills/
+csctl skill install --force  # Replace an existing skill directory
+csctl skill uninstall
+
 # Options
 csctl --workspace ~/projects   # Override workspace root
 csctl --version

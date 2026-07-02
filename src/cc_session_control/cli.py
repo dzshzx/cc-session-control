@@ -41,6 +41,23 @@ def _build_parser() -> argparse.ArgumentParser:
     prune_parser.add_argument("--sweep-zombies", action="store_true", help="Remove zombie sessions/<pid>.json files (dead procs; keeps current + alive pids)")
     prune_parser.add_argument("--sweep-aged", action="store_true", help="Remove age-keyed global entries older than cleanup_age_days")
 
+    # resume subcommand (headless: list sessions + print ready-to-copy commands)
+    resume_parser = sub.add_parser(
+        "resume",
+        help="List resumable sessions across directories and print resume commands",
+    )
+    resume_parser.add_argument("keyword", nargs="?", default="", help="Filter: sid/cwd/title, then transcript body")
+    resume_parser.add_argument("--page", type=int, default=1, help="Page number (default: 1)")
+    resume_parser.add_argument("--limit", type=int, default=20, help="Sessions per page (default: 20)")
+    resume_parser.add_argument("--all", action="store_true", dest="all_pages", help="List everything, no paging")
+
+    # skill subcommand group (bundled Claude Code agent skill)
+    skill_parser = sub.add_parser("skill", help="Manage the bundled Claude Code skill")
+    skill_sub = skill_parser.add_subparsers(dest="skill_command")
+    skill_install = skill_sub.add_parser("install", help="Install SKILL.md into ~/.claude/skills/")
+    skill_install.add_argument("--force", action="store_true", help="Replace an existing skill directory")
+    skill_sub.add_parser("uninstall", help="Remove the installed skill directory")
+
     # agents subcommand
     sub.add_parser("agents", help="List background agents")
 
@@ -210,6 +227,29 @@ def _cmd_prune_aged(args: argparse.Namespace) -> None:
     print(f"Swept {count} aged entr(y/ies).")
 
 
+def _cmd_resume(args: argparse.Namespace) -> None:
+    from .actions.resume_list import render
+    from .data.sessions import scan
+
+    print(render(scan(), keyword=args.keyword, page=args.page,
+                 limit=args.limit, all_pages=args.all_pages))
+
+
+def _cmd_skill(args: argparse.Namespace) -> None:
+    from .actions import skill_ops
+
+    if args.skill_command == "install":
+        ok, msg = skill_ops.install(force=args.force)
+    elif args.skill_command == "uninstall":
+        ok, msg = skill_ops.uninstall()
+    else:
+        print("Usage: csctl skill <install|uninstall>")
+        sys.exit(1)
+    print(msg)
+    if not ok:
+        sys.exit(1)
+
+
 def _cmd_agents(args: argparse.Namespace) -> None:
     from .actions.agent_ops import job_host
     from .data.registry import read_agent_jobs
@@ -278,6 +318,10 @@ def main() -> None:
         _cmd_rc(args)
     elif args.command == "prune":
         _cmd_prune(args)
+    elif args.command == "resume":
+        _cmd_resume(args)
+    elif args.command == "skill":
+        _cmd_skill(args)
     elif args.command == "agents":
         _cmd_agents(args)
     elif args.command == "env":
