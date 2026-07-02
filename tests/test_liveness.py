@@ -96,6 +96,23 @@ def test_live_index_agent_only_sid():
     assert idx["agentsid"].proc_alive is False
 
 
+def test_live_index_pidless_agents_entry_not_alive():
+    # `claude agents --json` keeps listing settled/blocked bg sessions but with
+    # NO pid — those are not alive (nothing to signal; terminate would always
+    # fail). Judged by pid non-empty, per the session-doctor contract.
+    dead_proc = _sp("bgsid", 629638, "123", kind="bg")
+    idx = liveness.live_index([dead_proc], {"bgsid": None})
+    assert idx["bgsid"].alive is False
+    assert idx["bgsid"].pid is None
+
+
+def test_live_index_pidless_agent_only_sid_not_alive():
+    # Same, without any sessions/*.json backing the sid.
+    idx = liveness.live_index([], {"bgsid": None})
+    assert idx["bgsid"].alive is False
+    assert idx["bgsid"].pids == []
+
+
 def test_live_index_source_buckets():
     procs = [
         _sp("a", 1, "1", proc_alive=True, kind="bg", entrypoint="cli"),

@@ -122,19 +122,24 @@ def live_index(
         )
 
     # `claude agents --json` is authoritative for liveness: it covers agent-only
-    # sids and rescues the degraded (no-/proc) path.
+    # sids and rescues the degraded (no-/proc) path. But it also keeps listing
+    # settled/blocked bg sessions WITHOUT a pid — those are not alive (there is
+    # no process to signal; terminate/stop would always fail), so alive is
+    # judged by pid non-empty.
     for sid, pid in agents_map.items():
         if not sid:
             continue
         info = index.get(sid)
         if info is None:
             index[sid] = LiveInfo(
-                sid=sid, pid=pid, alive=True, pids=[pid] if pid else []
+                sid=sid, pid=pid, alive=bool(pid), pids=[pid] if pid else []
             )
             continue
+        if not pid:
+            continue  # pid-less entry: the proc-based verdict stands
         info.alive = True
         if info.pid is None:
             info.pid = pid
-        if pid and pid not in info.pids:
+        if pid not in info.pids:
             info.pids.append(pid)
     return index
