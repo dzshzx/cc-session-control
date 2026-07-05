@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.1 (2026-07-05)
+
+Liveness false-positive fixes, a new foreground-tmux resume tier, and a
+spec-driven TUI polish pass.
+
+- **Fix: sessions no longer show as running after they stopped.** Two holes in
+  the `claude agents --json` merge are closed: pid-less entries (settled bg
+  sessions the CLI keeps listing) no longer count as alive, and entries whose
+  pid is dead (`/proc/<pid>` gone before claude's registry caught up) are
+  scrubbed at cache-refresh time. Degraded (no-`/proc`) platforms keep the old
+  behavior — there the agents list is the only liveness source.
+- **`t` key — tmux 接回 (foreground tmux resume).** The middle tier between
+  `Enter` (bare-terminal resume, dies with the terminal) and `R` (background +
+  remote control): resumes the session inside a `cc` tmux window (plain resume,
+  no `--remote-control`, so no cloud-env entries pile up) and brings your
+  terminal into it — a dropped SSH/phone connection no longer kills the
+  session. Sessions already living in a tmux pane are entered in place (no
+  kill, no confirm); live bare-terminal sessions go through the usual takeover
+  confirm. Outside tmux it execs `tmux attach`; inside it switches the client
+  and csctl exits.
+- **Footer now lists the full key table per tab** (wrapping to extra rows on
+  narrow terminals) instead of a trimmed high-frequency subset; `?` keeps the
+  detailed semantics.
+- **TUI polish per frontend design constraints:** session state is
+  triple-encoded (`▸● 忙` / `● 闲` / `○ 停` — shape + word + color, busy/idle
+  now visible), crashed RC panes show `✖ 已退出` in red, numeric/time columns
+  right-align, uniform 2-cell column gutters, palette collapsed to one
+  semantic set with ≥4.5:1 contrast foregrounds, and each tab's header/data
+  columns are generated from a single spec so they can never drift.
+
 ## 0.5.0 (2026-07-02)
 
 Absorbs the standalone "claude-session-doctor" skill scripts into csctl proper.
