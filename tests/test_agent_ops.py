@@ -42,13 +42,14 @@ def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
     monkeypatch.setattr(
         ao.rc, "run_in_tmux",
         lambda session, window, cmd: captured.update(
-            session=session, window=window, cmd=cmd) or True,
+            session=session, window=window, cmd=cmd) or "proj:1",
     )
     job = _make_job(resume_sid="sid-xyz", respawn_flags=["--bg-extra"])
     out = ao.respawn(job)
     assert out == "claude --resume sid-xyz --bg-extra --bg"
     assert captured["cmd"] == out
-    assert captured["session"] == ao.cfg.tmux_session
+    # per-project grouping: the job's cwd basename, not one shared session
+    assert captured["session"] == "proj"
 
 
 # --- remove_job: settled only, current-determinable only ---

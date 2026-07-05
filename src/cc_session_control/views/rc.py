@@ -1,18 +1,19 @@
 """RC view — the 项目 tab (workspace projects + their Remote Control surface).
 
-Shows three things for one machine-wide Remote Control surface:
+Shows two things:
   1. managed projects (RCProject) with the tri-state `remoteControlAtStartup`
      and `remoteControlSpawnMode`, plus the start/stop/autostart keys and `t`
      (start a NEW claude session in the project dir inside tmux, then enter it);
   2. project RC servers (RCServer) discovered via tmux ∪ /proc, badged
-     managed/external — external servers are READ-ONLY (no takeover/restart key);
-  3. the bridge-environment ledger (current vs orphan). Orphans are labelled
-     "云端需手动删除": csctl has NO local deregister — deletion is manual on
-     claude.ai/code (capability red line / AC9).
+     managed/external — external servers are READ-ONLY (no takeover/restart key).
 
-Only project rows are actionable. Server and environment rows are display-only,
-so no key toggles RC on a running session, takes over an external server, or
-deregisters a cloud environment.
+The bridge-environment ledger is deliberately NOT shown here: csctl cannot
+deregister cloud environments, so the TUI doesn't list what it can't act on.
+The ledger keeps recording in the background (snapshot upserts every cycle) and
+stays queryable via `csctl env`.
+
+Only project rows are actionable. Server rows are display-only, so no key
+toggles RC on a running session or takes over an external server.
 """
 
 from __future__ import annotations
@@ -21,9 +22,9 @@ from typing import TYPE_CHECKING
 
 import urwid
 
-from ..data import environments, rc
+from ..data import rc
 from ..data.rc import set_rc_at_startup
-from ..models import BridgeEnv, RCProject, RCServer
+from ..models import RCProject, RCServer
 from ._colspec import header_columns, row_columns
 
 if TYPE_CHECKING:
@@ -40,18 +41,6 @@ _RC_TRISTATE = {True: "开", False: "关", None: "未设置"}
 # `c` cycles the per-project remoteControlAtStartup tri-state in full so the user
 # can return to an explicit True (the old 2-cycle could never set True again).
 _NEXT_TRISTATE = {None: True, True: False, False: None}
-
-# Literal required in the UI by AC9 — the manual-delete red line.
-_MANUAL_DELETE = "云端需手动删除"
-
-# Red-line #5 honesty: the orphan ledger can only see envs minted while csctl was
-# running, and csctl can never deregister a cloud env. Surfaced in the env-ledger
-# section AND the help so the incompleteness is never silently implied as complete.
-_LEDGER_CAVEAT = (
-    "  注：孤儿清单不完整——csctl 未运行期间铸造的环境无法追踪；"
-    "且 csctl 不能注销云端环境，需在 claude.ai/code 手动删除。"
-)
-
 
 # One spec drives the tab header + project rows (_colspec.py).
 _PROJECT_COLS = [
@@ -129,45 +118,13 @@ class ServerRow(urwid.WidgetWrap):
         return key
 
 
-class EnvRow(urwid.WidgetWrap):
-    """A bridge-environment ledger entry (current/orphan) — display only."""
-
-    def __init__(self, env: BridgeEnv) -> None:
-        self.env = env
-        if env.status == "current":
-            mark = "● 绑定中"
-            hint = ""
-        else:
-            mark = "○ 孤儿"
-            hint = _MANUAL_DELETE
-        cols = row_columns(
-            [(10, "left", ""), (("weight", 2), "left", ""),
-             (("weight", 2), "left", ""), (("weight", 2), "left", "")],
-            [mark, env.env_id, env.bound_sid or "-", hint],
-        )
-        attr = "alive" if env.status == "current" else "dead"
-        mapped = urwid.AttrMap(cols, attr, focus_map=_RC_FOCUS)
-        super().__init__(mapped)
-
-    def selectable(self) -> bool:
-        # P4: display-only ledger row — focus SKIPS it (csctl has no deregister).
-        return False
-
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
-
-
 class RCView:
     def __init__(self, app: App) -> None:
         self.app = app
         self._projects: list[RCProject] = []
         self._servers: list[RCServer] = []
-        self._current: list[BridgeEnv] = []
-        self._orphans: list[BridgeEnv] = []
         self._pending: list[RCProject] | None = None
         self._pending_servers: list[RCServer] | None = None
-        self._pending_current: list[BridgeEnv] | None = None
-        self._pending_orphans: list[BridgeEnv] | None = None
         self._loaded = False
         self._help = False
 
@@ -190,41 +147,18 @@ class RCView:
 
     def load(self) -> None:
         self._projects = rc.scan()
-        self._servers, self._current, self._orphans = self._scan_extras()
+        self._servers = rc.scan_servers()
         self._loaded = True
         self._rebuild()
-
-    def _scan_extras(self) -> tuple[list[RCServer], list[BridgeEnv], list[BridgeEnv]]:
-        """Self-fetch the servers + environment ledger (no-snapshot path).
-
-        CURRENT uses the alive-gated `observe_live` so a zombie session's stale
-        bridge is not shown as bound (R3/R6); ORPHAN uses the bridge-truthy,
-        FILE-REFERENCED `observe` so it is precisely `ledger − file-referenced`
-        (an env still referenced by a file is NOT an orphan, even if its owner is
-        currently dead).
-        """
-        servers = rc.scan_servers()
-        observed = environments.observe_live(rc_servers=servers)
-        file_referenced = environments.observe(rc_servers=servers)
-        return (
-            servers,
-            environments.current_envs(observed),
-            environments.orphan_envs(file_referenced),
-        )
 
     def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
         """Worker-thread data fetch. Only sets pending fields — no widgets."""
         if snapshot is not None:
             self.set_pending(snapshot.rc_projects)
             self._pending_servers = snapshot.rc_servers
-            self._pending_current = environments.current_envs(snapshot.observed_envs)
-            self._pending_orphans = environments.orphan_envs(snapshot.file_referenced_envs)
         else:
             self.set_pending(rc.scan())
-            servers, current, orphans = self._scan_extras()
-            self._pending_servers = servers
-            self._pending_current = current
-            self._pending_orphans = orphans
+            self._pending_servers = rc.scan_servers()
 
     def set_pending(self, projects: list[RCProject]) -> None:
         self._pending = projects
@@ -237,12 +171,6 @@ class RCView:
             if self._pending_servers is not None:
                 self._servers = self._pending_servers
                 self._pending_servers = None
-            if self._pending_current is not None:
-                self._current = self._pending_current
-                self._pending_current = None
-            if self._pending_orphans is not None:
-                self._orphans = self._pending_orphans
-                self._pending_orphans = None
             if not self._help:
                 self._rebuild()
 
@@ -256,13 +184,6 @@ class RCView:
             self.walker.append(_DividerRow("── RC 服务（仅展示 · 托管见项目行 · 外部不可接管）──"))
             for s in self._servers:
                 self.walker.append(ServerRow(s))
-        if self._current or self._orphans:
-            self.walker.append(_DividerRow(f"── 环境台账（{_MANUAL_DELETE}）──"))
-            self.walker.append(_DividerRow(_LEDGER_CAVEAT))
-            for e in self._current:
-                self.walker.append(EnvRow(e))
-            for e in self._orphans:
-                self.walker.append(EnvRow(e))
         if not self.walker:
             self.walker.append(urwid.AttrMap(urwid.Text(" 暂无远控项目"), "dead"))
         if self.walker and focus_pos is not None:
@@ -273,10 +194,9 @@ class RCView:
         rc_off = sum(1 for p in self._projects if p.rc_at_startup is False)
         rc_text = f" · 自动远控关 {rc_off}" if rc_off else ""
         srv_text = f" · 服务 {len(self._servers)}" if self._servers else ""
-        env_text = f" · 孤儿环境 {len(self._orphans)}" if self._orphans else ""
         self.status.original_widget.set_text(
             f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}"
-            f"{rc_text}{srv_text}{env_text}"
+            f"{rc_text}{srv_text}"
         )
 
     def _selected(self) -> RCProject | None:
@@ -376,10 +296,9 @@ class RCView:
             "  S      停止全部远程控制服务（需确认）",
             "  r      重新扫描刷新",
             "",
-            "RC 服务 / 环境台账（只读）:",
+            "RC 服务（只读）:",
             "  外部服务只展示，不接管、不重启。",
-            f"  孤儿环境无法本地注销：{_MANUAL_DELETE}（claude.ai/code）。",
-            "  孤儿清单不完整：csctl 未运行期间铸造的环境无法追踪。",
+            "  云端环境台账不在 TUI 展示（csctl 无法注销云端环境）；查询用 csctl env。",
             "",
             "导航:",
             "  Tab    切换标签页",

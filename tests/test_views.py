@@ -6,9 +6,9 @@ import os
 import urwid
 
 from cc_session_control.data.snapshot import WorldSnapshot
-from cc_session_control.models import BridgeEnv, RCProject, RCServer, Session
+from cc_session_control.models import RCProject, RCServer, Session
 from cc_session_control.views.sessions import SessionRow, SessionsView
-from cc_session_control.views.rc import EnvRow, RCRow, RCView, ServerRow
+from cc_session_control.views.rc import RCRow, RCView, ServerRow
 
 
 class FakeApp:
@@ -767,38 +767,23 @@ def test_server_row_managed_external_badge():
     assert "外部" in external
 
 
-def test_env_row_orphan_shows_manual_delete_literal():
-    text = _row_text(EnvRow(BridgeEnv(prefix="env", key="ABC", status="orphan")))
-    assert "云端需手动删除" in text
-    assert "env_ABC" in text
-
-
-def test_rc_view_renders_env_ledger_sections(monkeypatch):
+def test_rc_view_renders_servers_but_no_env_ledger():
+    # The env ledger is deliberately NOT rendered in the TUI (csctl can't act on
+    # cloud environments) — only project rows + the RC server section remain.
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
     view._pending = [_make_project(name="p1")]
     view._pending_servers = [RCServer(name="ws/ext", managed=False, pid=7, status="running")]
-    view._pending_current = [BridgeEnv(prefix="cse", key="AAA", bound_sid="sid-a", status="current")]
-    view._pending_orphans = [BridgeEnv(prefix="env", key="ORPH", status="orphan")]
     view.apply_data()
 
-    texts = [_row_text(view.walker[i]) for i in range(len(view.walker))]
-    blob = "\n".join(texts)
-    assert any("云端需手动删除" in t for t in texts)  # manual-delete divider/row
-    assert "env_ORPH" in blob                          # orphan listed
-    assert "cse_AAA" in blob                            # current listed
-    assert "外部" in blob                               # external server badge
+    blob = "\n".join(_row_text(view.walker[i]) for i in range(len(view.walker)))
+    assert "外部" in blob        # external server badge still shown
+    assert "环境台账" not in blob  # env ledger section gone
+    assert "云端需手动删除" not in blob
 
 
-def test_rc_view_fetch_pending_uses_snapshot(monkeypatch):
-    import cc_session_control.views.rc as rc_view_mod
-
-    monkeypatch.setattr(rc_view_mod.environments, "current_envs",
-                        lambda obs: [BridgeEnv(prefix="cse", key="C", status="current")])
-    monkeypatch.setattr(rc_view_mod.environments, "orphan_envs",
-                        lambda obs: [BridgeEnv(prefix="env", key="O", status="orphan")])
-
+def test_rc_view_fetch_pending_uses_snapshot():
     snap = WorldSnapshot(
         rc_projects=[_make_project(name="p1")],
         rc_servers=[RCServer(name="ws/x", managed=True, pid=3, status="running")],
@@ -811,13 +796,11 @@ def test_rc_view_fetch_pending_uses_snapshot(monkeypatch):
 
     assert view._pending[0].name == "p1"
     assert view._pending_servers[0].name == "ws/x"
-    assert [e.env_id for e in view._pending_current] == ["cse_C"]
-    assert [e.env_id for e in view._pending_orphans] == ["env_O"]
 
 
-def test_rc_view_server_and_env_rows_are_read_only(monkeypatch):
-    # External servers / env rows must NOT be actionable (no takeover/restart/
-    # deregister key). Focusing such a row makes every key a no-op (AC9 red line).
+def test_rc_view_server_rows_are_read_only(monkeypatch):
+    # External servers must NOT be actionable (no takeover/restart key).
+    # Focusing such a row makes every key a no-op (AC9 red line).
     import cc_session_control.views.rc as rc_view_mod
 
     started = {"n": 0}
@@ -831,7 +814,6 @@ def test_rc_view_server_and_env_rows_are_read_only(monkeypatch):
     app.views = [view]
     view._projects = []
     view._servers = [RCServer(name="ws/ext", managed=False, pid=9, status="running")]
-    view._orphans = [BridgeEnv(prefix="env", key="O", status="orphan")]
     view._rebuild()
 
     # Focus the external ServerRow explicitly.
@@ -890,41 +872,18 @@ def test_environments_and_agent_ops_do_not_export_deregister():
         assert not hasattr(mod, "delete_env")
 
 
-def test_rc_view_source_carries_manual_delete_literal():
-    import cc_session_control.views.rc as rc_view_mod
+# === Post-review fix B: RC honesty (env ledger is CLI-only now) ==============
 
-    with open(rc_view_mod.__file__) as fh:
-        assert "云端需手动删除" in fh.read()
-
-
-# === Post-review fix B: RC ledger honesty + tri-state ========================
-
-def test_rc_view_env_section_shows_incomplete_caveat():
-    # Fix 1 (red line #5): the env-ledger panel itself must carry the "inherently
-    # incomplete" + manual-delete caveat, not only the `csctl env` CLI.
-    app = FakeApp()
-    view = RCView(app)
-    app.views = [view]
-    view._pending = []
-    view._pending_servers = []
-    view._pending_current = []
-    view._pending_orphans = [BridgeEnv(prefix="env", key="O", status="orphan")]
-    view.apply_data()
-    blob = "\n".join(_row_text(view.walker[i]) for i in range(len(view.walker)))
-    assert "不完整" in blob
-    assert "未运行" in blob
-    assert "云端需手动删除" in blob
-
-
-def test_rc_view_help_warns_ledger_incomplete():
+def test_rc_view_help_points_ledger_queries_at_cli():
+    # The env ledger left the TUI; the help must still be honest about WHY
+    # (csctl cannot deregister cloud envs) and point at `csctl env`.
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
     view._show_help()
     blob = "\n".join(_row_text(view.walker[i]) for i in range(len(view.walker)))
-    assert "不完整" in blob
-    assert "未运行" in blob
-    assert "云端需手动删除" in blob
+    assert "无法注销" in blob
+    assert "csctl env" in blob
 
 
 def test_rc_view_c_key_full_tristate_cycle(monkeypatch):

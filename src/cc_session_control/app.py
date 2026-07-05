@@ -64,7 +64,7 @@ PALETTE = [
     ("col_header",  "dark cyan",   "black", None,       "#9cc",       "#181818"),
 ]
 
-TAB_NAMES = ["会话", "后台", "项目"]
+TAB_NAMES = ["会话", "项目", "后台"]
 
 # D1: all three tabs share ONE footer prefix — the universal verbs (Tab/q/r) live
 # here exactly once so `r 刷新` shows identically on every tab. View-specific keys
@@ -98,7 +98,8 @@ class App:
         self._confirm_yes: Callable[[], None] | None = None
         self._confirm_base: urwid.Widget | None = None
 
-        self.views: list[TabView] = [SessionsView(self), AgentsView(self), RCView(self)]
+        # Order is in lockstep with TAB_NAMES: 会话 / 项目 / 后台.
+        self.views: list[TabView] = [SessionsView(self), RCView(self), AgentsView(self)]
         self._active = 0
 
         self.body = urwid.WidgetPlaceholder(self.views[0].widget)

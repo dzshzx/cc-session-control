@@ -175,14 +175,27 @@ def _tmux_has_session(session: str) -> bool:
     return cp is not None and cp.returncode == 0
 
 
-def _tmux_new_window(session: str, name: str, cmd: str) -> bool:
-    cp = _tmux_run(["new-window", "-t", session, "-n", name, cmd])
-    return cp is not None and cp.returncode == 0
+# -P -F makes tmux print the exact target of the window it just created, so
+# callers enter THAT window even when names collide (no select-by-name guess).
+_TARGET_FMT = "#{session_name}:#{window_index}"
 
 
-def _tmux_new_session(session: str, name: str, cmd: str) -> bool:
-    cp = _tmux_run(["new-session", "-d", "-s", session, "-n", name, cmd])
-    return cp is not None and cp.returncode == 0
+def _spawned_target(cp: subprocess.CompletedProcess | None) -> str | None:
+    if cp is None or cp.returncode != 0:
+        return None
+    return cp.stdout.strip() or None
+
+
+def _tmux_new_window(session: str, name: str, cmd: str) -> str | None:
+    """Create a window; return its exact "session:index" target, or None."""
+    cp = _tmux_run(["new-window", "-P", "-F", _TARGET_FMT, "-t", session, "-n", name, cmd])
+    return _spawned_target(cp)
+
+
+def _tmux_new_session(session: str, name: str, cmd: str) -> str | None:
+    """Create a detached session; return its window's target, or None."""
+    cp = _tmux_run(["new-session", "-d", "-P", "-F", _TARGET_FMT, "-s", session, "-n", name, cmd])
+    return _spawned_target(cp)
 
 
 def _tmux_kill_window(target: str) -> bool:
@@ -203,10 +216,23 @@ def _is_alive(proj: str) -> bool:
     return _tmux_pane_alive(f"{cfg.rc_session}:{proj}")
 
 
-def run_in_tmux(session: str, window: str, cmd: str) -> bool:
+def session_name_for(cwd: str) -> str:
+    """tmux session name for a project directory: its basename, with the tmux
+    target separators `.`/`:` (illegal in session names) replaced by `-`.
+
+    One session per project — the grouping rule shared by every claude spawn
+    (t 新建 / t 接回 / R 转入后台 / agents respawn). Empty cwd → "claude"."""
+    base = cwd.rstrip("/").rsplit("/", 1)[-1] if cwd else ""
+    name = base.replace(".", "-").replace(":", "-").strip()
+    return name or "claude"
+
+
+def run_in_tmux(session: str, window: str, cmd: str) -> str | None:
     """Run `cmd` in a tmux `window` under `session`, creating the session if
-    it doesn't exist yet. Public seam for relaunching a session outside the
-    managed RC server machinery."""
+    it doesn't exist yet. Returns the exact "session:window_index" target of
+    the new window (None on failure) so callers can enter it unambiguously.
+    Public seam for relaunching a session outside the managed RC server
+    machinery."""
     if _tmux_has_session(session):
         return _tmux_new_window(session, window, cmd)
     return _tmux_new_session(session, window, cmd)
@@ -437,12 +463,7 @@ def start_one(proj: str) -> bool:
         f"--name {shlex.quote(remote_name)} --spawn same-dir"
     )
 
-    session = cfg.rc_session
-    has_session = _tmux_has_session(session)
-
-    if has_session:
-        return _tmux_new_window(session, proj, cmd)
-    return _tmux_new_session(session, proj, cmd)
+    return run_in_tmux(cfg.rc_session, proj, cmd) is not None
 
 
 def stop_one(proj: str) -> bool:

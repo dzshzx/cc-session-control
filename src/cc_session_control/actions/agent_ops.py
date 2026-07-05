@@ -97,12 +97,13 @@ def _job_window(job: AgentJob) -> str:
 def respawn(job: AgentJob) -> str:
     """Relaunch a background agent in tmux; returns the exact command string.
 
-    Runs `respawn_cmd(job)` in the shared tmux session (`cfg.tmux_session`) so it
-    outlives the terminal — it does NOT os.exec/replace the csctl process. The
-    returned string also feeds the clipboard `y`-style key.
+    Runs `respawn_cmd(job)` in the job's per-project tmux session
+    (`rc.session_name_for(job.cwd)`) so it outlives the terminal — it does NOT
+    os.exec/replace the csctl process. The returned string also feeds the
+    clipboard `y`-style key.
     """
     cmd = respawn_cmd(job)
-    rc.run_in_tmux(cfg.tmux_session, _job_window(job), cmd)
+    rc.run_in_tmux(rc.session_name_for(job.cwd), _job_window(job), cmd)
     return cmd
 
 

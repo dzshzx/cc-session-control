@@ -124,9 +124,8 @@ def test_full_cycle_worker_stashes_then_main_loop_swaps(monkeypatch):
 def test_full_cycle_drives_real_views(monkeypatch):
     # Same path with the THREE real views: a controlled snapshot is projected
     # into each _pending then swapped into each walker by the main-loop phase.
-    import cc_session_control.views.rc as rc_view_mod
     import cc_session_control.views.sessions as sv_mod
-    from cc_session_control.models import BridgeEnv, RCProject, Session
+    from cc_session_control.models import RCProject, Session
 
     sess = [Session(sid="s1", cwd="/tmp/p", label="t", mtime=0.0, prompts=1,
                     pid=None, alive=False, current=False)]
@@ -138,13 +137,11 @@ def test_full_cycle_drives_real_views(monkeypatch):
     # Keep the views' projection IO-free / deterministic.
     monkeypatch.setattr(sv_mod, "cleanup_classified", lambda *a, **k: {
         "empty": 0, "short": 0, "orphan_dirs": 0, "zombie_procs": 0, "aged_entries": 0})
-    monkeypatch.setattr(rc_view_mod.environments, "current_envs", lambda obs: [])
-    monkeypatch.setattr(rc_view_mod.environments, "orphan_envs", lambda obs: [])
 
     app = App()
     app._run_fetch_cycle()
     assert app.views[0]._pending == sess          # SessionsView stashed
-    assert app.views[2]._pending == proj          # RCView stashed (projects)
+    assert app.views[1]._pending == proj          # RCView stashed (tab order: 会话/项目/后台)
 
     app._on_pipe(b"1")
     assert len(app.views[0].walker) == len(sess)  # swapped into the walker

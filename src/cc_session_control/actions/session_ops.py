@@ -8,7 +8,6 @@ import signal
 import time
 
 from .. import clipboard
-from ..config import cfg
 from ..data import proc, rc
 from ..data.liveness import invalidate_cache
 from ..models import Session
@@ -143,7 +142,8 @@ def relaunch_in_tmux(s: Session, fork: bool = False) -> bool:
             pass
         time.sleep(1)
         invalidate_cache()
-    return rc.run_in_tmux(cfg.tmux_session, _rc_name(s), tmux_resume_cmd(s, fork))
+    session = rc.session_name_for(s.cwd)
+    return rc.run_in_tmux(session, s.sid[:8], tmux_resume_cmd(s, fork)) is not None
 
 
 def attach_target(s: Session) -> str | None:
@@ -169,8 +169,8 @@ def tmux_foreground_cmd(s: Session) -> str:
 
 
 def do_tmux_resume(s: Session) -> str | None:
-    """Kill-if-takeover, spawn the resume window in `cfg.tmux_session`, and
-    return the tmux target to enter ("session:window-name"); None on failure.
+    """Kill-if-takeover, spawn the resume window in the session's per-project
+    tmux session, and return the exact tmux target to enter; None on failure.
 
     Mirrors `relaunch_in_tmux`'s kill handling (same `_resume_plan` should_kill
     + R10 refusal); the caller (cli) then calls `enter_window` on the target."""
@@ -184,15 +184,13 @@ def do_tmux_resume(s: Session) -> str | None:
             pass
         time.sleep(1)
         invalidate_cache()
-    window = _rc_name(s)
-    if not rc.run_in_tmux(cfg.tmux_session, window, tmux_foreground_cmd(s)):
-        return None
-    return f"{cfg.tmux_session}:{window}"
+    session = rc.session_name_for(s.cwd)
+    return rc.run_in_tmux(session, s.sid[:8], tmux_foreground_cmd(s))
 
 
 def do_tmux_new(directory: str) -> str | None:
-    """Start a NEW claude session in `directory` inside a `cfg.tmux_session`
-    window and return the tmux target to enter; None on failure.
+    """Start a NEW claude session in `directory`, inside that project's own
+    tmux session, and return the exact tmux target to enter; None on failure.
 
     The 项目-tab `t` key: same skeleton as `do_tmux_resume` but nothing exists
     yet — no kill, no confirm, no R10 gate (no process is terminated). Plain
@@ -200,11 +198,8 @@ def do_tmux_new(directory: str) -> str | None:
     every RC process mints a new cloud environment entry). No trust gate
     either: the user lands inside the window, so claude's own trust dialog
     shows interactively."""
-    window = directory.rstrip("/").rsplit("/", 1)[-1] or "session"
     cmd = f"cd {shlex.quote(directory)} && claude"
-    if not rc.run_in_tmux(cfg.tmux_session, window, cmd):
-        return None
-    return f"{cfg.tmux_session}:{window}"
+    return rc.run_in_tmux(rc.session_name_for(directory), "claude", cmd)
 
 
 def enter_window(target: str) -> bool:
