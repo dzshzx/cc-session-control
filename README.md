@@ -7,7 +7,7 @@ TUI manager for [Claude Code](https://claude.ai/code) sessions and Remote Contro
 ## Features
 
 - **Sessions Tab** — View, resume, terminate, and delete Claude Code sessions across all projects
-- **Remote Control Tab** — Start/stop RC servers per project, toggle auto-start, show running/stopped/dead states
+- **Projects Tab** — Start a new tmux claude session in a project dir (`t`), start/stop RC servers per project, toggle auto-start, show running/stopped/dead states
 - **Cleanup Tab** — Prune empty/short sessions, sweep orphan artifact directories
 
 Built with [urwid](https://urwid.org/).

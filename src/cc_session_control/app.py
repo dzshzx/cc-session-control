@@ -64,7 +64,7 @@ PALETTE = [
     ("col_header",  "dark cyan",   "black", None,       "#9cc",       "#181818"),
 ]
 
-TAB_NAMES = ["会话", "后台", "远程控制"]
+TAB_NAMES = ["会话", "后台", "项目"]
 
 # D1: all three tabs share ONE footer prefix — the universal verbs (Tab/q/r) live
 # here exactly once so `r 刷新` shows identically on every tab. View-specific keys
@@ -208,6 +208,10 @@ class App:
     def exit_with_tmux_resume(self, session: object) -> None:
         """`t` on a dead / bare-terminal session: resume it inside tmux, then enter."""
         self._exit(("tmux_resume", session))
+
+    def exit_with_tmux_new(self, directory: str) -> None:
+        """`t` on a project row: start a NEW claude session in tmux, then enter."""
+        self._exit(("tmux_new", directory))
 
     def set_hints(self, hints: str) -> None:
         """Footer = shared prefix + the active tab's keyhints (D1 single source)."""

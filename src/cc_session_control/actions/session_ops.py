@@ -190,6 +190,23 @@ def do_tmux_resume(s: Session) -> str | None:
     return f"{cfg.tmux_session}:{window}"
 
 
+def do_tmux_new(directory: str) -> str | None:
+    """Start a NEW claude session in `directory` inside a `cfg.tmux_session`
+    window and return the tmux target to enter; None on failure.
+
+    The 项目-tab `t` key: same skeleton as `do_tmux_resume` but nothing exists
+    yet — no kill, no confirm, no R10 gate (no process is terminated). Plain
+    `claude` with NO --remote-control (same tradeoff as `tmux_foreground_cmd`:
+    every RC process mints a new cloud environment entry). No trust gate
+    either: the user lands inside the window, so claude's own trust dialog
+    shows interactively."""
+    window = directory.rstrip("/").rsplit("/", 1)[-1] or "session"
+    cmd = f"cd {shlex.quote(directory)} && claude"
+    if not rc.run_in_tmux(cfg.tmux_session, window, cmd):
+        return None
+    return f"{cfg.tmux_session}:{window}"
+
+
 def enter_window(target: str) -> bool:
     """Bring `target` ("session:window") to the user's terminal foreground.
 

@@ -12,7 +12,7 @@ description: Diagnose and rescue local Claude Code sessions via csctl — list l
 ## 交互式 TUI
 
 ```bash
-csctl          # 三个 tab：会话 / 后台 agent / 远程控制；清理在会话 tab 的子菜单
+csctl          # 三个 tab：会话 / 后台 agent / 项目（远控 + t 新建 tmux 会话）；清理在会话 tab 的子菜单
 ```
 
 会话 tab 键位：方向键移动 · `/` 过滤 · `Enter` 接回（真接续，自动 cd+kill）· `f` 分叉接回 · `y` 复制命令到剪贴板 · `t` 终止活会话(确认) · `r` 刷新 · `q` 退出。接回时 csctl exec 成 claude 接管终端。

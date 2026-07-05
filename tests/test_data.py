@@ -246,6 +246,30 @@ def test_do_tmux_resume_refuses_takeover_when_degraded(monkeypatch):
     assert so.do_tmux_resume(s) is None
 
 
+def test_do_tmux_new_spawns_and_returns_target(monkeypatch):
+    import cc_session_control.actions.session_ops as so
+
+    spawns = []
+    monkeypatch.setattr(so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill")))
+    monkeypatch.setattr(
+        so.rc, "run_in_tmux",
+        lambda session, window, cmd: spawns.append((session, window, cmd)) or True,
+    )
+    target = so.do_tmux_new("/tmp/proj with space")
+    assert target == f"{so.cfg.tmux_session}:proj with space"
+    session, window, cmd = spawns[0]
+    assert session == so.cfg.tmux_session
+    assert window == "proj with space"
+    assert cmd == "cd '/tmp/proj with space' && claude"
+    assert "--remote-control" not in cmd and "--resume" not in cmd
+
+
+def test_do_tmux_new_spawn_failure_returns_none(monkeypatch):
+    import cc_session_control.actions.session_ops as so
+    monkeypatch.setattr(so.rc, "run_in_tmux", lambda *a: False)
+    assert so.do_tmux_new("/tmp/proj") is None
+
+
 def test_relaunch_in_tmux_kills_live_non_current(monkeypatch):
     import cc_session_control.actions.session_ops as so
 

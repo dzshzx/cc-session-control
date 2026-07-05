@@ -42,6 +42,9 @@ class FakeApp:
     def exit_with_tmux_resume(self, session):
         self.result = ("tmux_resume", session)
 
+    def exit_with_tmux_new(self, directory):
+        self.result = ("tmux_new", directory)
+
     def trigger_async_refresh(self):
         pass
 
@@ -335,7 +338,7 @@ def test_footer_keyhints_list_every_list_mode_key():
         assert f"{key} " in agents_hints, f"agents footer missing {key}"
 
     rc_hints = RCView(FakeApp()).keyhints()
-    for key in ("Enter", "s", "a", "c", "A", "S", "?"):
+    for key in ("t", "Enter", "s", "a", "c", "A", "S", "?"):
         assert f"{key} " in rc_hints, f"rc footer missing {key}"
 
 
@@ -405,6 +408,7 @@ def test_rc_view_fetch_pending(monkeypatch):
 def test_rc_view_keyhints_uses_new_labels():
     view = RCView(FakeApp())
     hints = view.keyhints()
+    assert "t 新建会话" in hints
     assert "开机自启" in hints
     assert "自动远控" in hints
     # batch keys are discoverable in the footer, each with its own label
@@ -425,6 +429,18 @@ def test_rc_view_status_bar_counts_use_new_labels():
     text = view.status.original_widget.get_text()[0]
     assert "开机自启 2" in text
     assert "自动远控关 2" in text
+
+
+def test_rc_view_t_key_exits_with_tmux_new():
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [_make_project(name="p1", directory="/tmp/p1")]
+    view.apply_data()
+
+    view.handle_key("t")
+
+    assert app.result == ("tmux_new", "/tmp/p1")
 
 
 def test_rc_view_c_key_notifies_with_new_label(monkeypatch):

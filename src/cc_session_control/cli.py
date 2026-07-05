@@ -298,7 +298,7 @@ def _cmd_env(args: argparse.Namespace) -> None:
 
 
 def _cmd_tui(args: argparse.Namespace) -> None:
-    from .actions.session_ops import do_resume, do_tmux_resume, enter_window
+    from .actions.session_ops import do_resume, do_tmux_new, do_tmux_resume, enter_window
     from .app import App
 
     app = App()
@@ -322,6 +322,14 @@ def _cmd_tui(args: argparse.Namespace) -> None:
             print("Failed to resume the session inside tmux (R10 degraded, or tmux unavailable).")
         elif not enter_window(target):
             print(f"Session resumed in tmux window {target}, but attaching failed.")
+    elif result[0] == "tmux_new":
+        # `t` on a 项目-tab project row: start a NEW claude session in tmux,
+        # then enter it (nothing is killed — pure spawn).
+        target = do_tmux_new(result[1])
+        if target is None:
+            print("Failed to start a new session inside tmux (is tmux available?).")
+        elif not enter_window(target):
+            print(f"Session started in tmux window {target}, but attaching failed.")
 
 
 def main() -> None:

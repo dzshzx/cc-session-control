@@ -1,8 +1,9 @@
-"""RC view — the 远程控制 tab.
+"""RC view — the 项目 tab (workspace projects + their Remote Control surface).
 
 Shows three things for one machine-wide Remote Control surface:
   1. managed projects (RCProject) with the tri-state `remoteControlAtStartup`
-     and `remoteControlSpawnMode`, plus the existing start/stop/autostart keys;
+     and `remoteControlSpawnMode`, plus the start/stop/autostart keys and `t`
+     (start a NEW claude session in the project dir inside tmux, then enter it);
   2. project RC servers (RCServer) discovered via tmux ∪ /proc, badged
      managed/external — external servers are READ-ONLY (no takeover/restart key);
   3. the bridge-environment ledger (current vs orphan). Orphans are labelled
@@ -183,7 +184,7 @@ class RCView:
         # Full key table (user preference 2026-07-05): every key gets a brief
         # hint; the footer Text wraps on narrow terminals (vertical for width).
         return (
-            "Enter 启动 · s 停止 · a 开机自启 · c 自动远控 · "
+            "t 新建会话 · Enter 启动远控 · s 停止 · a 开机自启 · c 自动远控 · "
             "A 全部启动 · S 全部停止 · ? 详细说明"
         )
 
@@ -300,7 +301,12 @@ class RCView:
 
         p = self._selected()
 
-        if key == "enter" and p:
+        if key == "t" and p:
+            # New claude session in the project dir, inside tmux, entered
+            # immediately — nothing is killed, so no confirm / R10 / trust gate
+            # (claude's own trust dialog shows interactively in the window).
+            self.app.exit_with_tmux_new(p.directory)
+        elif key == "enter" and p:
             if not p.trusted:
                 self.app.notify("未信任 — 先在该目录跑一次 claude")
                 return
@@ -358,7 +364,8 @@ class RCView:
     def _show_help(self) -> None:
         self._help = True
         lines = [
-            "远程控制操作（仅对「项目」行生效）:",
+            "项目操作（仅对「项目」行生效）:",
+            "  t      在项目目录新建 tmux claude 会话并直接进入（离开 csctl）",
             "  Enter  启动选中项目的远程控制服务",
             "  s      停止选中项目的远程控制服务（需确认）",
             "  a      切换「开机自启」：A 键一键启动时是否带上本项目",
