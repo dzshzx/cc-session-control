@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0 (2026-07-06)
+
+The RC tab becomes a project launcher, and tmux organization goes per-project.
+
+- **项目 (Projects) tab** — the 远程控制 tab is renamed: it already listed
+  workspace projects, and Remote Control is just one set of verbs on them. New
+  `t` key on a project row: start a NEW claude session in that project's
+  directory inside tmux and bring your terminal straight into it (no
+  `--remote-control`, nothing killed → no confirm). Tab order is now
+  会话 / 项目 / 后台.
+- **One tmux session per project.** Every claude spawn (`t` 新建, `t` 接回,
+  `R` 转入后台, background-agent respawn) now lands in a tmux session named
+  after the project directory (`.`/`:` sanitized to `-`) instead of one shared
+  `cc` session — `tmux ls` reads as a project list. **Breaking:**
+  `CSCTL_TMUX_SESSION` is removed. Existing windows in the old `cc` session
+  are unaffected (`t` on a tmux-hosted session still enters it in place).
+- **Exact tmux targets.** `run_in_tmux` returns the spawned window's
+  `session:window_index` (tmux `-P`), so entering a window no longer guesses
+  by name when names collide.
+- **Env ledger left the TUI.** The 项目 tab no longer renders the
+  bridge-environment ledger (csctl cannot deregister cloud environments); the
+  ledger still records every cycle and `csctl env` remains the query surface.
+  The read-only RC server section stays.
+- **Enter confirms the kill-confirm modal** alongside `y` (`n`/`Esc` cancel,
+  unchanged) — standard dialog muscle memory.
+
 ## 0.5.1 (2026-07-05)
 
 Liveness false-positive fixes, a new foreground-tmux resume tier, and a
