@@ -150,18 +150,20 @@ def test_full_cycle_drives_real_views(monkeypatch):
 
 # --- Confirm modal: App-level y/n routing shared by all tabs ---
 
-def test_confirm_y_runs_callback_and_closes():
-    app, _views = _app_with_recorders()
-    ran = {"n": 0}
-    app.confirm("终止？", lambda: ran.__setitem__("n", ran["n"] + 1))
+def test_confirm_y_or_enter_runs_callback_and_closes():
+    # Enter = 确认 alongside y (universal dialog muscle memory).
+    for confirm_key in ("y", "enter"):
+        app, _views = _app_with_recorders()
+        ran = {"n": 0}
+        app.confirm("终止？", lambda: ran.__setitem__("n", ran["n"] + 1))
 
-    assert app._confirm_yes is not None
-    assert isinstance(app.body.original_widget, urwid.Overlay)  # modal is up
+        assert app._confirm_yes is not None
+        assert isinstance(app.body.original_widget, urwid.Overlay)  # modal is up
 
-    app._input("y")
-    assert ran["n"] == 1                       # callback fired
-    assert app._confirm_yes is None            # modal closed
-    assert not isinstance(app.body.original_widget, urwid.Overlay)
+        app._input(confirm_key)
+        assert ran["n"] == 1                       # callback fired
+        assert app._confirm_yes is None            # modal closed
+        assert not isinstance(app.body.original_widget, urwid.Overlay)
 
 
 def test_confirm_n_and_esc_cancel_without_callback():
