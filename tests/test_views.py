@@ -293,6 +293,34 @@ def test_t_key_takeover_gated_when_degraded(monkeypatch):
     assert app._notifications[-1] == sv_mod._DEGRADED
 
 
+def test_status_cell_three_states():
+    # Frontend-spec triple encoding: shape + word (+ color attr). The word is
+    # the primary meaning carrier: 忙 = busy, 闲 = idle-alive, 停 = dead.
+    from cc_session_control.views._session_row import _status_parts
+    busy = _make_session(sid="b", alive=True, pid=1, status="busy")
+    idle = _make_session(sid="i", alive=True, pid=1, status="idle")
+    dead = _make_session(sid="d", alive=False)
+    cur = _make_session(sid="c", alive=True, current=True, pid=1, status="busy")
+    assert _status_parts(busy) == (" ● 忙", "status_busy")
+    assert _status_parts(idle) == (" ● 闲", "alive")
+    assert _status_parts(dead) == (" ○ 停", "dead")
+    assert _status_parts(cur)[0].startswith("▸")
+
+
+def test_session_header_and_row_share_one_colspec():
+    # Single-source column spec: header and data rows are generated from
+    # SESSION_COLS, so their widths/alignments cannot drift (checklist #4).
+    from cc_session_control.views._session_row import (
+        _SESSION_HEADER, SESSION_COLS, SessionRow,
+    )
+    row = SessionRow(_make_session(sid="s1", alive=False))
+    header_cols = _SESSION_HEADER.contents
+    row_cols = row._w.original_widget.contents
+    assert len(header_cols) == len(row_cols) == len(SESSION_COLS)
+    for (hw, ho), (rw, ro) in zip(header_cols, row_cols):
+        assert ho == ro  # same sizing options per column
+
+
 def test_footer_keyhints_list_every_list_mode_key():
     # Full-key-table contract (user preference 2026-07-05): the footer names
     # every key the view's handle_key dispatches in list mode (r/Tab/q live in

@@ -43,20 +43,25 @@ class TabView(Protocol):
     def handle_key(self, key: str) -> None: ...
 
 # 6-tuple: (name, fg_16, bg_16, mono, fg_256, bg_256)
+# ONE semantic set — views reference these names only (no per-tab duplicates;
+# the old rc_running/rc_stopped were aliases of alive/dead and are gone).
+# 256-color foregrounds are kept ≥ 4.5:1 against their background (WCAG-AA-ish,
+# checked via relative luminance): #aaa/#111 ≈ 8.1, #7ab/#111 ≈ 7.4,
+# #9cc/#181818 ≈ 10.0, #bbb/#111 ≈ 9.8, #d66/#111 ≈ 5.5.
 PALETTE = [
-    ("header",     "white,bold",  "black", "bold",     "#fff,bold",  "#111"),
-    ("footer",     "light gray",  "black", None,       "#999",       "#111"),
-    ("tab_on",     "white,bold",  "dark cyan", "bold,standout", "#fff,bold", "#068"),
-    ("tab_off",    "dark cyan",   "black", None,       "#688",       "#111"),
-    ("alive",      "light green", "black", None,       "#6d6",       "#111"),
-    ("dead",       "light gray",  "black", None,       "#ccc",       "#111"),
-    ("selected",   "white,bold",  "dark cyan", "standout", "#fff,bold", "#068"),
-    ("notify",     "yellow,bold", "black", "bold",     "#ff0,bold",  "#111"),
-    ("status",     "light gray",  "black", None,       "#aaa",       "#111"),
-    ("rc_running", "light green", "black", None,       "#6d6",       "#111"),
-    ("rc_stopped", "light gray",  "black", None,       "#ccc",       "#111"),
-    ("body",       "light gray",  "black", None,       "#ccc",       "#111"),
-    ("col_header", "dark cyan",   "black", None,       "#8aa",       "#181818"),
+    ("header",      "white,bold",  "black", "bold",     "#fff,bold",  "#111"),
+    ("footer",      "light gray",  "black", None,       "#aaa",       "#111"),
+    ("tab_on",      "white,bold",  "dark cyan", "bold,standout", "#fff,bold", "#068"),
+    ("tab_off",     "light cyan",  "black", None,       "#7ab",       "#111"),
+    ("alive",       "light green", "black", None,       "#6d6",       "#111"),
+    ("status_busy", "light green,bold", "black", "bold", "#6d6,bold", "#111"),
+    ("status_err",  "light red",   "black", None,       "#d66",       "#111"),
+    ("dead",        "light gray",  "black", None,       "#ccc",       "#111"),
+    ("selected",    "white,bold",  "dark cyan", "standout", "#fff,bold", "#068"),
+    ("notify",      "yellow,bold", "black", "bold",     "#ff0,bold",  "#111"),
+    ("status",      "light gray",  "black", None,       "#bbb",       "#111"),
+    ("body",        "light gray",  "black", None,       "#ccc",       "#111"),
+    ("col_header",  "dark cyan",   "black", None,       "#9cc",       "#181818"),
 ]
 
 TAB_NAMES = ["会话", "后台", "远程控制"]

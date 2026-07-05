@@ -19,6 +19,7 @@ from ..actions import agent_ops
 from ..actions.session_ops import would_take_over
 from ..data import proc, registry
 from ..models import AgentJob
+from ._colspec import header_columns, row_columns
 
 if TYPE_CHECKING:
     from ..data.snapshot import WorldSnapshot
@@ -31,14 +32,19 @@ if TYPE_CHECKING:
 _DEGRADED = "liveness 降级：破坏性操作已禁用"
 
 
-_AGENTS_HEADER = urwid.Columns([
-    (4, urwid.Text("")),
-    ("weight", 2, urwid.Text("名称")),
-    (8, urwid.Text("状态")),
-    (8, urwid.Text("节奏")),
-    ("weight", 2, urwid.Text("目录")),
-    ("weight", 2, urwid.Text("环境后缀")),
-], min_width=4)
+# One spec drives header + rows (_colspec.py). The 状态 text column already
+# carries the state in words, so the mark column only needs the ●/○ shape —
+# state never rides on color alone here either.
+_AGENT_COLS = [
+    (2, "left", ""),
+    (("weight", 2), "left", "名称"),
+    (8, "left", "状态"),
+    (8, "left", "节奏"),
+    (("weight", 2), "left", "目录"),
+    (("weight", 2), "left", "环境后缀"),
+]
+
+_AGENTS_HEADER = header_columns(_AGENT_COLS)
 
 
 class AgentRow(urwid.WidgetWrap):
@@ -46,14 +52,14 @@ class AgentRow(urwid.WidgetWrap):
         self.job = job
         mark = "●" if job.host_alive else "○"
         cwd = job.cwd.rstrip("/").rsplit("/", 1)[-1] if job.cwd else ""
-        cols = urwid.Columns([
-            (4, urwid.Text(mark, align="center")),
-            ("weight", 2, urwid.Text(job.name or job.short, wrap="clip")),
-            (8, urwid.Text(job.state or "-", wrap="clip")),
-            (8, urwid.Text(job.tempo or "-", wrap="clip")),
-            ("weight", 2, urwid.Text(cwd, wrap="clip")),
-            ("weight", 2, urwid.Text(job.env_suffix or "-", wrap="clip")),
-        ], min_width=4)
+        cols = row_columns(_AGENT_COLS, [
+            mark,
+            job.name or job.short,
+            job.state or "-",
+            job.tempo or "-",
+            cwd,
+            job.env_suffix or "-",
+        ])
         attr = "alive" if job.host_alive else "dead"
         mapped = urwid.AttrMap(cols, attr, focus_map={"alive": "selected", "dead": "selected", None: "selected"})
         super().__init__(mapped)

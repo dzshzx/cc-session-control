@@ -457,6 +457,9 @@ class SessionsView(CleanupMixin):
 
     def _show_help(self) -> None:
         lines = [
+            "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 · ○ 停 = 无进程",
+            "        ▸ = 当前会话（启动 csctl 的会话，受保护） · 📱 = 已开远控",
+            "",
             "会话操作:",
             "  Enter  接回选中的会话（在当前终端恢复；接运行中的会话会先确认接管）",
             "  t      tmux 接回（会话恢复进 tmux 窗口并接入前台——终端断线会话不死，",

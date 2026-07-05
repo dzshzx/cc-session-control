@@ -3,7 +3,7 @@
 Split out of `views/sessions.py` so that file stays under the 600-line budget.
 Holds the selectable `SessionRow` (with the D9 source badge + the 📱 remote-
 control-exposure marker), the cleanup-submenu rows (`_ActionRow`, `_PreviewRow`),
-and the column header constants. Rows never handle keys — `keypress` returns the key so the
+and the column spec. Rows never handle keys — `keypress` returns the key so the
 view's single dispatcher sees it (see frontend/widget-patterns.md).
 """
 
@@ -14,6 +14,7 @@ import time
 import urwid
 
 from ..models import Session
+from ._colspec import header_columns, row_columns
 
 # Transcript-derived hidden tags -> compact Chinese row marker.
 _HIDDEN_MARKERS = {
@@ -28,6 +29,19 @@ _SOURCE_BADGES = {
     "sdk": "SDK",
     "bg": "BG",
 }
+
+# One spec drives both the header and every row (see _colspec.py). Text columns
+# left; the numeric 提问 and the ragged relative 时间 right-align so their line-
+# to-line anchor is stable.
+SESSION_COLS = [
+    (6, "left", "状态"),
+    (4, "left", "来源"),
+    (4, "left", "远控"),
+    (11, "right", "时间"),
+    (5, "right", "提问"),
+    (("weight", 3), "left", "标题"),
+    (("weight", 1), "left", "项目"),
+]
 
 
 def _hidden_marker(session: Session) -> str:
@@ -53,6 +67,21 @@ def _flags(session: Session) -> str:
     return "📱" if session.rc_exposed else ""
 
 
+def _status_parts(session: Session) -> tuple[str, str]:
+    """(状态 cell text, row attr) — shape + word + color, three channels.
+
+    Frontend spec: state may not ride on color alone; the word carries the
+    meaning (忙 = generating/tool-running, 闲 = waiting for input, 停 = no
+    process), the ●/○ shape survives colorless terminals, and only the
+    established ●=on / ○=off convention is used (no ◐ — ambiguous, and an
+    East-Asian-Ambiguous width risk, the P5 glyph lesson)."""
+    cur = "▸" if session.current else " "
+    if session.alive:
+        word = "忙" if session.status == "busy" else "闲"
+        return f"{cur}● {word}", ("status_busy" if word == "忙" else "alive")
+    return f"{cur}○ 停", "dead"
+
+
 def _rel_time(mtime: float) -> str:
     """Human relative time: 刚刚 / N 分钟前 / N 小时前 / N 天前; falls back to an
     absolute %m-%d date past a week (and for a missing or future mtime)."""
@@ -75,8 +104,7 @@ def _rel_time(mtime: float) -> str:
 class SessionRow(urwid.WidgetWrap):
     def __init__(self, session: Session) -> None:
         self.session = session
-        mark = "●" if session.alive else "○"
-        cur = "▸" if session.current else " "
+        status_cell, attr = _status_parts(session)
         when = _rel_time(session.mtime)
         hidden = _hidden_marker(session)
         label = f"[{hidden}] {session.label}" if hidden else session.label
@@ -84,18 +112,19 @@ class SessionRow(urwid.WidgetWrap):
             label = label[:79] + "…"
         cwd = session.cwd.rstrip("/").rsplit("/", 1)[-1] if session.cwd else ""
 
-        cols = urwid.Columns([
-            (3, urwid.Text(f"{cur}{mark}")),
-            (5, urwid.Text(_source_badge(session))),
-            (5, urwid.Text(_flags(session))),
-            (12, urwid.Text(when)),
-            (5, urwid.Text(f"p{session.prompts}")),
-            ("weight", 3, urwid.Text(label, wrap="clip")),
-            ("weight", 1, urwid.Text(cwd, wrap="clip")),
-        ], min_width=6)
-
-        attr = "alive" if session.alive else "dead"
-        mapped = urwid.AttrMap(cols, attr, focus_map={"alive": "selected", "dead": "selected", None: "selected"})
+        cols = row_columns(SESSION_COLS, [
+            status_cell,
+            _source_badge(session),
+            _flags(session),
+            when,
+            f"p{session.prompts}",
+            label,
+            cwd,
+        ])
+        mapped = urwid.AttrMap(
+            cols, attr,
+            focus_map={"status_busy": "selected", "alive": "selected", "dead": "selected", None: "selected"},
+        )
         super().__init__(mapped)
 
     def selectable(self) -> bool:
@@ -111,7 +140,7 @@ class _ActionRow(urwid.WidgetWrap):
         cols = urwid.Columns([
             ("weight", 1, urwid.Text(label)),
             (8, urwid.Text(str(count), align="right")),
-        ])
+        ], dividechars=2)
         mapped = urwid.AttrMap(cols, "dead", focus_map={"dead": "selected", None: "selected"})
         super().__init__(mapped)
 
@@ -134,12 +163,4 @@ class _PreviewRow(urwid.WidgetWrap):
         return key
 
 
-_SESSION_HEADER = urwid.Columns([
-    (3, urwid.Text("")),
-    (5, urwid.Text("来源")),
-    (5, urwid.Text("远控")),
-    (12, urwid.Text("时间")),
-    (5, urwid.Text("提问")),
-    ("weight", 3, urwid.Text("标题")),
-    ("weight", 1, urwid.Text("项目")),
-], min_width=6)
+_SESSION_HEADER = header_columns(SESSION_COLS)

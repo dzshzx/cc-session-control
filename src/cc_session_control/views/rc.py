@@ -23,6 +23,7 @@ import urwid
 from ..data import environments, rc
 from ..data.rc import set_rc_at_startup
 from ..models import BridgeEnv, RCProject, RCServer
+from ._colspec import header_columns, row_columns
 
 if TYPE_CHECKING:
     from ..data.snapshot import WorldSnapshot
@@ -30,6 +31,10 @@ if TYPE_CHECKING:
     from ..app import App
 
 _STATUS_MAP = {"running": "● 运行中", "dead": "✖ 已退出", "stopped": "○ 已停止"}
+# Row attr per server/project status — dead (crashed pane) is a semantic error
+# state and gets its own red entry (shape ✖ + word 已退出 + color: 3 channels).
+_STATUS_ATTR = {"running": "alive", "dead": "status_err", "stopped": "dead"}
+_RC_FOCUS = {"alive": "selected", "status_err": "selected", "dead": "selected", None: "selected"}
 _RC_TRISTATE = {True: "开", False: "关", None: "未设置"}
 # `c` cycles the per-project remoteControlAtStartup tri-state in full so the user
 # can return to an explicit True (the old 2-cycle could never set True again).
@@ -47,26 +52,31 @@ _LEDGER_CAVEAT = (
 )
 
 
+# One spec drives the tab header + project rows (_colspec.py).
+_PROJECT_COLS = [
+    (10, "left", "状态"),
+    (8, "left", "开机自启"),
+    (8, "left", "自动远控"),
+    (10, "left", "启动模式"),
+    (("weight", 2), "left", "项目"),
+    (("weight", 3), "left", "目录"),
+]
+
+
 class RCRow(urwid.WidgetWrap):
     def __init__(self, project: RCProject) -> None:
         self.project = project
         status_text = _STATUS_MAP.get(project.status, project.status)
-        auto = "✓" if project.auto_start else "✗"
+        auto = "✓ 开" if project.auto_start else "✗ 关"
         rc_at = _RC_TRISTATE.get(project.rc_at_startup, "未设置")
         spawn = project.spawn_mode or "—"
         name = project.name if project.in_list or project.status == "running" else f"({project.name})"
 
-        cols = urwid.Columns([
-            (10, urwid.Text(status_text)),
-            (8, urwid.Text(auto, align="center")),
-            (8, urwid.Text(rc_at, align="center")),
-            (10, urwid.Text(spawn, wrap="clip")),
-            ("weight", 2, urwid.Text(name, wrap="clip")),
-            ("weight", 3, urwid.Text(project.directory, wrap="clip")),
-        ], min_width=6)
-
-        attr = "rc_running" if project.status == "running" else "rc_stopped"
-        mapped = urwid.AttrMap(cols, attr, focus_map={"rc_running": "selected", "rc_stopped": "selected", None: "selected"})
+        cols = row_columns(_PROJECT_COLS, [
+            status_text, auto, rc_at, spawn, name, project.directory,
+        ])
+        attr = _STATUS_ATTR.get(project.status, "dead")
+        mapped = urwid.AttrMap(cols, attr, focus_map=_RC_FOCUS)
         super().__init__(mapped)
 
     def selectable(self) -> bool:
@@ -89,20 +99,24 @@ class _DividerRow(urwid.WidgetWrap):
 class ServerRow(urwid.WidgetWrap):
     """A project RC server (managed/external) — display only, never actionable."""
 
+    _COLS = [
+        (10, "left", ""),
+        (8, "left", ""),
+        (8, "right", ""),
+        (("weight", 2), "left", ""),
+        (("weight", 3), "left", ""),
+    ]
+
     def __init__(self, server: RCServer) -> None:
         self.server = server
         status_text = _STATUS_MAP.get(server.status, server.status)
         badge = "托管" if server.managed else "外部"
         pid = str(server.pid) if server.pid else "-"
-        cols = urwid.Columns([
-            (10, urwid.Text(status_text)),
-            (8, urwid.Text(badge, align="center")),
-            (8, urwid.Text(pid, align="center")),
-            ("weight", 2, urwid.Text(server.name, wrap="clip")),
-            ("weight", 3, urwid.Text(server.cwd or "", wrap="clip")),
-        ], min_width=6)
-        attr = "rc_running" if server.status == "running" else "rc_stopped"
-        mapped = urwid.AttrMap(cols, attr, focus_map={"rc_running": "selected", "rc_stopped": "selected", None: "selected"})
+        cols = row_columns(self._COLS, [
+            status_text, badge, pid, server.name, server.cwd or "",
+        ])
+        attr = _STATUS_ATTR.get(server.status, "dead")
+        mapped = urwid.AttrMap(cols, attr, focus_map=_RC_FOCUS)
         super().__init__(mapped)
 
     def selectable(self) -> bool:
@@ -125,14 +139,13 @@ class EnvRow(urwid.WidgetWrap):
         else:
             mark = "○ 孤儿"
             hint = _MANUAL_DELETE
-        cols = urwid.Columns([
-            (10, urwid.Text(mark)),
-            ("weight", 2, urwid.Text(env.env_id, wrap="clip")),
-            ("weight", 2, urwid.Text(env.bound_sid or "-", wrap="clip")),
-            ("weight", 2, urwid.Text(hint, wrap="clip")),
-        ], min_width=6)
-        attr = "rc_running" if env.status == "current" else "rc_stopped"
-        mapped = urwid.AttrMap(cols, attr, focus_map={"rc_running": "selected", "rc_stopped": "selected", None: "selected"})
+        cols = row_columns(
+            [(10, "left", ""), (("weight", 2), "left", ""),
+             (("weight", 2), "left", ""), (("weight", 2), "left", "")],
+            [mark, env.env_id, env.bound_sid or "-", hint],
+        )
+        attr = "alive" if env.status == "current" else "dead"
+        mapped = urwid.AttrMap(cols, attr, focus_map=_RC_FOCUS)
         super().__init__(mapped)
 
     def selectable(self) -> bool:
@@ -158,14 +171,7 @@ class RCView:
         self._help = False
 
         self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
-        col_header = urwid.AttrMap(urwid.Columns([
-            (10, urwid.Text("状态")),
-            (8, urwid.Text("开机自启", align="center")),
-            (8, urwid.Text("自动远控", align="center")),
-            (10, urwid.Text("启动模式")),
-            ("weight", 2, urwid.Text("项目")),
-            ("weight", 3, urwid.Text("目录")),
-        ], min_width=6), "col_header")
+        col_header = urwid.AttrMap(header_columns(_PROJECT_COLS), "col_header")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
         body = urwid.AttrMap(self.listbox, {None: "body"})
