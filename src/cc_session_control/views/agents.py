@@ -101,7 +101,7 @@ class AgentsView:
     def keyhints(self) -> str:
         if self._mode in ("help", "watch"):
             return "按任意键返回"
-        return f"{agent_ops.KEYHINTS} · ? 帮助"
+        return f"{agent_ops.KEYHINTS} · ? 详细说明"
 
     def _enrich(self, jobs: list[AgentJob]) -> list[AgentJob]:
         """Fill host liveness for the self-fetch path (snapshot already enriched).

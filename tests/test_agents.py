@@ -134,7 +134,7 @@ def test_keyhints_reuse_agent_ops_constants():
     view = AgentsView(FakeApp())
     hints = view.keyhints()
     assert agent_ops.KEYHINTS in hints
-    assert "帮助" in hints
+    assert "详细说明" in hints
 
 
 # --- key dispatch: respawn / takeover / watch / remove / stop ---

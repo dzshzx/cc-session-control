@@ -174,7 +174,12 @@ class RCView:
     def keyhints(self) -> str:
         if self._help:
             return "按任意键返回"
-        return "Enter 启动 · s 停止 · a 开机自启 · c 自动远控 · A/S 批量 · ? 帮助"
+        # Full key table (user preference 2026-07-05): every key gets a brief
+        # hint; the footer Text wraps on narrow terminals (vertical for width).
+        return (
+            "Enter 启动 · s 停止 · a 开机自启 · c 自动远控 · "
+            "A 全部启动 · S 全部停止 · ? 详细说明"
+        )
 
     def load(self) -> None:
         self._projects = rc.scan()

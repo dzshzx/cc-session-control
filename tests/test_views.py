@@ -293,6 +293,34 @@ def test_t_key_takeover_gated_when_degraded(monkeypatch):
     assert app._notifications[-1] == sv_mod._DEGRADED
 
 
+def test_footer_keyhints_list_every_list_mode_key():
+    # Full-key-table contract (user preference 2026-07-05): the footer names
+    # every key the view's handle_key dispatches in list mode (r/Tab/q live in
+    # the App-level FOOTER_PREFIX). ? holds the detailed help.
+    sessions_hints = SessionsView(FakeApp()).keyhints()
+    for key in ("Enter", "t", "f", "s", "R", "d", "y", "h", "c", "/", "?"):
+        assert f"{key} " in sessions_hints, f"sessions footer missing {key}"
+
+    from cc_session_control.views.agents import AgentsView
+    agents_hints = AgentsView(FakeApp()).keyhints()
+    for key in ("Enter/o", "s", "d", "w", "R", "?"):
+        assert f"{key} " in agents_hints, f"agents footer missing {key}"
+
+    rc_hints = RCView(FakeApp()).keyhints()
+    for key in ("Enter", "s", "a", "c", "A", "S", "?"):
+        assert f"{key} " in rc_hints, f"rc footer missing {key}"
+
+
+def test_footer_hint_text_wraps_not_clips():
+    # The footer trades vertical rows for width: at 80 cols the full sessions
+    # key table must wrap to >1 row (urwid wrap='space'), never clip.
+    import urwid
+    from cc_session_control.app import FOOTER_PREFIX
+    hints = SessionsView(FakeApp()).keyhints()
+    text = urwid.Text(FOOTER_PREFIX + hints)
+    assert text.rows((80,)) > 1
+
+
 def test_rc_row_selectable():
     p = _make_project()
     row = RCRow(p)
@@ -351,7 +379,9 @@ def test_rc_view_keyhints_uses_new_labels():
     hints = view.keyhints()
     assert "开机自启" in hints
     assert "自动远控" in hints
-    assert "A/S" in hints  # batch keys are discoverable in the footer now
+    # batch keys are discoverable in the footer, each with its own label
+    assert "A 全部启动" in hints
+    assert "S 全部停止" in hints
 
 
 def test_rc_view_status_bar_counts_use_new_labels():
