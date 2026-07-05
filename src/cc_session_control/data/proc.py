@@ -45,6 +45,19 @@ def current_determinable() -> bool:
     return has_proc()
 
 
+def pid_exists(pid: int | None) -> bool:
+    """Bare `/proc/<pid>` existence — no starttime / pid-reuse defense.
+
+    For scrubbing externally-reported pids (e.g. `claude agents --json`) where
+    no recorded procStart exists to compare against. Deliberately does NOT
+    check comm/cmdline (a claude process may exec under another name). Always
+    False without `/proc`, so callers must skip scrubbing in degraded mode.
+    """
+    if not pid:
+        return False
+    return os.path.isdir(f"{_PROC}/{pid}")
+
+
 def proc_starttime(pid: int) -> str | None:
     """Field 22 (starttime) from `/proc/<pid>/stat`, or None if unavailable.
 

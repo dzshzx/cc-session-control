@@ -11,15 +11,36 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+from collections.abc import Callable
 
 from ..models import LiveInfo, SessionProc
+from . import proc
 
 _cache: dict[str, int | None] | None = None
 _cache_time: float = 0.0
 
 
+def _scrub_dead_pids(
+    mapping: dict[str, int | None],
+    exists: Callable[[int | None], bool],
+) -> dict[str, int | None]:
+    """Blank out pids whose process no longer exists (pure; `exists` injected).
+
+    `claude agents --json` can keep reporting a pid after the worker died
+    (SIGKILL/crash before its registry caught up). A dead pid must not count as
+    alive — blanking it lets the existing "pid-less entries are not alive" rule
+    in `live_index` take over. Entries are kept, never dropped.
+    """
+    return {sid: (pid if exists(pid) else None) for sid, pid in mapping.items()}
+
+
 def alive_map(max_age: float = 5.0) -> dict[str, int | None]:
-    """Return {session_id: pid} for all known agents. Cached for max_age seconds."""
+    """Return {session_id: pid} for all known agents. Cached for max_age seconds.
+
+    With `/proc` available, pids are scrubbed against process existence at
+    cache-refresh time (see `_scrub_dead_pids`). Without `/proc` (R10 degraded
+    mode) the map is the ONLY liveness source, so it is passed through as-is.
+    """
     global _cache, _cache_time
     now = time.monotonic()
     if _cache is not None and (now - _cache_time) < max_age:
@@ -36,6 +57,8 @@ def alive_map(max_age: float = 5.0) -> dict[str, int | None]:
         }
     except Exception:
         result = {}
+    if proc.has_proc():
+        result = _scrub_dead_pids(result, proc.pid_exists)
     _cache = result
     _cache_time = now
     return result
