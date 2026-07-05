@@ -36,6 +36,12 @@ class FakeApp:
     def exit_with_resume(self, session, fork=False):
         self.result = ("resume", session, fork)
 
+    def exit_with_attach(self, target):
+        self.result = ("attach", target)
+
+    def exit_with_tmux_resume(self, session):
+        self.result = ("tmux_resume", session)
+
     def trigger_async_refresh(self):
         pass
 
@@ -206,7 +212,7 @@ def test_sessions_cleanup_mode(monkeypatch):
 
 
 def test_sessions_short_cleanup_preview_excludes_empty_sessions(monkeypatch):
-    import cc_session_control.views.sessions as sv_mod
+    import cc_session_control.views._sessions_cleanup as cl_mod
 
     sessions = [
         _make_session(sid="empty", prompts=0),
@@ -214,7 +220,7 @@ def test_sessions_short_cleanup_preview_excludes_empty_sessions(monkeypatch):
         _make_session(sid="short2", prompts=2),
         _make_session(sid="long", prompts=3),
     ]
-    monkeypatch.setattr(sv_mod, "scan", lambda: sessions)
+    monkeypatch.setattr(cl_mod, "scan", lambda: sessions)
 
     app = FakeApp()
     view = SessionsView(app)
@@ -223,6 +229,68 @@ def test_sessions_short_cleanup_preview_excludes_empty_sessions(monkeypatch):
     view._enter_preview("short")
 
     assert {s.sid for s in view._preview_sessions} == {"short1", "short2"}
+
+
+def _sessions_view_with(monkeypatch, session):
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._sessions = [session]
+    view._all_sessions = [session]
+    view._rebuild()
+    return app, view
+
+
+def test_t_key_refuses_current_session(monkeypatch):
+    s = _make_session(sid="cur", alive=True, current=True, pid=1)
+    app, view = _sessions_view_with(monkeypatch, s)
+    view.handle_key("t")
+    assert app.result is None
+    assert "不能 tmux 接回当前会话" in app._notifications[-1]
+
+
+def test_t_key_attaches_tmux_hosted_session_without_confirm(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+    s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
+    app, view = _sessions_view_with(monkeypatch, s)
+    monkeypatch.setattr(sv_mod, "attach_target", lambda s: "cc:2")
+    view.handle_key("t")
+    assert app.result == ("attach", "cc:2")
+    assert app._confirm_messages == []
+
+
+def test_t_key_live_bare_terminal_confirms_takeover(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+    s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
+    app, view = _sessions_view_with(monkeypatch, s)
+    monkeypatch.setattr(sv_mod, "attach_target", lambda s: None)
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    view.handle_key("t")
+    assert app.result is None  # blocked on confirm
+    assert "tmux 接回" in app._confirm_messages[-1]
+    app._last_confirm()
+    assert app.result == ("tmux_resume", s)
+
+
+def test_t_key_dead_session_no_confirm(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+    s = _make_session(sid="sid1", alive=False, pid=None)
+    app, view = _sessions_view_with(monkeypatch, s)
+    monkeypatch.setattr(sv_mod, "attach_target", lambda s: None)
+    view.handle_key("t")
+    assert app.result == ("tmux_resume", s)
+    assert app._confirm_messages == []
+
+
+def test_t_key_takeover_gated_when_degraded(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+    s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
+    app, view = _sessions_view_with(monkeypatch, s)
+    monkeypatch.setattr(sv_mod, "attach_target", lambda s: None)
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    view.handle_key("t")
+    assert app.result is None
+    assert app._notifications[-1] == sv_mod._DEGRADED
 
 
 def test_rc_row_selectable():
@@ -886,10 +954,10 @@ def test_cleanup_submenu_exposes_zombie_and_aged_actions(monkeypatch):
 def test_zombie_sweep_preview_and_confirm(monkeypatch):
     # Fix 4: zombie sweep previews the dead pid files (from the shared snapshot's
     # session_procs/cur) and confirm routes to remove_zombie_session_files.
-    import cc_session_control.views.sessions as sv_mod
+    import cc_session_control.views._sessions_cleanup as cl_mod
     from cc_session_control.models import SessionProc
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(cl_mod.proc, "current_determinable", lambda: True)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -901,7 +969,7 @@ def test_zombie_sweep_preview_and_confirm(monkeypatch):
     assert view._preview_action == "zombies"
 
     swept = {"n": 0}
-    monkeypatch.setattr(sv_mod, "remove_zombie_session_files",
+    monkeypatch.setattr(cl_mod, "remove_zombie_session_files",
                         lambda procs, cur: swept.__setitem__("n", len(procs)) or 1)
     view._confirm_cleanup()
     assert swept["n"] == 1
@@ -925,10 +993,10 @@ def test_zombie_sweep_gated_when_undeterminable(monkeypatch):
 
 def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
     # Fix 4: the age sweep is mtime-only -> NOT R10-gated; works even with no /proc.
-    import cc_session_control.views.sessions as sv_mod
+    import cc_session_control.views._sessions_cleanup as cl_mod
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
-    monkeypatch.setattr(sv_mod, "list_aged_entries", lambda *a, **k: ["shell-snapshots/old.sh"])
+    monkeypatch.setattr(cl_mod.proc, "current_determinable", lambda: False)
+    monkeypatch.setattr(cl_mod, "list_aged_entries", lambda *a, **k: ["shell-snapshots/old.sh"])
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -938,7 +1006,7 @@ def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
     assert view._preview_action == "aged"
 
     swept = {"n": 0}
-    monkeypatch.setattr(sv_mod, "remove_aged_entries",
+    monkeypatch.setattr(cl_mod, "remove_aged_entries",
                         lambda *a, **k: swept.__setitem__("n", 1) or 1)
     view._confirm_cleanup()
     assert swept["n"] == 1

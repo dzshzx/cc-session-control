@@ -212,6 +212,63 @@ def run_in_tmux(session: str, window: str, cmd: str) -> bool:
     return _tmux_new_session(session, window, cmd)
 
 
+def _tmux_list_all_panes() -> list[tuple[str, int]]:
+    """[(\"session:window_index\", pane_pid)] across ALL tmux sessions; [] on failure."""
+    cp = _tmux_run(
+        ["list-panes", "-a", "-F", "#{session_name}:#{window_index}\t#{pane_pid}"]
+    )
+    if cp is None:
+        return []
+    out: list[tuple[str, int]] = []
+    for line in cp.stdout.splitlines():
+        target, _, pid_s = line.partition("\t")
+        try:
+            out.append((target.strip(), int(pid_s.strip())))
+        except ValueError:
+            continue
+    return out
+
+
+def window_containing(
+    panes: list[tuple[str, int]], ancestors: set[int]
+) -> str | None:
+    """PURE: the pane target whose pane_pid appears in `ancestors`, or None.
+
+    A session process hosted by a tmux pane has that pane's pid in its
+    ancestor chain (the pane pid is the window's root process)."""
+    for target, pane_pid in panes:
+        if pane_pid in ancestors:
+            return target
+    return None
+
+
+def find_session_window(pids: list[int]) -> str | None:
+    """The tmux window (\"session:index\") hosting any of `pids`, or None.
+
+    Walks each pid's `/proc` ancestor chain and matches it against every tmux
+    pane's root pid — finds windows in ANY tmux session (cc, rc, user-made)."""
+    panes = _tmux_list_all_panes()
+    if not panes:
+        return None
+    for pid in pids:
+        target = window_containing(panes, proc.ancestors_of(pid))
+        if target:
+            return target
+    return None
+
+
+def select_window(target: str) -> bool:
+    """tmux select-window -t <target>; False on failure (non-fatal for attach)."""
+    cp = _tmux_run(["select-window", "-t", target])
+    return cp is not None and cp.returncode == 0
+
+
+def switch_client(target: str) -> bool:
+    """tmux switch-client -t <target> — the inside-tmux attach equivalent."""
+    cp = _tmux_run(["switch-client", "-t", target])
+    return cp is not None and cp.returncode == 0
+
+
 def _read_rc_at_startup(directory: str) -> bool | None:
     for name in ("settings.local.json", "settings.json"):
         path = os.path.join(directory, ".claude", name)

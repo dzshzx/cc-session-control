@@ -98,18 +98,13 @@ def pid_alive(pid: int | None, proc_start: str | None) -> bool:
     return st == proc_start
 
 
-def ancestor_pids() -> set[int]:
-    """csctl's own ancestor pid chain (including self).
-
-    A session whose pid is in this set is the "current" one (it launched
-    csctl) and is protected. Linux/WSL only — returns just `{getpid()}` when
-    `/proc` is unavailable, in which case current can't be determined and
-    callers must degrade (see R10).
-    """
-    pids = {os.getpid()}
+def ancestors_of(start_pid: int) -> set[int]:
+    """Ancestor pid chain of `start_pid` (including itself), via `/proc` ppid
+    walk. Returns just `{start_pid}` when `/proc` is unavailable."""
+    pids = {start_pid}
     if not has_proc():
         return pids
-    pid = os.getpid()
+    pid = start_pid
     for _ in range(40):
         try:
             with open(f"{_PROC}/{pid}/stat") as fh:
@@ -122,6 +117,17 @@ def ancestor_pids() -> set[int]:
         pids.add(ppid)
         pid = ppid
     return pids
+
+
+def ancestor_pids() -> set[int]:
+    """csctl's own ancestor pid chain (including self).
+
+    A session whose pid is in this set is the "current" one (it launched
+    csctl) and is protected. Linux/WSL only — returns just `{getpid()}` when
+    `/proc` is unavailable, in which case current can't be determined and
+    callers must degrade (see R10).
+    """
+    return ancestors_of(os.getpid())
 
 
 # --- project RC server discovery (R5 / D5) ---------------------------------

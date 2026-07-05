@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import urwid
 
 from ..actions.session_ops import (
+    attach_target,
     relaunch_in_tmux,
     resume_cmd,
     terminate_session,
@@ -16,51 +16,25 @@ from ..actions.session_ops import (
     would_take_over,
 )
 from ..data import liveness, proc, registry
-from ..data.cleanup import (
-    cleanup_classified,
-    list_aged_entries,
-    list_orphan_dirs,
-    prune_sessions,
-    remove_aged_entries,
-    remove_orphan_dirs,
-    remove_session,
-    remove_zombie_session_files,
-    select_zombie_pids,
-)
+from ..data.cleanup import cleanup_classified, remove_session
 from ..data.sessions import scan
 from ..models import AgentJob, Session, SessionProc
 from ._session_row import (
     _SESSION_HEADER,
     SessionRow,
-    _ActionRow,
     _hidden_marker,
     _PreviewRow,
 )
+from ._sessions_cleanup import _DEGRADED, CleanupMixin
 
 if TYPE_CHECKING:
     from ..data.snapshot import WorldSnapshot
 
     from ..app import App
 
-# R10/D7: refusal shown when the "current" session can't be determined (no /proc)
-# — session-keyed destructive ops are disabled rather than silently doing nothing.
-_DEGRADED = "liveness 降级：破坏性操作已禁用"
 
-# Submenu actions. `stat` keys index `cleanup_classified`. The age sweep
-# (Strategy B) is mtime-only/session-agnostic, so it is NOT R10-gated; every
-# other action is.
-_CLEANUP_ACTIONS = [
-    {"key": "empty",   "label": "空壳会话(0提问)",      "stat": "empty",        "gated": True},
-    {"key": "short",   "label": "短会话(≤2提问)",       "stat": "short",        "gated": True},
-    {"key": "orphans", "label": "孤儿目录(sid 键)",      "stat": "orphan_dirs",  "gated": True},
-    {"key": "zombies", "label": "僵尸会话文件(pid 键)",  "stat": "zombie_procs", "gated": True},
-    {"key": "aged",    "label": "过期全局文件(按天)",    "stat": "aged_entries", "gated": False},
-]
-_GATED_ACTIONS = {a["key"] for a in _CLEANUP_ACTIONS if a["gated"]}
-
-
-class SessionsView:
-    # mode: "list" | "filter" | "cleanup" | "preview"
+class SessionsView(CleanupMixin):
+    # mode: "list" | "filter" | "cleanup" | "preview" | "help"
     def __init__(self, app: App) -> None:
         self.app = app
         self._sessions: list[Session] = []
@@ -98,9 +72,14 @@ class SessionsView:
             return "Enter 预览待清理项 · Esc 返回会话列表"
         if self._mode == "preview":
             return "Enter 确认清理 · Esc 取消"
-        # High-frequency keys only; y/R/c/h move to `?` help to keep one line
-        # (D3). `r 刷新` is in the App-level footer prefix, not here.
-        return "Enter 接回 · s 停止 · f 分叉 · d 删除 · / 过滤 · ? 帮助"
+        # Full key table (user preference 2026-07-05): every list-mode key gets a
+        # brief hint; `?` holds the detailed semantics. The footer Text wraps
+        # (urwid wrap='space'), trading vertical rows for width on narrow
+        # terminals. `r 刷新` stays in the App-level footer prefix, not here.
+        return (
+            "Enter 接回 · t tmux接回 · f 分叉 · s 停止 · R 转后台 · d 删除 · "
+            "y 复制命令 · h 桥接显隐 · c 清理 · / 过滤 · ? 详细说明"
+        )
 
     def _update_footer(self) -> None:
         if self.app.views[self.app._active] is not self:
@@ -249,13 +228,6 @@ class SessionsView:
             f" 共 {len(self._all_sessions)} 条会话 · 运行 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{cleanup_text}"
         )
 
-    def _rebuild_cleanup(self) -> None:
-        c = self._classified
-        self._cleanup_walker.clear()
-        for a in _CLEANUP_ACTIONS:
-            count = c.get(a["stat"], 0)
-            self._cleanup_walker.append(_ActionRow(a["key"], a["label"], count))
-
     def _selected(self) -> Session | None:
         if not self.walker:
             return None
@@ -267,8 +239,7 @@ class SessionsView:
     def _apply_filter(self) -> None:
         # D9: the hide filter unions the transcript `hidden` tags with the
         # registry `source == "sdk"` signal (Session.bridge_or_sdk), so the
-        # badge and the `h` toggle stay consistent regardless of which signal
-        # flagged the session.
+        # badge and the `h` toggle never disagree.
         visible = [
             s for s in self._all_sessions
             if self._show_hidden or not s.bridge_or_sdk
@@ -300,36 +271,6 @@ class SessionsView:
         self._rebuild()
         self.app._restore_footer()
 
-    # --- Cleanup submenu ---
-
-    def _enter_cleanup(self) -> None:
-        self._mode = "cleanup"
-        self._rebuild_cleanup()
-        cleanup_list = urwid.ListBox(self._cleanup_walker)
-        title = urwid.AttrMap(urwid.Text(" 清理会话", align="center"), "col_header")
-        box_content = urwid.Frame(cleanup_list, header=title)
-        box = urwid.LineBox(box_content)
-        overlay = urwid.Overlay(
-            box, self._list_body,
-            align="center", width=("relative", 50),
-            valign="middle", height=min(len(self._cleanup_walker) + 4, 20),
-        )
-        self._body.original_widget = overlay
-        self._update_footer()
-
-    def _exit_cleanup(self) -> None:
-        self._mode = "list"
-        self._body.original_widget = self._list_body
-        self._update_footer()
-
-    def _selected_action(self) -> str | None:
-        if not self._cleanup_walker:
-            return None
-        widget = self._cleanup_walker.get_focus()[0]
-        if isinstance(widget, _ActionRow):
-            return widget.action_key
-        return None
-
     def _show_overlay(self, title: str, rows: list, height: int | None = None) -> None:
         preview_walker = urwid.SimpleFocusListWalker(rows)
         preview_list = urwid.ListBox(preview_walker)
@@ -342,85 +283,6 @@ class SessionsView:
             valign="middle", height=h,
         )
         self._body.original_widget = overlay
-
-    def _open_preview(self, action: str, title: str, rows: list) -> None:
-        """Shared preview-overlay entry for a dir/file sweep (no session list)."""
-        self._mode = "preview"
-        self._preview_action = action
-        self._preview_sessions = []
-        self._show_overlay(title, rows)
-        self._update_footer()
-
-    def _enter_preview(self, action: str) -> None:
-        # R10/D7: session-keyed destructive sweeps need a determinable "current"
-        # (without /proc every pid looks dead, so they'd nuke the live session).
-        # Refuse HONESTLY — never let the refusal read as "nothing to clean".
-        if action in _GATED_ACTIONS and not proc.current_determinable():
-            self.app.notify(_DEGRADED)
-            return
-
-        if action in ("empty", "short"):
-            sessions = scan()
-            if action == "empty":
-                targets = prune_sessions(sessions, max_prompts=0)
-                label = "空壳会话"
-            else:
-                targets = [s for s in prune_sessions(sessions, max_prompts=2) if s.prompts > 0]
-                label = "短会话(≤2提问)"
-            if not targets:
-                self.app.notify(f"无{label}需要清理")
-                return
-            self._mode = "preview"
-            self._preview_action = action
-            self._preview_sessions = targets
-            rows = []
-            for s in targets:
-                when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
-                cwd = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
-                line = f"{when}  p{s.prompts}  {s.label[:60]}  ({cwd})"
-                rows.append(_PreviewRow(line))
-            self._show_overlay(f"将清理 {len(targets)} 条{label}", rows)
-            self._update_footer()
-        elif action == "orphans":
-            orphan_paths = list_orphan_dirs(scan())
-            if not orphan_paths:
-                self.app.notify("无孤儿目录需要清理")
-                return
-            rows = [_PreviewRow(p) for p in orphan_paths]
-            self._open_preview(action, f"将清理 {len(orphan_paths)} 个孤儿目录", rows)
-        elif action == "zombies":
-            pids = select_zombie_pids(self._session_procs, self._cur)
-            if not pids:
-                self.app.notify("无僵尸会话文件需要清理")
-                return
-            rows = [_PreviewRow(f"sessions/{pid}.json") for pid in pids]
-            self._open_preview(action, f"将清理 {len(pids)} 个僵尸会话文件", rows)
-        elif action == "aged":
-            entries = list_aged_entries()
-            if not entries:
-                self.app.notify("无过期文件需要清理")
-                return
-            rows = [_PreviewRow(e) for e in entries]
-            self._open_preview(action, f"将清理 {len(entries)} 个过期项", rows)
-
-    def _confirm_cleanup(self) -> None:
-        action = self._preview_action
-        if action in ("empty", "short"):
-            removed = sum(1 for t in self._preview_sessions if remove_session(t))
-            self.app.notify(f"已清理 {removed} 条会话")
-        elif action == "orphans":
-            count = remove_orphan_dirs(scan())
-            self.app.notify(f"已清理 {count} 个孤儿目录")
-        elif action == "zombies":
-            count = remove_zombie_session_files(self._session_procs, self._cur)
-            self.app.notify(f"已清理 {count} 个僵尸会话文件")
-        elif action == "aged":
-            count = remove_aged_entries()
-            self.app.notify(f"已清理 {count} 个过期项")
-        self._preview_action = None
-        self._preview_sessions = []
-        self._enter_cleanup()
-        self.app.trigger_async_refresh()
 
     def _do_terminate(self, s: Session) -> None:
         """Stop body, run only after the y/n confirm accepts."""
@@ -449,6 +311,28 @@ class SessionsView:
             )
         else:
             self.app.exit_with_resume(s, fork)
+
+    def _tmux_resume_or_confirm(self, s: Session) -> None:
+        """`t` key: attach when already tmux-hosted, else resume inside tmux.
+
+        A live tmux-hosted session is entered in place — no kill, no confirm, no
+        R10 gate (nothing destructive). Otherwise mirrors `R`: `would_take_over`
+        (the single should_kill source) decides the confirm + degrade gate.
+        """
+        target = attach_target(s)
+        if target:
+            self.app.exit_with_attach(target)
+            return
+        if would_take_over(s) and not proc.current_determinable():
+            self.app.notify(_DEGRADED)
+            return
+        if would_take_over(s):
+            self.app.confirm(
+                f"tmux 接回「{s.label[:30]}」？将先终止原进程。",
+                lambda: self.app.exit_with_tmux_resume(s),
+            )
+        else:
+            self.app.exit_with_tmux_resume(s)
 
     # --- Key dispatch ---
 
@@ -495,6 +379,11 @@ class SessionsView:
                 self.app.notify("不能接回当前会话")
                 return
             self._resume_or_confirm(s, fork=False)
+        elif key == "t" and s:
+            if s.current:
+                self.app.notify("不能 tmux 接回当前会话")
+                return
+            self._tmux_resume_or_confirm(s)
         elif key == "f" and s:
             if s.current:
                 self.app.notify("不能分叉当前会话")
@@ -568,10 +457,11 @@ class SessionsView:
 
     def _show_help(self) -> None:
         lines = [
-            "（footer 未列的键也可用）",
-            "",
             "会话操作:",
-            "  Enter  接回选中的会话（在终端中恢复；接运行中的会话会先确认接管）",
+            "  Enter  接回选中的会话（在当前终端恢复；接运行中的会话会先确认接管）",
+            "  t      tmux 接回（会话恢复进 tmux 窗口并接入前台——终端断线会话不死，",
+            "         重连后 tmux attach 可捡回；已在 tmux 中的会话直接接入不重启；",
+            "         接运行中的裸终端会话会先确认接管）",
             "  f      分叉会话（创建副本后接回，不影响原会话）",
             "  s      停止运行中的会话（发送 SIGTERM，需二次确认）",
             "  R      转入 tmux 后台并开启远控（脱离终端，手机/网页可接管；",

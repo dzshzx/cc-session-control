@@ -196,6 +196,14 @@ class App:
     def exit_with_resume(self, session: object, fork: bool = False) -> None:
         self._exit(("resume", session, fork))
 
+    def exit_with_attach(self, target: str) -> None:
+        """`t` on a session already living in a tmux window: enter it in place."""
+        self._exit(("attach", target))
+
+    def exit_with_tmux_resume(self, session: object) -> None:
+        """`t` on a dead / bare-terminal session: resume it inside tmux, then enter."""
+        self._exit(("tmux_resume", session))
+
     def set_hints(self, hints: str) -> None:
         """Footer = shared prefix + the active tab's keyhints (D1 single source)."""
         self.footer_text.set_text(FOOTER_PREFIX + hints)

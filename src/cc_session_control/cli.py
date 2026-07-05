@@ -298,15 +298,30 @@ def _cmd_env(args: argparse.Namespace) -> None:
 
 
 def _cmd_tui(args: argparse.Namespace) -> None:
-    from .actions.session_ops import do_resume
+    from .actions.session_ops import do_resume, do_tmux_resume, enter_window
     from .app import App
 
     app = App()
     result = app.run()
 
-    if result and isinstance(result, tuple) and result[0] == "resume":
+    if not result or not isinstance(result, tuple):
+        return
+    if result[0] == "resume":
         _, session, fork = result
         do_resume(session, fork=fork)
+    elif result[0] == "attach":
+        # `t` on a tmux-hosted session: enter its window (exec replaces csctl
+        # outside tmux; switch-client + normal exit inside).
+        if not enter_window(result[1]):
+            print(f"Failed to enter tmux window {result[1]} (is tmux running?)")
+    elif result[0] == "tmux_resume":
+        # `t` on a dead / bare-terminal session: spawn the resume window, then
+        # enter it. Kill semantics (takeover) are handled inside do_tmux_resume.
+        target = do_tmux_resume(result[1])
+        if target is None:
+            print("Failed to resume the session inside tmux (R10 degraded, or tmux unavailable).")
+        elif not enter_window(target):
+            print(f"Session resumed in tmux window {target}, but attaching failed.")
 
 
 def main() -> None:

@@ -146,5 +146,68 @@ def relaunch_in_tmux(s: Session, fork: bool = False) -> bool:
     return rc.run_in_tmux(cfg.tmux_session, _rc_name(s), tmux_resume_cmd(s, fork))
 
 
+def attach_target(s: Session) -> str | None:
+    """The tmux window ("session:index") already hosting this live session.
+
+    Non-None means the `t` key can attach directly — no kill, no respawn (the
+    session survives in place). None for dead sessions or live ones running in
+    a bare terminal (those need `do_tmux_resume`)."""
+    if not s.alive or not s.pid:
+        return None
+    return rc.find_session_window([s.pid])
+
+
+def tmux_foreground_cmd(s: Session) -> str:
+    """Shell command for the `t`-key window: plain resume, NO --remote-control.
+
+    Deliberately unlike `tmux_resume_cmd` (the `R` key): a foreground tmux
+    resume only needs the disconnect safety net; every --remote-control process
+    mints a new cloud environment entry, which piles up with frequent use."""
+    cwd, args, _ = _resume_plan(s)
+    line = shlex.join(args)
+    return f"cd {shlex.quote(cwd)} && {line}" if cwd else line
+
+
+def do_tmux_resume(s: Session) -> str | None:
+    """Kill-if-takeover, spawn the resume window in `cfg.tmux_session`, and
+    return the tmux target to enter ("session:window-name"); None on failure.
+
+    Mirrors `relaunch_in_tmux`'s kill handling (same `_resume_plan` should_kill
+    + R10 refusal); the caller (cli) then calls `enter_window` on the target."""
+    _, _, should_kill = _resume_plan(s)
+    if should_kill and s.pid:
+        if not proc.current_determinable():
+            return None
+        try:
+            os.kill(s.pid, signal.SIGTERM)
+        except Exception:
+            pass
+        time.sleep(1)
+        invalidate_cache()
+    window = _rc_name(s)
+    if not rc.run_in_tmux(cfg.tmux_session, window, tmux_foreground_cmd(s)):
+        return None
+    return f"{cfg.tmux_session}:{window}"
+
+
+def enter_window(target: str) -> bool:
+    """Bring `target` ("session:window") to the user's terminal foreground.
+
+    Outside tmux: exec `tmux attach-session` — replaces the csctl process (does
+    not return on success). Inside tmux ($TMUX set): `switch-client`, then
+    return so the caller exits csctl normally — both paths end csctl, keeping
+    "接回 = 离开 csctl" uniform. select-window failure is non-fatal (the user
+    lands in the session and can pick the window by hand)."""
+    rc.select_window(target)
+    session = target.split(":", 1)[0]
+    if os.environ.get("TMUX"):
+        return rc.switch_client(target)
+    try:
+        os.execvp("tmux", ["tmux", "attach-session", "-t", session])
+    except OSError:
+        return False
+    return True  # unreachable after a successful exec; keeps type-checkers calm
+
+
 def to_clipboard(text: str) -> bool:
     return clipboard.copy(text)
