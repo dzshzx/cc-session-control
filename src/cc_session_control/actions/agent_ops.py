@@ -141,8 +141,24 @@ def resume_takeover(job: AgentJob) -> Session:
         pid=pid,
         alive=alive,
         current=current,
+        proc_start=_host_start(pid),
         source="bg",
         agent_short=job.short,
+    )
+
+
+def _host_start(pid: int | None) -> str:
+    """`proc_start` of the joined host pid ("" when unknown).
+
+    `job_host` deliberately keeps its small `(pid, alive)` shape; this second
+    lookup feeds `take_over`'s kill-time `pid_alive` recheck so the pid-reuse
+    window is closed on the bg-agent path too, not just for scanned sessions.
+    """
+    if not pid:
+        return ""
+    return next(
+        (sp.proc_start for sp in liveness.live_session_procs() if sp.pid == pid),
+        "",
     )
 
 
@@ -164,4 +180,4 @@ def stop_job(job: AgentJob) -> bool:
     pid, alive = job_host(job)
     if not alive or not pid:
         return False
-    return session_ops.take_over(pid) in ("killed", "gone")
+    return session_ops.take_over(pid, _host_start(pid)) in session_ops.TAKE_OVER_OK

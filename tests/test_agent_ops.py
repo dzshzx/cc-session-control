@@ -120,6 +120,8 @@ def test_watch_none_when_absent(tmp_path, monkeypatch):
 def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
     monkeypatch.setattr(ao, "job_host", lambda job: (4242, True))
     monkeypatch.setattr(ao.proc, "ancestor_pids", lambda: set())
+    monkeypatch.setattr(ao.liveness, "live_session_procs", lambda *a, **k: [
+        SessionProc(pid=4242, sid="sid-take", proc_start="777", proc_alive=True)])
     job = _make_job(resume_sid="sid-take", cwd="/tmp/proj")
 
     s = ao.resume_takeover(job)
@@ -128,6 +130,7 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
     assert s.pid == 4242
     assert s.alive is True
     assert s.current is False
+    assert s.proc_start == "777"  # feeds take_over's kill-time pid-reuse recheck
     assert s.source == "bg"
     assert s.agent_short == job.short
 
@@ -170,6 +173,7 @@ def test_stop_job_kills_live_host(monkeypatch):
     import cc_session_control.actions.session_ops as so
     monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(ao, "job_host", lambda job: (4242, True))
+    monkeypatch.setattr(ao.liveness, "live_session_procs", lambda *a, **k: [])
     calls = {"kill": None, "invalidate": 0}
     monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
     monkeypatch.setattr(so.os, "kill", lambda pid, sig: calls.__setitem__("kill", (pid, sig)))

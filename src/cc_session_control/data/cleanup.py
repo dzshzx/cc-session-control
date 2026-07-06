@@ -143,10 +143,10 @@ def known_sids(
 
 def _gather_known(
     sessions: list[Session],
-    session_procs: list[SessionProc] | None,
-    agent_jobs: list[AgentJob] | None,
-    agents_map: dict[str, int | None] | None,
-    cur: set[int] | None,
+    session_procs: list[SessionProc] | None = None,
+    agent_jobs: list[AgentJob] | None = None,
+    agents_map: dict[str, int | None] | None = None,
+    cur: set[int] | None = None,
 ) -> set[str]:
     """Resolve the protected-sid set, self-fetching any omitted source.
 
@@ -216,7 +216,7 @@ def execute_orphan_removals(
     if not proc.current_determinable():
         return 0
     if known is None:
-        known = _gather_known(sessions or [], None, None, None, None)
+        known = _gather_known(sessions or [])
     base_by_label = dict(_sid_dir_paths())
     count = 0
     for entry in entries:
@@ -399,6 +399,9 @@ def execute_session_removals(
     """
     if not proc.current_determinable():
         return 0
+    # This self-fetch mirrors snapshot.liveness_inputs()'s assembly — cleanup
+    # sits BELOW snapshot in the data DAG and cannot import it; keep the two
+    # in sync when the liveness sources change.
     if session_procs is None:
         session_procs = liveness.live_session_procs()
     if agents_map is None:

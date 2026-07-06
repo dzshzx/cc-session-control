@@ -16,6 +16,10 @@ from ..models import Session
 
 TakeOverResult = Literal["killed", "gone", "refused", "failed"]
 
+#: The results a fail-fast caller counts as success (signalled, or nothing
+#: left to signal) — single-sourced so terminate/stop can't diverge on it.
+TAKE_OVER_OK = ("killed", "gone")
+
 
 def take_over(pid: int, proc_start: str = "") -> TakeOverResult:
     """THE kill primitive behind every takeover/stop: R10 gate → kill-time
@@ -57,7 +61,7 @@ def terminate_session(s: Session) -> bool:
     sessions, so they don't invalidate)."""
     if not s.pid:
         return False
-    return take_over(s.pid, s.proc_start) in ("killed", "gone")
+    return take_over(s.pid, s.proc_start) in TAKE_OVER_OK
 
 
 def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:

@@ -75,8 +75,6 @@ def test_snapshot_toggle_away_becomes_orphan(tmp_path, monkeypatch):
     assert snap2.file_referenced_envs == []
     orphans = env.orphan_envs(snap2.file_referenced_envs)
     assert any(e.env_id == "session_X" for e in orphans)
-    manual = env.manual_delete_list(snap2.file_referenced_envs)
-    assert any(r["env_id"] == "session_X" for r in manual)
 
 
 def test_snapshot_reobserve_keeps_single_stable_entry(tmp_path, monkeypatch):

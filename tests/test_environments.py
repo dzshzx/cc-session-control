@@ -237,9 +237,9 @@ def test_reconcile_owns_the_order_invariant(tmp_path, monkeypatch):
     assert ledger_keys == {("session", "GONE"), ("session", "LIVE"), ("session", "ZOMB")}
 
 
-# --- manual delete list ----------------------------------------------------
+# --- orphans as the manual-delete checklist ---------------------------------
 
-def test_manual_delete_list_includes_env_namespace(tmp_path, monkeypatch):
+def test_orphans_include_env_namespace(tmp_path, monkeypatch):
     _use_tmp_ledger(tmp_path, monkeypatch)
     # env_* is the project RC server namespace (pushed in by rc in Phase 5);
     # here we upsert one directly to prove it is a manual-delete candidate.
@@ -251,22 +251,21 @@ def test_manual_delete_list_includes_env_namespace(tmp_path, monkeypatch):
         now=100.0,
     )
     # Nothing observed -> both are orphans / candidates.
-    rows = env.manual_delete_list()
-    ids = {r["env_id"] for r in rows}
-    assert ids == {"cse_AAA", "env_ENVKEY"}
-    env_row = next(r for r in rows if r["env_id"] == "env_ENVKEY")
-    assert env_row["prefix"] == "env"
-    assert env_row["last_seen"] == 100.0
+    orphans = env.orphan_envs([])
+    assert {e.env_id for e in orphans} == {"cse_AAA", "env_ENVKEY"}
+    env_row = next(e for e in orphans if e.env_id == "env_ENVKEY")
+    assert env_row.prefix == "env"
+    assert env_row.last_seen == 100.0
 
 
-def test_manual_delete_list_excludes_currently_observed(tmp_path, monkeypatch):
+def test_orphans_exclude_currently_observed(tmp_path, monkeypatch):
     _use_tmp_ledger(tmp_path, monkeypatch)
     env.upsert(
         [EnvRecord("cse", "AAA", "sid-a"), EnvRecord("session", "BBB", "sid-b")],
         now=100.0,
     )
-    rows = env.manual_delete_list([EnvRecord("cse", "AAA", "sid-a")])
-    assert {r["env_id"] for r in rows} == {"session_BBB"}
+    orphans = env.orphan_envs([EnvRecord("cse", "AAA", "sid-a")])
+    assert {e.env_id for e in orphans} == {"session_BBB"}
 
 
 # --- corrupt / missing ledger is safe --------------------------------------
@@ -275,7 +274,6 @@ def test_missing_ledger_is_safe(tmp_path, monkeypatch):
     _use_tmp_ledger(tmp_path, monkeypatch)
     assert env.current_envs([]) == []
     assert env.orphan_envs([]) == []
-    assert env.manual_delete_list() == []
 
 
 def test_corrupt_ledger_lines_skipped(tmp_path, monkeypatch):
@@ -366,7 +364,7 @@ def test_orphan_appears_after_env_toggles_away(tmp_path, monkeypatch):
     assert file_ref2 == []
     orphans = env.orphan_envs(file_ref2)
     assert [e.env_id for e in orphans] == ["session_X"]
-    assert {r["env_id"] for r in env.manual_delete_list(file_ref2)} == {"session_X"}
+    assert {e.env_id for e in env.orphan_envs(file_ref2)} == {"session_X"}
 
 
 def test_file_referenced_zombie_is_neither_current_nor_orphan(tmp_path, monkeypatch):

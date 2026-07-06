@@ -460,22 +460,3 @@ def orphan_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
     return sorted(out, key=lambda e: e.last_seen, reverse=True)
 
 
-def manual_delete_list(observed: list[EnvRecord] | None = None) -> list[dict[str, Any]]:
-    """Orphans formatted for manual deletion on claude.ai/code (R6).
-
-    Each row carries the full namespaced `env_id` (incl. `env_*`), `prefix`,
-    `key`, last-known `bound_sid`, and `last_seen`. With no observation passed,
-    every ledger entry is treated as a candidate. There is NO deregister action
-    — this is a checklist for the human, observe-and-forget only.
-    """
-    orphans = orphan_envs(observed or [])
-    return [
-        {
-            "env_id": e.env_id,
-            "prefix": e.prefix,
-            "key": e.key,
-            "bound_sid": e.bound_sid,
-            "last_seen": e.last_seen,
-        }
-        for e in orphans
-    ]
