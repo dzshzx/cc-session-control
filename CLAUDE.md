@@ -87,7 +87,7 @@ The invariant is **import direction, not purity**: `views` import from `data`/`a
 
 Scanning hits the filesystem, `/proc`, and subprocesses, so it must not block the urwid loop, and the three tabs must not each re-scan it (R11/D8). The pattern (`App.trigger_async_refresh`):
 
-1. A daemon thread computes **one** `data/snapshot.py::build_world_snapshot()` for the whole cycle (transcripts, registries, `/proc` walk, RC servers — each scanned ONCE), then calls `view.fetch_pending(snapshot)` on each view. A failed build degrades to `fetch_pending(None)` (per-view self-fetch). Views write only their `_pending` field and **never touch widgets directly**.
+1. A daemon thread computes **one** `data/snapshot.py::build_world_snapshot()` for the whole cycle (transcripts, registries, `/proc` walk, RC servers — each scanned ONCE), then calls `view.fetch_pending(snapshot)` on each view. A failed build degrades to `fetch_pending(None)` (per-view self-fetch) — and the self-fetch reuses the SAME assembly, not a mirror: the Sessions view calls `snapshot.liveness_inputs()` (the `(session_procs, cur, agent_jobs, agents_map)` tuple `build_world_snapshot` itself consumes), the Agents view calls `liveness.enrich_jobs(...)`, and RC re-calls the same `rc.scan()`/`rc.scan_servers()`. Views write only their `_pending` field and **never touch widgets directly**.
 2. The thread writes one byte to a pipe registered via `loop.watch_pipe(self._on_pipe)`.
 3. `_on_pipe` runs on the main loop and calls `apply_data()` on each view, which swaps `_pending` into the live walker.
 

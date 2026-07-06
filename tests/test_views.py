@@ -482,12 +482,11 @@ def test_sessions_view_fetch_pending(monkeypatch):
     fake = [_make_session(sid="x1")]
     monkeypatch.setattr(sv_mod, "scan", lambda: fake)
     # The submenu counts (and the derived status-bar stats) now come from the
-    # frozen CleanupPlan; stub its builder so the self-fetch does no disk IO.
+    # frozen CleanupPlan; stub its builder + the shared self-fetch assembly so
+    # the no-snapshot path does no disk IO.
     from cc_session_control.data.cleanup import CleanupPlan
     monkeypatch.setattr(sv_mod, "build_plan", lambda *a, **k: CleanupPlan())
-    monkeypatch.setattr(sv_mod.registry, "read_session_procs", lambda *a, **k: [])
-    monkeypatch.setattr(sv_mod.registry, "read_agent_jobs", lambda *a, **k: [])
-    monkeypatch.setattr(sv_mod.liveness, "alive_map", lambda *a, **k: {})
+    monkeypatch.setattr(sv_mod, "liveness_inputs", lambda: ([], set(), [], {}))
 
     app = FakeApp()
     view = SessionsView(app)

@@ -49,6 +49,29 @@ class WorldSnapshot:
     cur: set[int] = field(default_factory=set)
 
 
+def liveness_inputs() -> tuple[
+    list[SessionProc], set[int], list[AgentJob], dict[str, int | None]
+]:
+    """The shared liveness inputs — `(session_procs, cur, agent_jobs,
+    agents_map)` — fetched ONCE, jobs already host-enriched.
+
+    Both `build_world_snapshot` and the Sessions view's `fetch_pending(None)`
+    self-fetch consume this, so the degraded path is the same assembly instead
+    of a hand-kept mirror that can drift. Each read swallows its own errors →
+    safe empties.
+    """
+    session_procs = liveness.live_session_procs()
+    try:
+        agent_jobs = liveness.enrich_jobs(registry.read_agent_jobs(), session_procs)
+    except Exception:
+        agent_jobs = []
+    try:
+        agents_map = liveness.alive_map()
+    except Exception:
+        agents_map = {}
+    return session_procs, proc.ancestor_pids(), agent_jobs, agents_map
+
+
 def build_world_snapshot() -> WorldSnapshot:
     """Compute the shared per-cycle world once (worker thread, R11/D8).
 
@@ -57,13 +80,8 @@ def build_world_snapshot() -> WorldSnapshot:
     registry reads are ~5s-TTL cached so the few repeat reads inside `scan()`
     hit the cache. Each callee swallows its own errors and returns safe empties.
     """
-    session_procs = liveness.live_session_procs()
+    session_procs, cur, agent_jobs, agents_map = liveness_inputs()
     all_sessions = sessions.scan()
-    agent_jobs = liveness.enrich_jobs(registry.read_agent_jobs(), session_procs)
-    # Cheap, cached/inexpensive liveness inputs surfaced for the cleanup submenu
-    # (the registry read above + scan() already warmed alive_map's 5s cache).
-    agents_map = liveness.alive_map()
-    cur = proc.ancestor_pids()
     rc_projects = rc.scan()
     rc_servers = rc.scan_servers()
     # R6 ledger persistence (the whole point of the ledger): record EVERY env an

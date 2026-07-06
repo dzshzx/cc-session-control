@@ -16,9 +16,10 @@ from ..actions.session_ops import (
     terminate_session,
     to_clipboard,
 )
-from ..data import liveness, proc, registry
+from ..data import proc
 from ..data.cleanup import CleanupPlan, build_plan, remove_session
 from ..data.sessions import scan
+from ..data.snapshot import liveness_inputs
 from ..models import AgentJob, Session, SessionProc
 from ._base import ListTabView
 from ._confirm import DEGRADED as _DEGRADED
@@ -141,7 +142,7 @@ class SessionsView(CleanupMixin, ListTabView):
 
     def load(self) -> None:
         sessions = scan()
-        procs, cur, jobs, agents = self._self_fetch_liveness()
+        procs, cur, jobs, agents = liveness_inputs()
         self._all_sessions = sessions
         self._plan = self._build_plan(sessions, procs, cur, jobs, agents)
         self._classified = self._plan.counts()
@@ -149,26 +150,6 @@ class SessionsView(CleanupMixin, ListTabView):
         self._loaded = True
         self._apply_filter()
         self._rebuild()
-
-    def _self_fetch_liveness(
-        self,
-    ) -> tuple[list[SessionProc], set[int], list[AgentJob], dict[str, int | None]]:
-        """No-snapshot liveness inputs (back-compat / tests). Swallows errors.
-
-        Mirrors what `build_world_snapshot` computes so the submenu counts + the
-        zombie sweep work even without a shared snapshot. Liveness injection goes
-        through the one `liveness.live_session_procs` seam, same as the snapshot.
-        """
-        procs = liveness.live_session_procs()
-        try:
-            jobs = registry.read_agent_jobs()
-        except Exception:
-            jobs = []
-        try:
-            agents = liveness.alive_map()
-        except Exception:
-            agents = {}
-        return procs, proc.ancestor_pids(), jobs, agents
 
     def _build_plan(
         self,
@@ -206,7 +187,7 @@ class SessionsView(CleanupMixin, ListTabView):
             jobs, agents = snapshot.agent_jobs, snapshot.agents_map
         else:
             sessions = scan()
-            procs, cur, jobs, agents = self._self_fetch_liveness()
+            procs, cur, jobs, agents = liveness_inputs()
         plan = self._build_plan(sessions, procs, cur, jobs, agents)
         self.set_pending(sessions)
         self._pending_plan = plan
