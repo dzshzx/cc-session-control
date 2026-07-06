@@ -204,21 +204,27 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
 
 
 def test_scan_marks_missing_directory(tmp_path, monkeypatch):
-    """A trusted/enabled project whose workspace dir is gone stays listed
-    (claude.json / rc-enabled still reference it) but gets dir_exists=False."""
+    """A missing-dir project stays listed (dir_exists=False) only while it is
+    still actionable — in the autostart list or holding a tmux window. Pure
+    trust residue (only ~/.claude.json references the deleted dir) is dropped:
+    csctl can't act on it and never edits claude's files."""
     ws = tmp_path / "workspace"
     (ws / "alive").mkdir(parents=True)
     cj = _write_claude_json(tmp_path, {
         str(ws / "alive"): {"hasTrustDialogAccepted": True},
         str(ws / "deleted"): {"hasTrustDialogAccepted": True},
+        str(ws / "gone-running"): {"hasTrustDialogAccepted": True},
     })
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
     monkeypatch.setattr(rc.cfg, "workspace", ws)
     monkeypatch.setattr(rc, "list_enabled", lambda: ["gone-enabled"])
-    monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    monkeypatch.setattr(rc, "_tmux_windows", lambda: ["gone-running"])
+    monkeypatch.setattr(rc, "_is_alive", lambda name: True)
 
     rows = {p.name: p for p in rc.scan()}
-    assert set(rows) == {"alive", "deleted", "gone-enabled"}
+    assert set(rows) == {"alive", "gone-enabled", "gone-running"}
+    assert "deleted" not in rows                     # trust-only residue hidden
     assert rows["alive"].dir_exists is True
-    assert rows["deleted"].dir_exists is False       # stale trust entry
     assert rows["gone-enabled"].dir_exists is False  # stale rc-enabled entry
+    assert rows["gone-running"].dir_exists is False  # window survives dir removal
+    assert rows["gone-running"].status == "running"

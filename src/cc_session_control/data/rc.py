@@ -183,6 +183,15 @@ def scan() -> list[RCProject]:
     for name in all_names:
         directory = str(cfg.workspace / name)
         in_windows = name in windows
+        dir_exists = os.path.isdir(directory)
+        if not dir_exists and name not in enabled and not in_windows:
+            # Pure trust residue: the directory is gone and only claude's own
+            # trust record (~/.claude.json) still references it. csctl can't
+            # act on it (no start, and it never edits claude's files), so it
+            # is dropped instead of rendered as a ✖ 缺失 row. Missing-dir
+            # projects that ARE actionable (in the autostart list, or with a
+            # live/dead tmux window) stay listed.
+            continue
         if in_windows:
             status = "running" if _is_alive(name) else "dead"
         else:
@@ -195,7 +204,7 @@ def scan() -> list[RCProject]:
             auto_start=name in enabled,
             rc_at_startup=_read_rc_at_startup(directory),
             spawn_mode=_read_spawn_mode(name),
-            dir_exists=os.path.isdir(directory),
+            dir_exists=dir_exists,
         ))
     return result
 
