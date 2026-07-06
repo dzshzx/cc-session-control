@@ -66,6 +66,31 @@ class ListTabView:
             return None
         return self.walker.get_focus()[0]
 
+    # --- key-table dispatch (see views/_keytable.py) ---
+
+    #: the view's single-source key table; subclasses override.
+    KEY_TABLE: tuple = ()
+
+    def _dispatch_key(self, key: str) -> None:
+        """List-mode dispatch driven by `KEY_TABLE` — the same declaration that
+        generates the footer hints and the help overlay. A selection-needing
+        key with nothing selected is ignored (matches the old `and s` guards)."""
+        for e in self.KEY_TABLE:
+            if key not in e.keys:
+                continue
+            handler = getattr(self, e.handler)
+            if e.needs_selection:
+                sel = self._selected()
+                if sel is not None:
+                    handler(sel)
+            else:
+                handler()
+            return
+
+    def _key_refresh(self) -> None:
+        """`r` — the footer-prefix promise, dispatched like any table key."""
+        self.app.refresh_with_notice()
+
     def _update_footer(self) -> None:
         if self.app.is_active(self):
             self.app.set_hints(self.keyhints())

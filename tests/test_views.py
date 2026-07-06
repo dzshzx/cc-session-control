@@ -399,10 +399,20 @@ def test_session_header_and_row_share_one_colspec():
         assert ho == ro  # same sizing options per column
 
 
+def test_key_table_handlers_resolve():
+    # KEY_TABLE binds handlers by method NAME; a typo would only surface on the
+    # actual keypress, so resolve every handler up front.
+    from cc_session_control.views.agents import AgentsView
+    for view_cls in (SessionsView, RCView, AgentsView):
+        view = view_cls(FakeApp())
+        for entry in view_cls.KEY_TABLE:
+            handler = getattr(view, entry.handler, None)
+            assert callable(handler), (view_cls.__name__, entry.handler)
+
+
 def test_footer_keyhints_list_every_list_mode_key():
-    # Full-key-table contract (user preference 2026-07-05): the footer names
-    # every key the view's handle_key dispatches in list mode (r/Tab/q live in
-    # the App-level FOOTER_PREFIX). ? holds the detailed help.
+    # Footer, help, and dispatch are all generated from each view's KEY_TABLE
+    # (single source), so this now guards content (no entry deleted), not drift.
     sessions_hints = SessionsView(FakeApp()).keyhints()
     for key in ("Enter", "t", "f", "s", "R", "d", "y", "h", "c", "/", "?"):
         assert f"{key} " in sessions_hints, f"sessions footer missing {key}"

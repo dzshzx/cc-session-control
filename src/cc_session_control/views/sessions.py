@@ -20,6 +20,7 @@ from ..models import AgentJob, Session, SessionProc
 from ._base import ListTabView
 from ._confirm import DEGRADED as _DEGRADED
 from ._confirm import confirm_takeover, stop_message
+from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 from ._session_row import (
     _SESSION_HEADER,
@@ -38,6 +39,68 @@ class SessionsView(CleanupMixin, ListTabView):
     # mode: "list" | "filter" | "cleanup" | "preview" | "help"
 
     OVERLAY_WIDTH = 70
+
+    # Single source for every list-mode key: footer hints, help overlay, and
+    # dispatch are all generated from this table (views/_keytable.py). Full key
+    # table in the footer is a user preference (2026-07-05); `r 刷新` stays in
+    # the App-level FOOTER_PREFIX, so its entry is hint-less here.
+    KEY_TABLE = (
+        Key(("enter",), "Enter 接回", "_key_resume", section="会话操作:", help=(
+            "  Enter  接回选中的会话（在当前终端恢复；接运行中的会话会先确认接管）",
+        )),
+        Key(("t",), "t tmux接回", "_key_tmux", section="会话操作:", help=(
+            "  t      tmux 接回（会话恢复进 tmux 窗口并接入前台——终端断线会话不死，",
+            "         重连后 tmux attach 可捡回；已在 tmux 中的会话直接接入不重启；",
+            "         接运行中的裸终端会话会先确认接管）",
+        )),
+        Key(("f",), "f 分叉", "_key_fork", section="会话操作:", help=(
+            "  f      分叉会话（创建副本后接回，不影响原会话）",
+        )),
+        Key(("s",), "s 停止", "_key_stop", section="会话操作:", help=(
+            "  s      停止运行中的会话（发送 SIGTERM，需二次确认）",
+        )),
+        Key(("R",), "R 转后台", "_key_relaunch", section="会话操作:", help=(
+            "  R      转入 tmux 后台并开启远控（脱离终端，手机/网页可接管；",
+            "         接运行中的会话会先确认接管）",
+        )),
+        Key(("d",), "d 删除", "_key_delete", section="会话操作:", help=(
+            "  d      删除已结束的会话记录",
+        )),
+        Key(("y",), "y 复制命令", "_key_yank", section="会话操作:", help=(
+            "  y      复制接回命令到剪贴板",
+        )),
+        Key(("h",), "h 桥接显隐", "_key_toggle_hidden", needs_selection=False,
+            section="会话操作:", help=(
+                "  h      显示/隐藏桥接、SDK 会话",
+            )),
+        Key(("c",), "c 清理", "_enter_cleanup", needs_selection=False,
+            section="清理与过滤:", help=(
+                "  c      打开清理子菜单",
+            )),
+        Key(("/",), "/ 过滤", "_enter_filter", needs_selection=False,
+            section="清理与过滤:", help=(
+                "  /      按关键词过滤会话列表",
+            )),
+        Key(("r",), None, "_key_refresh", needs_selection=False,
+            section="清理与过滤:", help=(
+                "  r      刷新",
+            )),
+        Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
+    )
+
+    HELP_LAYOUT = HelpLayout(
+        prefix=(
+            "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 · ○ 停 = 无进程",
+            "        ▸ = 当前会话（启动 csctl 的会话，受保护） · 📱 = 已开远控",
+            "",
+        ),
+        sections=("会话操作:", "清理与过滤:"),
+        suffix=(
+            "导航:",
+            "  Tab    切换标签页",
+            "  q      退出",
+        ),
+    )
 
     def __init__(self, app: App) -> None:
         super().__init__(app, _SESSION_HEADER)
@@ -69,14 +132,9 @@ class SessionsView(CleanupMixin, ListTabView):
             return "Enter 预览待清理项 · Esc 返回会话列表"
         if self._mode == "preview":
             return "Enter 确认清理 · Esc 取消"
-        # Full key table (user preference 2026-07-05): every list-mode key gets a
-        # brief hint; `?` holds the detailed semantics. The footer Text wraps
-        # (urwid wrap='space'), trading vertical rows for width on narrow
-        # terminals. `r 刷新` stays in the App-level footer prefix, not here.
-        return (
-            "Enter 接回 · t tmux接回 · f 分叉 · s 停止 · R 转后台 · d 删除 · "
-            "y 复制命令 · h 桥接显隐 · c 清理 · / 过滤 · ? 详细说明"
-        )
+        # Every list-mode key gets a brief hint, straight from KEY_TABLE; the
+        # footer Text wraps (urwid wrap='space'), trading rows for width.
+        return footer_hints(self.KEY_TABLE)
 
     def load(self) -> None:
         sessions = scan()
@@ -337,105 +395,80 @@ class SessionsView(CleanupMixin, ListTabView):
                 self.app.refresh_with_notice()
             return
 
-        # Normal list mode
-        s = self._selected()
+        # Normal list mode — dispatch straight from KEY_TABLE.
+        self._dispatch_key(key)
 
-        if key == "enter" and s:
-            if s.current:
-                self.app.notify("不能接回当前会话")
-                return
-            self._resume_or_confirm(s, fork=False)
-        elif key == "t" and s:
-            if s.current:
-                self.app.notify("不能 tmux 接回当前会话")
-                return
-            self._tmux_resume_or_confirm(s)
-        elif key == "f" and s:
-            if s.current:
-                self.app.notify("不能分叉当前会话")
-                return
-            self.app.exit_with_resume(s, fork=True)
-        elif key == "s" and s:
-            # Degrade gate FIRST (R2): off /proc every pid looks dead, so a stop
-            # could hit csctl's own session — refuse honestly before confirming.
-            if not proc.current_determinable():
-                self.app.notify(_DEGRADED)
-                return
-            if not s.alive:
-                self.app.notify("会话未在运行")
-                return
-            if s.current:
-                self.app.notify("不能停止当前会话")
-                return
-            self.app.confirm(
-                stop_message("停止会话", s.label),
-                lambda: self._do_terminate(s),
-            )
-        elif key == "R" and s:
-            if s.current:
-                self.app.notify("不能转入后台当前会话")
-                return
-            confirm_takeover(self.app, s, "转入后台", lambda: self._do_relaunch(s))
-        elif key == "d" and s:
-            if s.alive:
-                self.app.notify("运行中的会话不删，先停止")
-                return
-            if not proc.current_determinable():
-                self.app.notify(_DEGRADED)
-                return
-            # L4: honour remove_session's bool — only claim success when it truly
-            # removed something; a False here means there was nothing to delete.
-            if remove_session(s):
-                self.app.notify("已删除")
-            else:
-                self.app.notify("无可删除内容")
-            self.app.trigger_async_refresh()
-        elif key == "y" and s:
-            cmd = resume_cmd(s)
-            ok = to_clipboard(cmd)
-            self.app.notify("已复制" if ok else f"复制失败: {cmd}")
-        elif key == "c":
-            self._enter_cleanup()
-        elif key == "h":
-            self._show_hidden = not self._show_hidden
-            self._apply_filter()
-            self._rebuild()
-            self._update_footer()
-        elif key == "r":
-            self.app.refresh_with_notice()
-        elif key == "/":
-            self._enter_filter()
-        elif key == "?":
-            self._show_help()
+    # --- key handlers (bound by name in KEY_TABLE) ---
+
+    def _key_resume(self, s: Session) -> None:
+        if s.current:
+            self.app.notify("不能接回当前会话")
+            return
+        self._resume_or_confirm(s, fork=False)
+
+    def _key_tmux(self, s: Session) -> None:
+        if s.current:
+            self.app.notify("不能 tmux 接回当前会话")
+            return
+        self._tmux_resume_or_confirm(s)
+
+    def _key_fork(self, s: Session) -> None:
+        if s.current:
+            self.app.notify("不能分叉当前会话")
+            return
+        self.app.exit_with_resume(s, fork=True)
+
+    def _key_stop(self, s: Session) -> None:
+        # Degrade gate FIRST (R2): off /proc every pid looks dead, so a stop
+        # could hit csctl's own session — refuse honestly before confirming.
+        if not proc.current_determinable():
+            self.app.notify(_DEGRADED)
+            return
+        if not s.alive:
+            self.app.notify("会话未在运行")
+            return
+        if s.current:
+            self.app.notify("不能停止当前会话")
+            return
+        self.app.confirm(
+            stop_message("停止会话", s.label),
+            lambda: self._do_terminate(s),
+        )
+
+    def _key_relaunch(self, s: Session) -> None:
+        if s.current:
+            self.app.notify("不能转入后台当前会话")
+            return
+        confirm_takeover(self.app, s, "转入后台", lambda: self._do_relaunch(s))
+
+    def _key_delete(self, s: Session) -> None:
+        if s.alive:
+            self.app.notify("运行中的会话不删，先停止")
+            return
+        if not proc.current_determinable():
+            self.app.notify(_DEGRADED)
+            return
+        # L4: honour remove_session's bool — only claim success when it truly
+        # removed something; a False here means there was nothing to delete.
+        if remove_session(s):
+            self.app.notify("已删除")
+        else:
+            self.app.notify("无可删除内容")
+        self.app.trigger_async_refresh()
+
+    def _key_yank(self, s: Session) -> None:
+        cmd = resume_cmd(s)
+        ok = to_clipboard(cmd)
+        self.app.notify("已复制" if ok else f"复制失败: {cmd}")
+
+    def _key_toggle_hidden(self) -> None:
+        self._show_hidden = not self._show_hidden
+        self._apply_filter()
+        self._rebuild()
+        self._update_footer()
 
     def _show_help(self) -> None:
-        lines = [
-            "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 · ○ 停 = 无进程",
-            "        ▸ = 当前会话（启动 csctl 的会话，受保护） · 📱 = 已开远控",
-            "",
-            "会话操作:",
-            "  Enter  接回选中的会话（在当前终端恢复；接运行中的会话会先确认接管）",
-            "  t      tmux 接回（会话恢复进 tmux 窗口并接入前台——终端断线会话不死，",
-            "         重连后 tmux attach 可捡回；已在 tmux 中的会话直接接入不重启；",
-            "         接运行中的裸终端会话会先确认接管）",
-            "  f      分叉会话（创建副本后接回，不影响原会话）",
-            "  s      停止运行中的会话（发送 SIGTERM，需二次确认）",
-            "  R      转入 tmux 后台并开启远控（脱离终端，手机/网页可接管；",
-            "         接运行中的会话会先确认接管）",
-            "  d      删除已结束的会话记录",
-            "  y      复制接回命令到剪贴板",
-            "  h      显示/隐藏桥接、SDK 会话",
-            "",
-            "清理与过滤:",
-            "  c      打开清理子菜单",
-            "  /      按关键词过滤会话列表",
-            "  r      刷新",
-            "",
-            "导航:",
-            "  Tab    切换标签页",
-            "  q      退出",
-        ]
-        rows = [TextRow(line) for line in lines]
+        rows = [TextRow(line) for line in help_lines(self.KEY_TABLE, self.HELP_LAYOUT)]
         self._mode = "help"
         self._show_overlay("快捷键帮助", rows)
         self._update_footer()

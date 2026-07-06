@@ -28,6 +28,7 @@ from ..models import RCProject, RCServer
 from ._base import ListTabView
 from ._colspec import header_columns, row_columns
 from ._confirm import stop_message
+from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 
 if TYPE_CHECKING:
@@ -131,6 +132,62 @@ class ServerRow(urwid.WidgetWrap):
 
 
 class RCView(ListTabView):
+    # Single source for every list-mode key (views/_keytable.py): footer,
+    # help, and dispatch are generated from this table. `r 刷新` stays in the
+    # App-level FOOTER_PREFIX, so its entry is hint-less.
+    KEY_TABLE = (
+        Key(("t",), "t 新建会话", "_key_tmux_new",
+            section="项目操作（仅对「项目」行生效）:", help=(
+                "  t      在项目目录新建 tmux claude 会话并直接进入（离开 csctl）",
+            )),
+        Key(("enter",), "Enter 启动远控", "_key_start",
+            section="项目操作（仅对「项目」行生效）:", help=(
+                "  Enter  启动选中项目的远程控制服务",
+            )),
+        Key(("s",), "s 停止", "_key_stop",
+            section="项目操作（仅对「项目」行生效）:", help=(
+                "  s      停止选中项目的远程控制服务（需确认）",
+            )),
+        Key(("a",), "a 开机自启", "_key_autostart",
+            section="项目操作（仅对「项目」行生效）:", help=(
+                "  a      切换「开机自启」：A 键一键启动时是否带上本项目",
+            )),
+        Key(("c",), "c 自动远控", "_key_rc_toggle",
+            section="项目操作（仅对「项目」行生效）:", help=(
+                "  c      切换「自动远控」：claude 启动时自动开远程控制，手机即可接管",
+            )),
+        Key(("A",), "A 全部启动", "_key_start_all", needs_selection=False,
+            section="批量操作:", help=(
+                "  A      启动所有「开机自启」项目",
+            )),
+        Key(("S",), "S 全部停止", "_key_stop_all", needs_selection=False,
+            section="批量操作:", help=(
+                "  S      停止全部远程控制服务（需确认）",
+            )),
+        Key(("r",), None, "_key_refresh", needs_selection=False,
+            section="批量操作:", help=(
+                "  r      重新扫描刷新",
+            )),
+        Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
+    )
+
+    HELP_LAYOUT = HelpLayout(
+        sections=("项目操作（仅对「项目」行生效）:", "批量操作:"),
+        suffix=(
+            "目录缺失（✖ 缺失）:",
+            "  项目目录已删除，但 claude 的信任记录（~/.claude.json）或自启列表仍引用它。",
+            "  csctl 不改写 claude 的文件；用 a 键可将其移出自启列表，信任记录需手动清理。",
+            "",
+            "RC 服务（只读）:",
+            "  外部服务只展示，不接管、不重启。",
+            "  云端环境台账不在 TUI 展示（csctl 无法注销云端环境）；查询用 csctl env。",
+            "",
+            "导航:",
+            "  Tab    切换标签页",
+            "  q      退出",
+        ),
+    )
+
     def __init__(self, app: App) -> None:
         super().__init__(app, header_columns(_PROJECT_COLS))
         self._projects: list[RCProject] = []
@@ -144,12 +201,9 @@ class RCView(ListTabView):
             # "其余" is honest: the prefix's Tab/q stay global (Tab switches
             # tabs, q QUITS — neither returns to the list).
             return "其余任意键返回"
-        # Full key table (user preference 2026-07-05): every key gets a brief
-        # hint; the footer Text wraps on narrow terminals (vertical for width).
-        return (
-            "t 新建会话 · Enter 启动远控 · s 停止 · a 开机自启 · c 自动远控 · "
-            "A 全部启动 · S 全部停止 · ? 详细说明"
-        )
+        # Every list-mode key gets a brief hint, straight from KEY_TABLE; the
+        # footer Text wraps on narrow terminals (vertical for width).
+        return footer_hints(self.KEY_TABLE)
 
     def load(self) -> None:
         self._projects = rc.scan()
@@ -217,65 +271,69 @@ class RCView(ListTabView):
         if self._help:
             self._handle_overlay_key(key)
             return
+        # Normal list mode — dispatch straight from KEY_TABLE.
+        self._dispatch_key(key)
 
-        p = self._selected()
+    # --- key handlers (bound by name in KEY_TABLE) ---
 
-        if key == "t" and p:
-            if not p.dir_exists:
-                self.app.notify("目录缺失 — 无法新建会话")
-                return
-            # New claude session in the project dir, inside tmux, entered
-            # immediately — nothing is killed, so no confirm / R10 / trust gate
-            # (claude's own trust dialog shows interactively in the window).
-            self.app.exit_with_tmux_new(p.directory)
-        elif key == "enter" and p:
-            if not p.dir_exists:
-                self.app.notify("目录缺失 — 无法启动（可用 a 键移出自启列表）")
-                return
-            if not p.trusted:
-                self.app.notify("未信任 — 先在该目录跑一次 claude")
-                return
-            if p.status == "running":
-                self.app.notify("已在运行")
-                return
-            ok = rc.start_one(p.name)
-            self.app.notify(f"已启动 ws/{p.name}" if ok else "启动失败")
-            self.app.trigger_async_refresh()
-        elif key == "s" and p:
-            if p.status != "running":
-                self.app.notify("未在运行")
-                return
-            self.app.confirm(
-                stop_message("停止远控服务", p.name),
-                lambda: self._do_stop_one(p.name),
-            )
-        elif key == "a" and p:
-            new = rc.toggle_autostart(p.name)
-            self.app.notify(f"{p.name} 开机自启: {'开' if new else '关'}")
-            self.app.trigger_async_refresh()
-        elif key == "c" and p:
-            if not p.dir_exists:
-                # set_rc_at_startup would mkdir the deleted project back to life.
-                self.app.notify("目录缺失 — 不写入配置")
-                return
-            # Full 3-cycle so explicit True is reachable again: None→True→False→None.
-            new = _NEXT_TRISTATE[p.rc_at_startup]
-            set_rc_at_startup(p.directory, new)
-            self.app.notify(f"{p.name} 自动远控: {_RC_TRISTATE[new]}")
-            self.app.trigger_async_refresh()
-        elif key == "A":
-            count = rc.start_all_listed()
-            self.app.notify(f"已启动 {count} 个项目")
-            self.app.trigger_async_refresh()
-        elif key == "S":
-            if not any(p.status == "running" for p in self._projects):
-                self.app.notify("本来就没在跑")
-                return
-            self.app.confirm("停止全部远控服务？", self._do_stop_all)
-        elif key == "r":
-            self.app.refresh_with_notice()
-        elif key == "?":
-            self._show_help()
+    def _key_tmux_new(self, p: RCProject) -> None:
+        if not p.dir_exists:
+            self.app.notify("目录缺失 — 无法新建会话")
+            return
+        # New claude session in the project dir, inside tmux, entered
+        # immediately — nothing is killed, so no confirm / R10 / trust gate
+        # (claude's own trust dialog shows interactively in the window).
+        self.app.exit_with_tmux_new(p.directory)
+
+    def _key_start(self, p: RCProject) -> None:
+        if not p.dir_exists:
+            self.app.notify("目录缺失 — 无法启动（可用 a 键移出自启列表）")
+            return
+        if not p.trusted:
+            self.app.notify("未信任 — 先在该目录跑一次 claude")
+            return
+        if p.status == "running":
+            self.app.notify("已在运行")
+            return
+        ok = rc.start_one(p.name)
+        self.app.notify(f"已启动 ws/{p.name}" if ok else "启动失败")
+        self.app.trigger_async_refresh()
+
+    def _key_stop(self, p: RCProject) -> None:
+        if p.status != "running":
+            self.app.notify("未在运行")
+            return
+        self.app.confirm(
+            stop_message("停止远控服务", p.name),
+            lambda: self._do_stop_one(p.name),
+        )
+
+    def _key_autostart(self, p: RCProject) -> None:
+        new = rc.toggle_autostart(p.name)
+        self.app.notify(f"{p.name} 开机自启: {'开' if new else '关'}")
+        self.app.trigger_async_refresh()
+
+    def _key_rc_toggle(self, p: RCProject) -> None:
+        if not p.dir_exists:
+            # set_rc_at_startup would mkdir the deleted project back to life.
+            self.app.notify("目录缺失 — 不写入配置")
+            return
+        # Full 3-cycle so explicit True is reachable again: None→True→False→None.
+        new = _NEXT_TRISTATE[p.rc_at_startup]
+        set_rc_at_startup(p.directory, new)
+        self.app.notify(f"{p.name} 自动远控: {_RC_TRISTATE[new]}")
+        self.app.trigger_async_refresh()
+
+    def _key_start_all(self) -> None:
+        count = rc.start_all_listed()
+        self.app.notify(f"已启动 {count} 个项目")
+        self.app.trigger_async_refresh()
+
+    def _key_stop_all(self) -> None:
+        if not any(p.status == "running" for p in self._projects):
+            self.app.notify("本来就没在跑")
+            return
+        self.app.confirm("停止全部远控服务？", self._do_stop_all)
 
     def _do_stop_one(self, name: str) -> None:
         """Stop-one body, run only after the y/n confirm accepts."""
@@ -290,35 +348,8 @@ class RCView(ListTabView):
         self.app.trigger_async_refresh()
 
     def _show_help(self) -> None:
-        """Help as a scrollable overlay (same pattern as Sessions/Agents) — the
-        old walker-replacing text rows were unscrollable and unreadable on
-        short terminals."""
+        """Help as a scrollable overlay, generated from KEY_TABLE."""
         self._help = True
-        lines = [
-            "项目操作（仅对「项目」行生效）:",
-            "  t      在项目目录新建 tmux claude 会话并直接进入（离开 csctl）",
-            "  Enter  启动选中项目的远程控制服务",
-            "  s      停止选中项目的远程控制服务（需确认）",
-            "  a      切换「开机自启」：A 键一键启动时是否带上本项目",
-            "  c      切换「自动远控」：claude 启动时自动开远程控制，手机即可接管",
-            "",
-            "批量操作:",
-            "  A      启动所有「开机自启」项目",
-            "  S      停止全部远程控制服务（需确认）",
-            "  r      重新扫描刷新",
-            "",
-            "目录缺失（✖ 缺失）:",
-            "  项目目录已删除，但 claude 的信任记录（~/.claude.json）或自启列表仍引用它。",
-            "  csctl 不改写 claude 的文件；用 a 键可将其移出自启列表，信任记录需手动清理。",
-            "",
-            "RC 服务（只读）:",
-            "  外部服务只展示，不接管、不重启。",
-            "  云端环境台账不在 TUI 展示（csctl 无法注销云端环境）；查询用 csctl env。",
-            "",
-            "导航:",
-            "  Tab    切换标签页",
-            "  q      退出",
-        ]
-        rows = [TextRow(line) for line in lines]
+        rows = [TextRow(line) for line in help_lines(self.KEY_TABLE, self.HELP_LAYOUT)]
         self._show_overlay("项目 / 远控帮助", rows)
         self._update_footer()

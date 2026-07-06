@@ -141,12 +141,12 @@ def test_load_enriches_and_renders(monkeypatch):
     assert len(view.walker) == 1
 
 
-# --- keyhints reuse the agent_ops constants ---
+# --- keyhints are generated from the view's KEY_TABLE ---
 
-def test_keyhints_reuse_agent_ops_constants():
+def test_keyhints_generated_from_key_table():
     view = AgentsView(FakeApp())
     hints = view.keyhints()
-    assert agent_ops.KEYHINTS in hints
+    assert "Enter/o 接回" in hints
     assert "详细说明" in hints
 
 

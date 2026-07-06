@@ -22,6 +22,7 @@ from ._base import ListTabView
 from ._colspec import header_columns, row_columns
 from ._confirm import DEGRADED as _DEGRADED
 from ._confirm import confirm_takeover, stop_message
+from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 
 if TYPE_CHECKING:
@@ -71,6 +72,50 @@ class AgentRow(urwid.WidgetWrap):
 
 class AgentsView(ListTabView):
     # mode: "list" | "help" | "watch"
+
+    # Single source for every list-mode key (views/_keytable.py): footer,
+    # help, and dispatch are generated from this table. `r 刷新` stays in the
+    # App-level FOOTER_PREFIX, so its entry is hint-less.
+    KEY_TABLE = (
+        Key(("enter", "o"), "Enter/o 接回", "_takeover",
+            section="后台 agent 生命周期:", help=(
+                "  Enter/o 接回（拉回前台，复用 resume；接运行中的 agent 会先确认接管）",
+            )),
+        Key(("s",), "s 停止", "_stop", section="后台 agent 生命周期:", help=(
+            "  s       停止（仅运行中，需确认）",
+        )),
+        Key(("d",), "d 删除", "_remove", section="后台 agent 生命周期:", help=(
+            "  d       删除（仅已结束）",
+        )),
+        Key(("w",), "w 查看", "_watch", section="后台 agent 生命周期:", help=(
+            "  w       查看 timeline（只读）",
+        )),
+        Key(("R",), "R 重启", "_key_respawn", section="后台 agent 生命周期:", help=(
+            "  R       重启（respawn）",
+        )),
+        Key(("r",), None, "_key_refresh", needs_selection=False,
+            section="后台 agent 生命周期:", help=(
+                "  r       刷新",
+            )),
+        Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
+    )
+
+    # Orphan-process risk (R4.5 red line): stop only kills the host pid joined
+    # from the sessions registry — killing a --remote-control/bg worker does
+    # not always fully reap it, and a live worker with no sessions file can't
+    # be located at all.
+    HELP_LAYOUT = HelpLayout(
+        sections=("后台 agent 生命周期:",),
+        suffix=(
+            "停止/孤儿风险:",
+            "  停止只能杀经 sessions 文件 join 到的 host pid；杀 --remote-control/",
+            "  后台 agent 不一定彻底回收，可能残留孤儿进程，需手动确认；",
+            "  找不到运行中的后台 agent 的 host pid 时无法停止。",
+            "",
+            "导航：Tab 切换标签 · q 退出",
+        ),
+    )
+
     def __init__(self, app: App) -> None:
         super().__init__(app, _AGENTS_HEADER)
         self._jobs: list[AgentJob] = []
@@ -84,7 +129,7 @@ class AgentsView(ListTabView):
             # "其余" is honest: the prefix's Tab/q stay global (Tab switches
             # tabs, q QUITS — neither returns to the list).
             return "其余任意键返回"
-        return f"{agent_ops.KEYHINTS} · ? 详细说明"
+        return footer_hints(self.KEY_TABLE)
 
     def _enrich(self, jobs: list[AgentJob]) -> list[AgentJob]:
         """Fill host liveness for the self-fetch path (snapshot already enriched).
@@ -145,26 +190,13 @@ class AgentsView(ListTabView):
         if self._mode in ("help", "watch"):
             self._handle_overlay_key(key)
             return
+        # Normal list mode — dispatch straight from KEY_TABLE.
+        self._dispatch_key(key)
 
-        job = self._selected()
-
-        if key == "r":
-            # Unified verb table: `r` is refresh on EVERY tab (respawn moved to R).
-            self.app.refresh_with_notice()
-        elif key == "R" and job:
-            cmd = agent_ops.respawn(job)
-            self.app.notify(f"已重启：{cmd}")
-            self.app.trigger_async_refresh()
-        elif key in ("enter", "o") and job:
-            self._takeover(job)
-        elif key == "w" and job:
-            self._watch(job)
-        elif key == "d" and job:
-            self._remove(job)
-        elif key == "s" and job:
-            self._stop(job)
-        elif key == "?":
-            self._show_help()
+    def _key_respawn(self, job: AgentJob) -> None:
+        cmd = agent_ops.respawn(job)
+        self.app.notify(f"已重启：{cmd}")
+        self.app.trigger_async_refresh()
 
     def _takeover(self, job: AgentJob) -> None:
         s = agent_ops.resume_takeover(job)
@@ -236,11 +268,7 @@ class AgentsView(ListTabView):
         self.app.trigger_async_refresh()
 
     def _show_help(self) -> None:
-        rows = [TextRow(line) for line in agent_ops.HELP.splitlines()]
-        rows += [
-            TextRow(""),
-            TextRow("导航：Tab 切换标签 · q 退出"),
-        ]
+        rows = [TextRow(line) for line in help_lines(self.KEY_TABLE, self.HELP_LAYOUT)]
         self._mode = "help"
         self._show_overlay("后台 agent 帮助", rows)
         self._update_footer()

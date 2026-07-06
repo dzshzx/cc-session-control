@@ -216,12 +216,17 @@ def test_job_host_dead_when_no_live_match(monkeypatch):
 
 
 # --- AC4: help/keyhints carry orphan-risk warning + "接回" label ---
+# (both are generated from the view's single-source KEY_TABLE now)
 
 def test_keyhints_contains_takeover_label():
-    assert "接回" in ao.KEYHINTS
-    assert ao.TAKEOVER_LABEL == "接回"
+    from cc_session_control.views._keytable import footer_hints
+    from cc_session_control.views.agents import AgentsView
+    assert "接回" in footer_hints(AgentsView.KEY_TABLE)
 
 
 def test_help_contains_orphan_risk_warning():
-    assert "孤儿" in ao.HELP
-    assert "接管" in ao.HELP
+    from cc_session_control.views._keytable import help_lines
+    from cc_session_control.views.agents import AgentsView
+    blob = "\n".join(help_lines(AgentsView.KEY_TABLE, AgentsView.HELP_LAYOUT))
+    assert "孤儿" in blob
+    assert "接管" in blob
