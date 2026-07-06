@@ -21,6 +21,9 @@ class Session:
     pid: int | None
     alive: bool
     current: bool
+    # registry `procStart` of the chosen pid — lets kill-time `pid_alive`
+    # rechecks defeat pid reuse ("" = unknown, recheck degrades to existence).
+    proc_start: str = ""
     hidden: set[str] = field(default_factory=set)
     file: str = ""
     # Unified-workbench fields (all default so existing construction stays valid).

@@ -166,15 +166,18 @@ def test_stop_job_noop_when_host_dead(monkeypatch):
 
 
 def test_stop_job_kills_live_host(monkeypatch):
+    # The kill itself is session_ops.take_over — stub/observe it at that seam.
+    import cc_session_control.actions.session_ops as so
     monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(ao, "job_host", lambda job: (4242, True))
     calls = {"kill": None, "invalidate": 0}
-    monkeypatch.setattr(ao.os, "kill", lambda pid, sig: calls.__setitem__("kill", (pid, sig)))
-    monkeypatch.setattr(ao.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(ao.liveness, "invalidate_cache",
+    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
+    monkeypatch.setattr(so.os, "kill", lambda pid, sig: calls.__setitem__("kill", (pid, sig)))
+    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(so, "invalidate_cache",
                         lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1))
     assert ao.stop_job(_make_job()) is True
-    assert calls["kill"] == (4242, ao.signal.SIGTERM)
+    assert calls["kill"] == (4242, so.signal.SIGTERM)
     assert calls["invalidate"] == 1
 
 

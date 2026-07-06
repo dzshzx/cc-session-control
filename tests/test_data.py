@@ -127,6 +127,7 @@ def test_terminate_session_invalidates_cache(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
     calls = {"kill": 0, "invalidate": 0}
+    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
     monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
     monkeypatch.setattr(so, "invalidate_cache", lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1))
@@ -134,6 +135,54 @@ def test_terminate_session_invalidates_cache(monkeypatch):
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
     assert so.terminate_session(s) is True
     assert calls["kill"] == 1
+    assert calls["invalidate"] == 1
+
+
+# --- take_over: the ONE kill primitive (gate → recheck → SIGTERM → settle) ---
+
+def test_take_over_refused_without_proc(monkeypatch):
+    import cc_session_control.actions.session_ops as so
+    monkeypatch.setattr(so.proc, "current_determinable", lambda: False)
+    monkeypatch.setattr(so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill")))
+    assert so.take_over(4242) == "refused"
+
+
+def test_take_over_skips_kill_when_pid_gone_or_recycled(monkeypatch):
+    # Kill-time recheck: a pid that died (or was recycled — proc_start mismatch)
+    # while the confirm modal sat open must NOT be SIGTERMed.
+    import cc_session_control.actions.session_ops as so
+    monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: False)
+    monkeypatch.setattr(so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill")))
+    inv = {"n": 0}
+    monkeypatch.setattr(so, "invalidate_cache", lambda: inv.__setitem__("n", inv["n"] + 1))
+    assert so.take_over(4242, "12345") == "gone"
+    assert inv["n"] == 1
+
+
+def test_take_over_failed_on_signal_error(monkeypatch):
+    import cc_session_control.actions.session_ops as so
+    monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
+
+    def raise_perm(*_):
+        raise PermissionError("nope")
+
+    monkeypatch.setattr(so.os, "kill", raise_perm)
+    assert so.take_over(4242) == "failed"
+
+
+def test_take_over_kills_settles_and_invalidates(monkeypatch):
+    import cc_session_control.actions.session_ops as so
+    calls = {"kill": None, "sleep": 0, "invalidate": 0}
+    monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
+    monkeypatch.setattr(so.os, "kill", lambda pid, sig: calls.__setitem__("kill", (pid, sig)))
+    monkeypatch.setattr(so.time, "sleep", lambda *_: calls.__setitem__("sleep", calls["sleep"] + 1))
+    monkeypatch.setattr(so, "invalidate_cache", lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1))
+    assert so.take_over(4242, "999") == "killed"
+    assert calls["kill"] == (4242, so.signal.SIGTERM)
+    assert calls["sleep"] == 1
     assert calls["invalidate"] == 1
 
 
@@ -219,6 +268,7 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
     monkeypatch.setattr(so, "invalidate_cache", lambda: None)
     monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
     monkeypatch.setattr(
         so.rc, "run_in_tmux",
         lambda session, window, cmd: calls["spawn"].append((session, window, cmd)) or f"{session}:1",
@@ -277,6 +327,7 @@ def test_relaunch_in_tmux_kills_live_non_current(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
     calls = {"kill": 0, "invalidate": 0, "tmux": None}
+    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
     monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
     monkeypatch.setattr(so, "invalidate_cache", lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1))

@@ -23,12 +23,11 @@ from __future__ import annotations
 
 import os
 import shlex
-import signal
-import time
 
 from ..config import cfg
 from ..data import cleanup, liveness, proc, rc, registry
 from ..models import AgentJob, Session
+from . import session_ops
 
 # --- host-pid join (shared by stop_job, remove_job, and the view) -------------
 
@@ -154,23 +153,15 @@ def stop_job(job: AgentJob) -> bool:
 
     The host pid is JOINed from `sessions/<pid>.json` (`job_host`); only a
     confirmed-live pid is killed — a worker with no sessions file is unstoppable
-    (no-op False, orphan risk). Refuses when "current" can't be determined (no
-    `/proc`, R10). Owns the liveness-cache invalidation (like terminate). Killing
-    does not always fully reap a `--remote-control`/bg worker (orphan risk, see
-    `HELP`).
+    (no-op False, orphan risk). The kill itself is `session_ops.take_over` (the
+    ONE primitive: R10 gate, recheck, SIGTERM, cache invalidation); the early
+    R10 check here just skips the join IO when the answer is already no.
+    Killing does not always fully reap a `--remote-control`/bg worker (orphan
+    risk, see `HELP`).
     """
     if not proc.current_determinable():
         return False
     pid, alive = job_host(job)
     if not alive or not pid:
         return False
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        liveness.invalidate_cache()  # already gone — liveness changed
-        return True
-    except Exception:
-        return False
-    time.sleep(1)
-    liveness.invalidate_cache()
-    return True
+    return session_ops.take_over(pid) in ("killed", "gone")

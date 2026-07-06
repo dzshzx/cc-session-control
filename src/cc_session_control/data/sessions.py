@@ -133,6 +133,7 @@ def _parse_transcript(
         cand = info.pids if info.pids else ([pid] if pid else [])
         current = any(p in cur for p in cand)
         proc_alive = info.proc_alive
+        proc_start = info.proc_start
     else:
         pid = None
         alive = False
@@ -140,6 +141,7 @@ def _parse_transcript(
         bridge = None
         current = False
         proc_alive = False
+        proc_start = ""
 
     rc_exposed = is_rc_exposed(bridge, proc_alive)
 
@@ -148,6 +150,7 @@ def _parse_transcript(
         prompts=prompts, pid=pid,
         alive=alive,
         current=current,
+        proc_start=proc_start,
         hidden=hidden, file=path,
         kind=kind, entrypoint=entrypoint, source=source,
         rc_exposed=rc_exposed,

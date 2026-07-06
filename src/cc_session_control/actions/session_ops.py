@@ -7,39 +7,57 @@ import shlex
 import signal
 import time
 from dataclasses import dataclass
+from typing import Literal
 
 from .. import clipboard
 from ..data import proc, rc
 from ..data.liveness import invalidate_cache
 from ..models import Session
 
+TakeOverResult = Literal["killed", "gone", "refused", "failed"]
 
-def terminate_session(s: Session) -> bool:
-    """Send SIGTERM and own the liveness-cache invalidation.
 
-    Terminating is the one session op that changes `claude agents` liveness,
-    so it invalidates the alive_map cache itself — callers no longer have to
-    remember to. (delete/cleanup only touch already-dead sessions, so they
-    don't.)
+def take_over(pid: int, proc_start: str = "") -> TakeOverResult:
+    """THE kill primitive behind every takeover/stop: R10 gate → kill-time
+    liveness recheck → SIGTERM → settle → invalidate the liveness cache.
 
-    R10: refuses (returns False) when "current" can't be determined (no
-    `/proc`) — we can't prove `s` is not the launching session, so a SIGTERM
-    here could hit csctl's own session.
+    One implementation so the gate order and the kill semantics cannot fork
+    across the resume/terminate/stop variants (they had already started to:
+    only terminate/stop skipped the settle sleep for an already-gone pid).
+    The recheck (`pid_alive` against `proc_start`; mere existence when the
+    start is unknown) closes the pid-reuse window — a confirm modal can sit
+    open for minutes, and a recycled pid must never be SIGTERMed.
+
+    Results: "killed" (signalled + settled), "gone" (already dead / recycled —
+    nothing to kill), "refused" (R10: current undeterminable), "failed"
+    (signal error, e.g. permissions). Fail-fast callers (terminate/stop) treat
+    "failed" as failure; best-effort callers (the resume family) continue.
     """
     if not proc.current_determinable():
-        return False
-    if not s.pid:
-        return False
+        return "refused"
+    if not proc.pid_alive(pid, proc_start):
+        invalidate_cache()  # already gone — liveness may have changed
+        return "gone"
     try:
-        os.kill(s.pid, signal.SIGTERM)
+        os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        invalidate_cache()  # already gone — liveness changed
-        return True
+        invalidate_cache()
+        return "gone"
     except Exception:
-        return False
+        return "failed"
     time.sleep(1)
     invalidate_cache()
-    return True
+    return "killed"
+
+
+def terminate_session(s: Session) -> bool:
+    """Send SIGTERM via `take_over` (which owns the R10 gate + the
+    liveness-cache invalidation — terminating is the one session op that
+    changes `claude agents` liveness; delete/cleanup only touch already-dead
+    sessions, so they don't invalidate)."""
+    if not s.pid:
+        return False
+    return take_over(s.pid, s.proc_start) in ("killed", "gone")
 
 
 def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
@@ -90,18 +108,15 @@ def do_resume(s: Session, fork: bool = False) -> None:
     we never SIGTERM the launching session (every pid looks dead off `/proc`).
     """
     cwd, args, should_kill = _resume_plan(s, fork)
-    if should_kill:
-        if not proc.current_determinable():
+    if should_kill and s.pid:
+        if take_over(s.pid, s.proc_start) == "refused":
             print(
                 "Refused: '/proc' unavailable — cannot determine the current "
                 "session, so the old process can't be safely killed (R10)."
             )
             return
-        try:
-            os.kill(s.pid, signal.SIGTERM)
-        except Exception:
-            pass
-        time.sleep(1)
+        # "gone"/"failed" fall through: the kill is best-effort here, the
+        # resume itself must still happen.
     if cwd and os.path.isdir(cwd):
         os.chdir(cwd)
     os.execvp("claude", args)
@@ -121,30 +136,29 @@ def tmux_resume_cmd(s: Session, fork: bool = False) -> str:
     return f"cd {shlex.quote(cwd)} && {line}" if cwd else line
 
 
+def _spawn_in_tmux(s: Session, cmd: str, fork: bool = False) -> str | None:
+    """Kill-if-takeover, then spawn `cmd` in the session's per-project tmux
+    session — the shared skeleton behind `relaunch_in_tmux` (R key, with
+    --remote-control) and `do_tmux_resume` (t key, foreground): the two
+    differed only in the command builder. Returns the exact tmux target,
+    or None on R10 refusal ("refused" from `take_over`) / tmux failure;
+    "gone"/"failed" fall through like `do_resume` (best-effort kill).
+    """
+    _, _, should_kill = _resume_plan(s, fork)
+    if should_kill and s.pid and take_over(s.pid, s.proc_start) == "refused":
+        return None
+    return rc.run_in_tmux(rc.session_name_for(s.cwd), s.sid[:8], cmd)
+
+
 def relaunch_in_tmux(s: Session, fork: bool = False) -> bool:
     """Relaunch a session as `claude --resume … --remote-control …` inside a
     tmux window, so it outlives the terminal and is remotely controllable.
 
-    A live, non-current session is taken over (its old pid is killed first and
-    the liveness cache invalidated, like terminate); a fork leaves the original
-    running. csctl is NOT replaced — it just spawns the tmux window.
-
-    R10: when a takeover kill is required but "current" can't be determined (no
-    `/proc`), refuse (return False, do not kill or relaunch) — we can't prove `s`
-    is not the launching session.
+    A live, non-current session is taken over (old pid killed first, like
+    terminate); a fork leaves the original running. csctl is NOT replaced —
+    it just spawns the tmux window.
     """
-    _, _, should_kill = _resume_plan(s, fork)
-    if should_kill and s.pid:
-        if not proc.current_determinable():
-            return False
-        try:
-            os.kill(s.pid, signal.SIGTERM)
-        except Exception:
-            pass
-        time.sleep(1)
-        invalidate_cache()
-    session = rc.session_name_for(s.cwd)
-    return rc.run_in_tmux(session, s.sid[:8], tmux_resume_cmd(s, fork)) is not None
+    return _spawn_in_tmux(s, tmux_resume_cmd(s, fork), fork=fork) is not None
 
 
 def attach_target(s: Session) -> str | None:
@@ -172,21 +186,8 @@ def tmux_foreground_cmd(s: Session) -> str:
 def do_tmux_resume(s: Session) -> str | None:
     """Kill-if-takeover, spawn the resume window in the session's per-project
     tmux session, and return the exact tmux target to enter; None on failure.
-
-    Mirrors `relaunch_in_tmux`'s kill handling (same `_resume_plan` should_kill
-    + R10 refusal); the caller (cli) then calls `enter_window` on the target."""
-    _, _, should_kill = _resume_plan(s)
-    if should_kill and s.pid:
-        if not proc.current_determinable():
-            return None
-        try:
-            os.kill(s.pid, signal.SIGTERM)
-        except Exception:
-            pass
-        time.sleep(1)
-        invalidate_cache()
-    session = rc.session_name_for(s.cwd)
-    return rc.run_in_tmux(session, s.sid[:8], tmux_foreground_cmd(s))
+    The caller (cli) then calls `enter_window` on the target."""
+    return _spawn_in_tmux(s, tmux_foreground_cmd(s))
 
 
 def do_tmux_new(directory: str) -> str | None:
