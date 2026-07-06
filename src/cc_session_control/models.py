@@ -141,7 +141,7 @@ def split_env_id(value: str | None) -> tuple[str, str]:
     THE one parser for namespaced bridge/env ids (`session_*` / `cse_*` /
     `env_*`) — registry, environments, and rc all route through it so the edge
     rules (None, no underscore, empty prefix or suffix) cannot diverge. The
-    formatting inverse is `EnvRecord.env_id`/`BridgeEnv.env_id`.
+    formatting inverse is `BridgeEnv.env_id`.
     """
     if not value:
         return "", ""

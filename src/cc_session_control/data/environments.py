@@ -71,7 +71,7 @@ _RETENTION_SECONDS = 90 * 86400
 _MAX_ENTRIES = 500
 
 
-# --- observation builder (reads registry only, never rc) -------------------
+# --- observation builder (reads registry + liveness, never rc) -------------
 
 def _collect(
     session_procs: list[SessionProc],
