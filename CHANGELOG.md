@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.2 (2026-07-06)
+
+Architecture-review refactor batch: seven deepening refactors, no intended
+behavior change (two deliberate cosmetic alignments noted below).
+
+- **One liveness assembly point.** `liveness.live_session_procs()` now owns the
+  `proc_alive` injection that was inlined at 7 call sites (forgetting it made
+  everything read as dead, silently); all consumers go through the one seam.
+- **One takeover-confirm policy.** `views/_confirm.py::confirm_takeover` owns
+  the R10-degrade-gate → `would_take_over` → confirm sequence and the confirm
+  文案 templates (previously copy-pasted at 4/7 sites); `_DEGRADED` has one
+  definition.
+- **Shared tab base class.** `views/_base.py::ListTabView` hoists the
+  walker/listbox/status frame, focus-preserving rebuild, centered overlay,
+  footer guard, and overlay-mode key dispatch that all three tabs re-implemented.
+  Views talk to App only through an explicit façade (`is_active`/`own_footer`/
+  `release_footer`) — no more `app.frame`/`app._active` pokes.
+- **Single-source key tables.** `views/_keytable.py`: each tab declares one
+  `KEY_TABLE` and its footer hints, help overlay, and key dispatch are all
+  generated from it (the `_colspec` move applied to keys). Sessions/Projects
+  footer + help output is byte-identical; the Agents help is reformatted to the
+  same per-key layout as the other tabs (content preserved).
+- **Single-source Bridge Environment observation.** `models.split_env_id` is
+  the one namespaced-id parser (replacing four divergent implementations);
+  `liveness.is_rc_exposed` is public and `environments.observe_live` actually
+  calls it; `observe`/`observe_live` converge into one alive-gated collector.
+  The RC stop-confirm now truncates very long project names like the other
+  tabs' confirms (cosmetic alignment).
+- **`ExitIntent` replaces the exit-tuple ladder.** Resume-family actions exit
+  the MainLoop as self-finalizing intent dataclasses; `App` keeps one generic
+  `exit_with(intent)` and `cli._cmd_tui` one `intent.run()` — adding a resume
+  variant no longer touches `app.py`/`cli.py`.
+- **Deleted the `data/agents.py` re-export shim** (its stated reason was stale;
+  product code already imported from `liveness` directly).
+
 ## 0.6.1 (2026-07-06)
 
 UI/UX audit fix batch: honest footers, safe gates, readable modals.
