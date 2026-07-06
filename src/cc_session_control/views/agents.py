@@ -10,14 +10,13 @@ warning surfaced on `stop` is a capability red line (R4.5 / AC4).
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import urwid
 
 from ..actions import agent_ops
 from ..actions.session_ops import ResumeIntent
-from ..data import proc, registry
+from ..data import liveness, proc, registry
 from ..models import AgentJob
 from ._base import ListTabView
 from ._colspec import header_columns, row_columns
@@ -135,29 +134,21 @@ class AgentsView(ListTabView):
     def _overlay_active(self) -> bool:
         return self._mode in ("help", "watch")
 
-    def _enrich(self, jobs: list[AgentJob]) -> list[AgentJob]:
-        """Fill host liveness for the self-fetch path (snapshot already enriched).
-
-        Returns fresh copies via `dataclasses.replace` (like `snapshot._enrich_jobs`)
-        so the registry's ~5s-TTL cached AgentJob objects are never mutated.
-        """
-        out: list[AgentJob] = []
-        for job in jobs:
-            pid, alive = agent_ops.job_host(job)
-            out.append(replace(job, host_pid=pid, host_alive=alive))
-        return out
-
     def load(self) -> None:
-        self._jobs = self._enrich(registry.read_agent_jobs())
+        self._jobs = liveness.enrich_jobs(registry.read_agent_jobs())
         self._loaded = True
         self._rebuild()
 
     def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
-        """Worker-thread data fetch. Only sets pending fields — no widgets."""
+        """Worker-thread data fetch. Only sets pending fields — no widgets.
+
+        The self-fetch path uses the same `liveness.enrich_jobs` loop as the
+        snapshot (self-fetching the registry ONCE), so the two can't drift.
+        """
         if snapshot is not None:
             self._pending = snapshot.agent_jobs
         else:
-            self._pending = self._enrich(registry.read_agent_jobs())
+            self._pending = liveness.enrich_jobs(registry.read_agent_jobs())
 
     def apply_data(self) -> None:
         if self._pending is not None:

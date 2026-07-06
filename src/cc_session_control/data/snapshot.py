@@ -14,7 +14,7 @@ guards `build_world_snapshot` so a failed build degrades to per-view self-fetch.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
 from . import environments, liveness, proc, rc, registry, sessions
@@ -49,25 +49,6 @@ class WorldSnapshot:
     cur: set[int] = field(default_factory=set)
 
 
-def _enrich_jobs(
-    jobs: list[AgentJob], session_procs: list[SessionProc]
-) -> list[AgentJob]:
-    """Fill each job's `host_pid`/`host_alive` by joining sid -> sessions/<pid>.
-
-    `state.json` carries no pid, so a live worker's host pid is the proc-alive
-    `sessions/<pid>.json` for the job's sid (falling back to the first match when
-    none is alive). Uses the single `registry.host_pid_for_sid` join (shared with
-    `agent_ops.job_host`) and returns fresh copies so the cached registry objects
-    are never mutated. `session_procs` must already carry injected `proc_alive`
-    (build_world_snapshot does this).
-    """
-    out: list[AgentJob] = []
-    for job in jobs:
-        pid, alive = registry.host_pid_for_sid(job.sid, session_procs)
-        out.append(replace(job, host_pid=pid, host_alive=alive))
-    return out
-
-
 def build_world_snapshot() -> WorldSnapshot:
     """Compute the shared per-cycle world once (worker thread, R11/D8).
 
@@ -78,7 +59,7 @@ def build_world_snapshot() -> WorldSnapshot:
     """
     session_procs = liveness.live_session_procs()
     all_sessions = sessions.scan()
-    agent_jobs = _enrich_jobs(registry.read_agent_jobs(), session_procs)
+    agent_jobs = liveness.enrich_jobs(registry.read_agent_jobs(), session_procs)
     # Cheap, cached/inexpensive liveness inputs surfaced for the cleanup submenu
     # (the registry read above + scan() already warmed alive_map's 5s cache).
     agents_map = liveness.alive_map()

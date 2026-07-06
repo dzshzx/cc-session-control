@@ -248,16 +248,15 @@ def _cmd_skill(args: argparse.Namespace) -> None:
 
 
 def _cmd_agents(args: argparse.Namespace) -> None:
-    from .actions.agent_ops import job_host
+    from .data.liveness import enrich_jobs
     from .data.registry import read_agent_jobs
 
-    jobs = read_agent_jobs(max_age=0.0)
+    jobs = enrich_jobs(read_agent_jobs(max_age=0.0))
     if not jobs:
         print("No background agents found.")
         return
     for job in jobs:
-        _pid, alive = job_host(job)
-        state = "live" if alive else (job.state or "settled")
+        state = "live" if job.host_alive else (job.state or "settled")
         tempo = job.tempo or "-"
         name = job.name or job.short
         print(f"  {job.short}  [{state}]  tempo={tempo}  {name}  {job.cwd}")

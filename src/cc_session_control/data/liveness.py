@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 
-from ..models import LiveInfo, SessionProc
+from ..models import AgentJob, LiveInfo, SessionProc
 from . import proc, registry
 
 _cache: dict[str, int | None] | None = None
@@ -84,6 +84,29 @@ def live_session_procs(max_age: float = 5.0) -> list[SessionProc]:
         ]
     except Exception:
         return []
+
+
+def enrich_jobs(
+    jobs: list[AgentJob], session_procs: list[SessionProc] | None = None
+) -> list[AgentJob]:
+    """Fill each job's `host_pid`/`host_alive` — THE one enrich loop.
+
+    `state.json` carries no pid, so a worker's host pid is JOINed from
+    `sessions/<pid>.json` via the single pure join `registry.host_pid_for_sid`.
+    The snapshot, the agents view's self-fetch path, and `csctl agents` all
+    consume this loop: pass the shared snapshot's `session_procs` for zero
+    extra IO, or `None` to self-fetch ONCE (the old per-job `job_host` loops
+    re-injected `/proc` liveness onto the whole registry once per job).
+    Returns fresh copies so the ~5s-TTL cached registry objects are never
+    mutated.
+    """
+    if session_procs is None:
+        session_procs = live_session_procs()
+    out: list[AgentJob] = []
+    for job in jobs:
+        pid, alive = registry.host_pid_for_sid(job.sid, session_procs)
+        out.append(replace(job, host_pid=pid, host_alive=alive))
+    return out
 
 
 def _source_of(entrypoint: str, kind: str) -> str:

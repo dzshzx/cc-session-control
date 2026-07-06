@@ -107,7 +107,10 @@ def test_fetch_pending_uses_snapshot_agent_jobs():
 def test_fetch_pending_self_fetch_enriches(monkeypatch):
     jobs = [_make_job(short="s2", host_alive=False)]
     monkeypatch.setattr(av_mod.registry, "read_agent_jobs", lambda *a, **k: jobs)
-    monkeypatch.setattr(av_mod.agent_ops, "job_host", lambda job: (4242, True))
+    # The self-fetch path goes through the ONE liveness.enrich_jobs loop.
+    monkeypatch.setattr(av_mod.liveness, "live_session_procs", lambda *a, **k: [])
+    monkeypatch.setattr(av_mod.liveness.registry, "host_pid_for_sid",
+                        lambda sid, procs: (4242, True))
 
     app = FakeApp()
     view = AgentsView(app)
