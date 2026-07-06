@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.3 (2026-07-06)
+
+Post-review cleanup batch on top of 0.6.2's refactor series; no behavior
+change.
+
+- **Default `handle_key` lives in `ListTabView`.** Overlay mode is answered by
+  the new `_overlay_active()` hook, list mode dispatches from `KEY_TABLE`;
+  Agents/Projects drop their hand-written copies and Sessions handles only its
+  extra modes (filter/cleanup/preview) before falling through to the base.
+- **Tighter types on the exit seam.** `App.exit_with`/`result`/`run` are typed
+  as `ExitIntent` (TYPE_CHECKING import) and `KEY_TABLE` as `tuple[Key, ...]`.
+- **`Key.help` → `Key.help_lines`** — no builtin shadowing; the name states the
+  lines are pre-indented display lines.
+- Doc fixes: `split_env_id`'s docstring no longer claims a nonexistent
+  `EnvRecord.env_id`; the environments section header reflects the liveness
+  routing.
+
 ## 0.6.2 (2026-07-06)
 
 Architecture-review refactor batch: seven deepening refactors, no intended
