@@ -48,44 +48,44 @@ class SessionsView(CleanupMixin, ListTabView):
     # table in the footer is a user preference (2026-07-05); `r 刷新` stays in
     # the App-level FOOTER_PREFIX, so its entry is hint-less here.
     KEY_TABLE = (
-        Key(("enter",), "Enter 接回", "_key_resume", section="会话操作:", help=(
+        Key(("enter",), "Enter 接回", "_key_resume", section="会话操作:", help_lines=(
             "  Enter  接回选中的会话（在当前终端恢复；接运行中的会话会先确认接管）",
         )),
-        Key(("t",), "t tmux接回", "_key_tmux", section="会话操作:", help=(
+        Key(("t",), "t tmux接回", "_key_tmux", section="会话操作:", help_lines=(
             "  t      tmux 接回（会话恢复进 tmux 窗口并接入前台——终端断线会话不死，",
             "         重连后 tmux attach 可捡回；已在 tmux 中的会话直接接入不重启；",
             "         接运行中的裸终端会话会先确认接管）",
         )),
-        Key(("f",), "f 分叉", "_key_fork", section="会话操作:", help=(
+        Key(("f",), "f 分叉", "_key_fork", section="会话操作:", help_lines=(
             "  f      分叉会话（创建副本后接回，不影响原会话）",
         )),
-        Key(("s",), "s 停止", "_key_stop", section="会话操作:", help=(
+        Key(("s",), "s 停止", "_key_stop", section="会话操作:", help_lines=(
             "  s      停止运行中的会话（发送 SIGTERM，需二次确认）",
         )),
-        Key(("R",), "R 转后台", "_key_relaunch", section="会话操作:", help=(
+        Key(("R",), "R 转后台", "_key_relaunch", section="会话操作:", help_lines=(
             "  R      转入 tmux 后台并开启远控（脱离终端，手机/网页可接管；",
             "         接运行中的会话会先确认接管）",
         )),
-        Key(("d",), "d 删除", "_key_delete", section="会话操作:", help=(
+        Key(("d",), "d 删除", "_key_delete", section="会话操作:", help_lines=(
             "  d      删除已结束的会话记录",
         )),
-        Key(("y",), "y 复制命令", "_key_yank", section="会话操作:", help=(
+        Key(("y",), "y 复制命令", "_key_yank", section="会话操作:", help_lines=(
             "  y      复制接回命令到剪贴板",
         )),
         Key(("h",), "h 桥接显隐", "_key_toggle_hidden", needs_selection=False,
-            section="会话操作:", help=(
+            section="会话操作:", help_lines=(
                 "  h      显示/隐藏桥接、SDK 会话",
             )),
         Key(("c",), "c 清理", "_enter_cleanup", needs_selection=False,
-            section="清理与过滤:", help=(
+            section="清理与过滤:", help_lines=(
                 "  c      打开清理子菜单",
             )),
         Key(("/",), "/ 过滤", "_enter_filter", needs_selection=False,
-            section="清理与过滤:", help=(
+            section="清理与过滤:", help_lines=(
                 "  /      按关键词过滤会话列表",
             )),
         Key(("r",), None, "_key_refresh", needs_selection=False,
-            section="清理与过滤:", help=(
+            section="清理与过滤:", help_lines=(
                 "  r      刷新",
             )),
         Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
@@ -127,7 +127,7 @@ class SessionsView(CleanupMixin, ListTabView):
         self._cleanup_walker = urwid.SimpleFocusListWalker([])
 
     def keyhints(self) -> str:
-        if self._mode == "help":
+        if self._overlay_active():
             # "其余" is honest: the prefix's Tab/q stay global (Tab switches
             # tabs, q QUITS — neither returns to the list).
             return "其余任意键返回"
@@ -362,11 +362,12 @@ class SessionsView(CleanupMixin, ListTabView):
 
     # --- Key dispatch ---
 
-    def handle_key(self, key: str) -> None:
-        if self._mode == "help":
-            self._handle_overlay_key(key)
-            return
+    def _overlay_active(self) -> bool:
+        return self._mode == "help"
 
+    def handle_key(self, key: str) -> None:
+        """Extra modes first (filter/preview/cleanup are Sessions-only); the
+        help overlay + list dispatch fall through to the base handle_key."""
         if self._mode == "filter":
             if key == "enter":
                 self._exit_filter()
@@ -398,8 +399,8 @@ class SessionsView(CleanupMixin, ListTabView):
                 self.app.refresh_with_notice()
             return
 
-        # Normal list mode — dispatch straight from KEY_TABLE.
-        self._dispatch_key(key)
+        # Help overlay + normal list mode: the base handle_key.
+        super().handle_key(key)
 
     # --- key handlers (bound by name in KEY_TABLE) ---
 

@@ -19,7 +19,7 @@ class Key:
     keys: tuple[str, ...]        # urwid key names, e.g. ("enter", "o")
     hint: str | None             # footer label; None = shown only in help
     handler: str                 # view method name (resolved via getattr)
-    help: tuple[str, ...] = ()   # pre-indented help-overlay lines
+    help_lines: tuple[str, ...] = ()  # pre-indented help-overlay display lines
     section: str | None = None   # help section this entry lists under
     needs_selection: bool = True  # call handler(_selected()) vs handler()
 
@@ -45,7 +45,7 @@ def help_lines(table: tuple[Key, ...], layout: HelpLayout) -> list[str]:
         lines.append(title)
         for e in table:
             if e.section == title:
-                lines.extend(e.help)
+                lines.extend(e.help_lines)
         lines.append("")
     lines.extend(layout.suffix)
     return lines

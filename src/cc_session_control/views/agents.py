@@ -79,23 +79,23 @@ class AgentsView(ListTabView):
     # App-level FOOTER_PREFIX, so its entry is hint-less.
     KEY_TABLE = (
         Key(("enter", "o"), "Enter/o 接回", "_takeover",
-            section="后台 agent 生命周期:", help=(
+            section="后台 agent 生命周期:", help_lines=(
                 "  Enter/o 接回（拉回前台，复用 resume；接运行中的 agent 会先确认接管）",
             )),
-        Key(("s",), "s 停止", "_stop", section="后台 agent 生命周期:", help=(
+        Key(("s",), "s 停止", "_stop", section="后台 agent 生命周期:", help_lines=(
             "  s       停止（仅运行中，需确认）",
         )),
-        Key(("d",), "d 删除", "_remove", section="后台 agent 生命周期:", help=(
+        Key(("d",), "d 删除", "_remove", section="后台 agent 生命周期:", help_lines=(
             "  d       删除（仅已结束）",
         )),
-        Key(("w",), "w 查看", "_watch", section="后台 agent 生命周期:", help=(
+        Key(("w",), "w 查看", "_watch", section="后台 agent 生命周期:", help_lines=(
             "  w       查看 timeline（只读）",
         )),
-        Key(("R",), "R 重启", "_key_respawn", section="后台 agent 生命周期:", help=(
+        Key(("R",), "R 重启", "_key_respawn", section="后台 agent 生命周期:", help_lines=(
             "  R       重启（respawn）",
         )),
         Key(("r",), None, "_key_refresh", needs_selection=False,
-            section="后台 agent 生命周期:", help=(
+            section="后台 agent 生命周期:", help_lines=(
                 "  r       刷新",
             )),
         Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
@@ -126,11 +126,14 @@ class AgentsView(ListTabView):
     # --- TabView contract ---
 
     def keyhints(self) -> str:
-        if self._mode in ("help", "watch"):
+        if self._overlay_active():
             # "其余" is honest: the prefix's Tab/q stay global (Tab switches
             # tabs, q QUITS — neither returns to the list).
             return "其余任意键返回"
         return footer_hints(self.KEY_TABLE)
+
+    def _overlay_active(self) -> bool:
+        return self._mode in ("help", "watch")
 
     def _enrich(self, jobs: list[AgentJob]) -> list[AgentJob]:
         """Fill host liveness for the self-fetch path (snapshot already enriched).
@@ -185,14 +188,7 @@ class AgentsView(ListTabView):
             return widget.job
         return None
 
-    # --- key dispatch ---
-
-    def handle_key(self, key: str) -> None:
-        if self._mode in ("help", "watch"):
-            self._handle_overlay_key(key)
-            return
-        # Normal list mode — dispatch straight from KEY_TABLE.
-        self._dispatch_key(key)
+    # --- key handlers (bound by name in KEY_TABLE; dispatch lives in the base) ---
 
     def _key_respawn(self, job: AgentJob) -> None:
         cmd = agent_ops.respawn(job)

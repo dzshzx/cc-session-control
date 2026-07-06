@@ -16,6 +16,7 @@ import urwid
 
 if TYPE_CHECKING:
     from ..app import App
+    from ._keytable import Key
 
 
 class ListTabView:
@@ -69,7 +70,20 @@ class ListTabView:
     # --- key-table dispatch (see views/_keytable.py) ---
 
     #: the view's single-source key table; subclasses override.
-    KEY_TABLE: tuple = ()
+    KEY_TABLE: tuple[Key, ...] = ()
+
+    def handle_key(self, key: str) -> None:
+        """Default TabView key handling: overlay mode intercepts, list mode
+        dispatches from KEY_TABLE. A view with extra modes (e.g. the Sessions
+        filter/cleanup/preview) overrides, handles those, then calls super()."""
+        if self._overlay_active():
+            self._handle_overlay_key(key)
+            return
+        self._dispatch_key(key)
+
+    def _overlay_active(self) -> bool:
+        """Whether the view is in its overlay (help/watch) mode right now."""
+        raise NotImplementedError
 
     def _dispatch_key(self, key: str) -> None:
         """List-mode dispatch driven by `KEY_TABLE` — the same declaration that

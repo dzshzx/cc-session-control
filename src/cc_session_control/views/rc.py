@@ -138,35 +138,35 @@ class RCView(ListTabView):
     # App-level FOOTER_PREFIX, so its entry is hint-less.
     KEY_TABLE = (
         Key(("t",), "t 新建会话", "_key_tmux_new",
-            section="项目操作（仅对「项目」行生效）:", help=(
+            section="项目操作（仅对「项目」行生效）:", help_lines=(
                 "  t      在项目目录新建 tmux claude 会话并直接进入（离开 csctl）",
             )),
         Key(("enter",), "Enter 启动远控", "_key_start",
-            section="项目操作（仅对「项目」行生效）:", help=(
+            section="项目操作（仅对「项目」行生效）:", help_lines=(
                 "  Enter  启动选中项目的远程控制服务",
             )),
         Key(("s",), "s 停止", "_key_stop",
-            section="项目操作（仅对「项目」行生效）:", help=(
+            section="项目操作（仅对「项目」行生效）:", help_lines=(
                 "  s      停止选中项目的远程控制服务（需确认）",
             )),
         Key(("a",), "a 开机自启", "_key_autostart",
-            section="项目操作（仅对「项目」行生效）:", help=(
+            section="项目操作（仅对「项目」行生效）:", help_lines=(
                 "  a      切换「开机自启」：A 键一键启动时是否带上本项目",
             )),
         Key(("c",), "c 自动远控", "_key_rc_toggle",
-            section="项目操作（仅对「项目」行生效）:", help=(
+            section="项目操作（仅对「项目」行生效）:", help_lines=(
                 "  c      切换「自动远控」：claude 启动时自动开远程控制，手机即可接管",
             )),
         Key(("A",), "A 全部启动", "_key_start_all", needs_selection=False,
-            section="批量操作:", help=(
+            section="批量操作:", help_lines=(
                 "  A      启动所有「开机自启」项目",
             )),
         Key(("S",), "S 全部停止", "_key_stop_all", needs_selection=False,
-            section="批量操作:", help=(
+            section="批量操作:", help_lines=(
                 "  S      停止全部远程控制服务（需确认）",
             )),
         Key(("r",), None, "_key_refresh", needs_selection=False,
-            section="批量操作:", help=(
+            section="批量操作:", help_lines=(
                 "  r      重新扫描刷新",
             )),
         Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
@@ -198,13 +198,16 @@ class RCView(ListTabView):
         self._help = False
 
     def keyhints(self) -> str:
-        if self._help:
+        if self._overlay_active():
             # "其余" is honest: the prefix's Tab/q stay global (Tab switches
             # tabs, q QUITS — neither returns to the list).
             return "其余任意键返回"
         # Every list-mode key gets a brief hint, straight from KEY_TABLE; the
         # footer Text wraps on narrow terminals (vertical for width).
         return footer_hints(self.KEY_TABLE)
+
+    def _overlay_active(self) -> bool:
+        return self._help
 
     def load(self) -> None:
         self._projects = rc.scan()
@@ -268,14 +271,7 @@ class RCView(ListTabView):
             return widget.project
         return None
 
-    def handle_key(self, key: str) -> None:
-        if self._help:
-            self._handle_overlay_key(key)
-            return
-        # Normal list mode — dispatch straight from KEY_TABLE.
-        self._dispatch_key(key)
-
-    # --- key handlers (bound by name in KEY_TABLE) ---
+    # --- key handlers (bound by name in KEY_TABLE; dispatch lives in the base) ---
 
     def _key_tmux_new(self, p: RCProject) -> None:
         if not p.dir_exists:

@@ -6,7 +6,7 @@ import curses
 import os
 import threading
 from collections.abc import Callable
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import urwid
 
@@ -15,6 +15,9 @@ from .data.snapshot import WorldSnapshot, build_world_snapshot
 from .views.agents import AgentsView
 from .views.rc import RCView
 from .views.sessions import SessionsView
+
+if TYPE_CHECKING:
+    from .actions.session_ops import ExitIntent
 
 # D7/R10: shown across all tabs when `/proc` is unavailable (e.g. macOS), where
 # the "current" session can't be determined and destructive ops are refused.
@@ -89,7 +92,7 @@ def _make_screen() -> urwid.raw_display.Screen:
 
 class App:
     def __init__(self) -> None:
-        self.result: object | None = None  # a session_ops.ExitIntent, or None
+        self.result: ExitIntent | None = None
         self._exiting = False
         self._alarm_handle: object | None = None
         self._notify_alarm: object | None = None
@@ -211,14 +214,14 @@ class App:
         self._confirm_yes = None
         self.set_hints(self.views[self._active].keyhints())
 
-    def _exit(self, result: object = None) -> None:
+    def _exit(self, result: ExitIntent | None = None) -> None:
         self._exiting = True
         if self._alarm_handle:
             self.loop.remove_alarm(self._alarm_handle)
         self.result = result
         raise urwid.ExitMainLoop()
 
-    def exit_with(self, intent: object) -> None:
+    def exit_with(self, intent: ExitIntent) -> None:
         """Exit the MainLoop carrying a `session_ops.ExitIntent`.
 
         Views construct the intent (they know the verb); `cli._cmd_tui` calls
@@ -312,7 +315,7 @@ class App:
                 view.apply_data()
         return True
 
-    def run(self) -> object | None:
+    def run(self) -> ExitIntent | None:
         self._pipe_fd = self.loop.watch_pipe(self._on_pipe)
         self.views[self._active].load()
         self.set_hints(self.views[self._active].keyhints())
