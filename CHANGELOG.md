@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.1 (2026-07-07)
+
+### Changed
+
+- **项目 tab no longer lists pure trust residue**: a project whose workspace
+  directory is deleted and that is neither in the autostart list nor holding a
+  tmux window is now dropped by `rc.scan()` instead of rendered as a ✖ 缺失
+  row — csctl can't act on it (no start, and it never edits `~/.claude.json`).
+  Missing-dir projects that ARE actionable (stale rc-enabled entry, or a
+  server still running out of the deleted dir) stay listed. Applies to both
+  the TUI and `csctl rc status` (single source in `scan()`).
+
 ## 0.7.0 (2026-07-06)
 
 **tmux-first dispatch** (ADR-0001, `docs/adr/0001-tmux-first-session-dispatch.md`):
