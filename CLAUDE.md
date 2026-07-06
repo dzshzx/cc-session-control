@@ -49,7 +49,7 @@ csctl agents                                 # list background agents
 csctl env                                    # list bridge environments (current + orphan)
 ```
 
-Constraints from `CONTRIBUTING.md`: keep each source file **under 600 lines**, use type hints, no hardcoded paths. (`views/sessions.py` is the largest at ~595 lines — near the limit, so growing it likely means splitting first.)
+Constraints from `CONTRIBUTING.md`: keep each source file **under 600 lines**, use type hints, no hardcoded paths.
 
 ## Architecture
 
@@ -70,7 +70,7 @@ The invariant is **import direction, not purity**: `views` import from `data`/`a
 
 ### The view contract (how `app.py` drives tabs generically)
 
-`App` holds `self.views: list[TabView]` and drives each via the `TabView` `Protocol` (defined in `app.py`, `@runtime_checkable`). To add/modify a tab, satisfy that Protocol structurally — these members:
+`App` holds `self.views: list[TabView]` and drives each via the `TabView` `Protocol` (defined in `app.py`, `@runtime_checkable`). The shared *implementation* behind the Protocol is `views/_base.py::ListTabView` — the walker/listbox/status frame, focus-preserving `_rebuild` (subclasses supply `_build_rows`/`_status_text`), the centered `_show_overlay`, `_update_footer`, and the overlay-mode key dispatch (`_handle_overlay_key`/`_exit_overlay`/`_close_overlay_mode`) all live there ONCE; a new tab subclasses it and adds only rows + key semantics. In the reverse direction views talk to App ONLY through its view-facing façade — `notify`/`confirm`/`set_hints`/`trigger_async_refresh`/`refresh_with_notice`/`exit_with_*` plus `is_active(view)`, `own_footer(widget)`, `release_footer()` (the last two carry the Sessions filter Edit) — never `app.frame`/`app._active`/`app.views` directly. To add/modify a tab, satisfy the Protocol structurally — these members:
 
 - `.widget` — the urwid widget for the tab body
 - `._loaded` — bool; whether `load()` has run

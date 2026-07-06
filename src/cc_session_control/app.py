@@ -30,7 +30,8 @@ class TabView(Protocol):
     widgets; `apply_data()` runs on the main loop and swaps `_pending` into the
     walker. The `snapshot` is the shared per-cycle world (R11/D8); it is OPTIONAL
     — a view called with `None` self-fetches (back-compat / tests). Adding a tab
-    means honoring every member below.
+    means honoring every member below; subclass `views/_base.py::ListTabView`
+    for the shared walker/overlay/footer plumbing instead of re-writing it.
     """
 
     widget: urwid.Widget
@@ -235,6 +236,21 @@ class App:
     def set_hints(self, hints: str) -> None:
         """Footer = shared prefix + the active tab's keyhints (D1 single source)."""
         self.footer_text.set_text(FOOTER_PREFIX + hints)
+
+    # --- the view-facing façade (views call these, never App internals) ---
+
+    def is_active(self, view: TabView) -> bool:
+        """Whether `view` is the tab currently shown — the one question views
+        may ask about tab state (no peeking at `views`/`_active`)."""
+        return self.views[self._active] is view
+
+    def own_footer(self, widget: urwid.Widget) -> None:
+        """Hand the footer to a view's transient widget (e.g. the filter Edit)."""
+        self.frame.footer = widget
+
+    def release_footer(self) -> None:
+        """Give the footer back to the standard hints line."""
+        self._restore_footer()
 
     def notify(self, msg: str, seconds: float = 3) -> None:
         # The newest notification owns the footer: cancel the previous restore

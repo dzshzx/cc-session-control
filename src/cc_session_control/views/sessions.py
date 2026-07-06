@@ -17,6 +17,7 @@ from ..data import liveness, proc, registry
 from ..data.cleanup import cleanup_classified, remove_session
 from ..data.sessions import scan
 from ..models import AgentJob, Session, SessionProc
+from ._base import ListTabView
 from ._confirm import DEGRADED as _DEGRADED
 from ._confirm import confirm_takeover, stop_message
 from ._rows import TextRow
@@ -33,14 +34,16 @@ if TYPE_CHECKING:
     from ..app import App
 
 
-class SessionsView(CleanupMixin):
+class SessionsView(CleanupMixin, ListTabView):
     # mode: "list" | "filter" | "cleanup" | "preview" | "help"
+
+    OVERLAY_WIDTH = 70
+
     def __init__(self, app: App) -> None:
-        self.app = app
+        super().__init__(app, _SESSION_HEADER)
         self._sessions: list[Session] = []
         self._all_sessions: list[Session] = []
         self._pending: list[Session] | None = None
-        self._loaded = False
         self._mode = "list"
         self._filter_text = ""
         self._cleanup_stats: dict[str, int] = {}
@@ -55,14 +58,6 @@ class SessionsView(CleanupMixin):
         self._pending_procs: list[SessionProc] | None = None
         self._pending_cur: set[int] | None = None
         self._pending_classified: dict[str, int] | None = None
-
-        self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
-        col_header = urwid.AttrMap(_SESSION_HEADER, "col_header")
-        self.walker = urwid.SimpleFocusListWalker([])
-        self.listbox = urwid.ListBox(self.walker)
-        self._list_body = urwid.AttrMap(self.listbox, {None: "body"})
-        self._body = urwid.WidgetPlaceholder(self._list_body)
-        self.widget = urwid.Frame(self._body, header=col_header, footer=self.status)
         self._cleanup_walker = urwid.SimpleFocusListWalker([])
 
     def keyhints(self) -> str:
@@ -82,11 +77,6 @@ class SessionsView(CleanupMixin):
             "Enter 接回 · t tmux接回 · f 分叉 · s 停止 · R 转后台 · d 删除 · "
             "y 复制命令 · h 桥接显隐 · c 清理 · / 过滤 · ? 详细说明"
         )
-
-    def _update_footer(self) -> None:
-        if self.app.views[self.app._active] is not self:
-            return
-        self.app.set_hints(self.keyhints())
 
     def load(self) -> None:
         sessions = scan()
@@ -191,16 +181,14 @@ class SessionsView(CleanupMixin):
             elif self._mode == "cleanup":
                 self._rebuild_cleanup()
 
-    def _rebuild(self) -> None:
-        focus_pos = self.walker.get_focus()[1] if self.walker else 0
-        self.walker.clear()
+    def _build_rows(self) -> None:
         for s in self._sessions:
             self.walker.append(SessionRow(s))
         if not self._sessions:
             empty = "无匹配 · 按 / 改过滤 · Esc 清空" if self._filter_text else "暂无会话"
             self.walker.append(urwid.AttrMap(urwid.Text(f" {empty}"), "dead"))
-        if self.walker and focus_pos is not None:
-            self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
+
+    def _status_text(self) -> str:
         alive_n = sum(1 for s in self._all_sessions if s.alive)
         flt = f" · 过滤「{self._filter_text}」" if self._filter_text else ""
         empty = self._cleanup_stats.get("empty", 0)
@@ -220,14 +208,15 @@ class SessionsView(CleanupMixin):
             if orphans:
                 parts.append(f"孤儿 {orphans}")
             cleanup_text = f" · {' · '.join(parts)}"
-        self.status.original_widget.set_text(
+        return (
             f" 共 {len(self._all_sessions)} 条会话 · 运行 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{cleanup_text}"
         )
 
+    def _close_overlay_mode(self) -> None:
+        self._mode = "list"
+
     def _selected(self) -> Session | None:
-        if not self.walker:
-            return None
-        widget = self.walker.get_focus()[0]
+        widget = self._focused_widget()
         if isinstance(widget, SessionRow):
             return widget.session
         return None
@@ -255,7 +244,7 @@ class SessionsView(CleanupMixin):
     def _enter_filter(self) -> None:
         self._mode = "filter"
         self._filter_edit = urwid.Edit("过滤: ")
-        self.app.frame.footer = urwid.AttrMap(self._filter_edit, "notify")
+        self.app.own_footer(urwid.AttrMap(self._filter_edit, "notify"))
 
     def deactivate(self) -> None:
         """TabView hook: called on tab switch-away. Commits + closes a transient
@@ -273,20 +262,7 @@ class SessionsView(CleanupMixin):
             self._filter_text = self._filter_edit.get_edit_text()
         self._apply_filter()
         self._rebuild()
-        self.app._restore_footer()
-
-    def _show_overlay(self, title: str, rows: list, height: int | None = None) -> None:
-        preview_walker = urwid.SimpleFocusListWalker(rows)
-        preview_list = urwid.ListBox(preview_walker)
-        header = urwid.AttrMap(urwid.Text(f" {title}", align="center"), "col_header")
-        box = urwid.LineBox(urwid.Frame(preview_list, header=header))
-        h = height or min(len(rows) + 4, 30)
-        overlay = urwid.Overlay(
-            box, self._list_body,
-            align="center", width=("relative", 70),
-            valign="middle", height=h,
-        )
-        self._body.original_widget = overlay
+        self.app.release_footer()
 
     def _do_terminate(self, s: Session) -> None:
         """Stop body, run only after the y/n confirm accepts."""
@@ -327,15 +303,7 @@ class SessionsView(CleanupMixin):
 
     def handle_key(self, key: str) -> None:
         if self._mode == "help":
-            # `r` keeps its footer-prefix meaning (刷新) even here, so the
-            # "其余任意键返回" hint stays exact: Tab/q/r do what the prefix says,
-            # every OTHER key returns.
-            if key == "r":
-                self.app.refresh_with_notice()
-                return
-            self._mode = "list"
-            self._body.original_widget = self._list_body
-            self._update_footer()
+            self._handle_overlay_key(key)
             return
 
         if self._mode == "filter":

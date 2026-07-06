@@ -25,6 +25,7 @@ import urwid
 from ..data import rc
 from ..data.rc import set_rc_at_startup
 from ..models import RCProject, RCServer
+from ._base import ListTabView
 from ._colspec import header_columns, row_columns
 from ._confirm import stop_message
 from ._rows import TextRow
@@ -129,23 +130,14 @@ class ServerRow(urwid.WidgetWrap):
         return key
 
 
-class RCView:
+class RCView(ListTabView):
     def __init__(self, app: App) -> None:
-        self.app = app
+        super().__init__(app, header_columns(_PROJECT_COLS))
         self._projects: list[RCProject] = []
         self._servers: list[RCServer] = []
         self._pending: list[RCProject] | None = None
         self._pending_servers: list[RCServer] | None = None
-        self._loaded = False
         self._help = False
-
-        self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
-        col_header = urwid.AttrMap(header_columns(_PROJECT_COLS), "col_header")
-        self.walker = urwid.SimpleFocusListWalker([])
-        self.listbox = urwid.ListBox(self.walker)
-        self._list_body = urwid.AttrMap(self.listbox, {None: "body"})
-        self._body = urwid.WidgetPlaceholder(self._list_body)
-        self.widget = urwid.Frame(self._body, header=col_header, footer=self.status)
 
     def keyhints(self) -> str:
         if self._help:
@@ -188,9 +180,7 @@ class RCView:
             if not self._help:
                 self._rebuild()
 
-    def _rebuild(self) -> None:
-        focus_pos = self.walker.get_focus()[1] if self.walker else 0
-        self.walker.clear()
+    def _build_rows(self) -> None:
         # Projects first, so default focus lands on an actionable row.
         for p in self._projects:
             self.walker.append(RCRow(p))
@@ -200,9 +190,8 @@ class RCView:
                 self.walker.append(ServerRow(s))
         if not self.walker:
             self.walker.append(urwid.AttrMap(urwid.Text(" 暂无远控项目"), "dead"))
-        if self.walker and focus_pos is not None:
-            self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
 
+    def _status_text(self) -> str:
         running = sum(1 for p in self._projects if p.status == "running")
         auto = sum(1 for p in self._projects if p.auto_start)
         rc_off = sum(1 for p in self._projects if p.rc_at_startup is False)
@@ -210,39 +199,23 @@ class RCView:
         rc_text = f" · 自动远控关 {rc_off}" if rc_off else ""
         miss_text = f" · 目录缺失 {missing}" if missing else ""
         srv_text = f" · 服务 {len(self._servers)}" if self._servers else ""
-        self.status.original_widget.set_text(
+        return (
             f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}"
             f"{rc_text}{miss_text}{srv_text}"
         )
 
+    def _close_overlay_mode(self) -> None:
+        self._help = False
+
     def _selected(self) -> RCProject | None:
-        if not self.walker:
-            return None
-        widget = self.walker.get_focus()[0]
+        widget = self._focused_widget()
         if isinstance(widget, RCRow):
             return widget.project
         return None
 
-    def _update_footer(self) -> None:
-        if self.app.views[self.app._active] is not self:
-            return
-        self.app.set_hints(self.keyhints())
-
-    def deactivate(self) -> None:
-        """TabView hook: called on tab switch-away. No transient footer modes
-        here — the help overlay lives in the body widget and stays visibly modal."""
-
     def handle_key(self, key: str) -> None:
         if self._help:
-            # `r` keeps its footer-prefix meaning (刷新) even here, so the
-            # "其余任意键返回" hint stays exact.
-            if key == "r":
-                self.app.refresh_with_notice()
-                return
-            self._help = False
-            self._body.original_widget = self._list_body
-            self._rebuild()
-            self._update_footer()
+            self._handle_overlay_key(key)
             return
 
         p = self._selected()
@@ -347,12 +320,5 @@ class RCView:
             "  q      退出",
         ]
         rows = [TextRow(line) for line in lines]
-        listbox = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
-        header = urwid.AttrMap(urwid.Text(" 项目 / 远控帮助", align="center"), "col_header")
-        box = urwid.LineBox(urwid.Frame(listbox, header=header))
-        self._body.original_widget = urwid.Overlay(
-            box, self._list_body,
-            align="center", width=("relative", 80),
-            valign="middle", height=min(len(rows) + 4, 30),
-        )
+        self._show_overlay("项目 / 远控帮助", rows)
         self._update_footer()

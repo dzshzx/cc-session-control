@@ -18,6 +18,7 @@ import urwid
 from ..actions import agent_ops
 from ..data import proc, registry
 from ..models import AgentJob
+from ._base import ListTabView
 from ._colspec import header_columns, row_columns
 from ._confirm import DEGRADED as _DEGRADED
 from ._confirm import confirm_takeover, stop_message
@@ -68,22 +69,13 @@ class AgentRow(urwid.WidgetWrap):
         return key
 
 
-class AgentsView:
+class AgentsView(ListTabView):
     # mode: "list" | "help" | "watch"
     def __init__(self, app: App) -> None:
-        self.app = app
+        super().__init__(app, _AGENTS_HEADER)
         self._jobs: list[AgentJob] = []
         self._pending: list[AgentJob] | None = None
-        self._loaded = False
         self._mode = "list"
-
-        self.status = urwid.AttrMap(urwid.Text(" 扫描中…"), "status")
-        col_header = urwid.AttrMap(_AGENTS_HEADER, "col_header")
-        self.walker = urwid.SimpleFocusListWalker([])
-        self.listbox = urwid.ListBox(self.walker)
-        self._list_body = urwid.AttrMap(self.listbox, {None: "body"})
-        self._body = urwid.WidgetPlaceholder(self._list_body)
-        self.widget = urwid.Frame(self._body, header=col_header, footer=self.status)
 
     # --- TabView contract ---
 
@@ -93,10 +85,6 @@ class AgentsView:
             # tabs, q QUITS — neither returns to the list).
             return "其余任意键返回"
         return f"{agent_ops.KEYHINTS} · ? 详细说明"
-
-    def deactivate(self) -> None:
-        """TabView hook: called on tab switch-away. No transient footer modes
-        here — help/watch live in the body widget and stay visibly modal."""
 
     def _enrich(self, jobs: list[AgentJob]) -> list[AgentJob]:
         """Fill host liveness for the self-fetch path (snapshot already enriched).
@@ -132,62 +120,30 @@ class AgentsView:
 
     # --- rendering ---
 
-    def _rebuild(self) -> None:
-        focus_pos = self.walker.get_focus()[1] if self.walker else 0
-        self.walker.clear()
+    def _build_rows(self) -> None:
         for job in self._jobs:
             self.walker.append(AgentRow(job))
         if not self._jobs:
             self.walker.append(urwid.AttrMap(urwid.Text(" 暂无后台 agent"), "dead"))
-        if self.walker and focus_pos is not None:
-            self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
+
+    def _status_text(self) -> str:
         alive_n = sum(1 for j in self._jobs if j.host_alive)
-        self.status.original_widget.set_text(
-            f" 共 {len(self._jobs)} 个后台 agent · 运行 {alive_n}"
-        )
+        return f" 共 {len(self._jobs)} 个后台 agent · 运行 {alive_n}"
+
+    def _close_overlay_mode(self) -> None:
+        self._mode = "list"
 
     def _selected(self) -> AgentJob | None:
-        if not self.walker:
-            return None
-        widget = self.walker.get_focus()[0]
+        widget = self._focused_widget()
         if isinstance(widget, AgentRow):
             return widget.job
         return None
-
-    def _update_footer(self) -> None:
-        if self.app.views[self.app._active] is not self:
-            return
-        self.app.set_hints(self.keyhints())
-
-    def _show_overlay(self, title: str, rows: list, height: int | None = None) -> None:
-        walker = urwid.SimpleFocusListWalker(rows)
-        listbox = urwid.ListBox(walker)
-        header = urwid.AttrMap(urwid.Text(f" {title}", align="center"), "col_header")
-        box = urwid.LineBox(urwid.Frame(listbox, header=header))
-        h = height or min(len(rows) + 4, 30)
-        overlay = urwid.Overlay(
-            box, self._list_body,
-            align="center", width=("relative", 80),
-            valign="middle", height=h,
-        )
-        self._body.original_widget = overlay
-
-    def _exit_overlay(self) -> None:
-        self._mode = "list"
-        self._body.original_widget = self._list_body
-        self._rebuild()
-        self._update_footer()
 
     # --- key dispatch ---
 
     def handle_key(self, key: str) -> None:
         if self._mode in ("help", "watch"):
-            # `r` keeps its footer-prefix meaning (刷新) even here, so the
-            # "其余任意键返回" hint stays exact.
-            if key == "r":
-                self.app.refresh_with_notice()
-                return
-            self._exit_overlay()
+            self._handle_overlay_key(key)
             return
 
         job = self._selected()
