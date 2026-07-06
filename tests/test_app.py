@@ -143,12 +143,26 @@ def test_full_cycle_drives_real_views(monkeypatch):
 
     app = App()
     app._run_fetch_cycle()
-    assert app.views[0]._pending == sess          # SessionsView stashed
-    assert app.views[1]._pending == proj          # RCView stashed (tab order: 会话/项目/后台)
+    assert app.views[0]._pending == proj          # RCView stashed (tab order: 项目/会话/后台)
+    assert app.views[1]._pending == sess          # SessionsView stashed
 
     app._on_pipe(b"1")
-    assert len(app.views[0].walker) == len(sess)  # swapped into the walker
-    assert app.views[0]._pending is None
+    assert len(app.views[1].walker) == len(sess)  # swapped into the walker
+    assert app.views[1]._pending is None
+
+
+def test_tab_order_launcher_first():
+    # ADR-0001: 项目 → 会话 → 后台, startup on 项目; TAB_NAMES and self.views
+    # index in lockstep.
+    from cc_session_control.views.agents import AgentsView
+    from cc_session_control.views.rc import RCView
+    from cc_session_control.views.sessions import SessionsView
+
+    assert app_mod.TAB_NAMES == ["项目", "会话", "后台"]
+    app = App()
+    assert app._active == 0
+    assert [type(v) for v in app.views] == [RCView, SessionsView, AgentsView]
+    assert len(app.views) == len(app_mod.TAB_NAMES)
 
 
 # --- Confirm modal: App-level y/n routing shared by all tabs ---
@@ -224,7 +238,8 @@ def test_filter_mode_captures_q_into_edit():
     # _input consumed it before the view ever saw it.
     app = App()
     app.trigger_async_refresh = lambda: None  # keep the test IO-free
-    sessions_view = app.views[0]
+    app._input("tab")               # 项目 → 会话 (项目/会话/后台 order)
+    sessions_view = app.views[1]
     app._input("/")                 # enter filter mode
     app._input("q")                 # must land in the Edit, not exit
     assert sessions_view._mode == "filter"
@@ -234,17 +249,18 @@ def test_filter_mode_captures_q_into_edit():
 def test_tab_is_captured_during_filter_mode():
     app = App()
     app.trigger_async_refresh = lambda: None
-    sessions_view = app.views[0]
+    app._input("tab")               # 项目 → 会话
+    sessions_view = app.views[1]
     app._input("/")
     app._input("x")
     app._input("tab")               # captured: must NOT switch tabs mid-typing
-    assert app._active == 0
+    assert app._active == 1
     assert sessions_view._mode == "filter"
 
     app._input("enter")             # commit the filter
     assert sessions_view._filter_text == "x"
     app._input("tab")               # back in list mode: tab switches again
-    assert app._active == 1
+    assert app._active == 2
 
 
 def test_notify_restore_does_not_evict_filter_edit():
@@ -254,7 +270,8 @@ def test_notify_restore_does_not_evict_filter_edit():
     # _mode stayed "filter").
     app = App()
     app.trigger_async_refresh = lambda: None
-    sessions_view = app.views[0]
+    app._input("tab")               # 项目 → 会话
+    sessions_view = app.views[1]
     app.notify("已复制")
     app._input("/")                 # enter filter with the alarm still pending
     app._restore_footer()           # the leftover alarm fires

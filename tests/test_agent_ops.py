@@ -122,6 +122,8 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
     monkeypatch.setattr(ao.proc, "ancestor_pids", lambda: set())
     monkeypatch.setattr(ao.liveness, "live_session_procs", lambda *a, **k: [
         SessionProc(pid=4242, sid="sid-take", proc_start="777", proc_alive=True)])
+    monkeypatch.setattr(ao.tmux, "find_session_window",
+                        lambda pids: "proj:4" if pids == [4242] else None)
     job = _make_job(resume_sid="sid-take", cwd="/tmp/proj")
 
     s = ao.resume_takeover(job)
@@ -133,6 +135,7 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
     assert s.proc_start == "777"  # feeds take_over's kill-time pid-reuse recheck
     assert s.source == "bg"
     assert s.agent_short == job.short
+    assert s.tmux_target == "proj:4"  # resident worker -> tmux Enter attaches in place
 
     # The adapter feeds the EXISTING resume machinery unchanged: a live,
     # non-current session is taken over (old pid killed first).
@@ -142,9 +145,12 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
 def test_resume_takeover_dead_worker_no_kill(monkeypatch):
     monkeypatch.setattr(ao, "job_host", lambda job: (None, False))
     monkeypatch.setattr(ao.proc, "ancestor_pids", lambda: set())
+    monkeypatch.setattr(ao.tmux, "find_session_window",
+                        lambda pids: (_ for _ in ()).throw(AssertionError("dead: no tmux lookup")))
     job = _make_job(resume_sid="sid-dead", cwd="/tmp/proj")
     s = ao.resume_takeover(job)
     assert s.alive is False
+    assert s.tmux_target is None
     assert resume_cmd(s) == "cd /tmp/proj && claude --resume sid-dead"
 
 

@@ -34,7 +34,7 @@ _SOURCE_BADGES = {
 # left; the numeric 提问 and the ragged relative 时间 right-align so their line-
 # to-line anchor is stable.
 SESSION_COLS = [
-    (6, "left", "状态"),
+    (8, "left", "状态"),
     (4, "left", "来源"),
     (4, "left", "远控"),
     (11, "right", "时间"),
@@ -74,11 +74,18 @@ def _status_parts(session: Session) -> tuple[str, str]:
     meaning (忙 = generating/tool-running, 闲 = waiting for input, 停 = no
     process), the ●/○ shape survives colorless terminals, and only the
     established ●=on / ○=off convention is used (no ◐ — ambiguous, and an
-    East-Asian-Ambiguous width risk, the P5 glyph lesson)."""
+    East-Asian-Ambiguous width risk, the P5 glyph lesson).
+
+    A live tmux-resident session (ADR-0001) additionally shows the ⧉ badge —
+    U+29C9 is East_Asian_Width=Neutral (width-stable 1 cell, verified against
+    wcwidth + urwid.calc_width, the P5 check), unlike the ambiguous glyphs the
+    P5 lesson banned. Data comes from the snapshot's `tmux_target`; the resume
+    actions read the SAME field."""
     cur = "▸" if session.current else " "
     if session.alive:
         word = "忙" if session.status == "busy" else "闲"
-        return f"{cur}● {word}", ("status_busy" if word == "忙" else "alive")
+        badge = " ⧉" if session.tmux_target else ""
+        return f"{cur}● {word}{badge}", ("status_busy" if word == "忙" else "alive")
     return f"{cur}○ 停", "dead"
 
 

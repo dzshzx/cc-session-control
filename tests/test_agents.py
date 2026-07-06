@@ -4,7 +4,11 @@ import urwid
 
 import cc_session_control.views.agents as av_mod
 from cc_session_control.actions import agent_ops
-from cc_session_control.actions.session_ops import ResumeIntent
+from cc_session_control.actions.session_ops import (
+    AttachIntent,
+    ResumeIntent,
+    TmuxResumeIntent,
+)
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import AgentJob
 from cc_session_control.views.agents import AgentRow, AgentsView
@@ -145,7 +149,8 @@ def test_load_enriches_and_renders(monkeypatch):
 def test_keyhints_generated_from_key_table():
     view = AgentsView(FakeApp())
     hints = view.keyhints()
-    assert "Enter/o 接回" in hints
+    assert "Enter 接回" in hints
+    assert "t 终端接回" in hints
     assert "详细说明" in hints
 
 
@@ -173,84 +178,110 @@ def test_r_key_refreshes_not_respawn(monkeypatch):
     assert any("刷新" in m for m in app._notifications)
 
 
-def test_enter_key_takeover_like_o(monkeypatch):
-    # Enter is the unified primary action; on this tab that is takeover (= `o`).
+def test_enter_key_tmux_takeover(monkeypatch):
+    # Enter is the unified primary action; tmux-first (ADR-0001): a dead,
+    # non-resident worker resumes inside tmux + enters.
     monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
                         lambda job: _takeover_session(current=False))
     app, view = _make_view([_make_job()])
     view.handle_key("enter")
     assert app.result is not None
-    assert isinstance(app.result, ResumeIntent)
+    assert isinstance(app.result, TmuxResumeIntent)
 
 
-def test_o_key_takeover_routes_to_resume_intent(monkeypatch):
-    s = av_mod.agent_ops.resume_takeover  # keep ref
+def test_enter_key_resident_worker_attaches_in_place(monkeypatch):
+    # A tmux-resident live worker is entered in place — no kill, no confirm.
+    monkeypatch.setattr(
+        av_mod.agent_ops, "resume_takeover",
+        lambda job: _takeover_session(current=False, alive=True, tmux_target="proj:5"))
+    app, view = _make_view([_make_job(host_alive=True)])
+    view.handle_key("enter")
+    assert app.result == AttachIntent("proj:5")
+    assert app._confirm_messages == []
+
+
+def test_t_key_terminal_takeover_routes_to_resume_intent(monkeypatch):
+    # t = 终端接回 (fallback): bare-terminal resume via the existing path.
     monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
                         lambda job: _takeover_session(current=False))
     app, view = _make_view([_make_job()])
-    view.handle_key("o")
+    view.handle_key("t")
     assert app.result is not None
     assert isinstance(app.result, ResumeIntent)
 
 
-def test_o_key_takeover_refuses_current(monkeypatch):
+def test_enter_and_t_refuse_current(monkeypatch):
     monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
                         lambda job: _takeover_session(current=True))
     app, view = _make_view([_make_job()])
-    view.handle_key("o")
+    view.handle_key("enter")
+    view.handle_key("t")
     assert app.result is None
-    assert any("不能接回当前会话" in m for m in app._notifications)
+    assert sum("不能接回当前会话" in m for m in app._notifications) == 2
 
 
-def _takeover_session(current, alive=False):
+def _takeover_session(current, alive=False, tmux_target=None):
     from cc_session_control.models import Session
     return Session(sid="x", cwd="/tmp", label="x", mtime=0.0, prompts=0,
-                   pid=999 if alive else None, alive=alive, current=current, source="bg")
+                   pid=999 if alive else None, alive=alive, current=current,
+                   source="bg", tmux_target=tmux_target)
 
 
-def test_o_key_live_worker_confirms_takeover(monkeypatch):
-    # B1: takeover of a RUNNING worker kills its host pid → must confirm first.
+def test_enter_key_live_worker_confirms_takeover(monkeypatch):
+    # B1: takeover of a RUNNING (non-resident) worker kills its host pid →
+    # must confirm first, then resume inside tmux.
     monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
                         lambda job: _takeover_session(current=False, alive=True))
     app, view = _make_view([_make_job(host_alive=True)])
-    view.handle_key("o")
+    view.handle_key("enter")
     assert app.result is None  # not resumed yet
     assert app._confirm_messages and "接回后台 agent" in app._confirm_messages[0]
     assert "终止原进程" in app._confirm_messages[0]
     app._last_confirm()  # simulate pressing y
+    assert isinstance(app.result, TmuxResumeIntent)
+
+
+def test_t_key_live_worker_confirms_terminal_takeover(monkeypatch):
+    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
+                        lambda job: _takeover_session(current=False, alive=True))
+    app, view = _make_view([_make_job(host_alive=True)])
+    view.handle_key("t")
+    assert app.result is None
+    assert app._confirm_messages and "终端接回后台 agent" in app._confirm_messages[0]
+    app._last_confirm()
     assert isinstance(app.result, ResumeIntent)
 
 
-def test_o_key_live_takeover_gated_when_degraded(monkeypatch):
+def test_enter_key_live_takeover_gated_when_degraded(monkeypatch):
     # R10: off /proc a live takeover can't safely kill the old pid — the view
     # must refuse BEFORE the confirm (not exit the TUI into do_resume's refusal).
     monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
                         lambda job: _takeover_session(current=False, alive=True))
     monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: False)
     app, view = _make_view([_make_job(host_alive=True)])
-    view.handle_key("o")
+    view.handle_key("enter")
     assert app.result is None
     assert app._confirm_messages == []          # refused before any confirm
     assert app._notifications[-1] == av_mod._DEGRADED
 
 
-def test_o_key_dead_worker_not_gated_when_degraded(monkeypatch):
+def test_enter_key_dead_worker_not_gated_when_degraded(monkeypatch):
     # A dead worker kills nothing — it stays resumable in degraded mode (B3).
     monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
                         lambda job: _takeover_session(current=False, alive=False))
     monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: False)
     app, view = _make_view([_make_job()])
-    view.handle_key("o")
-    assert isinstance(app.result, ResumeIntent)
+    view.handle_key("enter")
+    assert isinstance(app.result, TmuxResumeIntent)
 
 
-def test_o_key_dead_worker_takes_over_directly(monkeypatch):
+def test_enter_key_dead_worker_takes_over_directly(monkeypatch):
     monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
                         lambda job: _takeover_session(current=False, alive=False))
     app, view = _make_view([_make_job(host_alive=False)])
-    view.handle_key("o")
+    view.handle_key("enter")
     assert app._confirm_messages == []  # dead worker: no takeover, no confirm
-    assert isinstance(app.result, ResumeIntent)
+    assert isinstance(app.result, TmuxResumeIntent)
 
 
 def test_d_key_refuses_live_job(monkeypatch):

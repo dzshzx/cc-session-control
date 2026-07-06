@@ -8,7 +8,7 @@ import os
 
 from ..config import cfg
 from ..models import LiveInfo, Session
-from . import registry
+from . import registry, tmux
 from .liveness import alive_map, is_rc_exposed, live_index, live_session_procs
 from .proc import ancestor_pids as _ancestor_pids  # /proc walk moved to proc.py
 
@@ -160,14 +160,49 @@ def _parse_transcript(
     )
 
 
+def _candidate_pids(info: LiveInfo | None) -> list[int]:
+    """A LiveInfo's pid candidate set — `pids` when filled, else the chosen pid
+    (same fallback rule the `current` check in `_parse_transcript` uses)."""
+    if info is None:
+        return []
+    if info.pids:
+        return info.pids
+    return [info.pid] if info.pid else []
+
+
+def _inject_tmux_residency(rows: list[Session], idx: dict[str, LiveInfo]) -> None:
+    """Fill `Session.tmux_target` for every ALIVE session, in ONE batch.
+
+    Collects all alive sessions' candidate pids, calls
+    `tmux.residency_targets` once (one `list-panes -a` per scan cycle), and
+    backfills each session with its first hit — any alive pid inside a tmux
+    pane makes the session resident (ADR-0001). Dead sessions stay None; the
+    badge and the resume/backgrounding actions read this SAME field, so there
+    is no per-action re-detection (no second source of truth)."""
+    alive_pids = {
+        pid for row in rows if row.alive for pid in _candidate_pids(idx.get(row.sid))
+    }
+    targets = tmux.residency_targets(alive_pids)
+    if not targets:
+        return
+    for row in rows:
+        if not row.alive:
+            continue
+        for pid in _candidate_pids(idx.get(row.sid)):
+            if pid in targets:
+                row.tmux_target = targets[pid]
+                break
+
+
 def scan() -> list[Session]:
     """Unified transcript-driven session scan.
 
     Merges the three liveness/identity sources once per scan — registry
     `sessions/<pid>.json`, `claude agents --json`, and `jobs/*/state.json` — then
     projects each transcript through `live_index()` to fill source/liveness/
-    rc-exposure. Scan stays transcript-driven: an agent-only sid (present in the
-    live index but with no transcript) is surfaced by the Agents tab, not here.
+    rc-exposure, and batch-injects tmux residency (`tmux_target`). Scan stays
+    transcript-driven: an agent-only sid (present in the live index but with no
+    transcript) is surfaced by the Agents tab, not here.
     """
     root = str(cfg.projects_root)
     session_procs = live_session_procs()
@@ -182,5 +217,6 @@ def scan() -> list[Session]:
         if row is not None:
             rows.append(row)
 
+    _inject_tmux_residency(rows, idx)
     rows.sort(key=lambda r: r.mtime, reverse=True)
     return rows

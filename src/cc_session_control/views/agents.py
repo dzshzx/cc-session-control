@@ -21,7 +21,7 @@ from ..models import AgentJob
 from ._base import ListTabView
 from ._colspec import header_columns, row_columns
 from ._confirm import DEGRADED as _DEGRADED
-from ._confirm import confirm_stop, confirm_takeover
+from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 
@@ -77,9 +77,15 @@ class AgentsView(ListTabView):
     # help, and dispatch are generated from this table. `r 刷新` stays in the
     # App-level FOOTER_PREFIX, so its entry is hint-less.
     KEY_TABLE = (
-        Key(("enter", "o"), "Enter/o 接回", "_takeover",
+        Key(("enter",), "Enter 接回", "_takeover",
             section="后台 agent 生命周期:", help_lines=(
-                "  Enter/o 接回（拉回前台，复用 resume；接运行中的 agent 会先确认接管）",
+                "  Enter   tmux 接回（恢复进 tmux 窗口并接入前台，断线不死；",
+                "          已驻留 tmux 的 agent 就地进入；接运行中的会先确认接管）",
+            )),
+        Key(("t",), "t 终端接回", "_terminal",
+            section="后台 agent 生命周期:", help_lines=(
+                "  t       终端接回（在当前终端恢复，随终端关闭而结束——兜底；",
+                "          接运行中的会先确认接管）",
             )),
         Key(("s",), "s 停止", "_stop", section="后台 agent 生命周期:", help_lines=(
             "  s       停止（仅运行中，需确认）",
@@ -187,14 +193,26 @@ class AgentsView(ListTabView):
         self.app.trigger_async_refresh()
 
     def _takeover(self, job: AgentJob) -> None:
+        """Enter — tmux 接回: a tmux-resident worker is entered in place;
+        otherwise resume it inside its per-project tmux window (ADR-0001)."""
         s = agent_ops.resume_takeover(job)
         if s.current:
             self.app.notify("不能接回当前会话")
             return
         # B1: takeover of a RUNNING worker kills its host pid (should_kill) — same
         # as Sessions Enter-live. A dead worker resumes directly, unconfirmed.
+        confirm_tmux_takeover(
+            self.app, s, "接回后台 agent", name=job.name or job.short,
+        )
+
+    def _terminal(self, job: AgentJob) -> None:
+        """t — 终端接回 (fallback): bare-terminal resume via the existing path."""
+        s = agent_ops.resume_takeover(job)
+        if s.current:
+            self.app.notify("不能接回当前会话")
+            return
         confirm_takeover(
-            self.app, s, "接回后台 agent",
+            self.app, s, "终端接回后台 agent",
             lambda: self.app.exit_with(ResumeIntent(s)),
             name=job.name or job.short,
         )

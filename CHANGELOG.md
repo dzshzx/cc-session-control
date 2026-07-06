@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+**tmux-first dispatch** (ADR-0001, `docs/adr/0001-tmux-first-session-dispatch.md`):
+csctl is repositioned from a session panel into a tmux-first dispatch center —
+every primary verb now puts the operator into (or the session into) a
+per-project tmux window, so sessions survive terminal/SSH disconnects by
+default. **Muscle memory from ≤0.6.x breaks deliberately**: `Enter` now lands
+in tmux instead of the bare terminal.
+
+### Changed
+
+- **Sessions tab `Enter` = tmux 接回** (was: bare-terminal resume). A
+  tmux-resident session is entered in place (no kill, no confirm); anything
+  else resumes into its per-project tmux window and enters, with the usual
+  takeover confirm / R10 gate. Bare-terminal resume moved to **`t` 终端接回**
+  (the fallback; on a resident session it pulls the session out of tmux via
+  the standard takeover confirm).
+- **Sessions tab `R` = 转后台 without Remote Control**: moves a bare session
+  into its per-project tmux window, does not enter it, stays in csctl. A
+  resident session is refused with 已在 tmux.
+- **`f` 分叉 now forks into tmux** (own `<sid8>-fork` window) and enters it.
+- **Projects tab `Enter` = 新建 tmux 会话并进入** (was on `t`); the RC-server
+  start moved to **`o` 启动远控**. `t` is unbound on this tab.
+- **后台 tab `Enter` = tmux 接回** (resident worker entered in place); new
+  **`t` 终端接回**; the old `o` alias is dropped (o now means RC start on the
+  Projects tab only).
+- **Tab order is launcher-first: 项目 → 会话 → 后台**, startup lands on 项目.
+
+### Removed
+
+- The session-level RC relaunch (`R` with `--remote-control`; internals
+  `relaunch_in_tmux` / `tmux_resume_cmd` / `_rc_name`). The Sessions tab can
+  no longer mint cloud environments at all — every fresh `--remote-control`
+  process minted a new cloud env entry with no local deregister. Phone/web
+  control stays available via the Projects tab (`o` / `c`) and the in-session
+  `/remote-control`.
+
+### Added
+
+- **tmux-residency badge ⧉** in the Sessions 状态 column for live sessions
+  running inside a tmux pane (U+29C9, width-stable). Residency is
+  batch-computed once per refresh (`tmux.residency_targets`: one
+  `list-panes -a` + `/proc` ancestor chains) into `Session.tmux_target`; the
+  badge and the resume/backgrounding actions read the same field.
+
 ## 0.6.5 (2026-07-06)
 
 Architecture-review refactor batch #2 (4 deepening candidates, re-verified

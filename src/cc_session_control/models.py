@@ -34,6 +34,11 @@ class Session:
     env_id: str | None = None   # bound bridge environment id, if any
     agent_short: str | None = None  # linked background-agent short id, if any
     status: str = ""            # registry `status` (busy / idle)
+    # tmux residency (CONTEXT.md / ADR-0001): non-None means a live pid of this
+    # session runs inside a tmux pane; the value is the enterable
+    # "session:window_index" target. Batch-computed in sessions.scan() via
+    # tmux.residency_targets — actions and the ⧉ badge read the SAME field.
+    tmux_target: str | None = None
 
     @property
     def bridge_or_sdk(self) -> bool:

@@ -2,8 +2,10 @@
 
 Shows two things:
   1. managed projects (RCProject) with the tri-state `remoteControlAtStartup`
-     and `remoteControlSpawnMode`, plus the start/stop/autostart keys and `t`
-     (start a NEW claude session in the project dir inside tmux, then enter it);
+     and `remoteControlSpawnMode`, plus Enter (start a NEW claude session in
+     the project dir inside tmux, then enter it — the tmux-first launcher,
+     ADR-0001), `o` (start the project RC server, the demoted secondary), and
+     the stop/autostart keys;
   2. project RC servers (RCServer) discovered via tmux ∪ /proc, badged
      managed/external — external servers are READ-ONLY (no takeover/restart key).
 
@@ -137,13 +139,14 @@ class RCView(ListTabView):
     # help, and dispatch are generated from this table. `r 刷新` stays in the
     # App-level FOOTER_PREFIX, so its entry is hint-less.
     KEY_TABLE = (
-        Key(("t",), "t 新建会话", "_key_tmux_new",
+        Key(("enter",), "Enter 新建会话", "_key_tmux_new",
             section="项目操作（仅对「项目」行生效）:", help_lines=(
-                "  t      在项目目录新建 tmux claude 会话并直接进入（离开 csctl）",
+                "  Enter  在项目目录新建 tmux claude 会话并直接进入（离开 csctl；",
+                "         tmux-first 主入口，会话默认获得断线保护）",
             )),
-        Key(("enter",), "Enter 启动远控", "_key_start",
+        Key(("o",), "o 启动远控", "_key_start",
             section="项目操作（仅对「项目」行生效）:", help_lines=(
-                "  Enter  启动选中项目的远程控制服务",
+                "  o      启动选中项目的远程控制服务（手机/网页控制面，次要入口）",
             )),
         Key(("s",), "s 停止", "_key_stop",
             section="项目操作（仅对「项目」行生效）:", help_lines=(

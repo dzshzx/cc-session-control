@@ -12,10 +12,10 @@ description: Diagnose and rescue local Claude Code sessions via csctl — list l
 ## 交互式 TUI
 
 ```bash
-csctl          # 三个 tab：会话 / 项目（远控 + t 新建 tmux 会话）/ 后台 agent；清理在会话 tab 的子菜单
+csctl          # 三个 tab（tmux-first，启动落在项目 tab）：项目（Enter 新建 tmux 会话 / o 启动远控）/ 会话 / 后台 agent；清理在会话 tab 的子菜单
 ```
 
-会话 tab 键位：方向键移动 · `/` 过滤 · `Enter` 接回（真接续，自动 cd+kill，接活会话先确认）· `t` tmux 接回（进 tmux 窗口，断线不死）· `f` 分叉接回 · `s` 停止活会话(确认) · `R` 转入后台+远控(确认) · `d` 删除已结束会话 · `y` 复制命令到剪贴板 · `h` 桥接/SDK 显隐 · `c` 清理子菜单 · `r` 刷新 · `q` 退出。接回时 csctl exec 成 claude 接管终端。
+会话 tab 键位：方向键移动 · `/` 过滤 · `Enter` tmux 接回（主操作：恢复进 per-project tmux 窗口并进入，断线不死；已驻留 ⧉ 会话就地进入；接活会话先确认）· `t` 终端接回（裸终端兜底，真接续自动 cd+kill）· `f` 分叉进 tmux · `s` 停止活会话(确认) · `R` 转后台（进 tmux 不进入、不开远控，留在 csctl）· `d` 删除已结束会话 · `y` 复制命令到剪贴板 · `h` 桥接/SDK 显隐 · `c` 清理子菜单 · `r` 刷新 · `q` 退出。接回 = 离开 csctl（attach 进 tmux 或 exec 成 claude）。
 
 ## 心智模型：会话形态
 
@@ -63,7 +63,7 @@ csctl resume [关键词] --all      # 不分页全列
 
 ## 接管远程控制 / 网页会话到本地
 
-`claude --remote-control` 或 claude.ai 网页控制的会话，在本机就是一个普通的**活会话**（会进 `claude agents`）。想搬到本地终端接管，照「接回规则」当"还活着"处理即可；`csctl resume` 已自动给出对应命令。TUI 里也可以选中后接回或 relaunch 进 tmux（`--remote-control` 恢复远控暴露）。
+`claude --remote-control` 或 claude.ai 网页控制的会话，在本机就是一个普通的**活会话**（会进 `claude agents`）。想搬到本地终端接管，照「接回规则」当"还活着"处理即可；`csctl resume` 已自动给出对应命令。TUI 里选中后 `Enter` tmux 接回（或 `t` 终端接回）。注意 0.7 起会话 tab **不再提供带 `--remote-control` 的 relaunch**（每个远控进程都会新铸一个云端环境）；要恢复远控暴露，用项目 tab 的 `o`/`c` 或会话内 `/remote-control`。
 
 ## 清理残留 bg agent
 

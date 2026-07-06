@@ -87,7 +87,7 @@ def would_take_over(s: Session, fork: bool = False) -> bool:
     The single source of the "needs confirmation" decision for the UI: it reads
     `_resume_plan`'s `should_kill` so views never re-derive `s.alive and not
     s.current` themselves (CLAUDE.md: should_kill is single-point — re-derivation
-    was the old divergence). `do_resume`/`relaunch_in_tmux` and the confirm gate
+    was the old divergence). `do_resume`/`do_tmux_resume` and the confirm gate
     thus agree by construction.
     """
     return _resume_plan(s, fork)[2]
@@ -126,79 +126,60 @@ def do_resume(s: Session, fork: bool = False) -> None:
     os.execvp("claude", args)
 
 
-def _rc_name(s: Session) -> str:
-    """Remote-control label (shown in claude.ai/code) for a relaunched session."""
-    base = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
-    return f"{base or 'session'}-{s.sid[:8]}"
-
-
-def tmux_resume_cmd(s: Session, fork: bool = False) -> str:
-    """Shell command that resumes the session under remote control."""
-    cwd, args, _ = _resume_plan(s, fork)
-    args = args + ["--remote-control", _rc_name(s)]
-    line = shlex.join(args)
-    return f"cd {shlex.quote(cwd)} && {line}" if cwd else line
-
-
 def _spawn_in_tmux(s: Session, cmd: str, fork: bool = False) -> str | None:
     """Kill-if-takeover, then spawn `cmd` in the session's per-project tmux
-    session — the shared skeleton behind `relaunch_in_tmux` (R key, with
-    --remote-control) and `do_tmux_resume` (t key, foreground): the two
-    differed only in the command builder. Returns the exact tmux target,
-    or None on R10 refusal ("refused" from `take_over`) / tmux failure;
-    "gone"/"failed" fall through like `do_resume` (best-effort kill).
+    session — the shared skeleton behind `do_tmux_resume` (Enter/f/R, the
+    tmux-first dispatch verbs, ADR-0001). A fork is a copy (never kills) and
+    gets its own `<sid8>-fork` window so it doesn't shadow the original's.
+    Returns the exact tmux target, or None on R10 refusal ("refused" from
+    `take_over`) / tmux failure; "gone"/"failed" fall through like
+    `do_resume` (best-effort kill).
     """
     _, _, should_kill = _resume_plan(s, fork)
     if should_kill and s.pid and take_over(s.pid, s.proc_start) == "refused":
         return None
-    return tmux.run_in_tmux(tmux.session_name_for(s.cwd), s.sid[:8], cmd)
-
-
-def relaunch_in_tmux(s: Session, fork: bool = False) -> bool:
-    """Relaunch a session as `claude --resume … --remote-control …` inside a
-    tmux window, so it outlives the terminal and is remotely controllable.
-
-    A live, non-current session is taken over (old pid killed first, like
-    terminate); a fork leaves the original running. csctl is NOT replaced —
-    it just spawns the tmux window.
-    """
-    return _spawn_in_tmux(s, tmux_resume_cmd(s, fork), fork=fork) is not None
+    window = f"{s.sid[:8]}-fork" if fork else s.sid[:8]
+    return tmux.run_in_tmux(tmux.session_name_for(s.cwd), window, cmd)
 
 
 def attach_target(s: Session) -> str | None:
     """The tmux window ("session:index") already hosting this live session.
 
-    Non-None means the `t` key can attach directly — no kill, no respawn (the
-    session survives in place). None for dead sessions or live ones running in
-    a bare terminal (those need `do_tmux_resume`)."""
-    if not s.alive or not s.pid:
+    Non-None means the session is tmux-resident and can be entered in place —
+    no kill, no respawn. Reads the snapshot-computed `Session.tmux_target`
+    (the SAME data the ⧉ badge renders — one source, no per-action
+    re-detection), guarded on `alive` so a stale target on a dead session
+    never answers."""
+    if not s.alive:
         return None
-    return tmux.find_session_window([s.pid])
+    return s.tmux_target
 
 
-def tmux_foreground_cmd(s: Session) -> str:
-    """Shell command for the `t`-key window: plain resume, NO --remote-control.
+def tmux_foreground_cmd(s: Session, fork: bool = False) -> str:
+    """Shell command for a tmux-dispatch window: plain resume, NO
+    --remote-control.
 
-    Deliberately unlike `tmux_resume_cmd` (the `R` key): a foreground tmux
-    resume only needs the disconnect safety net; every --remote-control process
-    mints a new cloud environment entry, which piles up with frequent use."""
-    cwd, args, _ = _resume_plan(s)
+    Deliberate (ADR-0001): tmux residency is the anti-disconnect mechanism;
+    every --remote-control process mints a new cloud environment entry, which
+    piles up with frequent use — the Sessions tab never mints cloud envs."""
+    cwd, args, _ = _resume_plan(s, fork)
     line = shlex.join(args)
     return f"cd {shlex.quote(cwd)} && {line}" if cwd else line
 
 
-def do_tmux_resume(s: Session) -> str | None:
-    """Kill-if-takeover, spawn the resume window in the session's per-project
-    tmux session, and return the exact tmux target to enter; None on failure.
-    The caller (cli) then calls `enter_window` on the target."""
-    return _spawn_in_tmux(s, tmux_foreground_cmd(s))
+def do_tmux_resume(s: Session, fork: bool = False) -> str | None:
+    """Kill-if-takeover (fork never kills), spawn the resume window in the
+    session's per-project tmux session, and return the exact tmux target;
+    None on failure. Enter/f enter the target afterwards (`TmuxResumeIntent`);
+    R 转后台 spawns it and stays in csctl."""
+    return _spawn_in_tmux(s, tmux_foreground_cmd(s, fork), fork=fork)
 
 
 def do_tmux_new(directory: str) -> str | None:
     """Start a NEW claude session in `directory`, inside that project's own
     tmux session, and return the exact tmux target to enter; None on failure.
 
-    The 项目-tab `t` key: same skeleton as `do_tmux_resume` but nothing exists
+    The 项目-tab Enter key: same skeleton as `do_tmux_resume` but nothing exists
     yet — no kill, no confirm, no R10 gate (no process is terminated). Plain
     `claude` with NO --remote-control (same tradeoff as `tmux_foreground_cmd`:
     every RC process mints a new cloud environment entry). No trust gate
@@ -226,7 +207,8 @@ class ExitIntent:
 
 @dataclass(frozen=True)
 class ResumeIntent(ExitIntent):
-    """Enter/f: bare-terminal resume (execvp; takeover kill inside do_resume)."""
+    """`t` 终端接回: bare-terminal resume (execvp; takeover kill inside
+    do_resume) — the fallback when tmux is unavailable or unwanted."""
 
     session: Session
     fork: bool = False
@@ -237,7 +219,7 @@ class ResumeIntent(ExitIntent):
 
 @dataclass(frozen=True)
 class AttachIntent(ExitIntent):
-    """`t` on a tmux-hosted session: enter its window in place (no kill)."""
+    """Enter on a tmux-resident session: enter its window in place (no kill)."""
 
     target: str
 
@@ -248,12 +230,14 @@ class AttachIntent(ExitIntent):
 
 @dataclass(frozen=True)
 class TmuxResumeIntent(ExitIntent):
-    """`t` on a dead / bare-terminal session: resume inside tmux, then enter."""
+    """Enter/f on a dead / bare-terminal session: resume (or fork) inside
+    tmux, then enter — the primary tmux-first dispatch (ADR-0001)."""
 
     session: Session
+    fork: bool = False
 
     def run(self) -> None:
-        target = do_tmux_resume(self.session)
+        target = do_tmux_resume(self.session, fork=self.fork)
         if target is None:
             print("Failed to resume the session inside tmux (R10 degraded, or tmux unavailable).")
         elif not enter_window(target):
@@ -262,7 +246,7 @@ class TmuxResumeIntent(ExitIntent):
 
 @dataclass(frozen=True)
 class TmuxNewIntent(ExitIntent):
-    """项目-tab `t`: start a NEW claude in tmux, then enter (pure spawn)."""
+    """项目-tab Enter: start a NEW claude in tmux, then enter (pure spawn)."""
 
     directory: str
 

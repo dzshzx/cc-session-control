@@ -78,6 +78,9 @@ def _setup_world(tmp_path, monkeypatch):
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     # The cli session launched csctl -> it is the "current" one.
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: {1001})
+    # No real tmux in unit tests: default to "nothing resident" (tests that
+    # exercise the residency injection override this).
+    monkeypatch.setattr(sessions_mod.tmux, "residency_targets", lambda pids: {})
 
 
 def test_scan_unifies_sources(tmp_path, monkeypatch):
@@ -120,6 +123,48 @@ def test_scan_unifies_sources(tmp_path, monkeypatch):
     assert bg.current is False
     assert bg.agent_short == BG_SID[:8]   # linked job short
     assert bg.status == "busy"
+
+
+def test_scan_injects_tmux_residency_for_alive_sessions(tmp_path, monkeypatch):
+    # ADR-0001 badge data: alive session with a pane-hosted pid gets its
+    # tmux_target backfilled from ONE batch residency call; alive session with
+    # no hit stays None; dead session stays None (its pids never queried).
+    _setup_world(tmp_path, monkeypatch)
+    seen = {}
+
+    def fake_residency(pids):
+        seen["pids"] = set(pids)
+        return {1001: "proj1:2"}
+
+    monkeypatch.setattr(sessions_mod.tmux, "residency_targets", fake_residency)
+
+    rows = {s.sid: s for s in sessions_mod.scan()}
+
+    assert rows[CLI_SID].tmux_target == "proj1:2"   # alive + pane hit
+    assert rows[VSC_SID].tmux_target is None        # alive, bare terminal
+    assert rows[SDK_SID].tmux_target is None        # dead: never resident
+    assert 1003 not in seen["pids"]                 # dead pid not queried
+    assert {1001, 1002, 1004} <= seen["pids"]
+
+
+def test_scan_residency_covers_all_alive_pids_of_a_sid(tmp_path, monkeypatch):
+    # Multi-pid (resume) session: ANY alive pid inside a pane makes it resident.
+    _setup_world(tmp_path, monkeypatch)
+    # Second registry file for CLI_SID (resume kept the sid, minted a new pid).
+    _write_json(tmp_path / "sessions" / "1005.json", {
+        "pid": 1005, "sessionId": CLI_SID, "cwd": "/work/proj1",
+        "kind": "interactive", "entrypoint": "cli", "status": "idle",
+        "procStart": "500",
+    })
+    registry.invalidate_cache()
+    alive_pids = {1001, 1002, 1004, 1005}
+    monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: pid in alive_pids)
+    # Only the OLDER pid 1001 lives in a tmux pane.
+    monkeypatch.setattr(sessions_mod.tmux, "residency_targets",
+                        lambda pids: {1001: "proj1:3"} if 1001 in set(pids) else {})
+
+    rows = {s.sid: s for s in sessions_mod.scan()}
+    assert rows[CLI_SID].tmux_target == "proj1:3"
 
 
 def test_scan_transcript_only_session_is_dead(tmp_path, monkeypatch):

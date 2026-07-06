@@ -251,39 +251,40 @@ def test_t_key_refuses_current_session(monkeypatch):
     app, view = _sessions_view_with(monkeypatch, s)
     view.handle_key("t")
     assert app.result is None
-    assert "不能 tmux 接回当前会话" in app._notifications[-1]
+    assert "不能接回当前会话" in app._notifications[-1]
 
 
-def test_t_key_attaches_tmux_hosted_session_without_confirm(monkeypatch):
-    import cc_session_control.views.sessions as sv_mod
-    s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
+def test_enter_key_attaches_resident_session_without_confirm(monkeypatch):
+    # ADR-0001: Enter on a tmux-resident session enters it IN PLACE — no kill,
+    # no confirm. Residency comes from the snapshot field, not a live lookup.
+    s = _make_session(sid="sid1", alive=True, current=False, pid=4242,
+                      tmux_target="cc:2")
     app, view = _sessions_view_with(monkeypatch, s)
-    monkeypatch.setattr(sv_mod, "attach_target", lambda s: "cc:2")
-    view.handle_key("t")
+    view.handle_key("enter")
     assert app.result == AttachIntent("cc:2")
     assert app._confirm_messages == []
 
 
-def test_t_key_live_bare_terminal_confirms_takeover(monkeypatch):
+def test_t_key_live_confirms_terminal_takeover(monkeypatch):
+    # t = 终端接回 (bare-terminal fallback): a live session — resident or not —
+    # goes through the standard takeover confirm into ResumeIntent.
     import cc_session_control.views.sessions as sv_mod
-    s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
+    s = _make_session(sid="sid1", alive=True, current=False, pid=4242,
+                      tmux_target="cc:2")
     app, view = _sessions_view_with(monkeypatch, s)
-    monkeypatch.setattr(sv_mod, "attach_target", lambda s: None)
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
     view.handle_key("t")
-    assert app.result is None  # blocked on confirm
-    assert "tmux 接回" in app._confirm_messages[-1]
+    assert app.result is None  # blocked on confirm (pull OUT of tmux = takeover)
+    assert "终端接回" in app._confirm_messages[-1]
     app._last_confirm()
-    assert app.result == TmuxResumeIntent(s)
+    assert app.result == ResumeIntent(s, fork=False)
 
 
 def test_t_key_dead_session_no_confirm(monkeypatch):
-    import cc_session_control.views.sessions as sv_mod
     s = _make_session(sid="sid1", alive=False, pid=None)
     app, view = _sessions_view_with(monkeypatch, s)
-    monkeypatch.setattr(sv_mod, "attach_target", lambda s: None)
     view.handle_key("t")
-    assert app.result == TmuxResumeIntent(s)
+    assert app.result == ResumeIntent(s, fork=False)
     assert app._confirm_messages == []
 
 
@@ -346,14 +347,13 @@ def test_enter_key_dead_session_not_gated_when_degraded(monkeypatch):
     app, view = _sessions_view_with(monkeypatch, s)
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
     view.handle_key("enter")
-    assert app.result == ResumeIntent(s, fork=False)
+    assert app.result == TmuxResumeIntent(s)
 
 
 def test_t_key_takeover_gated_when_degraded(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
     app, view = _sessions_view_with(monkeypatch, s)
-    monkeypatch.setattr(sv_mod, "attach_target", lambda s: None)
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
     view.handle_key("t")
     assert app.result is None
@@ -372,6 +372,22 @@ def test_status_cell_three_states():
     assert _status_parts(idle) == (" ● 闲", "alive")
     assert _status_parts(dead) == (" ○ 停", "dead")
     assert _status_parts(cur)[0].startswith("▸")
+
+
+def test_status_cell_tmux_residency_badge():
+    # ⧉ badge tri-state (ADR-0001): resident-alive shows it (current included),
+    # bare-terminal alive doesn't, dead never — even with a stale target.
+    from cc_session_control.views._session_row import _status_parts
+    resident = _make_session(sid="r", alive=True, pid=1, status="idle",
+                             tmux_target="proj:1")
+    cur_resident = _make_session(sid="c", alive=True, current=True, pid=1,
+                                 status="busy", tmux_target="proj:2")
+    bare = _make_session(sid="b", alive=True, pid=1, status="idle")
+    dead_stale = _make_session(sid="d", alive=False, tmux_target="proj:3")
+    assert _status_parts(resident) == (" ● 闲 ⧉", "alive")
+    assert _status_parts(cur_resident)[0] == "▸● 忙 ⧉"
+    assert "⧉" not in _status_parts(bare)[0]
+    assert "⧉" not in _status_parts(dead_stale)[0]
 
 
 def test_session_header_and_row_share_one_colspec():
@@ -408,12 +424,36 @@ def test_footer_keyhints_list_every_list_mode_key():
 
     from cc_session_control.views.agents import AgentsView
     agents_hints = AgentsView(FakeApp()).keyhints()
-    for key in ("Enter/o", "s", "d", "w", "R", "?"):
+    for key in ("Enter", "t", "s", "d", "w", "R", "?"):
         assert f"{key} " in agents_hints, f"agents footer missing {key}"
 
     rc_hints = RCView(FakeApp()).keyhints()
-    for key in ("t", "Enter", "s", "a", "c", "A", "S", "?"):
+    for key in ("Enter", "o", "s", "a", "c", "A", "S", "?"):
         assert f"{key} " in rc_hints, f"rc footer missing {key}"
+
+
+def test_key_table_bindings_match_tmux_first_dispatch():
+    # ADR-0001 rebinding regression guard: key -> handler name, per tab.
+    from cc_session_control.views.agents import AgentsView
+
+    def binding(view_cls):
+        return {k: e.handler for e in view_cls.KEY_TABLE for k in e.keys}
+
+    sessions = binding(SessionsView)
+    assert sessions["enter"] == "_key_resume"      # tmux 接回 (primary)
+    assert sessions["t"] == "_key_terminal"        # 终端接回 (fallback)
+    assert sessions["f"] == "_key_fork"            # 分叉进 tmux
+    assert sessions["R"] == "_key_relaunch"        # 转后台 (no RC)
+
+    agents = binding(AgentsView)
+    assert agents["enter"] == "_takeover"          # tmux 接回
+    assert agents["t"] == "_terminal"              # 终端接回
+    assert "o" not in agents                       # old alias dropped
+
+    rc = binding(RCView)
+    assert rc["enter"] == "_key_tmux_new"          # 新建 tmux 会话 (primary)
+    assert rc["o"] == "_key_start"                 # 启动远控 (demoted)
+    assert "t" not in rc                           # t unbound on 项目
 
 
 def test_footer_hint_text_wraps_not_clips():
@@ -465,8 +505,8 @@ def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
     view._pending = [_make_project(name="ghost", dir_exists=False)]
     view.apply_data()
 
-    view.handle_key("enter")   # start → refused
-    view.handle_key("t")       # tmux new → refused (no exit tuple)
+    view.handle_key("enter")   # tmux new → refused (no exit intent)
+    view.handle_key("o")       # RC start → refused
     view.handle_key("c")       # would mkdir the deleted dir back — refused
     assert app.result is None
     assert not writes
@@ -517,7 +557,8 @@ def test_rc_view_fetch_pending(monkeypatch):
 def test_rc_view_keyhints_uses_new_labels():
     view = RCView(FakeApp())
     hints = view.keyhints()
-    assert "t 新建会话" in hints
+    assert "Enter 新建会话" in hints    # tmux-first primary (ADR-0001)
+    assert "o 启动远控" in hints        # RC demoted to o
     assert "开机自启" in hints
     assert "自动远控" in hints
     # batch keys are discoverable in the footer, each with its own label
@@ -540,16 +581,35 @@ def test_rc_view_status_bar_counts_use_new_labels():
     assert "自动远控关 2" in text
 
 
-def test_rc_view_t_key_exits_with_tmux_new():
+def test_rc_view_enter_exits_with_tmux_new():
+    # Enter = 新建 tmux 会话并进入 (primary); o = 启动远控 (demoted, gated).
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
     view._pending = [_make_project(name="p1", directory="/tmp/p1")]
     view.apply_data()
 
-    view.handle_key("t")
+    view.handle_key("enter")
 
     assert app.result == TmuxNewIntent("/tmp/p1")
+
+
+def test_rc_view_o_key_starts_rc_server(monkeypatch):
+    from cc_session_control.data import rc as rc_mod
+
+    started = []
+    monkeypatch.setattr(rc_mod, "start_one", lambda name: started.append(name) or True)
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [_make_project(name="p1", status="stopped")]
+    view.apply_data()
+
+    view.handle_key("o")
+
+    assert started == ["p1"]
+    assert app.result is None                      # stays in csctl
+    assert any("已启动 ws/p1" in m for m in app._notifications)
 
 
 def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
@@ -677,7 +737,7 @@ def test_sessions_enter_live_confirms_takeover(monkeypatch):
     assert "终止原进程" in app._confirm_messages[0]
 
     app._last_confirm()
-    assert isinstance(app.result, ResumeIntent)
+    assert isinstance(app.result, TmuxResumeIntent)  # tmux-first primary
 
 
 def test_sessions_enter_dead_resumes_directly():
@@ -689,15 +749,15 @@ def test_sessions_enter_dead_resumes_directly():
 
     view.handle_key("enter")
     assert app._confirm_messages == []  # dead: no takeover, no confirm
-    assert isinstance(app.result, ResumeIntent)
+    assert app.result == TmuxResumeIntent(view._all_sessions[0])
 
 
 def test_sessions_R_live_confirms_relaunch(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
     relaunched = {"n": 0}
-    monkeypatch.setattr(sv_mod, "relaunch_in_tmux",
-                        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or True)
+    monkeypatch.setattr(sv_mod, "do_tmux_resume",
+                        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or "proj:1")
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -710,7 +770,24 @@ def test_sessions_R_live_confirms_relaunch(monkeypatch):
 
     app._last_confirm()
     assert relaunched["n"] == 1
-    assert any("已转入后台" in m for m in app._notifications)
+    assert app.result is None  # 转后台 stays in csctl (no exit intent)
+    assert any("已转入后台" in m and "proj:1" in m for m in app._notifications)
+
+
+def test_sessions_R_refuses_resident_session(monkeypatch):
+    # A tmux-resident session needs no backgrounding: notify, no confirm, no spawn.
+    import cc_session_control.views.sessions as sv_mod
+    spawned = {"n": 0}
+    monkeypatch.setattr(sv_mod, "do_tmux_resume",
+                        lambda s: spawned.__setitem__("n", spawned["n"] + 1) or "proj:1")
+    s = _make_session(sid="res", alive=True, current=False, pid=1,
+                      tmux_target="proj:9")
+    app, view = _sessions_view_with(monkeypatch, s)
+
+    view.handle_key("R")
+    assert spawned["n"] == 0
+    assert app._confirm_messages == []
+    assert "已在 tmux" in app._notifications[-1]
 
 
 def test_sessions_R_degraded_still_relaunches_dead(monkeypatch):
@@ -718,8 +795,8 @@ def test_sessions_R_degraded_still_relaunches_dead(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
     relaunched = {"n": 0}
-    monkeypatch.setattr(sv_mod, "relaunch_in_tmux",
-                        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or True)
+    monkeypatch.setattr(sv_mod, "do_tmux_resume",
+                        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or "proj:1")
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -734,8 +811,8 @@ def test_sessions_R_degraded_refuses_live_takeover(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
     relaunched = {"n": 0}
-    monkeypatch.setattr(sv_mod, "relaunch_in_tmux",
-                        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or True)
+    monkeypatch.setattr(sv_mod, "do_tmux_resume",
+                        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or "proj:1")
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -758,6 +835,18 @@ def test_sessions_f_refuses_current():
     view.handle_key("f")
     assert app.result is None
     assert any("不能分叉当前会话" in m for m in app._notifications)
+
+
+def test_sessions_f_forks_into_tmux_no_confirm(monkeypatch):
+    # f = 分叉进 tmux: a fork is a copy — no kill, no confirm, even for a live
+    # RESIDENT session (it must spawn its own window, never attach in place).
+    s = _make_session(sid="live", alive=True, current=False, pid=999,
+                      tmux_target="proj:4")
+    app, view = _sessions_view_with(monkeypatch, s)
+
+    view.handle_key("f")
+    assert app._confirm_messages == []
+    assert app.result == TmuxResumeIntent(s, fork=True)
 
 
 def test_rc_s_running_confirms_stop(monkeypatch):

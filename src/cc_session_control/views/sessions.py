@@ -7,11 +7,8 @@ from typing import TYPE_CHECKING
 import urwid
 
 from ..actions.session_ops import (
-    AttachIntent,
     ResumeIntent,
-    TmuxResumeIntent,
-    attach_target,
-    relaunch_in_tmux,
+    do_tmux_resume,
     resume_cmd,
     terminate_session,
     to_clipboard,
@@ -23,7 +20,7 @@ from ..data.sessions import scan
 from ..models import AgentJob, Session, SessionProc
 from ._base import ListTabView
 from ._confirm import DEGRADED as _DEGRADED
-from ._confirm import confirm_stop, confirm_takeover
+from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 from ._session_row import (
@@ -50,22 +47,23 @@ class SessionsView(CleanupMixin, ListTabView):
     # the App-level FOOTER_PREFIX, so its entry is hint-less here.
     KEY_TABLE = (
         Key(("enter",), "Enter 接回", "_key_resume", section="会话操作:", help_lines=(
-            "  Enter  接回选中的会话（在当前终端恢复；接运行中的会话会先确认接管）",
-        )),
-        Key(("t",), "t tmux接回", "_key_tmux", section="会话操作:", help_lines=(
-            "  t      tmux 接回（会话恢复进 tmux 窗口并接入前台——终端断线会话不死，",
-            "         重连后 tmux attach 可捡回；已在 tmux 中的会话直接接入不重启；",
+            "  Enter  tmux 接回（主操作：会话恢复进所属项目的 tmux 窗口并接入前台，",
+            "         终端断线会话不死；已驻留 tmux 的会话就地进入不重启；",
             "         接运行中的裸终端会话会先确认接管）",
         )),
+        Key(("t",), "t 终端接回", "_key_terminal", section="会话操作:", help_lines=(
+            "  t      终端接回（在当前终端恢复，会话随终端关闭而结束——tmux 不可用",
+            "         时的兜底；对已驻留会话 = 拉出 tmux，先确认接管）",
+        )),
         Key(("f",), "f 分叉", "_key_fork", section="会话操作:", help_lines=(
-            "  f      分叉会话（创建副本后接回，不影响原会话）",
+            "  f      分叉会话（创建副本进 tmux 窗口并进入，不影响原会话）",
         )),
         Key(("s",), "s 停止", "_key_stop", section="会话操作:", help_lines=(
             "  s      停止运行中的会话（发送 SIGTERM，需二次确认）",
         )),
         Key(("R",), "R 转后台", "_key_relaunch", section="会话操作:", help_lines=(
-            "  R      转入 tmux 后台并开启远控（脱离终端，手机/网页可接管；",
-            "         接运行中的会话会先确认接管）",
+            "  R      转入 tmux 后台（不开远控、不进入，留在 csctl；已驻留会话",
+            "         无需转移；接运行中的会话会先确认接管）",
         )),
         Key(("d",), "d 删除", "_key_delete", section="会话操作:", help_lines=(
             "  d      删除已结束的会话记录",
@@ -96,6 +94,7 @@ class SessionsView(CleanupMixin, ListTabView):
         prefix=(
             "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 · ○ 停 = 无进程",
             "        ▸ = 当前会话（启动 csctl 的会话，受保护） · 📱 = 已开远控",
+            "        ⧉ = tmux 驻留（会话进程在 tmux 窗口里，断线不死）",
             "",
         ),
         sections=("会话操作:", "清理与过滤:"),
@@ -308,33 +307,14 @@ class SessionsView(CleanupMixin, ListTabView):
         self.app.trigger_async_refresh()
 
     def _do_relaunch(self, s: Session) -> None:
-        """Relaunch-into-tmux body (after confirm when it takes over a live one)."""
-        ok = relaunch_in_tmux(s)
+        """转后台 body (after confirm when it takes over a live one): spawn the
+        resume window in the per-project tmux session, do NOT enter it — the
+        operator stays in csctl. No --remote-control (ADR-0001)."""
+        target = do_tmux_resume(s)
         self.app.notify(
-            "已转入后台 + 远控（手机/网页可接管）" if ok else "转入后台失败"
+            f"已转入后台（tmux {target}）" if target else "转入后台失败"
         )
         self.app.trigger_async_refresh()
-
-    def _resume_or_confirm(self, s: Session, fork: bool) -> None:
-        """Resume now, or confirm first when it would take over a live session."""
-        confirm_takeover(
-            self.app, s, "接回会话",
-            lambda: self.app.exit_with(ResumeIntent(s, fork)), fork=fork,
-        )
-
-    def _tmux_resume_or_confirm(self, s: Session) -> None:
-        """`t` key: attach when already tmux-hosted, else resume inside tmux.
-
-        A live tmux-hosted session is entered in place — no kill, no confirm, no
-        R10 gate (nothing destructive). Otherwise mirrors `R`.
-        """
-        target = attach_target(s)
-        if target:
-            self.app.exit_with(AttachIntent(target))
-            return
-        confirm_takeover(
-            self.app, s, "tmux 接回", lambda: self.app.exit_with(TmuxResumeIntent(s))
-        )
 
     # --- Key dispatch ---
 
@@ -381,22 +361,30 @@ class SessionsView(CleanupMixin, ListTabView):
     # --- key handlers (bound by name in KEY_TABLE) ---
 
     def _key_resume(self, s: Session) -> None:
+        """Enter — tmux 接回: enter a resident session in place, else resume
+        it inside its per-project tmux window and enter (ADR-0001 primary)."""
         if s.current:
             self.app.notify("不能接回当前会话")
             return
-        self._resume_or_confirm(s, fork=False)
+        confirm_tmux_takeover(self.app, s, "接回会话")
 
-    def _key_tmux(self, s: Session) -> None:
+    def _key_terminal(self, s: Session) -> None:
+        """t — 终端接回 (fallback): bare-terminal resume; a resident session is
+        pulled OUT of tmux via the same standard takeover confirm."""
         if s.current:
-            self.app.notify("不能 tmux 接回当前会话")
+            self.app.notify("不能接回当前会话")
             return
-        self._tmux_resume_or_confirm(s)
+        confirm_takeover(
+            self.app, s, "终端接回会话",
+            lambda: self.app.exit_with(ResumeIntent(s, fork=False)),
+        )
 
     def _key_fork(self, s: Session) -> None:
+        """f — 分叉进 tmux: a fork is a copy (never kills, no confirm)."""
         if s.current:
             self.app.notify("不能分叉当前会话")
             return
-        self.app.exit_with(ResumeIntent(s, fork=True))
+        confirm_tmux_takeover(self.app, s, "分叉会话", fork=True)
 
     def _key_stop(self, s: Session) -> None:
         confirm_stop(
@@ -405,8 +393,12 @@ class SessionsView(CleanupMixin, ListTabView):
         )
 
     def _key_relaunch(self, s: Session) -> None:
+        """R — 转后台 (no Remote Control): a resident session needs no move."""
         if s.current:
             self.app.notify("不能转入后台当前会话")
+            return
+        if s.alive and s.tmux_target:
+            self.app.notify(f"已在 tmux（{s.tmux_target}），无需转移")
             return
         confirm_takeover(self.app, s, "转入后台", lambda: self._do_relaunch(s))
 

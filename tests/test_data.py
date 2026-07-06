@@ -184,44 +184,20 @@ def test_take_over_kills_settles_and_invalidates(monkeypatch):
     assert calls["invalidate"] == 1
 
 
-# --- D3: relaunch_in_tmux (搬进 tmux + 远控) ---
-
-def test_tmux_resume_cmd_dead():
-    from cc_session_control.actions.session_ops import tmux_resume_cmd
-    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
-    assert tmux_resume_cmd(s) == (
-        "cd /tmp/proj && claude --resume abcdef0123456789 --remote-control proj-abcdef01"
-    )
-
-
-def test_tmux_resume_cmd_fork_includes_fork_flag():
-    from cc_session_control.actions.session_ops import tmux_resume_cmd
-    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
-    assert tmux_resume_cmd(s, fork=True) == (
-        "cd /tmp/proj && claude --resume abcdef0123456789 --fork-session "
-        "--remote-control proj-abcdef01"
-    )
-
-
-def test_tmux_resume_cmd_quotes_cwd_and_remote_name():
-    from cc_session_control.actions.session_ops import tmux_resume_cmd
-    s = _make_session(
-        sid="abcdef0123456789",
-        cwd="/tmp/project with space",
-        alive=False,
-    )
-    assert tmux_resume_cmd(s) == (
-        "cd '/tmp/project with space' && claude --resume abcdef0123456789 "
-        "--remote-control 'project with space-abcdef01'"
-    )
-
-
-# --- t key: tmux foreground resume / attach ---
+# --- tmux-first dispatch: tmux resume / attach (ADR-0001) ---
 
 def test_tmux_foreground_cmd_no_remote_control():
     from cc_session_control.actions.session_ops import tmux_foreground_cmd
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
     assert tmux_foreground_cmd(s) == "cd /tmp/proj && claude --resume abcdef0123456789"
+
+
+def test_tmux_foreground_cmd_fork_includes_fork_flag():
+    from cc_session_control.actions.session_ops import tmux_foreground_cmd
+    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
+    assert tmux_foreground_cmd(s, fork=True) == (
+        "cd /tmp/proj && claude --resume abcdef0123456789 --fork-session"
+    )
 
 
 def test_tmux_foreground_cmd_quotes_cwd():
@@ -232,22 +208,20 @@ def test_tmux_foreground_cmd_quotes_cwd():
 
 def test_attach_target_dead_session_is_none():
     from cc_session_control.actions.session_ops import attach_target
-    s = _make_session(sid="sid1", alive=False, pid=None)
+    # Even a stale tmux_target must not answer for a dead session.
+    s = _make_session(sid="sid1", alive=False, pid=None, tmux_target="cc:3")
     assert attach_target(s) is None
 
 
-def test_attach_target_live_tmux_hosted(monkeypatch):
-    import cc_session_control.actions.session_ops as so
-    monkeypatch.setattr(so.tmux, "find_session_window", lambda pids: "cc:3" if 4242 in pids else None)
-    s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
-    assert so.attach_target(s) == "cc:3"
-
-
-def test_attach_target_live_bare_terminal(monkeypatch):
-    import cc_session_control.actions.session_ops as so
-    monkeypatch.setattr(so.tmux, "find_session_window", lambda pids: None)
-    s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
-    assert so.attach_target(s) is None
+def test_attach_target_reads_snapshot_field():
+    # attach_target is a pure read of the snapshot-computed Session.tmux_target
+    # (same source as the ⧉ badge) — no per-action tmux re-detection.
+    from cc_session_control.actions.session_ops import attach_target
+    hosted = _make_session(sid="sid1", alive=True, current=False, pid=4242,
+                           tmux_target="cc:3")
+    bare = _make_session(sid="sid1", alive=True, current=False, pid=4242)
+    assert attach_target(hosted) == "cc:3"
+    assert attach_target(bare) is None
 
 
 def test_window_containing_matches_ancestor():
@@ -256,6 +230,46 @@ def test_window_containing_matches_ancestor():
     assert window_containing(panes, {4242, 200}) == "rc:0"
     assert window_containing(panes, {4242}) is None
     assert window_containing([], {100}) is None
+
+
+def test_residency_targets_batch_join(monkeypatch):
+    # ONE list-panes call for the whole pid set; per-pid ancestor-chain match.
+    from cc_session_control.data import tmux
+    calls = {"panes": 0}
+    panes = [("proj:1", 100), ("other:2", 200)]
+    monkeypatch.setattr(tmux, "_tmux_list_all_panes",
+                        lambda: calls.__setitem__("panes", calls["panes"] + 1) or panes)
+    ancestors = {4242: {100, 1}, 4343: {200, 1}, 5555: {999}}
+    monkeypatch.setattr(tmux.proc, "ancestors_of", lambda pid: ancestors.get(pid, set()))
+
+    out = tmux.residency_targets([4242, 4343, 5555])
+
+    assert out == {4242: "proj:1", 4343: "other:2"}  # 5555: no hit -> absent
+    assert calls["panes"] == 1                        # one tmux subprocess total
+
+
+def test_residency_targets_empty_pids_skips_tmux(monkeypatch):
+    from cc_session_control.data import tmux
+    monkeypatch.setattr(tmux, "_tmux_list_all_panes",
+                        lambda: (_ for _ in ()).throw(AssertionError("no tmux call")))
+    assert tmux.residency_targets([]) == {}
+
+
+def test_residency_targets_tmux_failure_returns_empty(monkeypatch):
+    from cc_session_control.data import tmux
+    monkeypatch.setattr(tmux, "_tmux_list_all_panes", lambda: [])
+    assert tmux.residency_targets([4242]) == {}
+
+
+def test_find_session_window_first_hit_over_residency(monkeypatch):
+    # find_session_window is now the single-target convenience over
+    # residency_targets — first hit in pids order, None on no hit.
+    from cc_session_control.data import tmux
+    monkeypatch.setattr(tmux, "residency_targets",
+                        lambda pids: {4343: "other:2", 4242: "proj:1"})
+    assert tmux.find_session_window([4242, 4343]) == "proj:1"
+    monkeypatch.setattr(tmux, "residency_targets", lambda pids: {})
+    assert tmux.find_session_window([4242]) is None
 
 
 def test_do_tmux_resume_kills_live_non_current(monkeypatch):
@@ -321,59 +335,29 @@ def test_do_tmux_new_spawn_failure_returns_none(monkeypatch):
     assert so.do_tmux_new("/tmp/proj") is None
 
 
-def test_relaunch_in_tmux_kills_live_non_current(monkeypatch):
+def test_do_tmux_resume_fork_spawns_fork_window_no_kill(monkeypatch):
+    # A fork is a copy: never kills, and gets its own <sid8>-fork window so it
+    # doesn't shadow the original session's window.
     import cc_session_control.actions.session_ops as so
 
-    calls = {"kill": 0, "invalidate": 0, "tmux": None}
-    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
+    calls = {"kill": 0, "tmux": None}
     monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(so, "invalidate_cache", lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1))
+    monkeypatch.setattr(so, "invalidate_cache", lambda: None)
     monkeypatch.setattr(so.tmux, "run_in_tmux",
-                        lambda session, window, cmd: calls.__setitem__("tmux", (session, window, cmd)) or f"{session}:1")
+                        lambda session, window, cmd: calls.__setitem__("tmux", (session, window, cmd)) or f"{session}:2")
 
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242)
-    assert so.relaunch_in_tmux(s) is True
-    assert calls["kill"] == 1
-    assert calls["invalidate"] == 1
+    assert so.do_tmux_resume(s, fork=True) == "proj:2"
+    assert calls["kill"] == 0             # fork leaves the original running
     session, window, cmd = calls["tmux"]
-    assert session == "proj"      # per-project session
-    assert window == "abcdef01"
-    assert "--resume abcdef0123456789" in cmd
-    assert "--remote-control proj-abcdef01" in cmd  # cloud display name keeps the prefix
+    assert session == "proj"
+    assert window == "abcdef01-fork"
+    assert "--fork-session" in cmd
+    assert "--remote-control" not in cmd
 
 
-def test_relaunch_in_tmux_dead_no_kill(monkeypatch):
-    import cc_session_control.actions.session_ops as so
-
-    calls = {"kill": 0}
-    monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
-    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(so, "invalidate_cache", lambda: None)
-    monkeypatch.setattr(so.tmux, "run_in_tmux", lambda session, window, cmd: f"{session}:0")
-
-    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
-    assert so.relaunch_in_tmux(s) is True
-    assert calls["kill"] == 0
-
-
-# --- M1: resume/relaunch kill paths gated on R10 (no /proc => no kill) ---
-
-def test_relaunch_in_tmux_refuses_kill_without_proc(monkeypatch):
-    import cc_session_control.actions.session_ops as so
-
-    calls = {"kill": 0, "tmux": 0}
-    monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
-    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(so, "invalidate_cache", lambda: None)
-    monkeypatch.setattr(so.tmux, "run_in_tmux",
-                        lambda *a: calls.__setitem__("tmux", calls["tmux"] + 1) or "proj:0")
-    monkeypatch.setattr(so.proc, "has_proc", lambda: False)
-
-    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242)
-    assert so.relaunch_in_tmux(s) is False  # refused: can't confirm current
-    assert calls["kill"] == 0               # no SIGTERM while current undeterminable
-    assert calls["tmux"] == 0               # and no relaunch either
+# --- M1: resume kill paths gated on R10 (no /proc => no kill) ---
 
 
 def test_do_resume_refuses_kill_without_proc(monkeypatch):

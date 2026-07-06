@@ -69,7 +69,9 @@ PALETTE = [
     ("col_header",  "dark cyan",   "black", None,       "#9cc",       "#181818"),
 ]
 
-TAB_NAMES = ["会话", "项目", "后台"]
+# Launcher-first order (ADR-0001): startup lands on 项目 (the tmux-first
+# dispatch entry), then 会话 / 后台. In lockstep with `self.views` below.
+TAB_NAMES = ["项目", "会话", "后台"]
 
 # D1: all three tabs share ONE footer prefix — the universal verbs (Tab/q/r) live
 # here exactly once so `r 刷新` shows identically on every tab. View-specific keys
@@ -104,8 +106,9 @@ class App:
         self._confirm_yes: Callable[[], None] | None = None
         self._confirm_base: urwid.Widget | None = None
 
-        # Order is in lockstep with TAB_NAMES: 会话 / 项目 / 后台.
-        self.views: list[TabView] = [SessionsView(self), RCView(self), AgentsView(self)]
+        # Order is in lockstep with TAB_NAMES: 项目 / 会话 / 后台 (launcher-first,
+        # ADR-0001 — startup loads the 项目 tab at _active=0).
+        self.views: list[TabView] = [RCView(self), SessionsView(self), AgentsView(self)]
         self._active = 0
 
         self.body = urwid.WidgetPlaceholder(self.views[0].widget)

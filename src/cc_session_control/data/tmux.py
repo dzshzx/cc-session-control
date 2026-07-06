@@ -16,6 +16,7 @@ don't conflate tmux windows with Remote Control).
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterable
 
 from . import proc
 
@@ -170,18 +171,37 @@ def window_containing(
     return None
 
 
+def residency_targets(pids: Iterable[int]) -> dict[int, str]:
+    """{pid: "session:window_index"} for every pid hosted by a tmux pane.
+
+    THE batch tmux-residency computation (ADR-0001 badge + actions share it):
+    ONE `list-panes -a` for the whole pid set, then each pid's `/proc` ancestor
+    chain is matched against the pane root pids — finds windows in ANY tmux
+    session (per-project, rc, user-made). Misses are simply absent from the
+    dict; tmux failure returns {} (swallow-errors contract)."""
+    pid_list = list(pids)
+    if not pid_list:
+        return {}
+    panes = _tmux_list_all_panes()
+    if not panes:
+        return {}
+    out: dict[int, str] = {}
+    for pid in pid_list:
+        target = window_containing(panes, proc.ancestors_of(pid))
+        if target:
+            out[pid] = target
+    return out
+
+
 def find_session_window(pids: list[int]) -> str | None:
     """The tmux window ("session:index") hosting any of `pids`, or None.
 
-    Walks each pid's `/proc` ancestor chain and matches it against every tmux
-    pane's root pid — finds windows in ANY tmux session (cc, rc, user-made)."""
-    panes = _tmux_list_all_panes()
-    if not panes:
-        return None
+    Single-target convenience over `residency_targets` (first hit in `pids`
+    order) — used by the action layer when only one session is in play."""
+    targets = residency_targets(pids)
     for pid in pids:
-        target = window_containing(panes, proc.ancestors_of(pid))
-        if target:
-            return target
+        if pid in targets:
+            return targets[pid]
     return None
 
 

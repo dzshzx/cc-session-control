@@ -120,7 +120,10 @@ def resume_takeover(job: AgentJob) -> Session:
     all kill/exec/`_resume_plan` logic is reused, none duplicated (R4.4 takeover).
     `pid`/`alive` come from the host join so a live worker is killed first
     (resume = takeover); `current` is computed so the launching session stays
-    protected. Does NOT itself replace the csctl process.
+    protected. `tmux_target` is filled here at action time (the agents list
+    renders no ⧉ badge, so there is no batch snapshot value to reuse) so the
+    tmux-first Enter can enter a resident worker in place. Does NOT itself
+    replace the csctl process.
     """
     pid, alive = job_host(job)
     current = bool(pid) and pid in proc.ancestor_pids()
@@ -136,6 +139,7 @@ def resume_takeover(job: AgentJob) -> Session:
         proc_start=_host_start(pid),
         source="bg",
         agent_short=job.short,
+        tmux_target=tmux.find_session_window([pid]) if alive and pid else None,
     )
 
 

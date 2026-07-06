@@ -12,7 +12,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from ..actions.session_ops import would_take_over
+from ..actions.session_ops import (
+    AttachIntent,
+    TmuxResumeIntent,
+    attach_target,
+    would_take_over,
+)
 from ..data import proc
 from ._rows import CONFIRM_NAME_CELLS, truncate_cells
 
@@ -89,3 +94,33 @@ def confirm_takeover(
         return
     shown = truncate_cells(s.label if name is None else name, CONFIRM_NAME_CELLS)
     app.confirm(f"{verb}「{shown}」？将先终止原进程。", on_yes)
+
+
+def confirm_tmux_takeover(
+    app: App,
+    s: Session,
+    verb: str,
+    *,
+    fork: bool = False,
+    name: str | None = None,
+) -> None:
+    """The tmux-first Enter/f body, shared by the 会话/后台 tabs (ADR-0001).
+
+    A tmux-resident session is entered IN PLACE (`AttachIntent` — no kill, no
+    confirm, no R10 gate: nothing destructive happens). Anything else goes
+    through the standard takeover gate (`confirm_takeover`) into
+    `TmuxResumeIntent` — resume (or fork) inside its per-project tmux window,
+    then enter. A fork is a copy: it never enters the original's window in
+    place, it always spawns its own (and never kills, so the confirm path
+    falls straight through).
+    """
+    if not fork:
+        target = attach_target(s)
+        if target:
+            app.exit_with(AttachIntent(target))
+            return
+    confirm_takeover(
+        app, s, verb,
+        lambda: app.exit_with(TmuxResumeIntent(s, fork=fork)),
+        name=name, fork=fork,
+    )

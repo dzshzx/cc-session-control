@@ -13,13 +13,15 @@ def test_bundled_skill_text_is_packaged():
 
 def test_bundled_skill_key_table_matches_tui():
     # Lock the documented Sessions-tab key vocabulary to the real TUI verbs
-    # (unified verb table): `s` 停止 / `t` tmux 接回 / `R` 转入后台 / `d` 删除.
-    # The old text bound `t` to terminate — following it triggered the wrong op.
+    # (tmux-first verb table, ADR-0001): `Enter` tmux 接回 / `t` 终端接回 /
+    # `R` 转后台 (no RC) / `s` 停止 / `d` 删除.
     text = skill_ops.bundled_skill_text()
     assert "`t` 终止" not in text
+    assert "`Enter` tmux 接回" in text
+    assert "`t` 终端接回" in text
     assert "`s` 停止活会话" in text
-    assert "`t` tmux 接回" in text
-    assert "`R` 转入后台" in text
+    assert "`R` 转后台" in text
+    assert "`R` 转入后台+远控" not in text     # the pre-0.7 RC relaunch is gone
     assert "`d` 删除" in text
 
 
