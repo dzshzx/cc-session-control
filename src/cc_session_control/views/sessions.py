@@ -131,6 +131,8 @@ class SessionsView(CleanupMixin, ListTabView):
             # "其余" is honest: the prefix's Tab/q stay global (Tab switches
             # tabs, q QUITS — neither returns to the list).
             return "其余任意键返回"
+        if self._mode == "filter":
+            return "输入关键词 · Enter 应用过滤 · Esc 取消"
         if self._mode == "cleanup":
             return "Enter 预览待清理项 · Esc 返回会话列表"
         if self._mode == "preview":
@@ -303,17 +305,17 @@ class SessionsView(CleanupMixin, ListTabView):
             ]
 
     def _enter_filter(self) -> None:
+        # The Edit lives in the VIEW's own frame footer (the status-bar slot),
+        # not the App footer: notify/set_hints can never evict it, and it stays
+        # visible with the list while typing.
         self._mode = "filter"
         self._filter_edit = urwid.Edit("过滤: ")
-        self.app.own_footer(urwid.AttrMap(self._filter_edit, "notify"))
+        self.widget.footer = urwid.AttrMap(self._filter_edit, "notify")
+        self._update_footer()
 
-    def deactivate(self) -> None:
-        """TabView hook: called on tab switch-away. Commits + closes a transient
-        filter — its Edit lives in the App footer and turns invisible once the
-        next tab's hints replace it; without this, keys after switching back
-        would still edit the hidden filter (mode leak)."""
-        if self._mode == "filter":
-            self._exit_filter()
+    def captures_text(self) -> bool:
+        """While the filter Edit is up it owns every key (incl. tab/q)."""
+        return self._mode == "filter"
 
     def _exit_filter(self, cancel: bool = False) -> None:
         self._mode = "list"
@@ -323,7 +325,8 @@ class SessionsView(CleanupMixin, ListTabView):
             self._filter_text = self._filter_edit.get_edit_text()
         self._apply_filter()
         self._rebuild()
-        self.app.release_footer()
+        self.widget.footer = self.status
+        self._update_footer()
 
     def _do_terminate(self, s: Session) -> None:
         """Stop body, run only after the y/n confirm accepts."""

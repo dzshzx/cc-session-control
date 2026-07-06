@@ -70,7 +70,7 @@ The invariant is **import direction, not purity**: `views` import from `data`/`a
 
 ### The view contract (how `app.py` drives tabs generically)
 
-`App` holds `self.views: list[TabView]` and drives each via the `TabView` `Protocol` (defined in `app.py`, `@runtime_checkable`). The shared *implementation* behind the Protocol is `views/_base.py::ListTabView` — the walker/listbox/status frame, focus-preserving `_rebuild` (subclasses supply `_build_rows`/`_status_text`), the centered `_show_overlay`, `_update_footer`, the default `handle_key` (overlay mode via the `_overlay_active` hook, else `_dispatch_key` from `KEY_TABLE`), and the overlay-mode key dispatch (`_handle_overlay_key`/`_exit_overlay`/`_close_overlay_mode`) all live there ONCE; a new tab subclasses it and adds only rows + key semantics (a view with extra modes, like Sessions filter/cleanup/preview, overrides `handle_key` and falls through to `super()`). In the reverse direction views talk to App ONLY through its view-facing façade — `notify`/`confirm`/`set_hints`/`trigger_async_refresh`/`refresh_with_notice`/`exit_with(intent)` plus `is_active(view)`, `own_footer(widget)`, `release_footer()` (the last two carry the Sessions filter Edit) — never `app.frame`/`app._active`/`app.views` directly. To add/modify a tab, satisfy the Protocol structurally — these members:
+`App` holds `self.views: list[TabView]` and drives each via the `TabView` `Protocol` (defined in `app.py`, `@runtime_checkable`). The shared *implementation* behind the Protocol is `views/_base.py::ListTabView` — the walker/listbox/status frame, focus-preserving `_rebuild` (subclasses supply `_build_rows`/`_status_text`), the centered `_show_overlay`, `_update_footer`, the default `handle_key` (overlay mode via the `_overlay_active` hook, else `_dispatch_key` from `KEY_TABLE`), and the overlay-mode key dispatch (`_handle_overlay_key`/`_exit_overlay`/`_close_overlay_mode`) all live there ONCE; a new tab subclasses it and adds only rows + key semantics (a view with extra modes, like Sessions filter/cleanup/preview, overrides `handle_key` and falls through to `super()`). In the reverse direction views talk to App ONLY through its view-facing façade — `notify`/`confirm`/`set_hints`/`trigger_async_refresh`/`refresh_with_notice`/`exit_with(intent)` plus `is_active(view)` — never `app.frame`/`app._active`/`app.views` directly. To add/modify a tab, satisfy the Protocol structurally — these members:
 
 - `.widget` — the urwid widget for the tab body
 - `._loaded` — bool; whether `load()` has run
@@ -79,9 +79,9 @@ The invariant is **import direction, not purity**: `views` import from `data`/`a
 - `apply_data()` — **runs on the main loop**; swaps `_pending` into the live walker
 - `keyhints() -> str` — footer hint string for the current mode
 - `handle_key(key)` — handles every key except `Tab` and `q`
-- `deactivate()` — called by `_switch_tab` on the outgoing view; closes transient **footer** modes (e.g. the Sessions filter Edit, which turns invisible once the next tab's hints replace the footer but would keep eating keys). Body-widget modes (help/watch overlays) stay — they remain visibly modal.
+- `captures_text()` — True while the view is capturing raw text input (the Sessions filter Edit); App then forwards EVERY key to `handle_key`, including `tab`/`q`, and `set_hints` drops the Tab/q/r footer prefix (its promises are false while typing). The filter Edit lives in the **view's own frame footer** (the status-bar slot), so `notify`/tab-switches can never evict it while its mode stays active.
 
-`App._input` handles only `tab` (switch) and `q` (quit); everything else is forwarded to the active view's `handle_key`. Adding a tab means updating `self.views` **and** `TAB_NAMES` **and** the `_switch_tab` cycle together (they index in lockstep).
+`App._input` handles only `tab` (switch) and `q` (quit) — and only after asking `captures_text()`; everything else is forwarded to the active view's `handle_key`. Adding a tab means updating `self.views` **and** `TAB_NAMES` **and** the `_switch_tab` cycle together (they index in lockstep).
 
 ### Async refresh + shared world snapshot (the threading model)
 

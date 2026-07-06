@@ -58,11 +58,6 @@ class FakeApp:
     def is_active(self, view):
         return not self.views or self.views[self._active] is view
 
-    def own_footer(self, widget):
-        self.frame.footer = widget
-
-    def release_footer(self):
-        self._restore_footer()
 
 
 def _make_session(**overrides):

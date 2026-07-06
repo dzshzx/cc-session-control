@@ -46,8 +46,8 @@ class _RecorderView:
     def handle_key(self, key):
         pass
 
-    def deactivate(self):
-        pass
+    def captures_text(self):
+        return False
 
 
 def _app_with_recorders(n=3):
@@ -217,21 +217,52 @@ def test_second_notify_cancels_first_restore_alarm():
     assert "second" in blob
 
 
-# --- Tab switch closes transient footer modes (filter-mode leak) ---
+# --- Filter mode owns its keys (captures_text): q/tab must not act globally ---
 
-def test_switch_tab_closes_sessions_filter_mode(monkeypatch):
+def test_filter_mode_captures_q_into_edit():
+    # `q` typed into the filter (e.g. the q in "sql") used to quit csctl:
+    # _input consumed it before the view ever saw it.
     app = App()
     app.trigger_async_refresh = lambda: None  # keep the test IO-free
     sessions_view = app.views[0]
     app._input("/")                 # enter filter mode
-    app._input("x")                 # type into the (footer) filter edit
+    app._input("q")                 # must land in the Edit, not exit
+    assert sessions_view._mode == "filter"
+    assert sessions_view._filter_edit.get_edit_text() == "q"
+
+
+def test_tab_is_captured_during_filter_mode():
+    app = App()
+    app.trigger_async_refresh = lambda: None
+    sessions_view = app.views[0]
+    app._input("/")
+    app._input("x")
+    app._input("tab")               # captured: must NOT switch tabs mid-typing
+    assert app._active == 0
     assert sessions_view._mode == "filter"
 
-    app._input("tab")               # switch away — the filter commits + closes
-
-    assert sessions_view._mode == "list"
+    app._input("enter")             # commit the filter
     assert sessions_view._filter_text == "x"
-    assert app.frame.footer is app.footer  # the hidden Edit left the footer
+    app._input("tab")               # back in list mode: tab switches again
+    assert app._active == 1
+
+
+def test_notify_restore_does_not_evict_filter_edit():
+    # A notify fired ≤3s before entering filter leaves a restore alarm pending;
+    # when it fires, the Edit must stay visible AND keep receiving keys (it used
+    # to live in the App footer, where the restore silently replaced it while
+    # _mode stayed "filter").
+    app = App()
+    app.trigger_async_refresh = lambda: None
+    sessions_view = app.views[0]
+    app.notify("已复制")
+    app._input("/")                 # enter filter with the alarm still pending
+    app._restore_footer()           # the leftover alarm fires
+    app._input("x")
+    assert sessions_view._filter_edit.get_edit_text() == "x"
+    canvas = app.frame.render((100, 30), focus=False)
+    blob = b"\n".join(canvas.text).decode()
+    assert "过滤" in blob           # the Edit is still on screen
 
 
 # --- Fix 2b: degraded-mode header banner (D7/R10) ---

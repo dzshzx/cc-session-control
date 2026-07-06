@@ -45,7 +45,7 @@ class TabView(Protocol):
     def apply_data(self) -> None: ...
     def keyhints(self) -> str: ...
     def handle_key(self, key: str) -> None: ...
-    def deactivate(self) -> None: ...  # tab switch-away: close transient FOOTER modes
+    def captures_text(self) -> bool: ...  # True while a text mode owns EVERY key (incl. tab/q)
 
 # 6-tuple: (name, fg_16, bg_16, mono, fg_256, bg_256)
 # ONE semantic set — views reference these names only (no per-tab duplicates;
@@ -146,10 +146,6 @@ class App:
         self.header.contents[1] = (tab_bar, self.header.options())
 
     def _switch_tab(self) -> None:
-        # Close the outgoing tab's transient footer modes (e.g. the Sessions
-        # filter Edit) — they turn invisible once the next tab's hints replace
-        # the footer, but would keep eating keys after switching back.
-        self.views[self._active].deactivate()
         self._active = (self._active + 1) % len(self.views)
         self.body.original_widget = self.views[self._active].widget
         self._update_tab_bar()
@@ -171,12 +167,19 @@ class App:
             elif key in ("n", "esc"):
                 self._close_confirm()
             return
+        view = self.views[self._active]
+        if view.captures_text():
+            # A text mode (e.g. the Sessions filter Edit) owns EVERY key:
+            # consuming tab/q here would switch tabs / quit mid-typing (the q
+            # in "sql" used to exit csctl).
+            view.handle_key(key)
+            return
         if key == "tab":
             self._switch_tab()
         elif key == "q":
             self._exit()
         else:
-            self.views[self._active].handle_key(key)
+            view.handle_key(key)
 
     def confirm(self, message: str, on_yes: Callable[[], None]) -> None:
         """Show a confirm modal over the active tab; run `on_yes` on Enter/y.
@@ -232,8 +235,13 @@ class App:
         self._exit(intent)
 
     def set_hints(self, hints: str) -> None:
-        """Footer = shared prefix + the active tab's keyhints (D1 single source)."""
-        self.footer_text.set_text(FOOTER_PREFIX + hints)
+        """Footer = shared prefix + the active tab's keyhints (D1 single source).
+
+        While the active view captures text, the prefix's Tab/q/r promises are
+        all false (every key goes to the text widget), so only the mode's own
+        hints are shown."""
+        prefix = "" if self.views[self._active].captures_text() else FOOTER_PREFIX
+        self.footer_text.set_text(prefix + hints)
 
     # --- the view-facing façade (views call these, never App internals) ---
 
@@ -241,14 +249,6 @@ class App:
         """Whether `view` is the tab currently shown — the one question views
         may ask about tab state (no peeking at `views`/`_active`)."""
         return self.views[self._active] is view
-
-    def own_footer(self, widget: urwid.Widget) -> None:
-        """Hand the footer to a view's transient widget (e.g. the filter Edit)."""
-        self.frame.footer = widget
-
-    def release_footer(self) -> None:
-        """Give the footer back to the standard hints line."""
-        self._restore_footer()
 
     def notify(self, msg: str, seconds: float = 3) -> None:
         # The newest notification owns the footer: cancel the previous restore

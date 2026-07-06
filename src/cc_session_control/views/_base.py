@@ -38,10 +38,11 @@ class ListTabView:
 
     # --- TabView default hooks ---
 
-    def deactivate(self) -> None:
-        """TabView hook: called on tab switch-away. Body-widget overlays stay
-        (they remain visibly modal); views with transient FOOTER modes (e.g.
-        the Sessions filter Edit) override this."""
+    def captures_text(self) -> bool:
+        """TabView hook: True while the view is capturing raw text input (e.g.
+        the Sessions filter Edit) — App then forwards EVERY key here, including
+        tab/q, instead of acting on them globally."""
+        return False
 
     # --- rendering plumbing ---
 
