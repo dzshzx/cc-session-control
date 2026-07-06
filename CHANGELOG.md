@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.1 (2026-07-06)
+
+UI/UX audit fix batch: honest footers, safe gates, readable modals.
+
+- **R10 degrade gates on every live takeover.** Sessions `Enter` and Agents
+  `Enter`/`o` now refuse a live takeover in-TUI when `/proc` is unavailable
+  (matching `t`/`R`) instead of confirming, exiting the TUI, and only then
+  printing the action-layer refusal. Dead sessions stay resumable.
+- **Filter mode no longer leaks across tabs.** New `deactivate()` member on the
+  TabView contract: switching tabs commits + closes a transient filter, so keys
+  after switching back never edit an invisible footer Edit.
+- **Confirm modal sizes to its content** (wrapped-text height, 46-cell floored
+  width) instead of fixed 50%×7, and names in confirm messages truncate by
+  terminal CELL width (`truncate_cells`, CJK = 2 cells) instead of `[:30]`.
+- **Newest notification owns the footer** — an older notify timer can no longer
+  clear a newer message early.
+- **Footer honesty in modal modes.** `r` now refreshes (via one shared
+  `App.refresh_with_notice`) in help/watch/cleanup-preview modes, and the help
+  hint reads 其余任意键返回 — every footer segment is true in every mode.
+- **RC help is a scrollable overlay** over the intact project list (shared
+  `TextRow`), readable on short terminals.
+- **Bundled skill key table corrected** — it still documented `t` as
+  "terminate"; now matches the real verb table (`t` tmux 接回 / `s` 停止 /
+  `R` 转入后台 / `d` 删除 …), locked by a test.
+- README features now describe the real 会话 / 项目 / 后台 tabs (cleanup is a
+  Sessions submenu, not a tab).
+
 ## 0.6.0 (2026-07-06)
 
 The RC tab becomes a project launcher, and tmux organization goes per-project.
