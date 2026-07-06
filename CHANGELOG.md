@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.6.5 (2026-07-06)
+
+Architecture-review refactor batch #2 (4 deepening candidates, re-verified
+against source before landing) + the two-axis code review's judgement-call
+cleanup. No behavior change except the one deliberate item listed at the end.
+
+- **One liveness-inputs assembly.** `liveness_inputs()` (the
+  `(session_procs, cur, agent_jobs, agents_map)` fetch) moved from
+  `data/snapshot.py` down into `data/liveness.py`, where cleanup can import
+  it: the two hand-kept mirrors inside `cleanup` (`_gather_known`'s
+  per-source self-fetch and `execute_session_removals`' inline fetch, plus
+  the "keep the two in sync" comment) are gone. A shared
+  `_fill_liveness_inputs` helper owns the fill-the-gaps ladder.
+- **`data/tmux.py` — the tmux adapter is its own module.** The generic tmux
+  seam (only `_tmux_run` touches `subprocess`; swallow-errors verb wrappers,
+  `run_in_tmux`, `session_name_for`, `find_session_window`, enter/attach
+  verbs) moved out of `data/rc.py`; `rc.py` keeps RC-server domain logic plus
+  four thin `cfg.rc_session`-scoped delegates. `actions/session_ops` and
+  `actions/agent_ops` no longer import `rc` at all — the session resume paths
+  are decoupled from Remote Control, matching CONTEXT.md's warning not to
+  conflate the two.
+- **Cleanup's interface closed.** New public
+  `cleanup.remove_agent_artifacts(short, sid)` (caller owns the alive/R10
+  gates); `agent_ops.remove_job` no longer pokes `cleanup._remove_path` /
+  `cleanup._session_artifact_paths`. No production code outside
+  `data/cleanup.py` touches a cleanup private anymore.
+- **One cleanup count vocabulary.** `csctl prune` now builds the same frozen
+  `CleanupPlan` the TUI uses and derives its summary from `plan.counts()`;
+  `--sweep-orphans` reuses the plan's frozen orphan list. The raw-tally
+  `cleanup_stats` (whose docstring still claimed a view contract the view had
+  left) and the consumerless pass-through `cleanup_classified` are deleted.
+
+Deliberate user-visible change (the only one):
+
+- The `csctl prune` summary header now reports "actionable now" counts from
+  the plan — `Total: N  Prunable empty: X  short(<=2): Y  Orphan dirs: Z
+  Zombie files: W  Aged: V` — instead of raw tallies that contradicted the
+  adjacent "Would prune N session(s)" line.
+
 ## 0.6.4 (2026-07-06)
 
 Architecture-review refactor batch (8 deepening candidates, adversarially
