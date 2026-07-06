@@ -207,6 +207,14 @@ def test_remove_zombie_session_files_multi_pid(tmp_path, monkeypatch):
     assert os.path.exists(os.path.join(sessions_dir, "1001.json"))    # current kept
 
 
+def test_select_zombie_pids_refuses_uninjected_rows():
+    # Tri-state sentinel: a raw registry row (proc_alive=None, never passed
+    # through liveness.live_session_procs) must NOT be classified as a zombie —
+    # misuse fails safe (delete nothing), not "everything looks dead".
+    raw = [SessionProc(pid=700772, sid="A"), SessionProc(pid=710575, sid="B")]
+    assert cleanup.select_zombie_pids(raw, cur=set()) == []
+
+
 def test_execute_zombie_removals_skips_pid_that_came_back(tmp_path, monkeypatch):
     # 删除 ⊆ 预览 revalidation: a previewed pid whose proc is alive again by
     # execution time is skipped.

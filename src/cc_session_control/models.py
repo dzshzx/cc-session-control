@@ -61,7 +61,12 @@ class SessionProc:
     entrypoint: str = ""
     status: str = ""
     proc_start: str = ""        # registry `procStart` (kernel starttime, as str)
-    proc_alive: bool = False    # injected /proc liveness, never parsed from JSON
+    # Injected /proc liveness, never parsed from JSON. Tri-state sentinel:
+    # None = NOT YET INJECTED (only `liveness.live_session_procs` sets it) —
+    # destructive consumers (`select_zombie_pids`) refuse None rather than
+    # treating an uninjected row as dead, so misuse fails safe (不删) instead
+    # of mass-deleting live sessions' files.
+    proc_alive: bool | None = None
     bridge: str | None = None   # `bridgeSessionId` (session_* namespace)
 
 

@@ -72,7 +72,7 @@ def invalidate_cache() -> None:
 def live_session_procs(max_age: float = 5.0) -> list[SessionProc]:
     """Registry session files with `/proc` liveness injected — THE assembly point.
 
-    `registry.read_session_procs` deliberately leaves `proc_alive=False` (pure
+    `registry.read_session_procs` deliberately leaves `proc_alive=None` (pure
     parse, no `/proc`); a `SessionProc.proc_alive` is only trustworthy after
     this injection. Every consumer must come through here rather than re-inline
     the `replace(sp, proc_alive=pid_alive(...))` idiom. Swallows errors → [].

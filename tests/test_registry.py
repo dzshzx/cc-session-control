@@ -36,7 +36,7 @@ def test_read_session_procs(tmp_path, monkeypatch):
     assert set(rows) == {"sid-aaa", "sid-bbb"}
     assert rows["sid-aaa"].pid == 151818
     assert rows["sid-aaa"].proc_start == "7601319"
-    assert rows["sid-aaa"].proc_alive is False
+    assert rows["sid-aaa"].proc_alive is None  # raw parse: liveness NOT injected
     assert rows["sid-aaa"].bridge is None
     assert rows["sid-bbb"].bridge == "session_016spR3Nkq2tJL2edM1exfuo"
     assert rows["sid-bbb"].cwd == "/work/b"
@@ -109,6 +109,13 @@ def test_host_pid_for_sid_prefers_proc_alive_match():
 
 def test_host_pid_for_sid_falls_back_to_first_dead():
     procs = [_sp(100, "sid-a", False), _sp(101, "sid-a", False)]
+    assert registry.host_pid_for_sid("sid-a", procs) == (100, False)
+
+
+def test_host_pid_for_sid_never_alive_from_uninjected_rows():
+    # Tri-state sentinel: raw registry rows (proc_alive=None) can never yield
+    # alive=True — only liveness.live_session_procs injection can.
+    procs = [_sp(100, "sid-a", None), _sp(101, "sid-a", None)]
     assert registry.host_pid_for_sid("sid-a", procs) == (100, False)
 
 

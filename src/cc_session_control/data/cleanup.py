@@ -231,17 +231,20 @@ def execute_orphan_removals(entries: list[str], *, known: set[str] | None = None
 def select_zombie_pids(session_procs: list[SessionProc], cur: set[int]) -> list[int]:
     """Removable `sessions/<pid>.json` pids — PURE (no IO), for unit tests.
 
-    A pid file is removable iff its proc is dead (`not proc_alive`) and the pid
-    is neither the current session's nor a live one. For a resumed multi-pid sid
-    this returns only the dead pid(s); the live pid's file is kept because its
-    injected `proc_alive` is True. Inputs are injected (proc liveness already on
-    each `SessionProc`, `cur` = ancestor-pid set).
+    A pid file is removable iff its proc is CONFIRMED dead (`proc_alive is
+    False` — the injected verdict) and the pid is neither the current session's
+    nor a live one. For a resumed multi-pid sid this returns only the dead
+    pid(s); the live pid's file is kept because its injected `proc_alive` is
+    True. An UNINJECTED row (`proc_alive is None` — raw registry parse that
+    never went through `liveness.live_session_procs`) is refused, not treated
+    as dead: misusing this with raw rows must fail safe (delete nothing), not
+    classify every session file as a zombie.
     """
     out: list[int] = []
     for sp in session_procs:
-        if sp.pid in cur:        # current session's pid file — protected
+        if sp.pid in cur:               # current session's pid file — protected
             continue
-        if sp.proc_alive:        # live runtime — keep (multi-pid: keep alive pid)
+        if sp.proc_alive is not False:  # alive, or uninjected (None) — keep
             continue
         out.append(sp.pid)
     return sorted(set(out))

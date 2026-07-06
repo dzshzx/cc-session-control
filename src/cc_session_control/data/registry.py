@@ -131,10 +131,11 @@ def host_pid_for_sid(
 
     `jobs/<short>/state.json` carries NO pid, so a background/agent worker's host
     pid is the `sessions/<pid>.json` entry sharing the sid. Prefers a proc-alive
-    match (so `alive=True` is trustworthy and defeats pid reuse); falls back to
-    the first sid match with `alive=False`. Relies on each `SessionProc.proc_alive`
-    already being injected by the caller (no IO here). Returns `(None, False)`
-    when no sessions file references the sid (that live worker is unstoppable).
+    match (`proc_alive is True` — so `alive=True` is trustworthy and defeats pid
+    reuse); falls back to the first sid match with `alive=False`. An uninjected
+    row (`proc_alive is None`) can never yield `alive=True` — only
+    `liveness.live_session_procs` injection can. Returns `(None, False)` when
+    no sessions file references the sid (that live worker is unstoppable).
 
     The single host-pid join shared by `snapshot._enrich_jobs`,
     `actions.agent_ops.job_host`, and `cleanup.remove_session` (M3 guard).
@@ -143,6 +144,6 @@ def host_pid_for_sid(
     if not procs:
         return None, False
     for sp in procs:
-        if sp.proc_alive:
+        if sp.proc_alive is True:
             return sp.pid, True
     return procs[0].pid, False
