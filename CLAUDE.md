@@ -125,7 +125,7 @@ A sid is **alive** iff `pid_alive` holds for one of its pids OR it appears in `a
 
 `sessions.scan()` globs `~/.claude/projects/*/*.jsonl` and line-scans each (a cheap substring pre-check guards every `json.loads` for speed — keep this pattern), then enriches each `Session` from `live_index()` + the registry: `kind`/`entrypoint`/`source` (cli/vscode/sdk/bg), `rc_exposed`, `env_id`, `agent_short`, `status`. Display `label` priority: `aiTitle` → first non-noise user prompt → `lastPrompt` → `(untitled)`. `_NOISE` / `_clean_text` strip command/system-reminder wrapper tags so prompts read cleanly. The 桥接/SDK hide filter keys off `Session.bridge_or_sdk` (D9: union of the transcript `hidden` tags and registry `source == "sdk"`) so the badge and the `h` toggle never disagree.
 
-**RC exposure is a pure predicate.** `sessions._is_rc_exposed(bridge, pid_alive) = bool(bridge) and pid_alive` — a session's *session remote control* is "exposed" only when its `bridgeSessionId` is truthy AND its proc is alive (a zombie's stale bridge does NOT count). Unit-tested across the full missing/null/string × alive/dead matrix.
+**RC exposure is a pure predicate.** `liveness.is_rc_exposed(bridge, pid_alive) = bool(bridge) and pid_alive` — a session's *session remote control* is "exposed" only when its `bridgeSessionId` is truthy AND its proc is alive (a zombie's stale bridge does NOT count). Unit-tested across the full missing/null/string × alive/dead matrix; `sessions.scan` and `environments.observe_live` both call this ONE implementation. Likewise **namespaced id parsing is single-sourced**: `models.split_env_id` is the only splitter of `session_*`/`cse_*`/`env_*` ids (registry/environments/rc all route through it), with `EnvRecord.env_id`/`BridgeEnv.env_id` as the formatting inverse.
 
 ### Background agents (后台 tab)
 
@@ -140,7 +140,7 @@ All tmux access goes through a single seam: only `_tmux_run` touches `subprocess
 **Discovery beyond tmux (`rc.scan_servers()`).** RC servers are also found by walking `/proc` (`proc.scan_rc_servers` + the pure `proc._match_rc_cmdline`: argv0 basename `claude` AND a `remote-control` subcommand token AND `--name` — codex, which uses a `--remote-control` *flag*, is excluded). A discovered pid that belongs to a csctl-managed tmux pane is **managed**; otherwise it's **external** and **read-only** (csctl never takes over / restarts it). Managed servers' `env_*` cloud id is grepped from the pane and pushed one-way into the ledger.
 
 **Three Remote Control namespaces — independent, never linked by suffix:**
-- **session remote control** → `bridgeSessionId: session_*` in `sessions/<pid>.json` (a foreground session exposing itself). Tri-state: key missing (never on) / `null` (transient — re-opening overwrites it) / string (exposed). "Exposed now" = the `_is_rc_exposed` predicate above.
+- **session remote control** → `bridgeSessionId: session_*` in `sessions/<pid>.json` (a foreground session exposing itself). Tri-state: key missing (never on) / `null` (transient — re-opening overwrites it) / string (exposed). "Exposed now" = the `is_rc_exposed` predicate above.
 - **background agent env** → `bridgeSessionId: cse_*` in `jobs/<short>/state.json`. A `cse_*` resume pair shares one suffix (same env); `session_*` and `cse_*` suffixes never coincide → only ever deduped *within* a namespace.
 - **project rc server env** → `env_*`, printed only to the server's stdout/QR, with **zero** state file — the only local signal is the running process + its pane output.
 

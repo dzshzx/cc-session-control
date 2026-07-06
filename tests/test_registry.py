@@ -134,3 +134,17 @@ def test_registry_cache_reuses_until_invalidated(tmp_path, monkeypatch):
     registry.invalidate_cache()
     fresh = registry.read_session_procs(max_age=999)
     assert {r.sid for r in fresh} == {"s1", "s2"}
+
+
+# --- split_env_id: THE one namespaced-id parser (models.py) ---
+
+def test_split_env_id_edge_rules():
+    from cc_session_control.models import split_env_id
+    assert split_env_id("cse_abc") == ("cse", "abc")
+    assert split_env_id("session_a_b") == ("session", "a_b")  # first _ splits
+    # Degenerate ids are rejected as a whole, never half-parsed.
+    assert split_env_id(None) == ("", "")
+    assert split_env_id("") == ("", "")
+    assert split_env_id("nounderscore") == ("", "")
+    assert split_env_id("_abc") == ("", "")
+    assert split_env_id("cse_") == ("", "")

@@ -18,7 +18,7 @@ import os
 import time
 
 from ..config import cfg
-from ..models import AgentJob, SessionProc
+from ..models import AgentJob, SessionProc, split_env_id
 
 _sessions_cache: list[SessionProc] | None = None
 _sessions_time: float = 0.0
@@ -31,13 +31,6 @@ def invalidate_cache() -> None:
     global _sessions_cache, _jobs_cache
     _sessions_cache = None
     _jobs_cache = None
-
-
-def _suffix(bridge: str | None) -> str:
-    """Namespace suffix of a bridge id (`cse_abc` -> `abc`), or ""."""
-    if not bridge or "_" not in bridge:
-        return ""
-    return bridge.split("_", 1)[1]
 
 
 def _parse_session_proc(path: str) -> SessionProc | None:
@@ -106,7 +99,7 @@ def _parse_agent_job(state_path: str) -> AgentJob | None:
         tempo=d.get("tempo", "") or "",
         cwd=d.get("cwd", "") or "",
         name=d.get("name", "") or "",
-        env_suffix=_suffix(d.get("bridgeSessionId")),
+        env_suffix=split_env_id(d.get("bridgeSessionId"))[1],
         respawn_flags=[str(x) for x in flags],
     )
 

@@ -97,7 +97,7 @@ def _source_of(entrypoint: str, kind: str) -> str:
     return "cli"
 
 
-def _is_rc_exposed(bridge: str | None, pid_alive: bool) -> bool:
+def is_rc_exposed(bridge: str | None, pid_alive: bool) -> bool:
     """Whether session remote control is CURRENTLY exposed (pure predicate).
 
     Exposed iff the bridge id is a truthy string AND the owning process is still

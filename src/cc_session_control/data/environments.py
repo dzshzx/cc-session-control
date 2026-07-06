@@ -51,7 +51,14 @@ from collections.abc import Iterator
 from typing import Any
 
 from ..config import cfg
-from ..models import AgentJob, BridgeEnv, EnvRecord, RCServer, SessionProc
+from ..models import (
+    AgentJob,
+    BridgeEnv,
+    EnvRecord,
+    RCServer,
+    SessionProc,
+    split_env_id,
+)
 from . import liveness, registry
 
 try:  # POSIX advisory locking; absent on Windows → degrade to no lock.
@@ -64,17 +71,51 @@ _RETENTION_SECONDS = 90 * 86400
 _MAX_ENTRIES = 500
 
 
-# --- bridge id parsing -----------------------------------------------------
-
-def _split_bridge(bridge: str) -> tuple[str, str]:
-    """`cse_abc` -> (`cse`, `abc`); the suffix is the namespace-local env id."""
-    prefix, sep, suffix = bridge.partition("_")
-    if not sep:
-        return "", ""
-    return prefix, suffix
-
-
 # --- observation builder (reads registry only, never rc) -------------------
+
+def _collect(
+    session_procs: list[SessionProc],
+    agent_jobs: list[AgentJob],
+    rc_servers: list[RCServer] | None,
+    *,
+    alive_gated: bool,
+) -> list[EnvRecord]:
+    """The ONE observation walk over the three env sources (R6).
+
+    `alive_gated=False` → the FILE-REFERENCED membership set (any env a file
+    references, alive or zombie). `alive_gated=True` → the CURRENT set, each
+    source gated by its own liveness rule: `session_*` by the single
+    `liveness.is_rc_exposed` predicate, `cse_*` by a host-alive job or a
+    proc-alive session sharing the job sid, `env_*` by a running RC server.
+    """
+    alive_sids = {sp.sid for sp in session_procs if sp.proc_alive}
+    records: list[EnvRecord] = []
+    for sp in session_procs:
+        if not sp.bridge:
+            continue
+        if alive_gated and not liveness.is_rc_exposed(sp.bridge, sp.proc_alive):
+            continue
+        prefix, key = split_env_id(sp.bridge)
+        if prefix and key:
+            records.append(EnvRecord(prefix=prefix, key=key, bound_sid=sp.sid))
+    for job in agent_jobs:
+        if not job.env_suffix:
+            continue
+        if alive_gated and not (job.host_alive or job.sid in alive_sids):
+            continue
+        records.append(
+            EnvRecord(prefix="cse", key=job.env_suffix, bound_sid=job.sid)
+        )
+    for srv in rc_servers or []:
+        if not srv.env_id:
+            continue
+        if alive_gated and srv.status != "running":
+            continue
+        prefix, key = split_env_id(srv.env_id)
+        if prefix and key:
+            records.append(EnvRecord(prefix=prefix, key=key, bound_sid=None))
+    return records
+
 
 def observe(
     session_procs: list[SessionProc] | None = None,
@@ -101,24 +142,7 @@ def observe(
             session_procs = registry.read_session_procs(max_age=max_age)
         if agent_jobs is None:
             agent_jobs = registry.read_agent_jobs(max_age=max_age)
-        records: list[EnvRecord] = []
-        for sp in session_procs:
-            if not sp.bridge:
-                continue
-            prefix, key = _split_bridge(sp.bridge)
-            if prefix and key:
-                records.append(EnvRecord(prefix=prefix, key=key, bound_sid=sp.sid))
-        for job in agent_jobs:
-            if job.env_suffix:
-                records.append(
-                    EnvRecord(prefix="cse", key=job.env_suffix, bound_sid=job.sid)
-                )
-        for srv in rc_servers or []:
-            if srv.env_id:
-                prefix, sep, key = srv.env_id.partition("_")
-                if sep and prefix and key:
-                    records.append(EnvRecord(prefix=prefix, key=key, bound_sid=None))
-        return records
+        return _collect(session_procs, agent_jobs, rc_servers, alive_gated=False)
     except Exception:
         return []
 
@@ -131,13 +155,14 @@ def observe_live(
 ) -> list[EnvRecord]:
     """Alive-gated "currently exposed" bridge envs (R3/R6) — the CURRENT set.
 
-    Where `observe()` is a bridge-truthy passive collector, this lifts the
-    `_is_rc_exposed` predicate to the env ledger: a bridge is CURRENT only when
-    its owner is alive — `session_*` gated by proc-alive, `cse_*` by a proc-alive
-    session sharing the job sid (host-alive), `env_*` by a running RC server. So a
-    zombie session's stale `bridgeSessionId` is NOT reported as current — it falls
-    through to `orphan_envs` (a manual-delete candidate) instead of overstating
-    the bound count.
+    Where `observe()` is a bridge-truthy passive collector, this applies the
+    single `liveness.is_rc_exposed` predicate (and the per-source gates in
+    `_collect`): a bridge is CURRENT only when its owner is alive — `session_*`
+    gated by proc-alive, `cse_*` by a proc-alive session sharing the job sid
+    (host-alive), `env_*` by a running RC server. So a zombie session's stale
+    `bridgeSessionId` is NOT reported as current — it falls through to
+    `orphan_envs` (a manual-delete candidate) instead of overstating the bound
+    count.
 
     Pure when `session_procs`/`agent_jobs` are supplied (the snapshot path passes
     its already-liveness-resolved data — DI for tests); reads the registry +
@@ -149,24 +174,7 @@ def observe_live(
             session_procs = liveness.live_session_procs(max_age=max_age)
         if agent_jobs is None:
             agent_jobs = registry.read_agent_jobs(max_age=max_age)
-        alive_sids = {sp.sid for sp in session_procs if sp.proc_alive}
-        records: list[EnvRecord] = []
-        for sp in session_procs:
-            if sp.bridge and sp.proc_alive:
-                prefix, key = _split_bridge(sp.bridge)
-                if prefix and key:
-                    records.append(EnvRecord(prefix=prefix, key=key, bound_sid=sp.sid))
-        for job in agent_jobs:
-            if job.env_suffix and (job.host_alive or job.sid in alive_sids):
-                records.append(
-                    EnvRecord(prefix="cse", key=job.env_suffix, bound_sid=job.sid)
-                )
-        for srv in rc_servers or []:
-            if srv.env_id and srv.status == "running":
-                prefix, sep, key = srv.env_id.partition("_")
-                if sep and prefix and key:
-                    records.append(EnvRecord(prefix=prefix, key=key, bound_sid=None))
-        return records
+        return _collect(session_procs, agent_jobs, rc_servers, alive_gated=True)
     except Exception:
         return []
 

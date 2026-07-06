@@ -10,7 +10,7 @@ import subprocess
 import time
 
 from ..config import cfg
-from ..models import EnvRecord, RCProject, RCServer
+from ..models import EnvRecord, RCProject, RCServer, split_env_id
 from . import environments, proc
 
 # Cloud bridge env id printed to a managed server's pane (`environment=env_…`).
@@ -367,14 +367,6 @@ def scan() -> list[RCProject]:
     return result
 
 
-def _split_env(env_id: str) -> tuple[str, str]:
-    """`env_abc` -> (`env`, `abc`); ("", "") when not a namespaced id."""
-    prefix, sep, suffix = env_id.partition("_")
-    if not sep or not prefix or not suffix:
-        return "", ""
-    return prefix, suffix
-
-
 def _capture_env_id(target: str) -> str:
     """Grep an `env_*` cloud id from a managed server's pane output, or "".
 
@@ -417,7 +409,7 @@ def scan_servers() -> list[RCServer]:
         found = by_pid.get(pid)
         env_id = _capture_env_id(target)
         if env_id:
-            prefix, key = _split_env(env_id)
+            prefix, key = split_env_id(env_id)
             if prefix and key:
                 env_records.append(EnvRecord(prefix=prefix, key=key, bound_sid=None))
         servers.append(RCServer(

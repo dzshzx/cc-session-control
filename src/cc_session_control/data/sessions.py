@@ -9,7 +9,7 @@ import os
 from ..config import cfg
 from ..models import LiveInfo, Session
 from . import registry
-from .liveness import _is_rc_exposed, alive_map, live_index, live_session_procs
+from .liveness import alive_map, is_rc_exposed, live_index, live_session_procs
 from .proc import ancestor_pids as _ancestor_pids  # /proc walk moved to proc.py
 
 _NOISE = (
@@ -141,7 +141,7 @@ def _parse_transcript(
         current = False
         proc_alive = False
 
-    rc_exposed = _is_rc_exposed(bridge, proc_alive)
+    rc_exposed = is_rc_exposed(bridge, proc_alive)
 
     return Session(
         sid=sid, cwd=cwd, label=label, mtime=st.st_mtime,

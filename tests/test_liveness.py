@@ -187,10 +187,10 @@ def test_alive_map_scrubs_with_proc(monkeypatch):
     liveness.invalidate_cache()
 
 
-# --- _is_rc_exposed: AC3 six-case matrix (bridge x pid_alive) ---
+# --- is_rc_exposed: AC3 six-case matrix (bridge x pid_alive) ---
 
 def test_is_rc_exposed_matrix():
-    f = liveness._is_rc_exposed
+    f = liveness.is_rc_exposed
     # bridge key absent -> None
     assert f(None, True) is False
     assert f(None, False) is False
