@@ -11,9 +11,10 @@ import json
 import subprocess
 import time
 from collections.abc import Callable
+from dataclasses import replace
 
 from ..models import LiveInfo, SessionProc
-from . import proc
+from . import proc, registry
 
 _cache: dict[str, int | None] | None = None
 _cache_time: float = 0.0
@@ -66,6 +67,23 @@ def alive_map(max_age: float = 5.0) -> dict[str, int | None]:
 def invalidate_cache() -> None:
     global _cache
     _cache = None
+
+
+def live_session_procs(max_age: float = 5.0) -> list[SessionProc]:
+    """Registry session files with `/proc` liveness injected — THE assembly point.
+
+    `registry.read_session_procs` deliberately leaves `proc_alive=False` (pure
+    parse, no `/proc`); a `SessionProc.proc_alive` is only trustworthy after
+    this injection. Every consumer must come through here rather than re-inline
+    the `replace(sp, proc_alive=pid_alive(...))` idiom. Swallows errors → [].
+    """
+    try:
+        return [
+            replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
+            for sp in registry.read_session_procs(max_age=max_age)
+        ]
+    except Exception:
+        return []
 
 
 def _source_of(entrypoint: str, kind: str) -> str:

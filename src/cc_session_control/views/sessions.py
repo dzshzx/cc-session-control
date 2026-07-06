@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import urwid
@@ -106,16 +105,10 @@ class SessionsView(CleanupMixin):
         """No-snapshot liveness inputs (back-compat / tests). Swallows errors.
 
         Mirrors what `build_world_snapshot` computes so the submenu counts + the
-        zombie sweep work even without a shared snapshot. `proc_alive` is injected
-        here exactly as the snapshot path does it.
+        zombie sweep work even without a shared snapshot. Liveness injection goes
+        through the one `liveness.live_session_procs` seam, same as the snapshot.
         """
-        try:
-            procs = [
-                replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
-                for sp in registry.read_session_procs()
-            ]
-        except Exception:
-            procs = []
+        procs = liveness.live_session_procs()
         try:
             jobs = registry.read_agent_jobs()
         except Exception:

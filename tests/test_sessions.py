@@ -9,7 +9,7 @@ scan() merges three liveness/identity sources (registry sessions/<pid>.json,
 import json
 
 from cc_session_control.config import cfg
-from cc_session_control.data import registry
+from cc_session_control.data import proc, registry
 from cc_session_control.data import sessions as sessions_mod
 
 CLI_SID = "cli11111-1111-1111-1111-111111111111"
@@ -73,7 +73,7 @@ def _setup_world(tmp_path, monkeypatch):
 
     # pid 1003 (sdk) is a zombie file: registry entry exists but proc is dead.
     alive_pids = {1001, 1002, 1004}
-    monkeypatch.setattr(sessions_mod, "pid_alive", lambda pid, ps: pid in alive_pids)
+    monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: pid in alive_pids)
     # No `claude agents --json` data — liveness comes from the registry join.
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     # The cli session launched csctl -> it is the "current" one.
@@ -131,7 +131,7 @@ def test_scan_transcript_only_session_is_dead(tmp_path, monkeypatch):
         {"cwd": "/work/x"},
         {"type": "user", "message": {"content": "hello"}},
     ])
-    monkeypatch.setattr(sessions_mod, "pid_alive", lambda pid, ps: False)
+    monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: False)
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: set())
 
@@ -152,7 +152,7 @@ def test_scan_excludes_transcript_without_cwd(tmp_path, monkeypatch):
     _write_transcript(projects, "nocwd-sid", [
         {"type": "user", "message": {"content": "no cwd here"}},
     ])
-    monkeypatch.setattr(sessions_mod, "pid_alive", lambda pid, ps: False)
+    monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: False)
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: set())
 

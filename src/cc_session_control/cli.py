@@ -188,18 +188,13 @@ def _cmd_prune_zombies(args: argparse.Namespace) -> None:
     gated here too — off `/proc` every pid looks dead, so `current` can't be
     determined and we must not even claim the files are sweepable (R10).
     """
-    from dataclasses import replace
-
-    from .data import proc, registry
+    from .data import liveness, proc
     from .data.cleanup import remove_zombie_session_files, select_zombie_pids
 
     if not proc.current_determinable():
         print("Refused: '/proc' unavailable — cannot determine the current session (R10).")
         return
-    procs = [
-        replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
-        for sp in registry.read_session_procs(max_age=0.0)
-    ]
+    procs = liveness.live_session_procs(max_age=0.0)
     cur = proc.ancestor_pids()
     zombies = select_zombie_pids(procs, cur)
     print(f"Would sweep {len(zombies)} zombie session file(s)")

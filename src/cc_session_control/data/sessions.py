@@ -5,14 +5,12 @@ from __future__ import annotations
 import glob
 import json
 import os
-from dataclasses import replace
 
 from ..config import cfg
 from ..models import LiveInfo, Session
 from . import registry
-from .liveness import _is_rc_exposed, alive_map, live_index
+from .liveness import _is_rc_exposed, alive_map, live_index, live_session_procs
 from .proc import ancestor_pids as _ancestor_pids  # /proc walk moved to proc.py
-from .proc import pid_alive
 
 _NOISE = (
     "<command-message>", "<command-name>", "<command-args>",
@@ -169,10 +167,7 @@ def scan() -> list[Session]:
     live index but with no transcript) is surfaced by the Agents tab, not here.
     """
     root = str(cfg.projects_root)
-    session_procs = [
-        replace(sp, proc_alive=pid_alive(sp.pid, sp.proc_start))
-        for sp in registry.read_session_procs()
-    ]
+    session_procs = live_session_procs()
     agents = alive_map()
     idx = live_index(session_procs, agents)
     job_shorts = {j.short for j in registry.read_agent_jobs()}

@@ -37,7 +37,6 @@ from __future__ import annotations
 import os
 import shutil
 import time
-from dataclasses import replace
 
 from ..config import cfg
 from ..models import AgentJob, Session, SessionProc
@@ -100,17 +99,6 @@ def _remove_path(path: str) -> bool:
 
 # --- Strategy A: sid-keyed orphan dirs (H1 protected-sid set) --------------
 
-def _live_session_procs(max_age: float = 5.0) -> list[SessionProc]:
-    """Registry session files with `/proc` liveness injected (swallow-error)."""
-    try:
-        return [
-            replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
-            for sp in registry.read_session_procs(max_age=max_age)
-        ]
-    except Exception:
-        return []
-
-
 def known_sids(
     sessions: list[Session],
     session_procs: list[SessionProc],
@@ -163,7 +151,7 @@ def _gather_known(
     self-read swallows its own errors → safe empties.
     """
     if session_procs is None:
-        session_procs = _live_session_procs()
+        session_procs = liveness.live_session_procs()
     if agent_jobs is None:
         try:
             agent_jobs = registry.read_agent_jobs()
@@ -353,7 +341,7 @@ def remove_session(s: Session) -> bool:
         if _remove_path(p):
             removed = True
     # M3: never delete a LIVE agent worker's jobs/<short> dir.
-    _, host_alive = registry.host_pid_for_sid(s.sid, _live_session_procs())
+    _, host_alive = registry.host_pid_for_sid(s.sid, liveness.live_session_procs())
     if not host_alive and _remove_path(_jobs_path(s.sid)):
         removed = True
     return removed

@@ -76,10 +76,7 @@ def build_world_snapshot() -> WorldSnapshot:
     registry reads are ~5s-TTL cached so the few repeat reads inside `scan()`
     hit the cache. Each callee swallows its own errors and returns safe empties.
     """
-    session_procs = [
-        replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
-        for sp in registry.read_session_procs()
-    ]
+    session_procs = liveness.live_session_procs()
     all_sessions = sessions.scan()
     agent_jobs = _enrich_jobs(registry.read_agent_jobs(), session_procs)
     # Cheap, cached/inexpensive liveness inputs surfaced for the cleanup submenu

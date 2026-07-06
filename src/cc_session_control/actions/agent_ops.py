@@ -25,7 +25,6 @@ import os
 import shlex
 import signal
 import time
-from dataclasses import replace
 
 from ..config import cfg
 from ..data import cleanup, liveness, proc, rc, registry
@@ -68,10 +67,7 @@ def job_host(job: AgentJob) -> tuple[int | None, bool]:
     Injects `/proc` liveness onto the registry rows, then defers to the single
     pure join `registry.host_pid_for_sid` (shared with `snapshot._enrich_jobs`).
     """
-    procs = [
-        replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
-        for sp in registry.read_session_procs()
-    ]
+    procs = liveness.live_session_procs()
     return registry.host_pid_for_sid(job.sid, procs)
 
 

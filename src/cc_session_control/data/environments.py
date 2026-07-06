@@ -48,12 +48,11 @@ import contextlib
 import json
 import os
 from collections.abc import Iterator
-from dataclasses import replace
 from typing import Any
 
 from ..config import cfg
 from ..models import AgentJob, BridgeEnv, EnvRecord, RCServer, SessionProc
-from . import proc, registry
+from . import liveness, registry
 
 try:  # POSIX advisory locking; absent on Windows → degrade to no lock.
     import fcntl
@@ -147,10 +146,7 @@ def observe_live(
     """
     try:
         if session_procs is None:
-            session_procs = [
-                replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
-                for sp in registry.read_session_procs(max_age=max_age)
-            ]
+            session_procs = liveness.live_session_procs(max_age=max_age)
         if agent_jobs is None:
             agent_jobs = registry.read_agent_jobs(max_age=max_age)
         alive_sids = {sp.sid for sp in session_procs if sp.proc_alive}

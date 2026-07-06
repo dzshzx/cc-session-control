@@ -201,3 +201,36 @@ def test_is_rc_exposed_matrix():
     assert f("session_x", False) is False
     # empty string is not a real bridge id
     assert f("", True) is False
+
+
+# --- live_session_procs: the ONE registry->proc_alive assembly point ---
+
+def test_live_session_procs_injects_proc_liveness(tmp_path, monkeypatch):
+    import json
+
+    from cc_session_control.config import cfg
+    from cc_session_control.data import proc, registry
+
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    registry.invalidate_cache()
+    sessions = tmp_path / "sessions"
+    sessions.mkdir(parents=True)
+    for pid, start in ((100, "10"), (200, "20")):
+        (sessions / f"{pid}.json").write_text(json.dumps({
+            "pid": pid, "sessionId": f"sid{pid}", "procStart": start,
+        }))
+    monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: pid == 100)
+
+    procs = {sp.pid: sp for sp in liveness.live_session_procs(max_age=0.0)}
+    assert procs[100].proc_alive is True   # injected, not the parse default
+    assert procs[200].proc_alive is False
+
+
+def test_live_session_procs_swallows_errors(monkeypatch):
+    from cc_session_control.data import registry
+
+    def boom(max_age=5.0):
+        raise RuntimeError("registry exploded")
+
+    monkeypatch.setattr(registry, "read_session_procs", boom)
+    assert liveness.live_session_procs() == []
