@@ -294,38 +294,15 @@ def _cmd_env(args: argparse.Namespace) -> None:
 
 
 def _cmd_tui(args: argparse.Namespace) -> None:
-    from .actions.session_ops import do_resume, do_tmux_new, do_tmux_resume, enter_window
+    from .actions.session_ops import ExitIntent
     from .app import App
 
-    app = App()
-    result = app.run()
+    result = App().run()
 
-    if not result or not isinstance(result, tuple):
-        return
-    if result[0] == "resume":
-        _, session, fork = result
-        do_resume(session, fork=fork)
-    elif result[0] == "attach":
-        # `t` on a tmux-hosted session: enter its window (exec replaces csctl
-        # outside tmux; switch-client + normal exit inside).
-        if not enter_window(result[1]):
-            print(f"Failed to enter tmux window {result[1]} (is tmux running?)")
-    elif result[0] == "tmux_resume":
-        # `t` on a dead / bare-terminal session: spawn the resume window, then
-        # enter it. Kill semantics (takeover) are handled inside do_tmux_resume.
-        target = do_tmux_resume(result[1])
-        if target is None:
-            print("Failed to resume the session inside tmux (R10 degraded, or tmux unavailable).")
-        elif not enter_window(target):
-            print(f"Session resumed in tmux window {target}, but attaching failed.")
-    elif result[0] == "tmux_new":
-        # `t` on a 项目-tab project row: start a NEW claude session in tmux,
-        # then enter it (nothing is killed — pure spawn).
-        target = do_tmux_new(result[1])
-        if target is None:
-            print("Failed to start a new session inside tmux (is tmux available?).")
-        elif not enter_window(target):
-            print(f"Session started in tmux window {target}, but attaching failed.")
+    # The intent finalizes itself outside the urwid loop (it may exec-replace
+    # csctl — resume/attach) and prints its own failure messages.
+    if isinstance(result, ExitIntent):
+        result.run()
 
 
 def main() -> None:

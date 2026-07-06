@@ -6,6 +6,7 @@ import os
 import shlex
 import signal
 import time
+from dataclasses import dataclass
 
 from .. import clipboard
 from ..data import proc, rc
@@ -200,6 +201,72 @@ def do_tmux_new(directory: str) -> str | None:
     shows interactively."""
     cmd = f"cd {shlex.quote(directory)} && claude"
     return rc.run_in_tmux(rc.session_name_for(directory), "claude", cmd)
+
+
+# --- exit intents (the payload crossing the exit-then-exec seam) ------------
+#
+# The TUI cannot run `claude` (or replace itself with tmux) inside the urwid
+# loop, so a resume-family action exits the MainLoop carrying ONE of these
+# intents and `cli._cmd_tui` calls `intent.run()` afterwards. Each intent owns
+# its own finalizer + failure messages, so adding a variant means adding one
+# class here + one view call — app.py and cli.py stay untouched.
+
+class ExitIntent:
+    """What a view asks csctl to do AFTER the MainLoop exits."""
+
+    def run(self) -> None:
+        """Finalize outside the loop; may exec-replace the csctl process."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class ResumeIntent(ExitIntent):
+    """Enter/f: bare-terminal resume (execvp; takeover kill inside do_resume)."""
+
+    session: Session
+    fork: bool = False
+
+    def run(self) -> None:
+        do_resume(self.session, fork=self.fork)
+
+
+@dataclass(frozen=True)
+class AttachIntent(ExitIntent):
+    """`t` on a tmux-hosted session: enter its window in place (no kill)."""
+
+    target: str
+
+    def run(self) -> None:
+        if not enter_window(self.target):
+            print(f"Failed to enter tmux window {self.target} (is tmux running?)")
+
+
+@dataclass(frozen=True)
+class TmuxResumeIntent(ExitIntent):
+    """`t` on a dead / bare-terminal session: resume inside tmux, then enter."""
+
+    session: Session
+
+    def run(self) -> None:
+        target = do_tmux_resume(self.session)
+        if target is None:
+            print("Failed to resume the session inside tmux (R10 degraded, or tmux unavailable).")
+        elif not enter_window(target):
+            print(f"Session resumed in tmux window {target}, but attaching failed.")
+
+
+@dataclass(frozen=True)
+class TmuxNewIntent(ExitIntent):
+    """项目-tab `t`: start a NEW claude in tmux, then enter (pure spawn)."""
+
+    directory: str
+
+    def run(self) -> None:
+        target = do_tmux_new(self.directory)
+        if target is None:
+            print("Failed to start a new session inside tmux (is tmux available?).")
+        elif not enter_window(target):
+            print(f"Session started in tmux window {target}, but attaching failed.")
 
 
 def enter_window(target: str) -> bool:

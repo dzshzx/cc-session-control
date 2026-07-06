@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import urwid
 
+from ..actions.session_ops import TmuxNewIntent
 from ..data import rc
 from ..data.rc import set_rc_at_startup
 from ..models import RCProject, RCServer
@@ -283,7 +284,7 @@ class RCView(ListTabView):
         # New claude session in the project dir, inside tmux, entered
         # immediately — nothing is killed, so no confirm / R10 / trust gate
         # (claude's own trust dialog shows interactively in the window).
-        self.app.exit_with_tmux_new(p.directory)
+        self.app.exit_with(TmuxNewIntent(p.directory))
 
     def _key_start(self, p: RCProject) -> None:
         if not p.dir_exists:

@@ -6,6 +6,12 @@ import os
 import urwid
 
 from cc_session_control.data.snapshot import WorldSnapshot
+from cc_session_control.actions.session_ops import (
+    AttachIntent,
+    ResumeIntent,
+    TmuxNewIntent,
+    TmuxResumeIntent,
+)
 from cc_session_control.models import RCProject, RCServer, Session
 from cc_session_control.views.sessions import SessionRow, SessionsView
 from cc_session_control.views.rc import RCRow, RCView, ServerRow
@@ -33,17 +39,8 @@ class FakeApp:
         self._confirm_messages.append(message)
         self._last_confirm = on_yes
 
-    def exit_with_resume(self, session, fork=False):
-        self.result = ("resume", session, fork)
-
-    def exit_with_attach(self, target):
-        self.result = ("attach", target)
-
-    def exit_with_tmux_resume(self, session):
-        self.result = ("tmux_resume", session)
-
-    def exit_with_tmux_new(self, directory):
-        self.result = ("tmux_new", directory)
+    def exit_with(self, intent):
+        self.result = intent
 
     def trigger_async_refresh(self):
         pass
@@ -271,7 +268,7 @@ def test_t_key_attaches_tmux_hosted_session_without_confirm(monkeypatch):
     app, view = _sessions_view_with(monkeypatch, s)
     monkeypatch.setattr(sv_mod, "attach_target", lambda s: "cc:2")
     view.handle_key("t")
-    assert app.result == ("attach", "cc:2")
+    assert app.result == AttachIntent("cc:2")
     assert app._confirm_messages == []
 
 
@@ -285,7 +282,7 @@ def test_t_key_live_bare_terminal_confirms_takeover(monkeypatch):
     assert app.result is None  # blocked on confirm
     assert "tmux 接回" in app._confirm_messages[-1]
     app._last_confirm()
-    assert app.result == ("tmux_resume", s)
+    assert app.result == TmuxResumeIntent(s)
 
 
 def test_t_key_dead_session_no_confirm(monkeypatch):
@@ -294,7 +291,7 @@ def test_t_key_dead_session_no_confirm(monkeypatch):
     app, view = _sessions_view_with(monkeypatch, s)
     monkeypatch.setattr(sv_mod, "attach_target", lambda s: None)
     view.handle_key("t")
-    assert app.result == ("tmux_resume", s)
+    assert app.result == TmuxResumeIntent(s)
     assert app._confirm_messages == []
 
 
@@ -357,7 +354,7 @@ def test_enter_key_dead_session_not_gated_when_degraded(monkeypatch):
     app, view = _sessions_view_with(monkeypatch, s)
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
     view.handle_key("enter")
-    assert app.result == ("resume", s, False)
+    assert app.result == ResumeIntent(s, fork=False)
 
 
 def test_t_key_takeover_gated_when_degraded(monkeypatch):
@@ -562,7 +559,7 @@ def test_rc_view_t_key_exits_with_tmux_new():
 
     view.handle_key("t")
 
-    assert app.result == ("tmux_new", "/tmp/p1")
+    assert app.result == TmuxNewIntent("/tmp/p1")
 
 
 def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
@@ -690,7 +687,7 @@ def test_sessions_enter_live_confirms_takeover(monkeypatch):
     assert "终止原进程" in app._confirm_messages[0]
 
     app._last_confirm()
-    assert app.result is not None and app.result[0] == "resume"
+    assert isinstance(app.result, ResumeIntent)
 
 
 def test_sessions_enter_dead_resumes_directly():
@@ -702,7 +699,7 @@ def test_sessions_enter_dead_resumes_directly():
 
     view.handle_key("enter")
     assert app._confirm_messages == []  # dead: no takeover, no confirm
-    assert app.result is not None and app.result[0] == "resume"
+    assert isinstance(app.result, ResumeIntent)
 
 
 def test_sessions_R_live_confirms_relaunch(monkeypatch):

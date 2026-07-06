@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING
 import urwid
 
 from ..actions.session_ops import (
+    AttachIntent,
+    ResumeIntent,
+    TmuxResumeIntent,
     attach_target,
     relaunch_in_tmux,
     resume_cmd,
@@ -340,7 +343,7 @@ class SessionsView(CleanupMixin, ListTabView):
         """Resume now, or confirm first when it would take over a live session."""
         confirm_takeover(
             self.app, s, "接回会话",
-            lambda: self.app.exit_with_resume(s, fork), fork=fork,
+            lambda: self.app.exit_with(ResumeIntent(s, fork)), fork=fork,
         )
 
     def _tmux_resume_or_confirm(self, s: Session) -> None:
@@ -351,10 +354,10 @@ class SessionsView(CleanupMixin, ListTabView):
         """
         target = attach_target(s)
         if target:
-            self.app.exit_with_attach(target)
+            self.app.exit_with(AttachIntent(target))
             return
         confirm_takeover(
-            self.app, s, "tmux 接回", lambda: self.app.exit_with_tmux_resume(s)
+            self.app, s, "tmux 接回", lambda: self.app.exit_with(TmuxResumeIntent(s))
         )
 
     # --- Key dispatch ---
@@ -416,7 +419,7 @@ class SessionsView(CleanupMixin, ListTabView):
         if s.current:
             self.app.notify("不能分叉当前会话")
             return
-        self.app.exit_with_resume(s, fork=True)
+        self.app.exit_with(ResumeIntent(s, fork=True))
 
     def _key_stop(self, s: Session) -> None:
         # Degrade gate FIRST (R2): off /proc every pid looks dead, so a stop

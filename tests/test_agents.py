@@ -4,6 +4,7 @@ import urwid
 
 import cc_session_control.views.agents as av_mod
 from cc_session_control.actions import agent_ops
+from cc_session_control.actions.session_ops import ResumeIntent
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import AgentJob
 from cc_session_control.views.agents import AgentRow, AgentsView
@@ -30,8 +31,8 @@ class FakeApp:
         self._confirm_messages.append(message)
         self._last_confirm = on_yes
 
-    def exit_with_resume(self, session, fork=False):
-        self.result = ("resume", session, fork)
+    def exit_with(self, intent):
+        self.result = intent
 
     def trigger_async_refresh(self):
         pass
@@ -181,17 +182,17 @@ def test_enter_key_takeover_like_o(monkeypatch):
     app, view = _make_view([_make_job()])
     view.handle_key("enter")
     assert app.result is not None
-    assert app.result[0] == "resume"
+    assert isinstance(app.result, ResumeIntent)
 
 
-def test_o_key_takeover_routes_to_exit_with_resume(monkeypatch):
+def test_o_key_takeover_routes_to_resume_intent(monkeypatch):
     s = av_mod.agent_ops.resume_takeover  # keep ref
     monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
                         lambda job: _takeover_session(current=False))
     app, view = _make_view([_make_job()])
     view.handle_key("o")
     assert app.result is not None
-    assert app.result[0] == "resume"
+    assert isinstance(app.result, ResumeIntent)
 
 
 def test_o_key_takeover_refuses_current(monkeypatch):
@@ -219,7 +220,7 @@ def test_o_key_live_worker_confirms_takeover(monkeypatch):
     assert app._confirm_messages and "接回后台 agent" in app._confirm_messages[0]
     assert "终止原进程" in app._confirm_messages[0]
     app._last_confirm()  # simulate pressing y
-    assert app.result is not None and app.result[0] == "resume"
+    assert isinstance(app.result, ResumeIntent)
 
 
 def test_o_key_live_takeover_gated_when_degraded(monkeypatch):
@@ -242,7 +243,7 @@ def test_o_key_dead_worker_not_gated_when_degraded(monkeypatch):
     monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: False)
     app, view = _make_view([_make_job()])
     view.handle_key("o")
-    assert app.result is not None and app.result[0] == "resume"
+    assert isinstance(app.result, ResumeIntent)
 
 
 def test_o_key_dead_worker_takes_over_directly(monkeypatch):
@@ -251,7 +252,7 @@ def test_o_key_dead_worker_takes_over_directly(monkeypatch):
     app, view = _make_view([_make_job(host_alive=False)])
     view.handle_key("o")
     assert app._confirm_messages == []  # dead worker: no takeover, no confirm
-    assert app.result is not None and app.result[0] == "resume"
+    assert isinstance(app.result, ResumeIntent)
 
 
 def test_d_key_refuses_live_job(monkeypatch):

@@ -89,7 +89,7 @@ def _make_screen() -> urwid.raw_display.Screen:
 
 class App:
     def __init__(self) -> None:
-        self.result: tuple | None = None
+        self.result: object | None = None  # a session_ops.ExitIntent, or None
         self._exiting = False
         self._alarm_handle: object | None = None
         self._notify_alarm: object | None = None
@@ -211,27 +211,22 @@ class App:
         self._confirm_yes = None
         self.set_hints(self.views[self._active].keyhints())
 
-    def _exit(self, result: tuple | None = None) -> None:
+    def _exit(self, result: object = None) -> None:
         self._exiting = True
         if self._alarm_handle:
             self.loop.remove_alarm(self._alarm_handle)
         self.result = result
         raise urwid.ExitMainLoop()
 
-    def exit_with_resume(self, session: object, fork: bool = False) -> None:
-        self._exit(("resume", session, fork))
+    def exit_with(self, intent: object) -> None:
+        """Exit the MainLoop carrying a `session_ops.ExitIntent`.
 
-    def exit_with_attach(self, target: str) -> None:
-        """`t` on a session already living in a tmux window: enter it in place."""
-        self._exit(("attach", target))
-
-    def exit_with_tmux_resume(self, session: object) -> None:
-        """`t` on a dead / bare-terminal session: resume it inside tmux, then enter."""
-        self._exit(("tmux_resume", session))
-
-    def exit_with_tmux_new(self, directory: str) -> None:
-        """`t` on a project row: start a NEW claude session in tmux, then enter."""
-        self._exit(("tmux_new", directory))
+        Views construct the intent (they know the verb); `cli._cmd_tui` calls
+        `intent.run()` after the loop ends — resume must exec OUTSIDE urwid, so
+        the finalizer cannot run here. App stays variant-agnostic: adding a
+        resume variant touches only the intent class + the view key handler.
+        """
+        self._exit(intent)
 
     def set_hints(self, hints: str) -> None:
         """Footer = shared prefix + the active tab's keyhints (D1 single source)."""
@@ -317,7 +312,7 @@ class App:
                 view.apply_data()
         return True
 
-    def run(self) -> tuple | None:
+    def run(self) -> object | None:
         self._pipe_fd = self.loop.watch_pipe(self._on_pipe)
         self.views[self._active].load()
         self.set_hints(self.views[self._active].keyhints())

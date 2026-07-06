@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import urwid
 
 from ..actions import agent_ops
+from ..actions.session_ops import ResumeIntent
 from ..data import proc, registry
 from ..models import AgentJob
 from ._base import ListTabView
@@ -207,7 +208,7 @@ class AgentsView(ListTabView):
         # as Sessions Enter-live. A dead worker resumes directly, unconfirmed.
         confirm_takeover(
             self.app, s, "接回后台 agent",
-            lambda: self.app.exit_with_resume(s, fork=False),
+            lambda: self.app.exit_with(ResumeIntent(s)),
             name=job.name or job.short,
         )
 

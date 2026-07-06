@@ -125,7 +125,7 @@ def resume_takeover(job: AgentJob) -> Session:
 
     Bringing a bg session to the foreground is just a resume of its
     `resume_sid`, so this returns a Session the view feeds to the SAME
-    `app.exit_with_resume` → `do_resume` pipeline used for foreground sessions —
+    `app.exit_with(ResumeIntent)` → `do_resume` pipeline used for foreground sessions —
     all kill/exec/`_resume_plan` logic is reused, none duplicated (R4.4 takeover).
     `pid`/`alive` come from the host join so a live worker is killed first
     (resume = takeover); `current` is computed so the launching session stays
