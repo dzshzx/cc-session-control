@@ -56,6 +56,7 @@ from ..models import (
     BridgeEnv,
     EnvRecord,
     RCServer,
+    Reconciliation,
     SessionProc,
     split_env_id,
 )
@@ -348,6 +349,36 @@ def _compact(
 
 # --- public API ------------------------------------------------------------
 
+def reconcile(
+    session_procs: list[SessionProc] | None = None,
+    agent_jobs: list[AgentJob] | None = None,
+    rc_servers: list[RCServer] | None = None,
+    max_age: float = 5.0,
+    now: float | None = None,
+) -> Reconciliation:
+    """THE R6 pipeline, in one place: observe (file-referenced) → `upsert` →
+    observe_live → classify (`current` / `orphan = ledger − file-referenced`).
+
+    The load-bearing ordering — upsert the file-referenced set BEFORE
+    classifying, and compute orphans against the FILE-REFERENCED tier (never
+    the alive-gated one, which would report every current env as an orphan) —
+    used to be re-established by hand at each call site; here it is an
+    implementation detail. Both consumers (`build_world_snapshot` every cycle
+    and `csctl env`) call this instead of re-wiring the pieces. Sources are
+    injectable like `observe`/`observe_live` (None → self-read); `rc_servers`
+    is always passed in (this module never imports rc — DAG unchanged).
+    """
+    file_referenced = observe(session_procs, agent_jobs, rc_servers, max_age=max_age)
+    upsert(file_referenced, now=now)
+    observed = observe_live(session_procs, agent_jobs, rc_servers, max_age=max_age)
+    return Reconciliation(
+        current=current_envs(observed),
+        orphans=orphan_envs(file_referenced),
+        observed=observed,
+        file_referenced=file_referenced,
+    )
+
+
 def upsert(records: list[EnvRecord], now: float | None = None) -> None:
     """Merge observed env records into the ledger (passive store, R6/D4).
 
@@ -389,8 +420,10 @@ def current_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
     """Envs bound to something observed right now (status='current').
 
     Classifies the ledger against the observation. An observed env not yet in
-    the ledger (caller queried before `upsert`) is still reported current so the
-    result is correct regardless of call order. Sorted newest-seen first.
+    the ledger is still reported current — inside `reconcile` (which upserts
+    first) that branch only fires when `upsert` itself failed silently (e.g. a
+    read-only ledger), so a write failure never hides a bound env. Sorted
+    newest-seen first.
     """
     obs = {(r.prefix, r.key): r for r in observed if r.prefix and r.key}
     ledger = _read_ledger()

@@ -84,27 +84,22 @@ def build_world_snapshot() -> WorldSnapshot:
     all_sessions = sessions.scan()
     rc_projects = rc.scan()
     rc_servers = rc.scan_servers()
-    # R6 ledger persistence (the whole point of the ledger): record EVERY env an
-    # on-disk file references THIS cycle — session_* + cse_* + the env_* captured
-    # from rc servers — using the bridge-truthy (NOT alive-gated) set for
-    # membership. When one of these later toggles away (RC turned off / job
-    # removed / server stopped) it stays in the ledger but drops out of the
-    # file-referenced set, surfacing as an orphan / manual-delete candidate. Cheap
-    # and safe on the worker thread: the ledger is write-on-change + flock +
-    # compacted, so re-observing the same set is a no-op rewrite.
-    file_referenced_envs = environments.observe(session_procs, agent_jobs, rc_servers)
-    environments.upsert(file_referenced_envs)
-    # CURRENT must be alive-gated (R3/R6): pass the already-liveness-resolved
-    # session_procs + host-enriched agent_jobs + running servers so a zombie's
-    # stale bridge is NOT counted as a bound (current) environment.
-    observed_envs = environments.observe_live(session_procs, agent_jobs, rc_servers)
+    # R6 ledger reconciliation (the whole point of the ledger): ONE pipeline —
+    # observe (file-referenced membership) → upsert → observe_live (alive-gated
+    # CURRENT) — owned by `environments.reconcile`, so the ordering invariant
+    # never lives here. An env that later toggles away (RC turned off / job
+    # removed / server stopped) stays in the ledger but drops out of the
+    # file-referenced set, surfacing as an orphan / manual-delete candidate.
+    # Cheap and safe on the worker thread: the ledger write is write-on-change
+    # + flock + compacted, so re-observing the same set is a no-op rewrite.
+    recon = environments.reconcile(session_procs, agent_jobs, rc_servers)
     return WorldSnapshot(
         sessions=all_sessions,
         agent_jobs=agent_jobs,
         rc_projects=rc_projects,
         rc_servers=rc_servers,
-        observed_envs=observed_envs,
-        file_referenced_envs=file_referenced_envs,
+        observed_envs=recon.observed,
+        file_referenced_envs=recon.file_referenced,
         session_procs=session_procs,
         agents_map=agents_map,
         cur=cur,

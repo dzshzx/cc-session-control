@@ -206,6 +206,37 @@ def test_orphan_split_when_nothing_observed(tmp_path, monkeypatch):
     assert [(e.prefix, e.key) for e in orphans] == [("cse", "AAA")]
 
 
+# --- reconcile: the ONE observe → upsert → classify pipeline ----------------
+
+def test_reconcile_owns_the_order_invariant(tmp_path, monkeypatch):
+    # End-to-end R6: a zombie's stale bridge is file-referenced (kept in the
+    # ledger, NOT current), an alive session's bridge is current, and an env
+    # only remembered by the ledger surfaces as the orphan — all from ONE call,
+    # with the upsert happening BEFORE classification.
+    _use_tmp_ledger(tmp_path, monkeypatch)
+    # Recent enough to survive the 90d retention compaction inside reconcile.
+    env.upsert([EnvRecord("session", "GONE", "sid-old")], now=time.time() - 10)
+    procs = [
+        SessionProc(pid=1, sid="sid-live", bridge="session_LIVE", proc_alive=True),
+        SessionProc(pid=2, sid="sid-zomb", bridge="session_ZOMB", proc_alive=False),
+    ]
+
+    recon = env.reconcile(procs, [], None)
+
+    assert {(r.prefix, r.key) for r in recon.file_referenced} == {
+        ("session", "LIVE"), ("session", "ZOMB")}
+    assert {(r.prefix, r.key) for r in recon.observed} == {("session", "LIVE")}
+    # current is classified against the ALIVE-gated tier...
+    assert {(e.prefix, e.key) for e in recon.current} == {("session", "LIVE")}
+    # ...orphans against the FILE-REFERENCED tier (the zombie is NOT an orphan —
+    # its file still references the env), and the upsert ran first (the two
+    # observed envs are already ledger members, so only GONE remains).
+    assert [(e.prefix, e.key, e.status) for e in recon.orphans] == [
+        ("session", "GONE", "orphan")]
+    ledger_keys = {(r["prefix"], r["key"]) for r in _ledger_lines(tmp_path)}
+    assert ledger_keys == {("session", "GONE"), ("session", "LIVE"), ("session", "ZOMB")}
+
+
 # --- manual delete list ----------------------------------------------------
 
 def test_manual_delete_list_includes_env_namespace(tmp_path, monkeypatch):

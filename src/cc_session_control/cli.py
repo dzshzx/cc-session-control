@@ -266,25 +266,17 @@ def _cmd_env(args: argparse.Namespace) -> None:
     from .data import environments, rc
 
     # Scan RC servers so the env_* namespace is covered too (it has no state
-    # file — only a running server references it).
-    servers = rc.scan_servers()
-    # CURRENT is alive-gated (R3/R6): a zombie session's stale bridge must not be
-    # counted as bound. FILE-REFERENCED is the bridge-truthy membership set.
-    observed = environments.observe_live(rc_servers=servers, max_age=0.0)
-    file_referenced = environments.observe(rc_servers=servers, max_age=0.0)
-    # Record every file-referenced env so a later run (after RC toggled off / a job
-    # removed) reports it as an orphan = ledger − file-referenced (R6 persistence).
-    environments.upsert(file_referenced)
-    current = environments.current_envs(observed)
-    orphans = environments.orphan_envs(file_referenced)
+    # file — only a running server references it). The whole observe → upsert →
+    # classify pipeline (and its ordering invariant) lives in reconcile.
+    recon = environments.reconcile(rc_servers=rc.scan_servers(), max_age=0.0)
 
-    print(f"Current bridge environments: {len(current)}")
-    for e in current:
+    print(f"Current bridge environments: {len(recon.current)}")
+    for e in recon.current:
         print(f"  {e.env_id}  sid={e.bound_sid or '-'}")
 
-    print(f"Orphan environments (delete manually on claude.ai/code): {len(orphans)}")
-    for row in environments.manual_delete_list(file_referenced):
-        print(f"  {row['env_id']}  sid={row['bound_sid'] or '-'}")
+    print(f"Orphan environments (delete manually on claude.ai/code): {len(recon.orphans)}")
+    for e in recon.orphans:
+        print(f"  {e.env_id}  sid={e.bound_sid or '-'}")
 
     print(
         "Note: csctl cannot deregister cloud environments; "
