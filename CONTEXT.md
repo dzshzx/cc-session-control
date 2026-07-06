@@ -7,7 +7,8 @@ agents, and Remote Control environments from one local machine.
 
 **Local Global Workbench**:
 A machine-wide management surface for seeing and acting on Claude Code sessions,
-agents, and Remote Control environments across projects.
+agents, and Remote Control environments across projects. Works tmux-first: its
+primary verbs dispatch sessions into per-project tmux windows (ADR-0001).
 _Avoid_: current project view, current session view
 
 **Claude Code Session**:
@@ -24,9 +25,35 @@ runtime or lifecycle wrapper for a Claude Code session, not a separate durable
 work unit.
 _Avoid_: process, task
 
+**tmux Residency (tmux 驻留)**:
+The property of a live session whose process runs inside a tmux pane; a
+resident session survives terminal and network disconnects. The primary
+protection csctl works toward.
+_Avoid_: detached, daemonized, "in tmux" without saying resident
+
+**tmux Resume (tmux 接回)**:
+Resuming a session inside its per-project tmux window and bringing the
+operator's terminal into that window — the primary resume verb; makes the
+session tmux-resident. A session already resident is entered in place.
+_Avoid_: attach
+
+**Terminal Resume (终端接回)**:
+Resuming a session in the bare terminal by replacing the csctl process; the
+session dies with the terminal. The fallback when tmux is unavailable or
+unwanted.
+_Avoid_: unqualified "resume/接回"
+
+**Backgrounding (转后台)**:
+Moving a session into its per-project tmux window without entering it and
+without enabling Remote Control; the operator stays in csctl.
+_Avoid_: relaunch, RC relaunch (the pre-0.7 behavior that also minted a cloud
+environment)
+
 **Remote Control** (umbrella term — two distinct concepts, do not conflate):
 
-**Session Remote Control** (primary user need):
+**Session Remote Control** (secondary control surface — demoted from primary
+by ADR-0001; tmux Residency is the anti-disconnect mechanism, RC is for
+phone/web control):
 Exposing one local Claude Code session to the Claude mobile app / claude.ai/code
 so it can be driven from outside the terminal. Observable on the local machine
 when `~/.claude/sessions/<pid>.json` carries a `bridgeSessionId` in the
