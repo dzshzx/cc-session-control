@@ -202,15 +202,13 @@ def test_sessions_view_filter_mode_routes_text_to_edit():
 
 
 def test_sessions_cleanup_mode(monkeypatch):
-    import cc_session_control.views.sessions as sv_mod
-
-    monkeypatch.setattr(sv_mod, "cleanup_classified", lambda *a, **k: {
-        "empty": 10, "short": 5, "orphan_dirs": 3,
-        "zombie_procs": 2, "aged_entries": 4,
-    })
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
+    view._classified = {
+        "empty": 10, "short": 5, "orphan_dirs": 3,
+        "zombie_procs": 2, "aged_entries": 4,
+    }
     view._enter_cleanup()
     assert view._mode == "cleanup"
     # Five submenu actions now: empty/short/orphans/zombies/aged (CLI/TUI parity).
@@ -219,24 +217,23 @@ def test_sessions_cleanup_mode(monkeypatch):
     assert view._mode == "list"
 
 
-def test_sessions_short_cleanup_preview_excludes_empty_sessions(monkeypatch):
+def test_sessions_short_cleanup_preview_reads_frozen_plan(monkeypatch):
+    # The preview list comes from the frozen CleanupPlan — no re-scan on entry.
     import cc_session_control.views._sessions_cleanup as cl_mod
+    from cc_session_control.data.cleanup import CleanupPlan
 
-    sessions = [
-        _make_session(sid="empty", prompts=0),
-        _make_session(sid="short1", prompts=1),
-        _make_session(sid="short2", prompts=2),
-        _make_session(sid="long", prompts=3),
-    ]
-    monkeypatch.setattr(cl_mod, "scan", lambda: sessions)
-
+    monkeypatch.setattr(cl_mod.proc, "current_determinable", lambda: True)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
+    view._plan = CleanupPlan(short=[
+        _make_session(sid="short1", prompts=1),
+        _make_session(sid="short2", prompts=2),
+    ])
 
     view._enter_preview("short")
 
-    assert {s.sid for s in view._preview_sessions} == {"short1", "short2"}
+    assert {s.sid for s in view._preview_targets} == {"short1", "short2"}
 
 
 def _sessions_view_with(monkeypatch, session):
@@ -484,11 +481,10 @@ def test_sessions_view_fetch_pending(monkeypatch):
 
     fake = [_make_session(sid="x1")]
     monkeypatch.setattr(sv_mod, "scan", lambda: fake)
-    # The submenu counts (and the derived status-bar stats) now come from
-    # cleanup_classified; stub it so the self-fetch path does no real disk IO.
-    monkeypatch.setattr(sv_mod, "cleanup_classified", lambda *a, **k: {
-        "empty": 0, "short": 0, "orphan_dirs": 0, "zombie_procs": 0, "aged_entries": 0,
-    })
+    # The submenu counts (and the derived status-bar stats) now come from the
+    # frozen CleanupPlan; stub its builder so the self-fetch does no disk IO.
+    from cc_session_control.data.cleanup import CleanupPlan
+    monkeypatch.setattr(sv_mod, "build_plan", lambda *a, **k: CleanupPlan())
     monkeypatch.setattr(sv_mod.registry, "read_session_procs", lambda *a, **k: [])
     monkeypatch.setattr(sv_mod.registry, "read_agent_jobs", lambda *a, **k: [])
     monkeypatch.setattr(sv_mod.liveness, "alive_map", lambda *a, **k: {})
@@ -838,13 +834,13 @@ def test_sessions_view_fetch_pending_uses_snapshot(monkeypatch):
 
     monkeypatch.setattr(sv_mod, "scan", lambda: (_ for _ in ()).throw(
         AssertionError("scan() must not run when a snapshot is provided")))
-    # Classified is computed from the snapshot's own liveness inputs (no re-scan).
+    # The plan is built from the snapshot's own liveness inputs (no re-scan).
+    from cc_session_control.data.cleanup import CleanupPlan
     seen = {}
-    monkeypatch.setattr(sv_mod, "cleanup_classified",
+    plan = CleanupPlan()
+    monkeypatch.setattr(sv_mod, "build_plan",
                         lambda s, procs, cur, jobs, agents: seen.update(
-                            n=len(s), procs=procs, cur=cur) or {
-                            "empty": 0, "short": 0, "orphan_dirs": 0,
-                            "zombie_procs": 0, "aged_entries": 0})
+                            n=len(s), procs=procs, cur=cur) or plan)
 
     fake = [_make_session(sid="snap1")]
     from cc_session_control.models import SessionProc
@@ -857,8 +853,8 @@ def test_sessions_view_fetch_pending_uses_snapshot(monkeypatch):
     view.fetch_pending(snap)
     assert view._pending == fake
     # Snapshot liveness inputs were projected straight through (no second scan).
-    assert view._pending_procs == snap.session_procs
-    assert view._pending_cur == {42}
+    assert view._pending_plan is plan
+    assert seen["procs"] == snap.session_procs
     assert seen["cur"] == {42}
 
 
@@ -1105,16 +1101,13 @@ def test_cleanup_preview_refuses_when_undeterminable_not_nothing(monkeypatch):
 
 def test_cleanup_submenu_exposes_zombie_and_aged_actions(monkeypatch):
     # Fix 4: CLI/TUI parity — the submenu offers the pid-keyed zombie sweep and
-    # the age sweep, with counts from cleanup_classified.
-    import cc_session_control.views.sessions as sv_mod
-
-    monkeypatch.setattr(sv_mod, "cleanup_classified", lambda *a, **k: {
-        "empty": 1, "short": 2, "orphan_dirs": 3, "zombie_procs": 4, "aged_entries": 5,
-    })
+    # the age sweep, with counts from the plan-derived classified dict.
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
-    view._classified = sv_mod.cleanup_classified()
+    view._classified = {
+        "empty": 1, "short": 2, "orphan_dirs": 3, "zombie_procs": 4, "aged_entries": 5,
+    }
     view._enter_cleanup()
     keys = [w.action_key for w in view._cleanup_walker]
     assert keys == ["empty", "short", "orphans", "zombies", "aged"]
@@ -1123,40 +1116,39 @@ def test_cleanup_submenu_exposes_zombie_and_aged_actions(monkeypatch):
 
 
 def test_zombie_sweep_preview_and_confirm(monkeypatch):
-    # Fix 4: zombie sweep previews the dead pid files (from the shared snapshot's
-    # session_procs/cur) and confirm routes to remove_zombie_session_files.
+    # Fix 4: zombie sweep previews the frozen plan's dead pid files and confirm
+    # routes the SAME frozen targets to the revalidating executor.
     import cc_session_control.views._sessions_cleanup as cl_mod
-    from cc_session_control.models import SessionProc
+    from cc_session_control.data.cleanup import CleanupPlan
 
     monkeypatch.setattr(cl_mod.proc, "current_determinable", lambda: True)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
-    view._session_procs = [SessionProc(pid=111, sid="z", proc_alive=False)]
-    view._cur = set()
+    view._plan = CleanupPlan(zombie_pids=[111])
 
     view._enter_preview("zombies")
     assert view._mode == "preview"
-    assert view._preview_action == "zombies"
+    assert view._preview_action.key == "zombies"
 
-    swept = {"n": 0}
-    monkeypatch.setattr(cl_mod, "remove_zombie_session_files",
-                        lambda procs, cur: swept.__setitem__("n", len(procs)) or 1)
+    import dataclasses
+    swept = {}
+    view._preview_action = dataclasses.replace(
+        view._preview_action, execute=lambda pids, **k: swept.update(pids=pids) or 1)
     view._confirm_cleanup()
-    assert swept["n"] == 1
+    assert swept["pids"] == [111]  # exactly the previewed targets
     assert any("僵尸会话文件" in m for m in app._notifications)
 
 
 def test_zombie_sweep_gated_when_undeterminable(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
-    from cc_session_control.models import SessionProc
+    from cc_session_control.data.cleanup import CleanupPlan
 
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
-    view._session_procs = [SessionProc(pid=111, sid="z", proc_alive=False)]
-    view._cur = set()
+    view._plan = CleanupPlan(zombie_pids=[111])
     view._enter_preview("zombies")
     assert view._mode == "list"
     assert app._notifications[-1] == sv_mod._DEGRADED
@@ -1165,20 +1157,22 @@ def test_zombie_sweep_gated_when_undeterminable(monkeypatch):
 def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
     # Fix 4: the age sweep is mtime-only -> NOT R10-gated; works even with no /proc.
     import cc_session_control.views._sessions_cleanup as cl_mod
+    from cc_session_control.data.cleanup import CleanupPlan
 
     monkeypatch.setattr(cl_mod.proc, "current_determinable", lambda: False)
-    monkeypatch.setattr(cl_mod, "list_aged_entries", lambda *a, **k: ["shell-snapshots/old.sh"])
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
+    view._plan = CleanupPlan(aged_entries=["shell-snapshots/old.sh"])
 
     view._enter_preview("aged")
     assert view._mode == "preview"
-    assert view._preview_action == "aged"
+    assert view._preview_action.key == "aged"
 
-    swept = {"n": 0}
-    monkeypatch.setattr(cl_mod, "remove_aged_entries",
-                        lambda *a, **k: swept.__setitem__("n", 1) or 1)
+    import dataclasses
+    swept = {}
+    view._preview_action = dataclasses.replace(
+        view._preview_action, execute=lambda entries, **k: swept.update(entries=entries) or 1)
     view._confirm_cleanup()
-    assert swept["n"] == 1
+    assert swept["entries"] == ["shell-snapshots/old.sh"]
     assert any("过期项" in m for m in app._notifications)

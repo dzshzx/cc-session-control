@@ -17,7 +17,7 @@ from ..actions.session_ops import (
     to_clipboard,
 )
 from ..data import liveness, proc, registry
-from ..data.cleanup import cleanup_classified, remove_session
+from ..data.cleanup import CleanupPlan, build_plan, remove_session
 from ..data.sessions import scan
 from ..models import AgentJob, Session, SessionProc
 from ._base import ListTabView
@@ -114,15 +114,13 @@ class SessionsView(CleanupMixin, ListTabView):
         self._filter_text = ""
         self._cleanup_stats: dict[str, int] = {}
         self._classified: dict[str, int] = {}
-        self._preview_action: str | None = None
-        self._preview_sessions: list[Session] = []
+        self._preview_action = None  # the previewed _CleanupAction record
+        self._preview_targets: list = []
         self._show_hidden = True
-        # Shared-snapshot liveness inputs for the pid-keyed zombie sweep + the
-        # classified counts (R11/D8 — projected, never re-scanned per view).
-        self._session_procs: list[SessionProc] = []
-        self._cur: set[int] = set()
-        self._pending_procs: list[SessionProc] | None = None
-        self._pending_cur: set[int] | None = None
+        # The frozen cleanup plan (R11/D8 — built from the shared snapshot,
+        # never re-scanned per view): counts, preview, and confirm all read it.
+        self._plan = CleanupPlan()
+        self._pending_plan: CleanupPlan | None = None
         self._pending_classified: dict[str, int] | None = None
         self._cleanup_walker = urwid.SimpleFocusListWalker([])
 
@@ -145,9 +143,8 @@ class SessionsView(CleanupMixin, ListTabView):
         sessions = scan()
         procs, cur, jobs, agents = self._self_fetch_liveness()
         self._all_sessions = sessions
-        self._session_procs = procs
-        self._cur = cur
-        self._classified = self._classify(sessions, procs, cur, jobs, agents)
+        self._plan = self._build_plan(sessions, procs, cur, jobs, agents)
+        self._classified = self._plan.counts()
         self._cleanup_stats = self._derive_stats(sessions, self._classified)
         self._loaded = True
         self._apply_filter()
@@ -173,18 +170,18 @@ class SessionsView(CleanupMixin, ListTabView):
             agents = {}
         return procs, proc.ancestor_pids(), jobs, agents
 
-    def _classify(
+    def _build_plan(
         self,
         sessions: list[Session],
         procs: list[SessionProc],
         cur: set[int],
         jobs: list[AgentJob],
         agents: dict[str, int | None],
-    ) -> dict[str, int]:
+    ) -> CleanupPlan:
         try:
-            return cleanup_classified(sessions, procs, cur, jobs, agents)
+            return build_plan(sessions, procs, cur, jobs, agents)
         except Exception:
-            return {}
+            return CleanupPlan()
 
     def _derive_stats(self, sessions: list[Session], classified: dict[str, int]) -> dict[str, int]:
         """The legacy 4-key status-bar shape, derived from the classified counts."""
@@ -200,9 +197,8 @@ class SessionsView(CleanupMixin, ListTabView):
 
         Projects the shared `snapshot` when given (R11/D8 — no per-view re-scan);
         falls back to a self-contained scan when called with no snapshot
-        (back-compat / tests). The liveness inputs (`session_procs`/`cur` +
-        `agent_jobs`/`agents_map`) feed the pid-keyed zombie sweep and the
-        classified counts — taken straight from the snapshot, never re-scanned.
+        (back-compat / tests). The liveness inputs feed ONE frozen `CleanupPlan`
+        — counts, preview, and confirm all read it, never a re-scan.
         """
         if snapshot is not None:
             sessions = snapshot.sessions
@@ -211,12 +207,11 @@ class SessionsView(CleanupMixin, ListTabView):
         else:
             sessions = scan()
             procs, cur, jobs, agents = self._self_fetch_liveness()
-        classified = self._classify(sessions, procs, cur, jobs, agents)
+        plan = self._build_plan(sessions, procs, cur, jobs, agents)
         self.set_pending(sessions)
-        self._pending_procs = procs
-        self._pending_cur = cur
-        self._pending_classified = classified
-        self.set_pending_stats(self._derive_stats(sessions, classified))
+        self._pending_plan = plan
+        self._pending_classified = plan.counts()
+        self.set_pending_stats(self._derive_stats(sessions, plan.counts()))
 
     def set_pending(self, sessions: list[Session]) -> None:
         self._pending = sessions
@@ -228,12 +223,9 @@ class SessionsView(CleanupMixin, ListTabView):
         if self._pending is not None:
             self._all_sessions = self._pending
             self._pending = None
-            if self._pending_procs is not None:
-                self._session_procs = self._pending_procs
-                self._pending_procs = None
-            if self._pending_cur is not None:
-                self._cur = self._pending_cur
-                self._pending_cur = None
+            if self._pending_plan is not None:
+                self._plan = self._pending_plan
+                self._pending_plan = None
             if self._pending_classified is not None:
                 self._classified = self._pending_classified
                 self._pending_classified = None

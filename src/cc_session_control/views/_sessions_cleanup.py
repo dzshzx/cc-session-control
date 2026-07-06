@@ -1,45 +1,101 @@
 """Cleanup-submenu half of the Sessions tab (mixin).
 
 Split out of `views/sessions.py` to keep that file under the 600-line budget.
-Pure code move — the submenu behavior, mode names ("cleanup"/"preview"), R10
-gating, and preview-first contract are unchanged. The mixin reads/writes the
-view's own state (`_mode`, `_classified`, `_cleanup_walker`, `_body`, …), so it
+Each cleanup action is ONE `_CleanupAction` record — its counts key, R10 gate,
+plan targets, preview row/文案, and executor — so `_enter_preview` and
+`_confirm_cleanup` are table-driven (the same move `_keytable`/`_colspec` made
+for keys and columns; the old parallel elif ladders could silently disagree).
+Preview and confirm both read the view's frozen `CleanupPlan` (built with the
+shared snapshot), and the `execute_*` functions revalidate each item against
+fresh protection data — 删除 ⊆ 预览. The mixin reads/writes the view's own
+state (`_mode`, `_plan`, `_classified`, `_cleanup_walker`, `_body`, …), so it
 must be mixed into `SessionsView` only.
 """
 
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import urwid
 
 from ..data import proc
 from ..data.cleanup import (
-    list_aged_entries,
-    list_orphan_dirs,
-    prune_sessions,
-    remove_aged_entries,
-    remove_orphan_dirs,
-    remove_session,
-    remove_zombie_session_files,
-    select_zombie_pids,
+    CleanupPlan,
+    execute_aged_removals,
+    execute_orphan_removals,
+    execute_session_removals,
+    execute_zombie_removals,
 )
-from ..data.sessions import scan
+from ..models import Session
 from ._confirm import DEGRADED as _DEGRADED
 from ._rows import TextRow
 from ._session_row import _ActionRow
 
-# Submenu actions. `stat` keys index `cleanup_classified`. The age sweep
-# (Strategy B) is mtime-only/session-agnostic, so it is NOT R10-gated; every
-# other action is.
-_CLEANUP_ACTIONS = [
-    {"key": "empty",   "label": "空壳会话(0提问)",      "stat": "empty",        "gated": True},
-    {"key": "short",   "label": "短会话(≤2提问)",       "stat": "short",        "gated": True},
-    {"key": "orphans", "label": "孤儿目录(sid 键)",      "stat": "orphan_dirs",  "gated": True},
-    {"key": "zombies", "label": "僵尸会话文件(pid 键)",  "stat": "zombie_procs", "gated": True},
-    {"key": "aged",    "label": "过期全局文件(按天)",    "stat": "aged_entries", "gated": False},
-]
-_GATED_ACTIONS = {a["key"] for a in _CLEANUP_ACTIONS if a["gated"]}
+
+def _session_line(s: Session) -> str:
+    when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
+    cwd = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
+    return f"{when}  p{s.prompts}  {s.label[:60]}  ({cwd})"
+
+
+@dataclass(frozen=True)
+class _CleanupAction:
+    """One submenu action: every fact about it lives in this record."""
+    key: str
+    label: str                                   # submenu row label
+    stat: str                                    # `CleanupPlan.counts()` key
+    gated: bool                                  # R10-gated (age sweep is not)
+    targets: Callable[[CleanupPlan], list]       # frozen preview/exec list
+    format_row: Callable[[object], str]          # one preview row per target
+    execute: Callable[[list], int]               # revalidating executor
+    none_notice: str                             # "无…需要清理"
+    title_tpl: str                               # preview overlay title
+    done_tpl: str                                # post-confirm notify
+
+
+# The age sweep (Strategy B) is mtime-only/session-agnostic, so it is NOT
+# R10-gated; every other action is.
+_CLEANUP_ACTIONS: tuple[_CleanupAction, ...] = (
+    _CleanupAction(
+        key="empty", label="空壳会话(0提问)", stat="empty", gated=True,
+        targets=lambda p: p.empty, format_row=_session_line,
+        execute=execute_session_removals,
+        none_notice="无空壳会话需要清理",
+        title_tpl="将清理 {n} 条空壳会话", done_tpl="已清理 {n} 条会话",
+    ),
+    _CleanupAction(
+        key="short", label="短会话(≤2提问)", stat="short", gated=True,
+        targets=lambda p: p.short, format_row=_session_line,
+        execute=execute_session_removals,
+        none_notice="无短会话(≤2提问)需要清理",
+        title_tpl="将清理 {n} 条短会话(≤2提问)", done_tpl="已清理 {n} 条会话",
+    ),
+    _CleanupAction(
+        key="orphans", label="孤儿目录(sid 键)", stat="orphan_dirs", gated=True,
+        targets=lambda p: p.orphan_entries, format_row=str,
+        execute=execute_orphan_removals,
+        none_notice="无孤儿目录需要清理",
+        title_tpl="将清理 {n} 个孤儿目录", done_tpl="已清理 {n} 个孤儿目录",
+    ),
+    _CleanupAction(
+        key="zombies", label="僵尸会话文件(pid 键)", stat="zombie_procs", gated=True,
+        targets=lambda p: p.zombie_pids,
+        format_row=lambda pid: f"sessions/{pid}.json",
+        execute=execute_zombie_removals,
+        none_notice="无僵尸会话文件需要清理",
+        title_tpl="将清理 {n} 个僵尸会话文件", done_tpl="已清理 {n} 个僵尸会话文件",
+    ),
+    _CleanupAction(
+        key="aged", label="过期全局文件(按天)", stat="aged_entries", gated=False,
+        targets=lambda p: p.aged_entries, format_row=str,
+        execute=execute_aged_removals,
+        none_notice="无过期文件需要清理",
+        title_tpl="将清理 {n} 个过期项", done_tpl="已清理 {n} 个过期项",
+    ),
+)
+_ACTION_BY_KEY = {a.key: a for a in _CLEANUP_ACTIONS}
 
 
 class CleanupMixin:
@@ -50,8 +106,7 @@ class CleanupMixin:
         c = self._classified
         self._cleanup_walker.clear()
         for a in _CLEANUP_ACTIONS:
-            count = c.get(a["stat"], 0)
-            self._cleanup_walker.append(_ActionRow(a["key"], a["label"], count))
+            self._cleanup_walker.append(_ActionRow(a.key, a.label, c.get(a.stat, 0)))
 
     def _enter_cleanup(self) -> None:
         self._mode = "cleanup"
@@ -81,81 +136,31 @@ class CleanupMixin:
             return widget.action_key
         return None
 
-    def _open_preview(self, action: str, title: str, rows: list) -> None:
-        """Shared preview-overlay entry for a dir/file sweep (no session list)."""
-        self._mode = "preview"
-        self._preview_action = action
-        self._preview_sessions = []
-        self._show_overlay(title, rows)
-        self._update_footer()
-
-    def _enter_preview(self, action: str) -> None:
+    def _enter_preview(self, action_key: str) -> None:
         # R10/D7: session-keyed destructive sweeps need a determinable "current"
         # (without /proc every pid looks dead, so they'd nuke the live session).
         # Refuse HONESTLY — never let the refusal read as "nothing to clean".
-        if action in _GATED_ACTIONS and not proc.current_determinable():
+        action = _ACTION_BY_KEY[action_key]
+        if action.gated and not proc.current_determinable():
             self.app.notify(_DEGRADED)
             return
-
-        if action in ("empty", "short"):
-            sessions = scan()
-            if action == "empty":
-                targets = prune_sessions(sessions, max_prompts=0)
-                label = "空壳会话"
-            else:
-                targets = [s for s in prune_sessions(sessions, max_prompts=2) if s.prompts > 0]
-                label = "短会话(≤2提问)"
-            if not targets:
-                self.app.notify(f"无{label}需要清理")
-                return
-            self._mode = "preview"
-            self._preview_action = action
-            self._preview_sessions = targets
-            rows = []
-            for s in targets:
-                when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
-                cwd = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
-                line = f"{when}  p{s.prompts}  {s.label[:60]}  ({cwd})"
-                rows.append(TextRow(line))
-            self._show_overlay(f"将清理 {len(targets)} 条{label}", rows)
-            self._update_footer()
-        elif action == "orphans":
-            orphan_paths = list_orphan_dirs(scan())
-            if not orphan_paths:
-                self.app.notify("无孤儿目录需要清理")
-                return
-            rows = [TextRow(p) for p in orphan_paths]
-            self._open_preview(action, f"将清理 {len(orphan_paths)} 个孤儿目录", rows)
-        elif action == "zombies":
-            pids = select_zombie_pids(self._session_procs, self._cur)
-            if not pids:
-                self.app.notify("无僵尸会话文件需要清理")
-                return
-            rows = [TextRow(f"sessions/{pid}.json") for pid in pids]
-            self._open_preview(action, f"将清理 {len(pids)} 个僵尸会话文件", rows)
-        elif action == "aged":
-            entries = list_aged_entries()
-            if not entries:
-                self.app.notify("无过期文件需要清理")
-                return
-            rows = [TextRow(e) for e in entries]
-            self._open_preview(action, f"将清理 {len(entries)} 个过期项", rows)
+        targets = action.targets(self._plan)
+        if not targets:
+            self.app.notify(action.none_notice)
+            return
+        self._mode = "preview"
+        self._preview_action = action
+        self._preview_targets = targets
+        rows = [TextRow(action.format_row(t)) for t in targets]
+        self._show_overlay(action.title_tpl.format(n=len(targets)), rows)
+        self._update_footer()
 
     def _confirm_cleanup(self) -> None:
         action = self._preview_action
-        if action in ("empty", "short"):
-            removed = sum(1 for t in self._preview_sessions if remove_session(t))
-            self.app.notify(f"已清理 {removed} 条会话")
-        elif action == "orphans":
-            count = remove_orphan_dirs(scan())
-            self.app.notify(f"已清理 {count} 个孤儿目录")
-        elif action == "zombies":
-            count = remove_zombie_session_files(self._session_procs, self._cur)
-            self.app.notify(f"已清理 {count} 个僵尸会话文件")
-        elif action == "aged":
-            count = remove_aged_entries()
-            self.app.notify(f"已清理 {count} 个过期项")
+        if action is not None:
+            removed = action.execute(self._preview_targets)
+            self.app.notify(action.done_tpl.format(n=removed))
         self._preview_action = None
-        self._preview_sessions = []
+        self._preview_targets = []
         self._enter_cleanup()
         self.app.trigger_async_refresh()

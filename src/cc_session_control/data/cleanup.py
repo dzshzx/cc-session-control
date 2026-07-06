@@ -1,7 +1,10 @@
 """Cleanup strategies for Claude Code's on-disk state (D6/R7).
 
-Two strategies, both preview-first (a `list_*`/`*_stats` read split from the
-matching `remove_*` write, so the view can preview then confirm):
+Two strategies, both preview-first: `build_plan` freezes the candidate lists
+once per cycle (`CleanupPlan` — the ONE source for the classified counts, the
+preview overlay, and the CLI dry-run), and the matching `execute_*` write
+deletes AT MOST that frozen list, revalidating every item against fresh
+protection data at execution time (删除 ⊆ 预览 — 宁可少删):
 
 - **Strategy A — key-typed orphan sweep.** Key semantics are PER DIRECTORY,
   never a blanket `uuid == sessionId` rule:
@@ -37,6 +40,7 @@ from __future__ import annotations
 import os
 import shutil
 import time
+from dataclasses import dataclass, field
 
 from ..config import cfg
 from ..models import AgentJob, Session, SessionProc
@@ -193,30 +197,32 @@ def list_orphan_dirs(
     return sorted(set(orphans))
 
 
-def remove_orphan_dirs(
-    sessions: list[Session],
-    *,
-    session_procs: list[SessionProc] | None = None,
-    agent_jobs: list[AgentJob] | None = None,
-    agents_map: dict[str, int | None] | None = None,
-    cur: set[int] | None = None,
-) -> int:
-    """Delete orphan sid-keyed artifact entries. Refuses without `/proc`.
+def execute_orphan_removals(entries: list[str], *, known: set[str] | None = None) -> int:
+    """Delete AT MOST the previewed orphan entries (`<label>/<sid>`).
 
-    Protects registry-known / live / current sids (H1) — see `known_sids`.
+    删除 ⊆ 预览 + revalidation: only entries from the frozen preview list are
+    touched, and each sid is re-checked against a FRESH protection set (the
+    registry / liveness / current sources of `known_sids`; `known=None`
+    self-fetches them at execution time) — a sid that became known between
+    preview and confirm is skipped, never the other way around. A transcript
+    that appeared without any registry/live trace is the one gap (scanning
+    transcripts here would invert the data DAG); its artifacts also can't have
+    been in the preview, so nothing unpreviewed is ever deleted.
+    Refuses without `/proc` (R10).
     """
     if not proc.current_determinable():
         return 0
-    known = _gather_known(sessions, session_procs, agent_jobs, agents_map, cur)
+    if known is None:
+        known = _gather_known([], None, None, None, None)
+    base_by_label = dict(_sid_dir_paths())
     count = 0
-    for _label, path in _sid_dir_paths():
-        if not os.path.isdir(path):
+    for entry in entries:
+        label, _, sid = entry.partition("/")
+        base = base_by_label.get(label)
+        if not base or not sid or sid in known:
             continue
-        for name in os.listdir(path):
-            if name in known:
-                continue
-            if _remove_path(os.path.join(path, name)):
-                count += 1
+        if _remove_path(os.path.join(base, sid)):
+            count += 1
     return count
 
 
@@ -241,12 +247,29 @@ def select_zombie_pids(session_procs: list[SessionProc], cur: set[int]) -> list[
     return sorted(set(out))
 
 
-def remove_zombie_session_files(session_procs: list[SessionProc], cur: set[int]) -> int:
-    """Delete zombie `sessions/<pid>.json` files. Refuses without `/proc`."""
+def execute_zombie_removals(
+    pids: list[int],
+    *,
+    session_procs: list[SessionProc] | None = None,
+    cur: set[int] | None = None,
+) -> int:
+    """Delete AT MOST the previewed zombie `sessions/<pid>.json` files.
+
+    Each pid is re-selected against FRESH liveness (`session_procs`/`cur`
+    self-fetched when None) — a pid that came back alive (or became current)
+    between preview and confirm is skipped. Refuses without `/proc` (R10).
+    """
     if not proc.current_determinable():
         return 0
+    if session_procs is None:
+        session_procs = liveness.live_session_procs()
+    if cur is None:
+        cur = proc.ancestor_pids()
+    still_zombie = set(select_zombie_pids(session_procs, cur))
     count = 0
-    for pid in select_zombie_pids(session_procs, cur):
+    for pid in pids:
+        if pid not in still_zombie:
+            continue
         if _remove_path(os.path.join(str(cfg.sessions_dir), f"{pid}.json")):
             count += 1
     return count
@@ -274,22 +297,29 @@ def list_aged_entries(now: float | None = None) -> list[str]:
     return sorted(out)
 
 
-def remove_aged_entries(now: float | None = None) -> int:
-    """Delete age-swept entries older than `cfg.cleanup_age_days`."""
+def execute_aged_removals(entries: list[str], now: float | None = None) -> int:
+    """Delete AT MOST the previewed aged entries (`<label>/<name>`).
+
+    Each entry's mtime is re-checked against the cutoff at execution time — an
+    entry touched since the preview is skipped; entries that newly aged past
+    the cutoff are NOT added (删除 ⊆ 预览). Mtime-only, so not R10-gated.
+    """
     cutoff = _age_cutoff(time.time() if now is None else now)
+    base_by_label = dict(_age_dir_paths())
     count = 0
-    for _label, path in _age_dir_paths():
-        if not os.path.isdir(path):
+    for entry in entries:
+        label, _, name = entry.partition("/")
+        base = base_by_label.get(label)
+        if not base or not name:
             continue
-        for name in os.listdir(path):
-            full = os.path.join(path, name)
-            try:
-                if os.stat(full).st_mtime >= cutoff:
-                    continue
-            except OSError:
+        full = os.path.join(base, name)
+        try:
+            if os.stat(full).st_mtime >= cutoff:
                 continue
-            if _remove_path(full):
-                count += 1
+        except OSError:
+            continue
+        if _remove_path(full):
+            count += 1
     return count
 
 
@@ -347,6 +377,92 @@ def remove_session(s: Session) -> bool:
     return removed
 
 
+def execute_session_removals(
+    targets: list[Session],
+    *,
+    session_procs: list[SessionProc] | None = None,
+    agents_map: dict[str, int | None] | None = None,
+    cur: set[int] | None = None,
+) -> int:
+    """Delete AT MOST the previewed prunable sessions, via `remove_session`.
+
+    Each target is revalidated against FRESH liveness (self-fetched when the
+    kwargs are None): a session that came alive or became current between
+    preview and confirm is skipped (删除 ⊆ 预览, 宁可少删). Refuses without
+    `/proc` (R10).
+    """
+    if not proc.current_determinable():
+        return 0
+    if session_procs is None:
+        session_procs = liveness.live_session_procs()
+    if agents_map is None:
+        try:
+            agents_map = liveness.alive_map()
+        except Exception:
+            agents_map = {}
+    if cur is None:
+        cur = proc.ancestor_pids()
+    fresh_alive = {sp.sid for sp in session_procs if sp.proc_alive}
+    fresh_alive |= {sid for sid, pid in agents_map.items() if pid}
+    count = 0
+    for s in targets:
+        if s.sid in fresh_alive or s.current or (s.pid and s.pid in cur):
+            continue
+        if remove_session(s):
+            count += 1
+    return count
+
+
+# --- The cleanup plan (ONE source for counts, preview, and execution) -------
+
+@dataclass
+class CleanupPlan:
+    """Frozen cleanup candidates, built ONCE per snapshot cycle.
+
+    The status-bar/submenu counts, the preview overlay, and the confirmed
+    execution all read the SAME plan, so what the user sees is what (at most)
+    gets deleted — the old flow re-scanned between count, preview, and
+    confirm, and the three could silently disagree. Execution goes through the
+    `execute_*` functions, which revalidate every item against fresh
+    protection data (删除 ⊆ 预览).
+    """
+    empty: list[Session] = field(default_factory=list)
+    short: list[Session] = field(default_factory=list)
+    orphan_entries: list[str] = field(default_factory=list)
+    zombie_pids: list[int] = field(default_factory=list)
+    aged_entries: list[str] = field(default_factory=list)
+
+    def counts(self) -> dict[str, int]:
+        """The classified counts, derived from the plan itself."""
+        return {
+            "empty": len(self.empty),
+            "short": len(self.short),
+            "orphan_dirs": len(self.orphan_entries),
+            "zombie_procs": len(self.zombie_pids),
+            "aged_entries": len(self.aged_entries),
+        }
+
+
+def build_plan(
+    sessions: list[Session],
+    session_procs: list[SessionProc],
+    cur: set[int],
+    agent_jobs: list[AgentJob] | None = None,
+    agents_map: dict[str, int | None] | None = None,
+    now: float | None = None,
+) -> CleanupPlan:
+    """Build the cleanup plan from the shared world data (deps injected)."""
+    return CleanupPlan(
+        empty=prune_sessions(sessions, max_prompts=0),
+        short=[s for s in prune_sessions(sessions, max_prompts=2) if s.prompts > 0],
+        orphan_entries=list_orphan_dirs(
+            sessions, session_procs=session_procs, agent_jobs=agent_jobs,
+            agents_map=agents_map, cur=cur),
+        zombie_pids=select_zombie_pids(session_procs, cur),
+        aged_entries=list_aged_entries(now),
+    )
+
+
 # --- Classified counts -----------------------------------------------------
 
 def cleanup_stats(sessions: list[Session]) -> dict[str, int]:
@@ -371,20 +487,13 @@ def cleanup_classified(
     agents_map: dict[str, int | None] | None = None,
     now: float | None = None,
 ) -> dict[str, int]:
-    """Per-category cleanup counts (D6). Deps injected so it stays unit-testable.
+    """Per-category cleanup counts (D6) — a thin view over `build_plan`.
 
-    Breaks the cleanup surface into its categories — empty/short sessions,
-    sid-keyed orphan dirs, pid-keyed zombie session files, and age-swept global
-    entries — for the (Phase 7) workbench view to surface. The shared world data
-    (`session_procs`/`agent_jobs`/`agents_map`/`cur`) feeds the H1 protected-sid
-    set so the orphan count never includes live/registry-known sids.
+    Deriving the counts FROM the plan keeps them equal to what a preview would
+    show: `empty`/`short` count *prunable* sessions (not alive/current/recent),
+    matching the preview list instead of the raw prompt tally.
     """
-    return {
-        "empty": sum(1 for s in sessions if s.prompts == 0),
-        "short": sum(1 for s in sessions if 0 < s.prompts <= 2),
-        "orphan_dirs": len(list_orphan_dirs(
-            sessions, session_procs=session_procs, agent_jobs=agent_jobs,
-            agents_map=agents_map, cur=cur)),
-        "zombie_procs": len(select_zombie_pids(session_procs, cur)),
-        "aged_entries": len(list_aged_entries(now)),
-    }
+    return build_plan(
+        sessions, session_procs, cur,
+        agent_jobs=agent_jobs, agents_map=agents_map, now=now,
+    ).counts()

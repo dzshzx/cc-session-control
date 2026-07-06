@@ -138,10 +138,10 @@ def _cmd_rc(args: argparse.Namespace) -> None:
 def _cmd_prune(args: argparse.Namespace) -> None:
     from .data.cleanup import (
         cleanup_stats,
+        execute_orphan_removals,
+        execute_session_removals,
         list_orphan_dirs,
         prune_sessions,
-        remove_orphan_dirs,
-        remove_session,
     )
     from .data.sessions import scan
 
@@ -155,7 +155,9 @@ def _cmd_prune(args: argparse.Namespace) -> None:
         if not args.apply:
             print("Dry run. Add --apply to execute.")
             return
-        count = remove_orphan_dirs(sessions)
+        # Deletes AT MOST the listed entries, revalidated against fresh
+        # protection data (删除 ⊆ 预览 — same executor as the TUI).
+        count = execute_orphan_removals(orphans)
         print(f"Swept {count} orphan dir(s).")
         return
 
@@ -174,9 +176,8 @@ def _cmd_prune(args: argparse.Namespace) -> None:
         print("Dry run. Add --apply to execute.")
         return
 
-    for s in targets:
-        remove_session(s)
-    print(f"Pruned {len(targets)} session(s).")
+    count = execute_session_removals(targets)
+    print(f"Pruned {count} session(s).")
 
 
 def _cmd_prune_zombies(args: argparse.Namespace) -> None:
@@ -184,12 +185,12 @@ def _cmd_prune_zombies(args: argparse.Namespace) -> None:
 
     Reuses the already-gated `data/cleanup` helpers: `select_zombie_pids` keeps
     the current session's pid and any alive pid of a resumed multi-pid sid, and
-    `remove_zombie_session_files` refuses without `/proc`. The dry-run preview is
+    `execute_zombie_removals` refuses without `/proc`. The dry-run preview is
     gated here too — off `/proc` every pid looks dead, so `current` can't be
     determined and we must not even claim the files are sweepable (R10).
     """
     from .data import liveness, proc
-    from .data.cleanup import remove_zombie_session_files, select_zombie_pids
+    from .data.cleanup import execute_zombie_removals, select_zombie_pids
 
     if not proc.current_determinable():
         print("Refused: '/proc' unavailable — cannot determine the current session (R10).")
@@ -201,25 +202,25 @@ def _cmd_prune_zombies(args: argparse.Namespace) -> None:
     if not args.apply:
         print("Dry run. Add --apply to execute.")
         return
-    count = remove_zombie_session_files(procs, cur)
+    count = execute_zombie_removals(zombies, session_procs=procs, cur=cur)
     print(f"Swept {count} zombie session file(s).")
 
 
 def _cmd_prune_aged(args: argparse.Namespace) -> None:
     """Strategy B age sweep of time/global-keyed dirs (R7.2) via the CLI.
 
-    `remove_aged_entries` is mtime-only and session-agnostic, so (unlike the
-    zombie sweep) it is not gated on `/proc`.
+    The age sweep is mtime-only and session-agnostic, so (unlike the zombie
+    sweep) it is not gated on `/proc`.
     """
     from .config import cfg
-    from .data.cleanup import list_aged_entries, remove_aged_entries
+    from .data.cleanup import execute_aged_removals, list_aged_entries
 
     aged = list_aged_entries()
     print(f"Would sweep {len(aged)} aged entr(y/ies) older than {cfg.cleanup_age_days}d")
     if not args.apply:
         print("Dry run. Add --apply to execute.")
         return
-    count = remove_aged_entries()
+    count = execute_aged_removals(aged)
     print(f"Swept {count} aged entr(y/ies).")
 
 

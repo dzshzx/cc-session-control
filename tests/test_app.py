@@ -138,8 +138,8 @@ def test_full_cycle_drives_real_views(monkeypatch):
 
     monkeypatch.setattr(app_mod, "build_world_snapshot", lambda: snap)
     # Keep the views' projection IO-free / deterministic.
-    monkeypatch.setattr(sv_mod, "cleanup_classified", lambda *a, **k: {
-        "empty": 0, "short": 0, "orphan_dirs": 0, "zombie_procs": 0, "aged_entries": 0})
+    from cc_session_control.data.cleanup import CleanupPlan
+    monkeypatch.setattr(sv_mod, "build_plan", lambda *a, **k: CleanupPlan())
 
     app = App()
     app._run_fetch_cycle()
