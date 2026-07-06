@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.6.4 (2026-07-06)
+
+Architecture-review refactor batch (8 deepening candidates, adversarially
+reviewed before landing) + a two-axis code review with its fixes. No intended
+behavior change except the deliberate items listed at the end.
+
+- **Sessions filter mode owns its keys (bug fix).** The filter Edit now lives
+  in the view's own frame footer, and `App._input` asks `captures_text()`
+  before consuming global keys. Fixes two real defects: typing a keyword
+  containing `q` quit csctl outright, and a notify restore-alarm left over
+  from ≤3s before entering the filter evicted the (still key-eating) Edit.
+  `deactivate()`/`own_footer()`/`release_footer()` are gone from the TabView
+  Protocol and the App façade.
+- **One plain-stop confirm policy.** `views/_confirm.py::confirm_stop` is the
+  symmetric twin of `confirm_takeover`; the three views' hand-written stop
+  triads collapse to one call each (`gated=False` expresses the RC tab's
+  tmux-window stop, which never needed the R10 gate).
+- **One kill primitive.** `session_ops.take_over(pid, proc_start)` owns
+  R10 gate → kill-time `pid_alive` recheck (closes the pid-reuse window while
+  a confirm modal sits open; `Session`/`resume_takeover` now carry
+  `proc_start`) → SIGTERM → settle → cache invalidation, returning
+  `killed/gone/refused/failed`. The five hand-copied (and already diverging)
+  kill sequences consume it; `relaunch_in_tmux`/`do_tmux_resume` fold into one
+  `_spawn_in_tmux` skeleton.
+- **Cleanup runs off ONE frozen plan.** `cleanup.build_plan` →
+  `CleanupPlan`: the status-bar counts, the preview overlay, and the CLI
+  dry-run all read the same candidates, and the new `execute_*` functions
+  delete AT MOST that list, revalidating each item against fresh protection
+  data (删除 ⊆ 预览 — including the transcript tier, fed by a fresh scan from
+  the caller). Each TUI submenu action is one table-driven `_CleanupAction`
+  record; the old `remove_orphan_dirs`/`remove_zombie_session_files`/
+  `remove_aged_entries` are gone.
+- **One agent host-enrich loop.** `liveness.enrich_jobs(jobs, session_procs)`
+  replaces the three copies (snapshot / agents view / `csctl agents`); the
+  per-job full-registry `/proc` re-injection is gone.
+- **`proc_alive` is a tri-state sentinel.** Raw registry rows carry `None`
+  (= not injected); `select_zombie_pids` and `host_pid_for_sid` refuse it, so
+  misusing raw rows fails safe (deletes nothing) instead of classifying every
+  session file as a zombie.
+- **One degraded-fetch assembly.** `snapshot.liveness_inputs()` feeds both
+  `build_world_snapshot` and the Sessions view's `fetch_pending(None)`
+  self-fetch (the documented "mirrors the snapshot" copy is gone).
+- **One ledger pipeline.** `environments.reconcile(...)` →
+  `models.Reconciliation` owns the R6 order (observe → upsert → observe_live →
+  classify, orphans against the FILE-REFERENCED tier); snapshot and
+  `csctl env` both consume it. `manual_delete_list` (dead product code after
+  the switch) is removed — `csctl env` prints the same checklist from
+  `recon.orphans`.
+
+Deliberate visible changes: Tab is captured (inert) while the filter Edit is
+open — Enter/Esc first; the footer shows only the filter hints while typing
+(the Tab/q/r prefix promises would be false); the RC not-running notice reads
+"远控服务未在运行" (was bare "未在运行"); the 空壳/短 counts in the status bar
+and cleanup submenu now mean "prunable now" (excluding alive/current/recent),
+matching the preview exactly; `csctl prune --apply` prints the revalidated
+removed count; an already-gone/recycled pid is no longer SIGTERMed and skips
+the 1s settle on every path.
+
 ## 0.6.3 (2026-07-06)
 
 Post-review cleanup batch on top of 0.6.2's refactor series; no behavior
