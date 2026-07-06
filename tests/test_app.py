@@ -46,6 +46,9 @@ class _RecorderView:
     def handle_key(self, key):
         pass
 
+    def deactivate(self):
+        pass
+
 
 def _app_with_recorders(n=3):
     app = App()
@@ -183,6 +186,52 @@ def test_confirm_swallows_other_keys():
     app._input("tab")                          # tab must NOT switch while modal up
     assert app._active == before
     assert app._confirm_yes is not None        # still modal
+
+
+def test_confirm_modal_fits_long_message_on_narrow_terminal(monkeypatch):
+    # The old fixed 50%×7 overlay clipped the message tail and the n/Esc line
+    # on narrow terminals; the modal now sizes to its wrapped content.
+    app, _views = _app_with_recorders()
+    monkeypatch.setattr(app._screen, "get_cols_rows", lambda: (40, 24))
+    msg = "接回会话「" + "长" * 30 + "」？将先终止原进程。"
+    app.confirm(msg, lambda: None)
+    canvas = app.body.original_widget.render((40, 24), focus=False)
+    blob = b"\n".join(canvas.text).decode()
+    assert "取消" in blob   # the control line is visible (was clipped at 7 rows)
+    assert "确认" in blob
+
+
+# --- Notifications: the newest message owns the footer ---
+
+def test_second_notify_cancels_first_restore_alarm():
+    # Without cancelling, the FIRST notification's timer fires and clears the
+    # SECOND message early.
+    app, _views = _app_with_recorders()
+    removed = []
+    app.loop.remove_alarm = lambda handle: removed.append(handle)
+    app.notify("first")
+    first_handle = app._notify_alarm
+    app.notify("second")
+    assert removed == [first_handle]
+    blob = b"\n".join(app.frame.footer.render((80,)).text).decode()
+    assert "second" in blob
+
+
+# --- Tab switch closes transient footer modes (filter-mode leak) ---
+
+def test_switch_tab_closes_sessions_filter_mode(monkeypatch):
+    app = App()
+    app.trigger_async_refresh = lambda: None  # keep the test IO-free
+    sessions_view = app.views[0]
+    app._input("/")                 # enter filter mode
+    app._input("x")                 # type into the (footer) filter edit
+    assert sessions_view._mode == "filter"
+
+    app._input("tab")               # switch away — the filter commits + closes
+
+    assert sessions_view._mode == "list"
+    assert sessions_view._filter_text == "x"
+    assert app.frame.footer is app.footer  # the hidden Edit left the footer
 
 
 # --- Fix 2b: degraded-mode header banner (D7/R10) ---

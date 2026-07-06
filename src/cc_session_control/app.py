@@ -41,6 +41,7 @@ class TabView(Protocol):
     def apply_data(self) -> None: ...
     def keyhints(self) -> str: ...
     def handle_key(self, key: str) -> None: ...
+    def deactivate(self) -> None: ...  # tab switch-away: close transient FOOTER modes
 
 # 6-tuple: (name, fg_16, bg_16, mono, fg_256, bg_256)
 # ONE semantic set — views reference these names only (no per-tab duplicates;
@@ -90,6 +91,7 @@ class App:
         self.result: tuple | None = None
         self._exiting = False
         self._alarm_handle: object | None = None
+        self._notify_alarm: object | None = None
         self._pipe_fd: int | None = None
         self._refreshing = False
         # When set, a confirm modal is up: `_input` routes Enter/y/n/esc here and
@@ -140,6 +142,10 @@ class App:
         self.header.contents[1] = (tab_bar, self.header.options())
 
     def _switch_tab(self) -> None:
+        # Close the outgoing tab's transient footer modes (e.g. the Sessions
+        # filter Edit) — they turn invisible once the next tab's hints replace
+        # the footer, but would keep eating keys after switching back.
+        self.views[self._active].deactivate()
         self._active = (self._active + 1) % len(self.views)
         self.body.original_widget = self.views[self._active].widget
         self._update_tab_bar()
@@ -181,10 +187,19 @@ class App:
         self._confirm_base = self.body.original_widget
         text = urwid.Text(f"  {message}\n\n  Enter / y 确认    n / Esc 取消")
         box = urwid.AttrMap(urwid.LineBox(urwid.Filler(text)), "notify")
+        # Size to the content: the old fixed 50%×7 clipped long labels and the
+        # n/Esc line on narrow terminals. Width floors at 46 cells (capped to
+        # the screen); height = wrapped text rows + the LineBox border.
+        try:
+            cols, rows = self._screen.get_cols_rows()
+        except Exception:
+            cols, rows = 80, 24
+        width = min(max(cols // 2, 46), cols)
+        height = min(text.rows((max(width - 2, 1),)) + 2, max(rows - 2, 3))
         self.body.original_widget = urwid.Overlay(
             box, self._confirm_base,
-            align="center", width=("relative", 50),
-            valign="middle", height=7,
+            align="center", width=width,
+            valign="middle", height=height,
         )
         self.footer_text.set_text(" Enter/y 确认 · n/Esc 取消")
 
@@ -222,10 +237,15 @@ class App:
         self.footer_text.set_text(FOOTER_PREFIX + hints)
 
     def notify(self, msg: str, seconds: float = 3) -> None:
+        # The newest notification owns the footer: cancel the previous restore
+        # alarm so an older timer can't clear this message early.
+        if self._notify_alarm is not None:
+            self.loop.remove_alarm(self._notify_alarm)
         self.frame.footer = urwid.AttrMap(urwid.Text(f" {msg}"), "notify")
-        self.loop.set_alarm_in(seconds, lambda *_: self._restore_footer())
+        self._notify_alarm = self.loop.set_alarm_in(seconds, lambda *_: self._restore_footer())
 
     def _restore_footer(self) -> None:
+        self._notify_alarm = None
         self.frame.footer = self.footer
 
     def _run_fetch_cycle(self) -> None:
@@ -244,6 +264,12 @@ class App:
             snapshot = None
         for v in self.views:
             v.fetch_pending(snapshot)
+
+    def refresh_with_notice(self) -> None:
+        """Refresh + the standard footer notice — the single body of the
+        footer-prefix promise `r 刷新` (list AND modal modes, every tab)."""
+        self.trigger_async_refresh()
+        self.notify("刷新中…")
 
     def trigger_async_refresh(self) -> None:
         if self._refreshing or self._exiting:

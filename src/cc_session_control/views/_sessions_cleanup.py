@@ -25,7 +25,8 @@ from ..data.cleanup import (
     select_zombie_pids,
 )
 from ..data.sessions import scan
-from ._session_row import _ActionRow, _PreviewRow
+from ._rows import TextRow
+from ._session_row import _ActionRow
 
 # R10/D7: refusal shown when the "current" session can't be determined (no /proc)
 # — session-keyed destructive ops are disabled rather than silently doing nothing.
@@ -118,7 +119,7 @@ class CleanupMixin:
                 when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
                 cwd = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
                 line = f"{when}  p{s.prompts}  {s.label[:60]}  ({cwd})"
-                rows.append(_PreviewRow(line))
+                rows.append(TextRow(line))
             self._show_overlay(f"将清理 {len(targets)} 条{label}", rows)
             self._update_footer()
         elif action == "orphans":
@@ -126,21 +127,21 @@ class CleanupMixin:
             if not orphan_paths:
                 self.app.notify("无孤儿目录需要清理")
                 return
-            rows = [_PreviewRow(p) for p in orphan_paths]
+            rows = [TextRow(p) for p in orphan_paths]
             self._open_preview(action, f"将清理 {len(orphan_paths)} 个孤儿目录", rows)
         elif action == "zombies":
             pids = select_zombie_pids(self._session_procs, self._cur)
             if not pids:
                 self.app.notify("无僵尸会话文件需要清理")
                 return
-            rows = [_PreviewRow(f"sessions/{pid}.json") for pid in pids]
+            rows = [TextRow(f"sessions/{pid}.json") for pid in pids]
             self._open_preview(action, f"将清理 {len(pids)} 个僵尸会话文件", rows)
         elif action == "aged":
             entries = list_aged_entries()
             if not entries:
                 self.app.notify("无过期文件需要清理")
                 return
-            rows = [_PreviewRow(e) for e in entries]
+            rows = [TextRow(e) for e in entries]
             self._open_preview(action, f"将清理 {len(entries)} 个过期项", rows)
 
     def _confirm_cleanup(self) -> None:

@@ -80,6 +80,7 @@ The invariant is **import direction, not purity**: `views` import from `data`/`a
 - `apply_data()` — **runs on the main loop**; swaps `_pending` into the live walker
 - `keyhints() -> str` — footer hint string for the current mode
 - `handle_key(key)` — handles every key except `Tab` and `q`
+- `deactivate()` — called by `_switch_tab` on the outgoing view; closes transient **footer** modes (e.g. the Sessions filter Edit, which turns invisible once the next tab's hints replace the footer but would keep eating keys). Body-widget modes (help/watch overlays) stay — they remain visibly modal.
 
 `App._input` handles only `tab` (switch) and `q` (quit); everything else is forwarded to the active view's `handle_key`. Adding a tab means updating `self.views` **and** `TAB_NAMES` **and** the `_switch_tab` cycle together (they index in lockstep).
 

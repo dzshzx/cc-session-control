@@ -48,6 +48,10 @@ class FakeApp:
     def trigger_async_refresh(self):
         pass
 
+    def refresh_with_notice(self):
+        self.trigger_async_refresh()
+        self.notify("刷新中…")
+
     def set_hints(self, hints):
         self.footer_text.set_text(hints)
 
@@ -283,6 +287,68 @@ def test_t_key_dead_session_no_confirm(monkeypatch):
     view.handle_key("t")
     assert app.result == ("tmux_resume", s)
     assert app._confirm_messages == []
+
+
+def test_truncate_cells_by_display_width():
+    from urwid import calc_width
+
+    from cc_session_control.views._rows import truncate_cells
+
+    assert truncate_cells("short", 30) == "short"
+    label = "很长的会话标题" * 6           # 42 chars = 84 cells
+    out = truncate_cells(label, 30)
+    assert out.endswith("…")
+    assert calc_width(out, 0, len(out)) <= 30
+
+
+def test_confirm_message_truncates_cjk_label_by_cells(monkeypatch):
+    # A 40-CJK-char label is 80 cells — the old [:30] slice kept 60 cells of it.
+    s = _make_session(sid="sid1", alive=True, current=False, pid=4242,
+                      label="标" * 40)
+    app, view = _sessions_view_with(monkeypatch, s)
+    view.handle_key("enter")
+    msg = app._confirm_messages[-1]
+    assert "标" * 14 + "…" in msg           # 28 cells + ellipsis = 29 ≤ 30
+    assert "标" * 15 not in msg
+
+
+def test_sessions_help_mode_r_refreshes_and_stays():
+    # The footer prefix promises `r 刷新` everywhere — in help mode r must
+    # refresh, not close the overlay ("其余任意键返回" excludes it).
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._show_help()
+    assert view._mode == "help"
+    view.handle_key("r")
+    assert view._mode == "help"
+    assert any("刷新" in m for m in app._notifications)
+    view.handle_key("x")
+    assert view._mode == "list"
+
+
+def test_enter_key_live_takeover_gated_when_degraded(monkeypatch):
+    # R10: like `t`/`R`, a live Enter-takeover must be refused in-TUI when
+    # /proc is unavailable — not confirmed and then refused by do_resume after
+    # csctl has already exited.
+    import cc_session_control.views.sessions as sv_mod
+    s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
+    app, view = _sessions_view_with(monkeypatch, s)
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    view.handle_key("enter")
+    assert app.result is None
+    assert app._confirm_messages == []          # refused before any confirm
+    assert app._notifications[-1] == sv_mod._DEGRADED
+
+
+def test_enter_key_dead_session_not_gated_when_degraded(monkeypatch):
+    # Resuming a DEAD session kills nothing — still allowed off /proc (B3).
+    import cc_session_control.views.sessions as sv_mod
+    s = _make_session(sid="sid1", alive=False, pid=None)
+    app, view = _sessions_view_with(monkeypatch, s)
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    view.handle_key("enter")
+    assert app.result == ("resume", s, False)
 
 
 def test_t_key_takeover_gated_when_degraded(monkeypatch):
@@ -881,9 +947,33 @@ def test_rc_view_help_points_ledger_queries_at_cli():
     view = RCView(app)
     app.views = [view]
     view._show_help()
-    blob = "\n".join(_row_text(view.walker[i]) for i in range(len(view.walker)))
+    canvas = view._body.original_widget.render((100, 40), focus=False)
+    blob = b"\n".join(canvas.text).decode()
     assert "无法注销" in blob
     assert "csctl env" in blob
+
+
+def test_rc_view_help_is_overlay_and_keeps_list(monkeypatch):
+    # Help is an Overlay over the intact project list (like Sessions/Agents) —
+    # the old walker-replacing rows were unscrollable on short terminals.
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [_make_project(name="p1")]
+    view.apply_data()
+    rows_before = len(view.walker)
+
+    view._show_help()
+    assert isinstance(view._body.original_widget, urwid.Overlay)
+    assert len(view.walker) == rows_before      # list untouched underneath
+
+    view.handle_key("r")                        # r refreshes, stays in help
+    assert view._help is True
+    assert isinstance(view._body.original_widget, urwid.Overlay)
+
+    view.handle_key("x")                        # any non-global key returns
+    assert view._body.original_widget is view._list_body
+    assert view._help is False
 
 
 def test_rc_view_c_key_full_tristate_cycle(monkeypatch):

@@ -2,8 +2,8 @@
 
 Split out of `views/sessions.py` so that file stays under the 600-line budget.
 Holds the selectable `SessionRow` (with the D9 source badge + the 📱 remote-
-control-exposure marker), the cleanup-submenu rows (`_ActionRow`, `_PreviewRow`),
-and the column spec. Rows never handle keys — `keypress` returns the key so the
+control-exposure marker), the cleanup-submenu `_ActionRow`, and the column spec
+(read-only overlay text rows live in `_rows.TextRow`). Rows never handle keys — `keypress` returns the key so the
 view's single dispatcher sees it (see frontend/widget-patterns.md).
 """
 
@@ -142,18 +142,6 @@ class _ActionRow(urwid.WidgetWrap):
             (8, urwid.Text(str(count), align="right")),
         ], dividechars=2)
         mapped = urwid.AttrMap(cols, "dead", focus_map={"dead": "selected", None: "selected"})
-        super().__init__(mapped)
-
-    def selectable(self) -> bool:
-        return True
-
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
-
-
-class _PreviewRow(urwid.WidgetWrap):
-    def __init__(self, text: str) -> None:
-        mapped = urwid.AttrMap(urwid.Text(text), "dead", focus_map={"dead": "selected", None: "selected"})
         super().__init__(mapped)
 
     def selectable(self) -> bool:

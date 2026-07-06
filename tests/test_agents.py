@@ -36,6 +36,10 @@ class FakeApp:
     def trigger_async_refresh(self):
         pass
 
+    def refresh_with_notice(self):
+        self.trigger_async_refresh()
+        self.notify("刷新中…")
+
     def set_hints(self, hints):
         self.footer_text.set_text(hints)
 
@@ -209,6 +213,29 @@ def test_o_key_live_worker_confirms_takeover(monkeypatch):
     assert app.result is not None and app.result[0] == "resume"
 
 
+def test_o_key_live_takeover_gated_when_degraded(monkeypatch):
+    # R10: off /proc a live takeover can't safely kill the old pid — the view
+    # must refuse BEFORE the confirm (not exit the TUI into do_resume's refusal).
+    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
+                        lambda job: _takeover_session(current=False, alive=True))
+    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: False)
+    app, view = _make_view([_make_job(host_alive=True)])
+    view.handle_key("o")
+    assert app.result is None
+    assert app._confirm_messages == []          # refused before any confirm
+    assert app._notifications[-1] == av_mod._DEGRADED
+
+
+def test_o_key_dead_worker_not_gated_when_degraded(monkeypatch):
+    # A dead worker kills nothing — it stays resumable in degraded mode (B3).
+    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
+                        lambda job: _takeover_session(current=False, alive=False))
+    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: False)
+    app, view = _make_view([_make_job()])
+    view.handle_key("o")
+    assert app.result is not None and app.result[0] == "resume"
+
+
 def test_o_key_dead_worker_takes_over_directly(monkeypatch):
     monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
                         lambda job: _takeover_session(current=False, alive=False))
@@ -263,6 +290,10 @@ def test_help_mode_and_return():
     app, view = _make_view([_make_job()])
     view.handle_key("?")
     assert view._mode == "help"
-    assert view.keyhints() == "按任意键返回"
-    view.handle_key("x")  # any key returns
+    # "其余" is honest: the footer prefix's Tab/q stay global and do NOT return.
+    assert view.keyhints() == "其余任意键返回"
+    view.handle_key("r")  # r keeps its prefix meaning: refresh, stay in help
+    assert view._mode == "help"
+    assert any("刷新" in m for m in app._notifications)
+    view.handle_key("x")  # any other key returns
     assert view._mode == "list"

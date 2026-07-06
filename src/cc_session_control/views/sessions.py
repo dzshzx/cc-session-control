@@ -19,11 +19,11 @@ from ..data import liveness, proc, registry
 from ..data.cleanup import cleanup_classified, remove_session
 from ..data.sessions import scan
 from ..models import AgentJob, Session, SessionProc
+from ._rows import CONFIRM_NAME_CELLS, TextRow, truncate_cells
 from ._session_row import (
     _SESSION_HEADER,
     SessionRow,
     _hidden_marker,
-    _PreviewRow,
 )
 from ._sessions_cleanup import _DEGRADED, CleanupMixin
 
@@ -67,7 +67,9 @@ class SessionsView(CleanupMixin):
 
     def keyhints(self) -> str:
         if self._mode == "help":
-            return "按任意键返回"
+            # "其余" is honest: the prefix's Tab/q stay global (Tab switches
+            # tabs, q QUITS — neither returns to the list).
+            return "其余任意键返回"
         if self._mode == "cleanup":
             return "Enter 预览待清理项 · Esc 返回会话列表"
         if self._mode == "preview":
@@ -261,6 +263,14 @@ class SessionsView(CleanupMixin):
         self._filter_edit = urwid.Edit("过滤: ")
         self.app.frame.footer = urwid.AttrMap(self._filter_edit, "notify")
 
+    def deactivate(self) -> None:
+        """TabView hook: called on tab switch-away. Commits + closes a transient
+        filter — its Edit lives in the App footer and turns invisible once the
+        next tab's hints replace it; without this, keys after switching back
+        would still edit the hidden filter (mode leak)."""
+        if self._mode == "filter":
+            self._exit_filter()
+
     def _exit_filter(self, cancel: bool = False) -> None:
         self._mode = "list"
         if cancel:
@@ -304,9 +314,15 @@ class SessionsView(CleanupMixin):
         Reads `would_take_over` (= should_kill, the single source) so the confirm
         gate never re-derives the takeover condition (CLAUDE.md invariant).
         """
+        # Degrade gate FIRST (R10), same as `t`/`R`: off /proc a live takeover
+        # can't safely kill the old pid — refuse here instead of confirming,
+        # exiting the TUI, and only then having do_resume print its refusal.
+        if would_take_over(s, fork) and not proc.current_determinable():
+            self.app.notify(_DEGRADED)
+            return
         if would_take_over(s, fork):
             self.app.confirm(
-                f"接回会话「{s.label[:30]}」？将先终止原进程。",
+                f"接回会话「{truncate_cells(s.label, CONFIRM_NAME_CELLS)}」？将先终止原进程。",
                 lambda: self.app.exit_with_resume(s, fork),
             )
         else:
@@ -328,7 +344,7 @@ class SessionsView(CleanupMixin):
             return
         if would_take_over(s):
             self.app.confirm(
-                f"tmux 接回「{s.label[:30]}」？将先终止原进程。",
+                f"tmux 接回「{truncate_cells(s.label, CONFIRM_NAME_CELLS)}」？将先终止原进程。",
                 lambda: self.app.exit_with_tmux_resume(s),
             )
         else:
@@ -338,6 +354,12 @@ class SessionsView(CleanupMixin):
 
     def handle_key(self, key: str) -> None:
         if self._mode == "help":
+            # `r` keeps its footer-prefix meaning (刷新) even here, so the
+            # "其余任意键返回" hint stays exact: Tab/q/r do what the prefix says,
+            # every OTHER key returns.
+            if key == "r":
+                self.app.refresh_with_notice()
+                return
             self._mode = "list"
             self._body.original_widget = self._list_body
             self._update_footer()
@@ -357,6 +379,10 @@ class SessionsView(CleanupMixin):
                 self._confirm_cleanup()
             elif key == "esc":
                 self._enter_cleanup()
+            elif key == "r":
+                # Footer prefix promises `r 刷新` on every tab/mode — honor it
+                # (the preview list itself stays as computed at entry).
+                self.app.refresh_with_notice()
             return
 
         if self._mode == "cleanup":
@@ -367,8 +393,7 @@ class SessionsView(CleanupMixin):
             elif key == "esc":
                 self._exit_cleanup()
             elif key == "r":
-                self.app.trigger_async_refresh()
-                self.app.notify("刷新中…")
+                self.app.refresh_with_notice()
             return
 
         # Normal list mode
@@ -402,7 +427,7 @@ class SessionsView(CleanupMixin):
                 self.app.notify("不能停止当前会话")
                 return
             self.app.confirm(
-                f"停止会话「{s.label[:30]}」？将终止其进程。",
+                f"停止会话「{truncate_cells(s.label, CONFIRM_NAME_CELLS)}」？将终止其进程。",
                 lambda: self._do_terminate(s),
             )
         elif key == "R" and s:
@@ -417,7 +442,7 @@ class SessionsView(CleanupMixin):
                 return
             if would_take_over(s):
                 self.app.confirm(
-                    f"转入后台「{s.label[:30]}」？将先终止原进程。",
+                    f"转入后台「{truncate_cells(s.label, CONFIRM_NAME_CELLS)}」？将先终止原进程。",
                     lambda: self._do_relaunch(s),
                 )
             else:
@@ -448,8 +473,7 @@ class SessionsView(CleanupMixin):
             self._rebuild()
             self._update_footer()
         elif key == "r":
-            self.app.trigger_async_refresh()
-            self.app.notify("刷新中…")
+            self.app.refresh_with_notice()
         elif key == "/":
             self._enter_filter()
         elif key == "?":
@@ -482,7 +506,7 @@ class SessionsView(CleanupMixin):
             "  Tab    切换标签页",
             "  q      退出",
         ]
-        rows = [_PreviewRow(line) for line in lines]
+        rows = [TextRow(line) for line in lines]
         self._mode = "help"
         self._show_overlay("快捷键帮助", rows)
         self._update_footer()

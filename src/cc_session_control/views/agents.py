@@ -20,6 +20,7 @@ from ..actions.session_ops import would_take_over
 from ..data import proc, registry
 from ..models import AgentJob
 from ._colspec import header_columns, row_columns
+from ._rows import CONFIRM_NAME_CELLS, TextRow, truncate_cells
 
 if TYPE_CHECKING:
     from ..data.snapshot import WorldSnapshot
@@ -71,20 +72,6 @@ class AgentRow(urwid.WidgetWrap):
         return key
 
 
-class _TextRow(urwid.WidgetWrap):
-    """Read-only line used in the watch overlay."""
-
-    def __init__(self, text: str) -> None:
-        mapped = urwid.AttrMap(urwid.Text(text), "dead", focus_map={"dead": "selected", None: "selected"})
-        super().__init__(mapped)
-
-    def selectable(self) -> bool:
-        return True
-
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
-
-
 class AgentsView:
     # mode: "list" | "help" | "watch"
     def __init__(self, app: App) -> None:
@@ -106,8 +93,14 @@ class AgentsView:
 
     def keyhints(self) -> str:
         if self._mode in ("help", "watch"):
-            return "按任意键返回"
+            # "其余" is honest: the prefix's Tab/q stay global (Tab switches
+            # tabs, q QUITS — neither returns to the list).
+            return "其余任意键返回"
         return f"{agent_ops.KEYHINTS} · ? 详细说明"
+
+    def deactivate(self) -> None:
+        """TabView hook: called on tab switch-away. No transient footer modes
+        here — help/watch live in the body widget and stay visibly modal."""
 
     def _enrich(self, jobs: list[AgentJob]) -> list[AgentJob]:
         """Fill host liveness for the self-fetch path (snapshot already enriched).
@@ -193,6 +186,11 @@ class AgentsView:
 
     def handle_key(self, key: str) -> None:
         if self._mode in ("help", "watch"):
+            # `r` keeps its footer-prefix meaning (刷新) even here, so the
+            # "其余任意键返回" hint stays exact.
+            if key == "r":
+                self.app.refresh_with_notice()
+                return
             self._exit_overlay()
             return
 
@@ -200,8 +198,7 @@ class AgentsView:
 
         if key == "r":
             # Unified verb table: `r` is refresh on EVERY tab (respawn moved to R).
-            self.app.trigger_async_refresh()
-            self.app.notify("刷新中…")
+            self.app.refresh_with_notice()
         elif key == "R" and job:
             cmd = agent_ops.respawn(job)
             self.app.notify(f"已重启：{cmd}")
@@ -222,11 +219,18 @@ class AgentsView:
         if s.current:
             self.app.notify("不能接回当前会话")
             return
+        # Degrade gate FIRST (R10): off /proc a live takeover can't safely kill
+        # the old pid — refuse here instead of confirming, exiting the TUI, and
+        # only then having do_resume print its refusal. A dead worker kills
+        # nothing and stays resumable.
+        if would_take_over(s) and not proc.current_determinable():
+            self.app.notify(_DEGRADED)
+            return
         # B1: takeover of a RUNNING worker kills its host pid (should_kill) — same
         # as Sessions Enter-live. Confirm first; a dead worker resumes directly.
         if would_take_over(s):
             self.app.confirm(
-                f"接回后台 agent「{(job.name or job.short)[:30]}」？将先终止原进程。",
+                f"接回后台 agent「{truncate_cells(job.name or job.short, CONFIRM_NAME_CELLS)}」？将先终止原进程。",
                 lambda: self.app.exit_with_resume(s, fork=False),
             )
         else:
@@ -244,7 +248,7 @@ class AgentsView:
         except Exception:
             self.app.notify("读取 timeline 失败")
             return
-        rows = [_TextRow(line) for line in lines] or [_TextRow("(空)")]
+        rows = [TextRow(line) for line in lines] or [TextRow("(空)")]
         self._mode = "watch"
         self._show_overlay(f"timeline（只读）· {job.name or job.short}", rows)
         self._update_footer()
@@ -270,7 +274,7 @@ class AgentsView:
             self.app.notify("后台 agent 未在运行")
             return
         self.app.confirm(
-            f"停止后台 agent「{(job.name or job.short)[:30]}」？将终止其进程。",
+            f"停止后台 agent「{truncate_cells(job.name or job.short, CONFIRM_NAME_CELLS)}」？将终止其进程。",
             lambda: self._do_stop(job),
         )
 
@@ -289,10 +293,10 @@ class AgentsView:
         self.app.trigger_async_refresh()
 
     def _show_help(self) -> None:
-        rows = [_TextRow(line) for line in agent_ops.HELP.splitlines()]
+        rows = [TextRow(line) for line in agent_ops.HELP.splitlines()]
         rows += [
-            _TextRow(""),
-            _TextRow("导航：Tab 切换标签 · q 退出"),
+            TextRow(""),
+            TextRow("导航：Tab 切换标签 · q 退出"),
         ]
         self._mode = "help"
         self._show_overlay("后台 agent 帮助", rows)

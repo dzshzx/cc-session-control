@@ -26,6 +26,7 @@ from ..data import rc
 from ..data.rc import set_rc_at_startup
 from ..models import RCProject, RCServer
 from ._colspec import header_columns, row_columns
+from ._rows import TextRow
 
 if TYPE_CHECKING:
     from ..data.snapshot import WorldSnapshot
@@ -132,12 +133,15 @@ class RCView:
         col_header = urwid.AttrMap(header_columns(_PROJECT_COLS), "col_header")
         self.walker = urwid.SimpleFocusListWalker([])
         self.listbox = urwid.ListBox(self.walker)
-        body = urwid.AttrMap(self.listbox, {None: "body"})
-        self.widget = urwid.Frame(body, header=col_header, footer=self.status)
+        self._list_body = urwid.AttrMap(self.listbox, {None: "body"})
+        self._body = urwid.WidgetPlaceholder(self._list_body)
+        self.widget = urwid.Frame(self._body, header=col_header, footer=self.status)
 
     def keyhints(self) -> str:
         if self._help:
-            return "按任意键返回"
+            # "其余" is honest: the prefix's Tab/q stay global (Tab switches
+            # tabs, q QUITS — neither returns to the list).
+            return "其余任意键返回"
         # Full key table (user preference 2026-07-05): every key gets a brief
         # hint; the footer Text wraps on narrow terminals (vertical for width).
         return (
@@ -212,9 +216,19 @@ class RCView:
             return
         self.app.set_hints(self.keyhints())
 
+    def deactivate(self) -> None:
+        """TabView hook: called on tab switch-away. No transient footer modes
+        here — the help overlay lives in the body widget and stays visibly modal."""
+
     def handle_key(self, key: str) -> None:
         if self._help:
+            # `r` keeps its footer-prefix meaning (刷新) even here, so the
+            # "其余任意键返回" hint stays exact.
+            if key == "r":
+                self.app.refresh_with_notice()
+                return
             self._help = False
+            self._body.original_widget = self._list_body
             self._rebuild()
             self._update_footer()
             return
@@ -264,8 +278,7 @@ class RCView:
                 return
             self.app.confirm("停止全部远控服务？", self._do_stop_all)
         elif key == "r":
-            self.app.trigger_async_refresh()
-            self.app.notify("刷新中…")
+            self.app.refresh_with_notice()
         elif key == "?":
             self._show_help()
 
@@ -282,6 +295,9 @@ class RCView:
         self.app.trigger_async_refresh()
 
     def _show_help(self) -> None:
+        """Help as a scrollable overlay (same pattern as Sessions/Agents) — the
+        old walker-replacing text rows were unscrollable and unreadable on
+        short terminals."""
         self._help = True
         lines = [
             "项目操作（仅对「项目」行生效）:",
@@ -304,8 +320,13 @@ class RCView:
             "  Tab    切换标签页",
             "  q      退出",
         ]
-        self.walker.clear()
-        for line in lines:
-            self.walker.append(urwid.AttrMap(urwid.Text(line), "dead"))
-        self.status.original_widget.set_text(" 按任意键返回")
+        rows = [TextRow(line) for line in lines]
+        listbox = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
+        header = urwid.AttrMap(urwid.Text(" 项目 / 远控帮助", align="center"), "col_header")
+        box = urwid.LineBox(urwid.Frame(listbox, header=header))
+        self._body.original_widget = urwid.Overlay(
+            box, self._list_body,
+            align="center", width=("relative", 80),
+            valign="middle", height=min(len(rows) + 4, 30),
+        )
         self._update_footer()

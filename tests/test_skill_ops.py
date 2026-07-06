@@ -11,6 +11,18 @@ def test_bundled_skill_text_is_packaged():
     assert "csctl resume" in text
 
 
+def test_bundled_skill_key_table_matches_tui():
+    # Lock the documented Sessions-tab key vocabulary to the real TUI verbs
+    # (unified verb table): `s` 停止 / `t` tmux 接回 / `R` 转入后台 / `d` 删除.
+    # The old text bound `t` to terminate — following it triggered the wrong op.
+    text = skill_ops.bundled_skill_text()
+    assert "`t` 终止" not in text
+    assert "`s` 停止活会话" in text
+    assert "`t` tmux 接回" in text
+    assert "`R` 转入后台" in text
+    assert "`d` 删除" in text
+
+
 def test_install_uninstall_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     ok, msg = skill_ops.install()
