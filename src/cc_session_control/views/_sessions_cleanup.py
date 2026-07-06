@@ -25,12 +25,9 @@ from ..data.cleanup import (
     select_zombie_pids,
 )
 from ..data.sessions import scan
+from ._confirm import DEGRADED as _DEGRADED
 from ._rows import TextRow
 from ._session_row import _ActionRow
-
-# R10/D7: refusal shown when the "current" session can't be determined (no /proc)
-# — session-keyed destructive ops are disabled rather than silently doing nothing.
-_DEGRADED = "liveness 降级：破坏性操作已禁用"
 
 # Submenu actions. `stat` keys index `cleanup_classified`. The age sweep
 # (Strategy B) is mtime-only/session-agnostic, so it is NOT R10-gated; every

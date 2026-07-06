@@ -16,21 +16,17 @@ from typing import TYPE_CHECKING
 import urwid
 
 from ..actions import agent_ops
-from ..actions.session_ops import would_take_over
 from ..data import proc, registry
 from ..models import AgentJob
 from ._colspec import header_columns, row_columns
-from ._rows import CONFIRM_NAME_CELLS, TextRow, truncate_cells
+from ._confirm import DEGRADED as _DEGRADED
+from ._confirm import confirm_takeover, stop_message
+from ._rows import TextRow
 
 if TYPE_CHECKING:
     from ..data.snapshot import WorldSnapshot
 
     from ..app import App
-
-
-# R10/D7: refusal shown when "current" can't be determined (no /proc) — the
-# destructive ops are gated honestly BEFORE any confirm (mirrors SessionsView).
-_DEGRADED = "liveness 降级：破坏性操作已禁用"
 
 
 # One spec drives header + rows (_colspec.py). The 状态 text column already
@@ -219,22 +215,13 @@ class AgentsView:
         if s.current:
             self.app.notify("不能接回当前会话")
             return
-        # Degrade gate FIRST (R10): off /proc a live takeover can't safely kill
-        # the old pid — refuse here instead of confirming, exiting the TUI, and
-        # only then having do_resume print its refusal. A dead worker kills
-        # nothing and stays resumable.
-        if would_take_over(s) and not proc.current_determinable():
-            self.app.notify(_DEGRADED)
-            return
         # B1: takeover of a RUNNING worker kills its host pid (should_kill) — same
-        # as Sessions Enter-live. Confirm first; a dead worker resumes directly.
-        if would_take_over(s):
-            self.app.confirm(
-                f"接回后台 agent「{truncate_cells(job.name or job.short, CONFIRM_NAME_CELLS)}」？将先终止原进程。",
-                lambda: self.app.exit_with_resume(s, fork=False),
-            )
-        else:
-            self.app.exit_with_resume(s, fork=False)
+        # as Sessions Enter-live. A dead worker resumes directly, unconfirmed.
+        confirm_takeover(
+            self.app, s, "接回后台 agent",
+            lambda: self.app.exit_with_resume(s, fork=False),
+            name=job.name or job.short,
+        )
 
     def _watch(self, job: AgentJob) -> None:
         path = agent_ops.watch(job)
@@ -274,7 +261,7 @@ class AgentsView:
             self.app.notify("后台 agent 未在运行")
             return
         self.app.confirm(
-            f"停止后台 agent「{truncate_cells(job.name or job.short, CONFIRM_NAME_CELLS)}」？将终止其进程。",
+            stop_message("停止后台 agent", job.name or job.short),
             lambda: self._do_stop(job),
         )
 

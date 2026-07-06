@@ -12,19 +12,20 @@ from ..actions.session_ops import (
     resume_cmd,
     terminate_session,
     to_clipboard,
-    would_take_over,
 )
 from ..data import liveness, proc, registry
 from ..data.cleanup import cleanup_classified, remove_session
 from ..data.sessions import scan
 from ..models import AgentJob, Session, SessionProc
-from ._rows import CONFIRM_NAME_CELLS, TextRow, truncate_cells
+from ._confirm import DEGRADED as _DEGRADED
+from ._confirm import confirm_takeover, stop_message
+from ._rows import TextRow
 from ._session_row import (
     _SESSION_HEADER,
     SessionRow,
     _hidden_marker,
 )
-from ._sessions_cleanup import _DEGRADED, CleanupMixin
+from ._sessions_cleanup import CleanupMixin
 
 if TYPE_CHECKING:
     from ..data.snapshot import WorldSnapshot
@@ -302,46 +303,25 @@ class SessionsView(CleanupMixin):
         self.app.trigger_async_refresh()
 
     def _resume_or_confirm(self, s: Session, fork: bool) -> None:
-        """Resume now, or confirm first when it would take over a live session.
-
-        Reads `would_take_over` (= should_kill, the single source) so the confirm
-        gate never re-derives the takeover condition (CLAUDE.md invariant).
-        """
-        # Degrade gate FIRST (R10), same as `t`/`R`: off /proc a live takeover
-        # can't safely kill the old pid — refuse here instead of confirming,
-        # exiting the TUI, and only then having do_resume print its refusal.
-        if would_take_over(s, fork) and not proc.current_determinable():
-            self.app.notify(_DEGRADED)
-            return
-        if would_take_over(s, fork):
-            self.app.confirm(
-                f"接回会话「{truncate_cells(s.label, CONFIRM_NAME_CELLS)}」？将先终止原进程。",
-                lambda: self.app.exit_with_resume(s, fork),
-            )
-        else:
-            self.app.exit_with_resume(s, fork)
+        """Resume now, or confirm first when it would take over a live session."""
+        confirm_takeover(
+            self.app, s, "接回会话",
+            lambda: self.app.exit_with_resume(s, fork), fork=fork,
+        )
 
     def _tmux_resume_or_confirm(self, s: Session) -> None:
         """`t` key: attach when already tmux-hosted, else resume inside tmux.
 
         A live tmux-hosted session is entered in place — no kill, no confirm, no
-        R10 gate (nothing destructive). Otherwise mirrors `R`: `would_take_over`
-        (the single should_kill source) decides the confirm + degrade gate.
+        R10 gate (nothing destructive). Otherwise mirrors `R`.
         """
         target = attach_target(s)
         if target:
             self.app.exit_with_attach(target)
             return
-        if would_take_over(s) and not proc.current_determinable():
-            self.app.notify(_DEGRADED)
-            return
-        if would_take_over(s):
-            self.app.confirm(
-                f"tmux 接回「{truncate_cells(s.label, CONFIRM_NAME_CELLS)}」？将先终止原进程。",
-                lambda: self.app.exit_with_tmux_resume(s),
-            )
-        else:
-            self.app.exit_with_tmux_resume(s)
+        confirm_takeover(
+            self.app, s, "tmux 接回", lambda: self.app.exit_with_tmux_resume(s)
+        )
 
     # --- Key dispatch ---
 
@@ -420,26 +400,14 @@ class SessionsView(CleanupMixin):
                 self.app.notify("不能停止当前会话")
                 return
             self.app.confirm(
-                f"停止会话「{truncate_cells(s.label, CONFIRM_NAME_CELLS)}」？将终止其进程。",
+                stop_message("停止会话", s.label),
                 lambda: self._do_terminate(s),
             )
         elif key == "R" and s:
             if s.current:
                 self.app.notify("不能转入后台当前会话")
                 return
-            # Degrade gate only for a takeover (live): relaunching a DEAD session
-            # kills nothing and data refuses nothing, so it stays usable off
-            # /proc (B3). `would_take_over` is the single should_kill source.
-            if would_take_over(s) and not proc.current_determinable():
-                self.app.notify(_DEGRADED)
-                return
-            if would_take_over(s):
-                self.app.confirm(
-                    f"转入后台「{truncate_cells(s.label, CONFIRM_NAME_CELLS)}」？将先终止原进程。",
-                    lambda: self._do_relaunch(s),
-                )
-            else:
-                self._do_relaunch(s)
+            confirm_takeover(self.app, s, "转入后台", lambda: self._do_relaunch(s))
         elif key == "d" and s:
             if s.alive:
                 self.app.notify("运行中的会话不删，先停止")

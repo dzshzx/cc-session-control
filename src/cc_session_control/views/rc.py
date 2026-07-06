@@ -26,6 +26,7 @@ from ..data import rc
 from ..data.rc import set_rc_at_startup
 from ..models import RCProject, RCServer
 from ._colspec import header_columns, row_columns
+from ._confirm import stop_message
 from ._rows import TextRow
 
 if TYPE_CHECKING:
@@ -272,7 +273,7 @@ class RCView:
                 self.app.notify("未在运行")
                 return
             self.app.confirm(
-                f"停止远控服务「{p.name}」？将终止其进程。",
+                stop_message("停止远控服务", p.name),
                 lambda: self._do_stop_one(p.name),
             )
         elif key == "a" and p:
