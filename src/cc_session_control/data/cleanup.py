@@ -485,39 +485,3 @@ def build_plan(
         zombie_pids=select_zombie_pids(session_procs, cur),
         aged_entries=list_aged_entries(now),
     )
-
-
-# --- Classified counts -----------------------------------------------------
-
-def cleanup_stats(sessions: list[Session]) -> dict[str, int]:
-    """Summary counts for the Sessions cleanup submenu (view-facing contract).
-
-    Keeps the established 4-key shape (`total/empty/short/orphans`) that the
-    view reads; `orphans` is the sid-keyed orphan count (Strategy A).
-    """
-    return {
-        "total": len(sessions),
-        "empty": sum(1 for s in sessions if s.prompts == 0),
-        "short": sum(1 for s in sessions if 0 < s.prompts <= 2),
-        "orphans": len(list_orphan_dirs(sessions)),
-    }
-
-
-def cleanup_classified(
-    sessions: list[Session],
-    session_procs: list[SessionProc],
-    cur: set[int],
-    agent_jobs: list[AgentJob] | None = None,
-    agents_map: dict[str, int | None] | None = None,
-    now: float | None = None,
-) -> dict[str, int]:
-    """Per-category cleanup counts (D6) — a thin view over `build_plan`.
-
-    Deriving the counts FROM the plan keeps them equal to what a preview would
-    show: `empty`/`short` count *prunable* sessions (not alive/current/recent),
-    matching the preview list instead of the raw prompt tally.
-    """
-    return build_plan(
-        sessions, session_procs, cur,
-        agent_jobs=agent_jobs, agents_map=agents_map, now=now,
-    ).counts()

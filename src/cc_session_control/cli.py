@@ -136,21 +136,31 @@ def _cmd_rc(args: argparse.Namespace) -> None:
 
 
 def _cmd_prune(args: argparse.Namespace) -> None:
+    from .data import liveness
     from .data.cleanup import (
-        cleanup_stats,
+        build_plan,
         execute_orphan_removals,
         execute_session_removals,
-        list_orphan_dirs,
         prune_sessions,
     )
     from .data.sessions import scan
 
     sessions = scan()
-    stats = cleanup_stats(sessions)
-    print(f"Total: {stats['total']}  Empty: {stats['empty']}  Short(<=2): {stats['short']}  Orphans: {stats['orphans']}")
+    # One shared fetch feeds the frozen plan — the SAME assembly build_plan's
+    # other callers (the Sessions view, build_world_snapshot) use, so the CLI
+    # header and any future TUI parity stay derived from one source (删除 ⊆ 预览
+    # still holds: execute_* revalidate against fresh data at apply time).
+    procs, cur, jobs, agents = liveness.liveness_inputs()
+    plan = build_plan(sessions, procs, cur, jobs, agents)
+    counts = plan.counts()
+    print(
+        f"Total: {len(sessions)}  Prunable empty: {counts['empty']}  "
+        f"short(<=2): {counts['short']}  Orphan dirs: {counts['orphan_dirs']}  "
+        f"Zombie files: {counts['zombie_procs']}  Aged: {counts['aged_entries']}"
+    )
 
     if args.sweep_orphans:
-        orphans = list_orphan_dirs(sessions)
+        orphans = plan.orphan_entries
         print(f"Would sweep {len(orphans)} orphan artifact dir(s)")
         if not args.apply:
             print("Dry run. Add --apply to execute.")

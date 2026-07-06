@@ -286,7 +286,7 @@ def test_remove_aged_entries(tmp_path, monkeypatch):
 
 # --- Classified counts (injected deps) -------------------------------------
 
-def test_cleanup_classified_breaks_down_categories(tmp_path, monkeypatch):
+def test_plan_counts_break_down_categories(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     monkeypatch.setattr(cfg, "cleanup_age_days", 14)
     _mkdir(tmp_path, "session-env", "orphan-a")
@@ -297,7 +297,7 @@ def test_cleanup_classified_breaks_down_categories(tmp_path, monkeypatch):
     ]
     procs = [_sp(700772, "A", proc_alive=False)]  # one zombie
 
-    counts = cleanup.cleanup_classified(sessions, procs, cur=set(), now=0.0)
+    counts = cleanup.build_plan(sessions, procs, cur=set(), now=0.0).counts()
     assert counts["empty"] == 1
     assert counts["short"] == 1
     assert counts["orphan_dirs"] == 1

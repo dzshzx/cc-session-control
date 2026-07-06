@@ -34,9 +34,10 @@ def _mkdir(base, *parts):
 
 def _stub_scan(monkeypatch):
     # Avoid the transcript glob + `claude agents --json` subprocess; the sweeps
-    # under test don't depend on the session scan. `cleanup_stats` (called by
-    # `_cmd_prune`) now consults the orphan protected-sid set (H1), which reaches
-    # `liveness.alive_map`, so stub that too.
+    # under test don't depend on the session scan. `_cmd_prune`'s header now
+    # builds the frozen `CleanupPlan` (via `build_plan`), which consults the
+    # orphan protected-sid set (H1) and reaches `liveness.alive_map`, so stub
+    # that too.
     monkeypatch.setattr(sessions, "scan", lambda: [])
     monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
     registry.invalidate_cache()

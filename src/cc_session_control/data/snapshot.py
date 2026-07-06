@@ -35,7 +35,7 @@ class WorldSnapshot:
     `session_procs` (with `/proc` liveness already injected), `agents_map`
     (`claude agents --json`) and `cur` (the ancestor-pid set) are the raw liveness
     inputs `build_world_snapshot` already computes for the scan; they are exposed
-    here so the Sessions cleanup submenu can feed `cleanup_classified` /
+    here so the Sessions cleanup submenu can feed `cleanup.build_plan` /
     `select_zombie_pids` WITHOUT a second scan (R11/D8).
     """
     sessions: list[Session] = field(default_factory=list)

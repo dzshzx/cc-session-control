@@ -6,9 +6,7 @@ import json
 import subprocess
 
 from cc_session_control.actions.session_ops import resume_cmd
-from cc_session_control.config import cfg
-from cc_session_control.data import liveness, registry
-from cc_session_control.data.cleanup import cleanup_stats, prune_sessions
+from cc_session_control.data.cleanup import prune_sessions
 from cc_session_control.data.sessions import _parse_transcript
 from cc_session_control.models import LiveInfo, Session
 
@@ -523,41 +521,6 @@ def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
     assert rc.start_one(proj) is True
     assert calls["kill"] == 1
     assert calls["cmd"] is not None
-
-
-# --- D1: cleanup_stats ---
-
-def test_cleanup_stats_counts(tmp_path, monkeypatch):
-    monkeypatch.setattr(cfg, "claude_home", tmp_path)
-    # H1 self-fetch reaches alive_map/registry; keep it hermetic (no subprocess).
-    monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
-    registry.invalidate_cache()
-    sessions = [
-        _make_session(sid="empty1", prompts=0),
-        _make_session(sid="short1", prompts=1),
-        _make_session(sid="short2", prompts=2),
-        _make_session(sid="full1", prompts=5),
-    ]
-    # session-env: one matching sid (full1), one orphan dir
-    env = tmp_path / "session-env"
-    env.mkdir()
-    (env / "full1").mkdir()
-    (env / "orphan-xyz").mkdir()
-
-    stats = cleanup_stats(sessions)
-    assert stats["total"] == 4
-    assert stats["empty"] == 1
-    assert stats["short"] == 2
-    assert stats["orphans"] == 1
-
-
-def test_cleanup_stats_no_dirs(tmp_path, monkeypatch):
-    monkeypatch.setattr(cfg, "claude_home", tmp_path)
-    monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
-    registry.invalidate_cache()
-    sessions = [_make_session(sid="full1", prompts=5)]
-    stats = cleanup_stats(sessions)
-    assert stats == {"total": 1, "empty": 0, "short": 0, "orphans": 0}
 
 
 # --- D4: _parse_transcript ---
