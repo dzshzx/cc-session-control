@@ -162,20 +162,19 @@ def known_sids(
     return known
 
 
-def _gather_known(
-    sessions: list[Session],
-    session_procs: list[SessionProc] | None = None,
-    agent_jobs: list[AgentJob] | None = None,
-    agents_map: dict[str, int | None] | None = None,
-    cur: set[int] | None = None,
-) -> set[str]:
-    """Resolve the protected-sid set, self-fetching any omitted source.
+def _fill_liveness_inputs(
+    session_procs: list[SessionProc] | None,
+    agent_jobs: list[AgentJob] | None,
+    agents_map: dict[str, int | None] | None,
+    cur: set[int] | None,
+) -> tuple[list[SessionProc], list[AgentJob], dict[str, int | None], set[int]]:
+    """Fill any None input from `liveness.liveness_inputs()` (the ONE assembly).
 
-    Snapshot/view callers inject the shared world data (R11); CLI / no-snapshot
-    callers pass nothing and we fill the gaps from `liveness.liveness_inputs()`
-    (the ONE shared assembly `build_world_snapshot` and the Sessions view
-    self-fetch also use), which itself swallows each source's errors → safe
-    empties.
+    Snapshot/view callers inject the shared world data (R11) and pay no IO
+    here; CLI / no-snapshot callers pass None and get the same assembly
+    `build_world_snapshot` uses (which swallows each source's errors → safe
+    empties). A caller that doesn't consume a source passes `[]`/`{}` — not
+    None — so an unused gap never triggers the fetch on its own.
     """
     if session_procs is None or agent_jobs is None or agents_map is None or cur is None:
         d_procs, d_cur, d_jobs, d_agents = liveness.liveness_inputs()
@@ -187,6 +186,20 @@ def _gather_known(
             agents_map = d_agents
         if cur is None:
             cur = d_cur
+    return session_procs, agent_jobs, agents_map, cur
+
+
+def _gather_known(
+    sessions: list[Session],
+    session_procs: list[SessionProc] | None = None,
+    agent_jobs: list[AgentJob] | None = None,
+    agents_map: dict[str, int | None] | None = None,
+    cur: set[int] | None = None,
+) -> set[str]:
+    """Resolve the protected-sid set, self-fetching any omitted source
+    (`_fill_liveness_inputs`)."""
+    session_procs, agent_jobs, agents_map, cur = _fill_liveness_inputs(
+        session_procs, agent_jobs, agents_map, cur)
     return known_sids(sessions, session_procs, agent_jobs, agents_map, cur)
 
 
@@ -418,14 +431,10 @@ def execute_session_removals(
     """
     if not proc.current_determinable():
         return 0
-    if session_procs is None or agents_map is None or cur is None:
-        d_procs, d_cur, _d_jobs, d_agents = liveness.liveness_inputs()
-        if session_procs is None:
-            session_procs = d_procs
-        if agents_map is None:
-            agents_map = d_agents
-        if cur is None:
-            cur = d_cur
+    # agent_jobs is unused here: pass [] (not None) so an omitted-but-unused
+    # source never triggers the fetch on its own (see _fill_liveness_inputs).
+    session_procs, _, agents_map, cur = _fill_liveness_inputs(
+        session_procs, [], agents_map, cur)
     fresh_alive = {sp.sid for sp in session_procs if sp.proc_alive}
     fresh_alive |= {sid for sid, pid in agents_map.items() if pid}
     count = 0
