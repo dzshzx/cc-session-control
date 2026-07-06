@@ -18,8 +18,8 @@ from ..actions.session_ops import (
 )
 from ..data import proc
 from ..data.cleanup import CleanupPlan, build_plan, remove_session
+from ..data.liveness import liveness_inputs
 from ..data.sessions import scan
-from ..data.snapshot import liveness_inputs
 from ..models import AgentJob, Session, SessionProc
 from ._base import ListTabView
 from ._confirm import DEGRADED as _DEGRADED

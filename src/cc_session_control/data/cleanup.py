@@ -151,23 +151,21 @@ def _gather_known(
     """Resolve the protected-sid set, self-fetching any omitted source.
 
     Snapshot/view callers inject the shared world data (R11); CLI / no-snapshot
-    callers pass nothing and we read the (TTL-cached) registry + `alive_map`. Each
-    self-read swallows its own errors → safe empties.
+    callers pass nothing and we fill the gaps from `liveness.liveness_inputs()`
+    (the ONE shared assembly `build_world_snapshot` and the Sessions view
+    self-fetch also use), which itself swallows each source's errors → safe
+    empties.
     """
-    if session_procs is None:
-        session_procs = liveness.live_session_procs()
-    if agent_jobs is None:
-        try:
-            agent_jobs = registry.read_agent_jobs()
-        except Exception:
-            agent_jobs = []
-    if agents_map is None:
-        try:
-            agents_map = liveness.alive_map()
-        except Exception:
-            agents_map = {}
-    if cur is None:
-        cur = proc.ancestor_pids()
+    if session_procs is None or agent_jobs is None or agents_map is None or cur is None:
+        d_procs, d_cur, d_jobs, d_agents = liveness.liveness_inputs()
+        if session_procs is None:
+            session_procs = d_procs
+        if agent_jobs is None:
+            agent_jobs = d_jobs
+        if agents_map is None:
+            agents_map = d_agents
+        if cur is None:
+            cur = d_cur
     return known_sids(sessions, session_procs, agent_jobs, agents_map, cur)
 
 
@@ -399,18 +397,14 @@ def execute_session_removals(
     """
     if not proc.current_determinable():
         return 0
-    # This self-fetch mirrors snapshot.liveness_inputs()'s assembly — cleanup
-    # sits BELOW snapshot in the data DAG and cannot import it; keep the two
-    # in sync when the liveness sources change.
-    if session_procs is None:
-        session_procs = liveness.live_session_procs()
-    if agents_map is None:
-        try:
-            agents_map = liveness.alive_map()
-        except Exception:
-            agents_map = {}
-    if cur is None:
-        cur = proc.ancestor_pids()
+    if session_procs is None or agents_map is None or cur is None:
+        d_procs, d_cur, _d_jobs, d_agents = liveness.liveness_inputs()
+        if session_procs is None:
+            session_procs = d_procs
+        if agents_map is None:
+            agents_map = d_agents
+        if cur is None:
+            cur = d_cur
     fresh_alive = {sp.sid for sp in session_procs if sp.proc_alive}
     fresh_alive |= {sid for sid, pid in agents_map.items() if pid}
     count = 0

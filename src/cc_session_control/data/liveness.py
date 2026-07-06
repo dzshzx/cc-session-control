@@ -20,6 +20,30 @@ _cache: dict[str, int | None] | None = None
 _cache_time: float = 0.0
 
 
+def liveness_inputs() -> tuple[
+    list[SessionProc], set[int], list[AgentJob], dict[str, int | None]
+]:
+    """The shared liveness inputs — `(session_procs, cur, agent_jobs,
+    agents_map)` — fetched ONCE, jobs already host-enriched.
+
+    `build_world_snapshot`, the Sessions view's `fetch_pending(None)`
+    self-fetch, and `cleanup`'s protection-set assembly all consume this, so
+    the degraded/self-fetch paths are the same assembly instead of a
+    hand-kept mirror that can drift. Each read swallows its own errors → safe
+    empties.
+    """
+    session_procs = live_session_procs()
+    try:
+        agent_jobs = enrich_jobs(registry.read_agent_jobs(), session_procs)
+    except Exception:
+        agent_jobs = []
+    try:
+        agents_map = alive_map()
+    except Exception:
+        agents_map = {}
+    return session_procs, proc.ancestor_pids(), agent_jobs, agents_map
+
+
 def _scrub_dead_pids(
     mapping: dict[str, int | None],
     exists: Callable[[int | None], bool],

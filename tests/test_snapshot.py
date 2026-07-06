@@ -19,8 +19,8 @@ def _sp(pid, sid, bridge=None, proc_start="1"):
 
 
 def _stub_sources(monkeypatch, procs):
-    monkeypatch.setattr(snapshot.registry, "read_session_procs", lambda *a, **k: procs)
-    monkeypatch.setattr(snapshot.registry, "read_agent_jobs", lambda *a, **k: [])
+    monkeypatch.setattr(snapshot.liveness.registry, "read_session_procs", lambda *a, **k: procs)
+    monkeypatch.setattr(snapshot.liveness.registry, "read_agent_jobs", lambda *a, **k: [])
     monkeypatch.setattr(snapshot.sessions, "scan", lambda: [])
     monkeypatch.setattr(snapshot.rc, "scan", lambda: [])
     monkeypatch.setattr(snapshot.rc, "scan_servers", lambda: [])
@@ -42,7 +42,7 @@ def test_snapshot_persists_file_referenced_keeps_active_alive_gated(tmp_path, mo
         _sp(2, "sid-zombie", bridge="session_ZOMBIE"),
     ]
     _stub_sources(monkeypatch, procs)
-    monkeypatch.setattr(snapshot.proc, "pid_alive", lambda pid, ps: pid == 1)
+    monkeypatch.setattr(snapshot.liveness.proc, "pid_alive", lambda pid, ps: pid == 1)
 
     snap = snapshot.build_world_snapshot()
 
@@ -61,7 +61,7 @@ def test_snapshot_persists_file_referenced_keeps_active_alive_gated(tmp_path, mo
 
 def test_snapshot_toggle_away_becomes_orphan(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "config_dir", tmp_path)
-    monkeypatch.setattr(snapshot.proc, "pid_alive", lambda pid, ps: True)
+    monkeypatch.setattr(snapshot.liveness.proc, "pid_alive", lambda pid, ps: True)
 
     # Cycle 1: a session references env X.
     _stub_sources(monkeypatch, [_sp(1, "sid-x", bridge="session_X")])
@@ -79,7 +79,7 @@ def test_snapshot_toggle_away_becomes_orphan(tmp_path, monkeypatch):
 
 def test_snapshot_reobserve_keeps_single_stable_entry(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "config_dir", tmp_path)
-    monkeypatch.setattr(snapshot.proc, "pid_alive", lambda pid, ps: True)
+    monkeypatch.setattr(snapshot.liveness.proc, "pid_alive", lambda pid, ps: True)
     _stub_sources(monkeypatch, [_sp(1, "sid-x", bridge="session_X")])
 
     snapshot.build_world_snapshot()
