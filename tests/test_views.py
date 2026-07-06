@@ -431,6 +431,43 @@ def test_rc_view_construct():
     assert view.widget is not None
 
 
+def test_rc_row_marks_missing_directory():
+    row = RCRow(_make_project(dir_exists=False, status="stopped"))
+    text = _row_text(row)
+    assert "✖ 缺失" in text
+    assert "目录缺失" in text
+    # A server still running out of a deleted dir keeps its running status.
+    running = _row_text(RCRow(_make_project(dir_exists=False, status="running")))
+    assert "● 运行中" in running
+    assert "目录缺失" in running
+
+
+def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
+    import cc_session_control.views.rc as rc_view_mod
+    from cc_session_control.data import rc as rc_mod
+
+    writes = []
+    monkeypatch.setattr(rc_view_mod, "set_rc_at_startup",
+                        lambda directory, value: writes.append((directory, value)))
+    monkeypatch.setattr(rc_mod, "toggle_autostart", lambda name: False)
+
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [_make_project(name="ghost", dir_exists=False)]
+    view.apply_data()
+
+    view.handle_key("enter")   # start → refused
+    view.handle_key("t")       # tmux new → refused (no exit tuple)
+    view.handle_key("c")       # would mkdir the deleted dir back — refused
+    assert app.result is None
+    assert not writes
+    assert sum("目录缺失" in m for m in app._notifications) == 3
+
+    view.handle_key("a")       # the removal path stays available
+    assert any("开机自启" in m for m in app._notifications)
+
+
 def test_sessions_view_fetch_pending(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
 

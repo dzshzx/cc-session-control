@@ -87,7 +87,8 @@ def _cmd_rc(args: argparse.Namespace) -> None:
         for p in projects:
             icon = {"running": "[running]", "dead": "[dead   ]", "stopped": "[stopped]"}.get(p.status, p.status)
             auto = "auto" if p.auto_start else "    "
-            print(f"  {icon} {auto}  {p.name}")
+            missing = "" if p.dir_exists else "  (directory missing)"
+            print(f"  {icon} {auto}  {p.name}{missing}")
 
     elif sub == "add":
         proj = args.project

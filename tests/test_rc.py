@@ -201,3 +201,24 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
 
     rows = {p.name: p for p in rc.scan()}
     assert rows["proj"].spawn_mode == "new-window"
+
+
+def test_scan_marks_missing_directory(tmp_path, monkeypatch):
+    """A trusted/enabled project whose workspace dir is gone stays listed
+    (claude.json / rc-enabled still reference it) but gets dir_exists=False."""
+    ws = tmp_path / "workspace"
+    (ws / "alive").mkdir(parents=True)
+    cj = _write_claude_json(tmp_path, {
+        str(ws / "alive"): {"hasTrustDialogAccepted": True},
+        str(ws / "deleted"): {"hasTrustDialogAccepted": True},
+    })
+    monkeypatch.setattr(rc.cfg, "claude_json", cj)
+    monkeypatch.setattr(rc.cfg, "workspace", ws)
+    monkeypatch.setattr(rc, "list_enabled", lambda: ["gone-enabled"])
+    monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+
+    rows = {p.name: p for p in rc.scan()}
+    assert set(rows) == {"alive", "deleted", "gone-enabled"}
+    assert rows["alive"].dir_exists is True
+    assert rows["deleted"].dir_exists is False       # stale trust entry
+    assert rows["gone-enabled"].dir_exists is False  # stale rc-enabled entry

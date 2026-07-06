@@ -362,6 +362,7 @@ def scan() -> list[RCProject]:
             auto_start=name in enabled,
             rc_at_startup=_read_rc_at_startup(directory),
             spawn_mode=_read_spawn_mode(name),
+            dir_exists=os.path.isdir(directory),
         ))
     return result
 

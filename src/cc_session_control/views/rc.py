@@ -58,15 +58,24 @@ class RCRow(urwid.WidgetWrap):
     def __init__(self, project: RCProject) -> None:
         self.project = project
         status_text = _STATUS_MAP.get(project.status, project.status)
+        attr = _STATUS_ATTR.get(project.status, "dead")
+        directory = project.directory
+        if not project.dir_exists:
+            # Stale reference: claude.json / rc-enabled still list the project
+            # but its workspace directory is gone. A running server (dir
+            # deleted underneath it) keeps its status; otherwise 缺失 wins.
+            directory += "（目录缺失）"
+            if project.status != "running":
+                status_text = "✖ 缺失"
+                attr = "status_err"
         auto = "✓ 开" if project.auto_start else "✗ 关"
         rc_at = _RC_TRISTATE.get(project.rc_at_startup, "未设置")
         spawn = project.spawn_mode or "—"
         name = project.name if project.in_list or project.status == "running" else f"({project.name})"
 
         cols = row_columns(_PROJECT_COLS, [
-            status_text, auto, rc_at, spawn, name, project.directory,
+            status_text, auto, rc_at, spawn, name, directory,
         ])
-        attr = _STATUS_ATTR.get(project.status, "dead")
         mapped = urwid.AttrMap(cols, attr, focus_map=_RC_FOCUS)
         super().__init__(mapped)
 
@@ -196,11 +205,13 @@ class RCView:
         running = sum(1 for p in self._projects if p.status == "running")
         auto = sum(1 for p in self._projects if p.auto_start)
         rc_off = sum(1 for p in self._projects if p.rc_at_startup is False)
+        missing = sum(1 for p in self._projects if not p.dir_exists)
         rc_text = f" · 自动远控关 {rc_off}" if rc_off else ""
+        miss_text = f" · 目录缺失 {missing}" if missing else ""
         srv_text = f" · 服务 {len(self._servers)}" if self._servers else ""
         self.status.original_widget.set_text(
             f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}"
-            f"{rc_text}{srv_text}"
+            f"{rc_text}{miss_text}{srv_text}"
         )
 
     def _selected(self) -> RCProject | None:
@@ -236,11 +247,17 @@ class RCView:
         p = self._selected()
 
         if key == "t" and p:
+            if not p.dir_exists:
+                self.app.notify("目录缺失 — 无法新建会话")
+                return
             # New claude session in the project dir, inside tmux, entered
             # immediately — nothing is killed, so no confirm / R10 / trust gate
             # (claude's own trust dialog shows interactively in the window).
             self.app.exit_with_tmux_new(p.directory)
         elif key == "enter" and p:
+            if not p.dir_exists:
+                self.app.notify("目录缺失 — 无法启动（可用 a 键移出自启列表）")
+                return
             if not p.trusted:
                 self.app.notify("未信任 — 先在该目录跑一次 claude")
                 return
@@ -263,6 +280,10 @@ class RCView:
             self.app.notify(f"{p.name} 开机自启: {'开' if new else '关'}")
             self.app.trigger_async_refresh()
         elif key == "c" and p:
+            if not p.dir_exists:
+                # set_rc_at_startup would mkdir the deleted project back to life.
+                self.app.notify("目录缺失 — 不写入配置")
+                return
             # Full 3-cycle so explicit True is reachable again: None→True→False→None.
             new = _NEXT_TRISTATE[p.rc_at_startup]
             set_rc_at_startup(p.directory, new)
@@ -311,6 +332,10 @@ class RCView:
             "  A      启动所有「开机自启」项目",
             "  S      停止全部远程控制服务（需确认）",
             "  r      重新扫描刷新",
+            "",
+            "目录缺失（✖ 缺失）:",
+            "  项目目录已删除，但 claude 的信任记录（~/.claude.json）或自启列表仍引用它。",
+            "  csctl 不改写 claude 的文件；用 a 键可将其移出自启列表，信任记录需手动清理。",
             "",
             "RC 服务（只读）:",
             "  外部服务只展示，不接管、不重启。",

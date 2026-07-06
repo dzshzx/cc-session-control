@@ -112,6 +112,9 @@ class RCProject:
     auto_start: bool
     rc_at_startup: bool | None = None  # per-project remoteControlAtStartup override
     spawn_mode: str | None = None      # per-project remoteControlSpawnMode (None=unset)
+    # False when the workspace directory is gone but claude.json / rc-enabled
+    # still reference the project — shown as 缺失, start-ops refused.
+    dir_exists: bool = True
 
 
 @dataclass
