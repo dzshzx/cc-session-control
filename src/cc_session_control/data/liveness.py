@@ -1,7 +1,6 @@
 """Session liveness — the single authority.
 
-Owns the ONE module-global cache for `claude agents --json` (mirrored by the
-`agents.py` re-export shim so terminate's invalidate and scan's read share it).
+Owns the ONE module-global cache for `claude agents --json`.
 `live_index` is a pure merge of already-fetched liveness inputs (registry
 session files with injected proc liveness + `claude agents --json`).
 """

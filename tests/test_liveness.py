@@ -1,6 +1,4 @@
-"""Tests for data/liveness.py — live_index purity and the agents.py cache shim."""
-
-import time
+"""Tests for data/liveness.py — live_index purity and the alive_map cache."""
 
 from cc_session_control.data import liveness
 from cc_session_control.models import SessionProc
@@ -203,20 +201,3 @@ def test_is_rc_exposed_matrix():
     assert f("session_x", False) is False
     # empty string is not a real bridge id
     assert f("", True) is False
-
-
-# --- agents.py shim shares ONE cache with liveness ---
-
-def test_shim_and_liveness_share_one_cache():
-    from cc_session_control.data import agents
-    # Same callables -> same module-global cache.
-    assert agents.alive_map is liveness.alive_map
-    assert agents.invalidate_cache is liveness.invalidate_cache
-
-    liveness._cache = {"sid1": 111}
-    liveness._cache_time = time.monotonic()
-    # Reading through the shim returns the seeded cache (no subprocess).
-    assert agents.alive_map(max_age=999) == {"sid1": 111}
-    # Invalidating through the shim clears liveness's single cache.
-    agents.invalidate_cache()
-    assert liveness._cache is None

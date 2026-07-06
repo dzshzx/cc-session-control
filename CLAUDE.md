@@ -59,7 +59,6 @@ The UI toolkit is **urwid** (the only runtime dependency is `urwid>=2.0.0`). Thr
   - bottom (pure IO + parse): `proc.py` (the ONLY `/proc` seam — `proc_starttime`/`pid_alive`/`ancestor_pids`/`scan_rc_servers`), `registry.py` (`sessions/*.json` + `jobs/*/state.json`, ~5s TTL cache).
   - middle: `liveness.py` (the ONE liveness authority — `alive_map`/`invalidate_cache`/pure `live_index`), `environments.py` (the bridge-environment ledger — **must never import `rc`**), `cleanup.py` (per-dir-key + age cleanup strategies).
   - top (assemble): `sessions.py` (parse transcripts → `Session`), `rc.py` (tmux + trust + `/proc` server discovery → `RCProject`/`RCServer`; calls `environments.upsert` one-way).
-  - `agents.py` is a **zero-logic re-export shim** for `liveness.alive_map`/`invalidate_cache` (kept so old imports + the `session_ops.invalidate_cache` monkeypatch keep working).
   - `snapshot.py` sits ABOVE the rest (composes them into one `WorldSnapshot`); nothing in `data/` imports it (only `app`/`views` do).
   Returns the dataclasses in `models.py` (`Session`, `SessionProc`, `AgentJob`, `LiveInfo`, `RCProject`, `RCServer`, `EnvRecord`, `BridgeEnv`).
 - **`actions/`** — operations that don't belong in `data/`: `session_ops.py` (`terminate_session`, `resume_cmd`/`do_resume`, `relaunch_in_tmux`, `to_clipboard`), `agent_ops.py` (background-agent lifecycle: `respawn`/`remove_job`/`watch`/`resume_takeover`/`stop_job`, with `job_host` joining sid→`sessions/<pid>.json`), `resume_list.py` (headless `csctl resume` selection/paging/formatting — command synthesis stays in `session_ops.resume_cmd`, never re-derived here), and `skill_ops.py` (bundled-skill install/uninstall; the skill source ships as package data `skill/SKILL.md`).
@@ -108,7 +107,7 @@ The TUI cannot run `claude` inside itself. To resume a session, `SessionsView` c
 
 ### Liveness & identity — sessionId is the primary key
 
-The **primary key is `sessionId`**, never pid. Liveness is a **multi-source merge** with `data/liveness.py` as the **one authority** (NOT `agents.py`, which is just a re-export shim):
+The **primary key is `sessionId`**, never pid. Liveness is a **multi-source merge** with `data/liveness.py` as the **one authority**:
 
 - `data/liveness.py::alive_map()` runs `claude agents --json` (cached 5s) → `{sessionId: pid}` (agent sessions only — it does NOT list RC servers or reflect RC exposure).
 - `data/registry.py::read_session_procs()` reads `sessions/<pid>.json` for richer per-runtime state (`status`/`procStart`/`kind`/`entrypoint`/`bridgeSessionId`). **A file existing ≠ alive** (most are zombies).
