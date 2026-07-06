@@ -22,7 +22,7 @@ from ..models import AgentJob
 from ._base import ListTabView
 from ._colspec import header_columns, row_columns
 from ._confirm import DEGRADED as _DEGRADED
-from ._confirm import confirm_takeover, stop_message
+from ._confirm import confirm_stop, confirm_takeover
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 
@@ -237,17 +237,9 @@ class AgentsView(ListTabView):
         self.app.trigger_async_refresh()
 
     def _stop(self, job: AgentJob) -> None:
-        # Degrade gate FIRST (R2): off /proc we can't prove this isn't csctl's own
-        # session — refuse honestly before confirming.
-        if not proc.current_determinable():
-            self.app.notify(_DEGRADED)
-            return
-        if not job.host_alive:
-            self.app.notify("后台 agent 未在运行")
-            return
-        self.app.confirm(
-            stop_message("停止后台 agent", job.name or job.short),
-            lambda: self._do_stop(job),
+        confirm_stop(
+            self.app, "后台 agent", job.name or job.short,
+            lambda: self._do_stop(job), alive=job.host_alive,
         )
 
     def _do_stop(self, job: AgentJob) -> None:

@@ -22,7 +22,7 @@ from ..data.sessions import scan
 from ..models import AgentJob, Session, SessionProc
 from ._base import ListTabView
 from ._confirm import DEGRADED as _DEGRADED
-from ._confirm import confirm_takeover, stop_message
+from ._confirm import confirm_stop, confirm_takeover
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 from ._session_row import (
@@ -426,20 +426,9 @@ class SessionsView(CleanupMixin, ListTabView):
         self.app.exit_with(ResumeIntent(s, fork=True))
 
     def _key_stop(self, s: Session) -> None:
-        # Degrade gate FIRST (R2): off /proc every pid looks dead, so a stop
-        # could hit csctl's own session — refuse honestly before confirming.
-        if not proc.current_determinable():
-            self.app.notify(_DEGRADED)
-            return
-        if not s.alive:
-            self.app.notify("会话未在运行")
-            return
-        if s.current:
-            self.app.notify("不能停止当前会话")
-            return
-        self.app.confirm(
-            stop_message("停止会话", s.label),
-            lambda: self._do_terminate(s),
+        confirm_stop(
+            self.app, "会话", s.label, lambda: self._do_terminate(s),
+            alive=s.alive, current=s.current,
         )
 
     def _key_relaunch(self, s: Session) -> None:

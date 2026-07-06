@@ -31,6 +31,38 @@ def stop_message(verb: str, name: str) -> str:
     return f"{verb}「{truncate_cells(name, CONFIRM_NAME_CELLS)}」？将终止其进程。"
 
 
+def confirm_stop(
+    app: App,
+    noun: str,
+    name: str,
+    on_yes: Callable[[], None],
+    *,
+    alive: bool,
+    current: bool = False,
+    gated: bool = True,
+) -> None:
+    """The plain-stop twin of `confirm_takeover`: degrade-gate → alive →
+    current(self-protect) → confirm, with the 文案 derived from one `noun`
+    (停止{noun} / {noun}未在运行 / 不能停止当前{noun}).
+
+    `gated=False` skips the R10 degrade gate for stops that don't signal a
+    pid — the RC tab's stop kills a tmux window, not a process, so refusing
+    it off `/proc` would be a gate it never needed.
+    """
+    if gated and not proc.current_determinable():
+        app.notify(DEGRADED)
+        return
+    if not alive:
+        # 中西文混排: a latin-ending noun ("后台 agent") gets a space before 未.
+        sep = " " if noun and noun[-1].isascii() else ""
+        app.notify(f"{noun}{sep}未在运行")
+        return
+    if current:
+        app.notify(f"不能停止当前{noun}")
+        return
+    app.confirm(stop_message(f"停止{noun}", name), on_yes)
+
+
 def confirm_takeover(
     app: App,
     s: Session,

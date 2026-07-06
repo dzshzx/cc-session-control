@@ -28,7 +28,7 @@ from ..data.rc import set_rc_at_startup
 from ..models import RCProject, RCServer
 from ._base import ListTabView
 from ._colspec import header_columns, row_columns
-from ._confirm import stop_message
+from ._confirm import confirm_stop
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 
@@ -297,12 +297,10 @@ class RCView(ListTabView):
         self.app.trigger_async_refresh()
 
     def _key_stop(self, p: RCProject) -> None:
-        if p.status != "running":
-            self.app.notify("未在运行")
-            return
-        self.app.confirm(
-            stop_message("停止远控服务", p.name),
-            lambda: self._do_stop_one(p.name),
+        # gated=False: this stop kills a tmux window, not a pid — no R10 gate.
+        confirm_stop(
+            self.app, "远控服务", p.name, lambda: self._do_stop_one(p.name),
+            alive=p.status == "running", gated=False,
         )
 
     def _key_autostart(self, p: RCProject) -> None:
