@@ -180,7 +180,3 @@ Full maintainer guide: `docs/releasing.md`. The non-obvious bits:
 - **CI** (`.github/workflows/ci.yml`) runs the same test + `/home/` grep + build + smoke gate on every push to `master` and PR.
 - **TestPyPI dry run** (`.github/workflows/release-testpypi.yml`) is a manual `workflow_dispatch` that publishes to TestPyPI (env `testpypi`) without touching the real index — optional rehearsal before a real tag.
 - **Gotchas:** a published version is immutable — never overwrite it, bump to the next patch instead. `dist/` is gitignored; the local pre-release sequence mirrors the workflow (`uv run --extra dev pytest tests/`, the `/home/` grep, `uv build --no-sources`, wheel/sdist `csctl --version`, `uvx twine check dist/*`). Right after a publish, `uv` may not see the new version until you bust its index cache with `uv ... --refresh`.
-
-## Trellis
-
-This repo is managed by Trellis (see `AGENTS.md`). The development workflow, coding specs, and task tracking live under `.trellis/` (`workflow.md`, `spec/`, `tasks/`). Slash commands like `/trellis:continue` and `/trellis:finish-work` may be available. The `.trellis/`, `.agents/`, and `.codex/` directories are scaffolding for AI agents, not application code.

@@ -9,8 +9,7 @@ build/
 .pytest_cache/
 .mypy_cache/
 
-# Trellis workflow scaffolding + per-platform agent integration (local tooling)
-.trellis/
+# Per-platform agent integration (local tooling)
 .claude/
 .codex/
 .agents/
