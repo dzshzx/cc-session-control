@@ -156,8 +156,9 @@ def _cmd_prune(args: argparse.Namespace) -> None:
             print("Dry run. Add --apply to execute.")
             return
         # Deletes AT MOST the listed entries, revalidated against fresh
-        # protection data (删除 ⊆ 预览 — same executor as the TUI).
-        count = execute_orphan_removals(orphans)
+        # protection data (删除 ⊆ 预览 — same executor as the TUI; `sessions`
+        # feeds the transcript tier of the protection set).
+        count = execute_orphan_removals(orphans, sessions=sessions)
         print(f"Swept {count} orphan dir(s).")
         return
 

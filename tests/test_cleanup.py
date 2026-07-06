@@ -110,6 +110,17 @@ def test_execute_orphan_removals_deletes_at_most_the_preview(tmp_path, monkeypat
     assert os.path.isdir(os.path.join(tmp_path, "session-env", "late-orphan"))
 
 
+def test_execute_orphan_removals_fresh_transcript_protects(tmp_path, monkeypatch):
+    # A transcript that appeared between preview and confirm (no registry/live
+    # trace) feeds the protection set via the caller-supplied fresh scan.
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    _mkdir(tmp_path, "session-env", "ghost-sid")
+    entries = ["session-env/ghost-sid"]
+    fresh_scan = [_make_session(sid="ghost-sid")]
+    assert cleanup.execute_orphan_removals(entries, sessions=fresh_scan) == 0
+    assert os.path.isdir(os.path.join(tmp_path, "session-env", "ghost-sid"))
+
+
 # --- H1: orphan sweep protects registry-known / live / current sids ---------
 
 def _job(sid, **kw):

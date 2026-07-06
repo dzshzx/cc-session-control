@@ -197,23 +197,26 @@ def list_orphan_dirs(
     return sorted(set(orphans))
 
 
-def execute_orphan_removals(entries: list[str], *, known: set[str] | None = None) -> int:
+def execute_orphan_removals(
+    entries: list[str],
+    *,
+    sessions: list[Session] | None = None,
+    known: set[str] | None = None,
+) -> int:
     """Delete AT MOST the previewed orphan entries (`<label>/<sid>`).
 
     删除 ⊆ 预览 + revalidation: only entries from the frozen preview list are
-    touched, and each sid is re-checked against a FRESH protection set (the
-    registry / liveness / current sources of `known_sids`; `known=None`
-    self-fetches them at execution time) — a sid that became known between
-    preview and confirm is skipped, never the other way around. A transcript
-    that appeared without any registry/live trace is the one gap (scanning
-    transcripts here would invert the data DAG); its artifacts also can't have
-    been in the preview, so nothing unpreviewed is ever deleted.
-    Refuses without `/proc` (R10).
+    touched, and each sid is re-checked against a FRESH protection set —
+    `known_sids` over `sessions` (pass a freshly scanned transcript list;
+    scanning here would invert the data DAG) plus the self-fetched registry /
+    liveness / current sources — so a sid that became known between preview
+    and confirm is skipped, never the other way around. `known` overrides the
+    assembly entirely (tests). Refuses without `/proc` (R10).
     """
     if not proc.current_determinable():
         return 0
     if known is None:
-        known = _gather_known([], None, None, None, None)
+        known = _gather_known(sessions or [], None, None, None, None)
     base_by_label = dict(_sid_dir_paths())
     count = 0
     for entry in entries:

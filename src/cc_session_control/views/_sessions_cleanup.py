@@ -28,10 +28,19 @@ from ..data.cleanup import (
     execute_session_removals,
     execute_zombie_removals,
 )
+from ..data.sessions import scan
 from ..models import Session
 from ._confirm import DEGRADED as _DEGRADED
 from ._rows import TextRow
 from ._session_row import _ActionRow
+
+
+def _execute_orphans(entries: list[str]) -> int:
+    """Orphan executor with the FULL fresh protection set: a fresh transcript
+    scan feeds `known_sids`' transcript tier (the executor can't scan itself —
+    data-DAG), closing the window where a sid's transcript appeared between
+    preview and confirm without any registry/live trace."""
+    return execute_orphan_removals(entries, sessions=scan())
 
 
 def _session_line(s: Session) -> str:
@@ -75,7 +84,7 @@ _CLEANUP_ACTIONS: tuple[_CleanupAction, ...] = (
     _CleanupAction(
         key="orphans", label="孤儿目录(sid 键)", stat="orphan_dirs", gated=True,
         targets=lambda p: p.orphan_entries, format_row=str,
-        execute=execute_orphan_removals,
+        execute=_execute_orphans,
         none_notice="无孤儿目录需要清理",
         title_tpl="将清理 {n} 个孤儿目录", done_tpl="已清理 {n} 个孤儿目录",
     ),
