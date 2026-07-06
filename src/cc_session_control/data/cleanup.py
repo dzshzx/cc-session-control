@@ -80,9 +80,10 @@ def _session_artifact_paths(sid: str) -> list[str]:
     """All on-disk artifact paths owned by one session id (cfg-derived).
 
     Covers the sid-keyed dirs plus the 8-char-prefixed `jobs/<short>` dir for
-    this session. Used by `agent_ops.remove_job` (which has already alive-gated
-    the job). `remove_session` does NOT use this — it guards the `jobs/<short>`
-    path separately so a LIVE agent worker's jobs dir is never deleted (M3).
+    this session. Used by `remove_agent_artifacts` (whose caller,
+    `agent_ops.remove_job`, has already alive-gated the job). `remove_session`
+    does NOT use this — it guards the `jobs/<short>` path separately so a LIVE
+    agent worker's jobs dir is never deleted (M3).
     """
     return _sid_keyed_paths(sid) + [_jobs_path(sid)]
 
@@ -99,6 +100,26 @@ def _remove_path(path: str) -> bool:
         except OSError:
             return False
     return False
+
+
+def remove_agent_artifacts(short: str, sid: str) -> bool:
+    """Delete a settled background agent's `jobs/<short>` dir + sid artifacts.
+
+    Removes `jobs/<short>` first (the return value is True iff THAT removal
+    happened), then every path in `_session_artifact_paths(sid)` (the sid-keyed
+    dirs plus `jobs/<sid[:8]>` — a second remove of the same job dir when
+    `short == sid[:8]` is a harmless no-op).
+
+    The CALLER owns the gates: this function assumes the job has already been
+    alive-gated (a LIVE worker must never reach here) and that
+    `proc.current_determinable()` (R10) has already been checked — it only
+    deletes.
+    """
+    job_dir = os.path.join(str(cfg.jobs_dir), short)
+    removed = _remove_path(job_dir)
+    for path in _session_artifact_paths(sid):
+        _remove_path(path)
+    return removed
 
 
 # --- Strategy A: sid-keyed orphan dirs (H1 protected-sid set) --------------

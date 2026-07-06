@@ -94,15 +94,7 @@ def remove_job(job: AgentJob) -> bool:
     _, alive = job_host(job)
     if alive:
         return False
-    job_dir = os.path.join(str(cfg.jobs_dir), job.short)
-    removed = cleanup._remove_path(job_dir)
-    # Reuse cleanup's artifact-path helper / remover: it returns the sid-keyed
-    # dirs (session-env/file-history/tasks/uploads) plus jobs/<sid[:8]> (which
-    # usually equals job_dir — a second remove is a harmless no-op), so the job's
-    # session leaves no orphan artifacts behind.
-    for path in cleanup._session_artifact_paths(job.sid):
-        cleanup._remove_path(path)
-    return removed
+    return cleanup.remove_agent_artifacts(job.short, job.sid)
 
 
 # --- watch (read-only) --------------------------------------------------------
