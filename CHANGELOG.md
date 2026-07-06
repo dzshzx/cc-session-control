@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 (unreleased)
+## 0.7.0 (2026-07-06)
 
 **tmux-first dispatch** (ADR-0001, `docs/adr/0001-tmux-first-session-dispatch.md`):
 csctl is repositioned from a session panel into a tmux-first dispatch center —
