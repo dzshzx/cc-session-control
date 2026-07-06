@@ -40,7 +40,7 @@ def test_respawn_cmd_no_flags():
 def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
     captured = {}
     monkeypatch.setattr(
-        ao.rc, "run_in_tmux",
+        ao.tmux, "run_in_tmux",
         lambda session, window, cmd: captured.update(
             session=session, window=window, cmd=cmd) or "proj:1",
     )

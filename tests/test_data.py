@@ -240,20 +240,20 @@ def test_attach_target_dead_session_is_none():
 
 def test_attach_target_live_tmux_hosted(monkeypatch):
     import cc_session_control.actions.session_ops as so
-    monkeypatch.setattr(so.rc, "find_session_window", lambda pids: "cc:3" if 4242 in pids else None)
+    monkeypatch.setattr(so.tmux, "find_session_window", lambda pids: "cc:3" if 4242 in pids else None)
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
     assert so.attach_target(s) == "cc:3"
 
 
 def test_attach_target_live_bare_terminal(monkeypatch):
     import cc_session_control.actions.session_ops as so
-    monkeypatch.setattr(so.rc, "find_session_window", lambda pids: None)
+    monkeypatch.setattr(so.tmux, "find_session_window", lambda pids: None)
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
     assert so.attach_target(s) is None
 
 
 def test_window_containing_matches_ancestor():
-    from cc_session_control.data.rc import window_containing
+    from cc_session_control.data.tmux import window_containing
     panes = [("cc:1", 100), ("rc:0", 200)]
     assert window_containing(panes, {4242, 200}) == "rc:0"
     assert window_containing(panes, {4242}) is None
@@ -270,7 +270,7 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
     monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
     monkeypatch.setattr(
-        so.rc, "run_in_tmux",
+        so.tmux, "run_in_tmux",
         lambda session, window, cmd: calls["spawn"].append((session, window, cmd)) or f"{session}:1",
     )
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242)
@@ -286,7 +286,7 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
 def test_do_tmux_resume_dead_session_no_kill(monkeypatch):
     import cc_session_control.actions.session_ops as so
     monkeypatch.setattr(so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill")))
-    monkeypatch.setattr(so.rc, "run_in_tmux", lambda session, window, cmd: f"{session}:0")
+    monkeypatch.setattr(so.tmux, "run_in_tmux", lambda session, window, cmd: f"{session}:0")
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
     assert so.do_tmux_resume(s) == "proj:0"
 
@@ -305,7 +305,7 @@ def test_do_tmux_new_spawns_and_returns_target(monkeypatch):
     spawns = []
     monkeypatch.setattr(so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill")))
     monkeypatch.setattr(
-        so.rc, "run_in_tmux",
+        so.tmux, "run_in_tmux",
         lambda session, window, cmd: spawns.append((session, window, cmd)) or f"{session}:0",
     )
     target = so.do_tmux_new("/tmp/proj with space")
@@ -319,7 +319,7 @@ def test_do_tmux_new_spawns_and_returns_target(monkeypatch):
 
 def test_do_tmux_new_spawn_failure_returns_none(monkeypatch):
     import cc_session_control.actions.session_ops as so
-    monkeypatch.setattr(so.rc, "run_in_tmux", lambda *a: None)
+    monkeypatch.setattr(so.tmux, "run_in_tmux", lambda *a: None)
     assert so.do_tmux_new("/tmp/proj") is None
 
 
@@ -331,7 +331,7 @@ def test_relaunch_in_tmux_kills_live_non_current(monkeypatch):
     monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
     monkeypatch.setattr(so, "invalidate_cache", lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1))
-    monkeypatch.setattr(so.rc, "run_in_tmux",
+    monkeypatch.setattr(so.tmux, "run_in_tmux",
                         lambda session, window, cmd: calls.__setitem__("tmux", (session, window, cmd)) or f"{session}:1")
 
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242)
@@ -352,7 +352,7 @@ def test_relaunch_in_tmux_dead_no_kill(monkeypatch):
     monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
     monkeypatch.setattr(so, "invalidate_cache", lambda: None)
-    monkeypatch.setattr(so.rc, "run_in_tmux", lambda session, window, cmd: f"{session}:0")
+    monkeypatch.setattr(so.tmux, "run_in_tmux", lambda session, window, cmd: f"{session}:0")
 
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
     assert so.relaunch_in_tmux(s) is True
@@ -368,7 +368,7 @@ def test_relaunch_in_tmux_refuses_kill_without_proc(monkeypatch):
     monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
     monkeypatch.setattr(so, "invalidate_cache", lambda: None)
-    monkeypatch.setattr(so.rc, "run_in_tmux",
+    monkeypatch.setattr(so.tmux, "run_in_tmux",
                         lambda *a: calls.__setitem__("tmux", calls["tmux"] + 1) or "proj:0")
     monkeypatch.setattr(so.proc, "has_proc", lambda: False)
 
@@ -395,7 +395,7 @@ def test_do_resume_refuses_kill_without_proc(monkeypatch):
 
 
 def test_run_in_tmux_reports_new_window_failure(monkeypatch):
-    from cc_session_control.data import rc
+    from cc_session_control.data import tmux
 
     def fake_tmux(args):
         if args[0] == "has-session":
@@ -404,13 +404,13 @@ def test_run_in_tmux_reports_new_window_failure(monkeypatch):
             return subprocess.CompletedProcess(["tmux", *args], 1, "", "failed")
         raise AssertionError(args)
 
-    monkeypatch.setattr(rc, "_tmux_run", fake_tmux)
+    monkeypatch.setattr(tmux, "_tmux_run", fake_tmux)
 
-    assert rc.run_in_tmux("rc", "proj", "cmd") is None
+    assert tmux.run_in_tmux("rc", "proj", "cmd") is None
 
 
 def test_run_in_tmux_reports_new_session_failure(monkeypatch):
-    from cc_session_control.data import rc
+    from cc_session_control.data import tmux
 
     def fake_tmux(args):
         if args[0] == "has-session":
@@ -419,13 +419,13 @@ def test_run_in_tmux_reports_new_session_failure(monkeypatch):
             return subprocess.CompletedProcess(["tmux", *args], 1, "", "failed")
         raise AssertionError(args)
 
-    monkeypatch.setattr(rc, "_tmux_run", fake_tmux)
+    monkeypatch.setattr(tmux, "_tmux_run", fake_tmux)
 
-    assert rc.run_in_tmux("rc", "proj", "cmd") is None
+    assert tmux.run_in_tmux("rc", "proj", "cmd") is None
 
 
 def test_run_in_tmux_returns_printed_target(monkeypatch):
-    from cc_session_control.data import rc
+    from cc_session_control.data import tmux
 
     def fake_tmux(args):
         if args[0] == "has-session":
@@ -435,13 +435,13 @@ def test_run_in_tmux_returns_printed_target(monkeypatch):
             return subprocess.CompletedProcess(["tmux", *args], 0, "proj:3\n", "")
         raise AssertionError(args)
 
-    monkeypatch.setattr(rc, "_tmux_run", fake_tmux)
+    monkeypatch.setattr(tmux, "_tmux_run", fake_tmux)
 
-    assert rc.run_in_tmux("proj", "claude", "cmd") == "proj:3"
+    assert tmux.run_in_tmux("proj", "claude", "cmd") == "proj:3"
 
 
 def test_session_name_for_sanitizes_tmux_separators():
-    from cc_session_control.data.rc import session_name_for
+    from cc_session_control.data.tmux import session_name_for
     assert session_name_for("/tmp/myproj") == "myproj"
     assert session_name_for("/tmp/myproj/") == "myproj"
     assert session_name_for("/tmp/my.proj") == "my-proj"
@@ -450,7 +450,7 @@ def test_session_name_for_sanitizes_tmux_separators():
 
 
 def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
-    from cc_session_control.data import rc
+    from cc_session_control.data import rc, tmux
 
     proj = "project with space"
     (tmp_path / proj).mkdir()
@@ -458,9 +458,9 @@ def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
     monkeypatch.setattr(rc.cfg, "workspace", tmp_path)
     monkeypatch.setattr(rc, "is_trusted", lambda name: True)
     monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
-    monkeypatch.setattr(rc, "_tmux_has_session", lambda session: False)
+    monkeypatch.setattr(tmux, "_tmux_has_session", lambda session: False)
     monkeypatch.setattr(
-        rc,
+        tmux,
         "_tmux_new_session",
         lambda session, window, cmd: calls.__setitem__("cmd", cmd) or True,
     )
@@ -474,7 +474,7 @@ def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
 
 
 def test_start_one_refuses_running_window(tmp_path, monkeypatch):
-    from cc_session_control.data import rc
+    from cc_session_control.data import rc, tmux
 
     proj = "proj"
     (tmp_path / proj).mkdir()
@@ -489,7 +489,7 @@ def test_start_one_refuses_running_window(tmp_path, monkeypatch):
         lambda name: calls.__setitem__("kill", calls["kill"] + 1) or True,
     )
     monkeypatch.setattr(
-        rc,
+        tmux,
         "_tmux_new_window",
         lambda *a: calls.__setitem__("new", calls["new"] + 1) or True,
     )
@@ -499,7 +499,7 @@ def test_start_one_refuses_running_window(tmp_path, monkeypatch):
 
 
 def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
-    from cc_session_control.data import rc
+    from cc_session_control.data import rc, tmux
 
     proj = "proj"
     (tmp_path / proj).mkdir()
@@ -513,9 +513,9 @@ def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
         "stop_one",
         lambda name: calls.__setitem__("kill", calls["kill"] + 1) or True,
     )
-    monkeypatch.setattr(rc, "_tmux_has_session", lambda session: True)
+    monkeypatch.setattr(tmux, "_tmux_has_session", lambda session: True)
     monkeypatch.setattr(
-        rc,
+        tmux,
         "_tmux_new_window",
         lambda session, window, cmd: calls.__setitem__("cmd", cmd) or True,
     )

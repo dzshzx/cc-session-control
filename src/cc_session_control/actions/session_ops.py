@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .. import clipboard
-from ..data import proc, rc
+from ..data import proc, tmux
 from ..data.liveness import invalidate_cache
 from ..models import Session
 
@@ -151,7 +151,7 @@ def _spawn_in_tmux(s: Session, cmd: str, fork: bool = False) -> str | None:
     _, _, should_kill = _resume_plan(s, fork)
     if should_kill and s.pid and take_over(s.pid, s.proc_start) == "refused":
         return None
-    return rc.run_in_tmux(rc.session_name_for(s.cwd), s.sid[:8], cmd)
+    return tmux.run_in_tmux(tmux.session_name_for(s.cwd), s.sid[:8], cmd)
 
 
 def relaunch_in_tmux(s: Session, fork: bool = False) -> bool:
@@ -173,7 +173,7 @@ def attach_target(s: Session) -> str | None:
     a bare terminal (those need `do_tmux_resume`)."""
     if not s.alive or not s.pid:
         return None
-    return rc.find_session_window([s.pid])
+    return tmux.find_session_window([s.pid])
 
 
 def tmux_foreground_cmd(s: Session) -> str:
@@ -205,7 +205,7 @@ def do_tmux_new(directory: str) -> str | None:
     either: the user lands inside the window, so claude's own trust dialog
     shows interactively."""
     cmd = f"cd {shlex.quote(directory)} && claude"
-    return rc.run_in_tmux(rc.session_name_for(directory), "claude", cmd)
+    return tmux.run_in_tmux(tmux.session_name_for(directory), "claude", cmd)
 
 
 # --- exit intents (the payload crossing the exit-then-exec seam) ------------
@@ -282,10 +282,10 @@ def enter_window(target: str) -> bool:
     return so the caller exits csctl normally — both paths end csctl, keeping
     "接回 = 离开 csctl" uniform. select-window failure is non-fatal (the user
     lands in the session and can pick the window by hand)."""
-    rc.select_window(target)
+    tmux.select_window(target)
     session = target.split(":", 1)[0]
     if os.environ.get("TMUX"):
-        return rc.switch_client(target)
+        return tmux.switch_client(target)
     try:
         os.execvp("tmux", ["tmux", "attach-session", "-t", session])
     except OSError:

@@ -25,7 +25,7 @@ import os
 import shlex
 
 from ..config import cfg
-from ..data import cleanup, liveness, proc, rc, registry
+from ..data import cleanup, liveness, proc, registry, tmux
 from ..models import AgentJob, Session
 from . import session_ops
 
@@ -71,12 +71,12 @@ def respawn(job: AgentJob) -> str:
     """Relaunch a background agent in tmux; returns the exact command string.
 
     Runs `respawn_cmd(job)` in the job's per-project tmux session
-    (`rc.session_name_for(job.cwd)`) so it outlives the terminal — it does NOT
+    (`tmux.session_name_for(job.cwd)`) so it outlives the terminal — it does NOT
     os.exec/replace the csctl process. The returned string also feeds the
     clipboard `y`-style key.
     """
     cmd = respawn_cmd(job)
-    rc.run_in_tmux(rc.session_name_for(job.cwd), _job_window(job), cmd)
+    tmux.run_in_tmux(tmux.session_name_for(job.cwd), _job_window(job), cmd)
     return cmd
 
 
