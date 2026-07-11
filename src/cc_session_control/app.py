@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import urwid
 
+from . import theme
 from .data import proc
 from .data.snapshot import WorldSnapshot, build_world_snapshot
 from .views.agents import AgentsView
@@ -47,28 +48,6 @@ class TabView(Protocol):
     def handle_key(self, key: str) -> None: ...
     def captures_text(self) -> bool: ...  # True while a text mode owns EVERY key (incl. tab/q)
 
-# 6-tuple: (name, fg_16, bg_16, mono, fg_256, bg_256)
-# ONE semantic set — views reference these names only (no per-tab duplicates;
-# the old rc_running/rc_stopped were aliases of alive/dead and are gone).
-# 256-color foregrounds are kept ≥ 4.5:1 against their background (WCAG-AA-ish,
-# checked via relative luminance): #aaa/#111 ≈ 8.1, #7ab/#111 ≈ 7.4,
-# #9cc/#181818 ≈ 10.0, #bbb/#111 ≈ 9.8, #d66/#111 ≈ 5.5.
-PALETTE = [
-    ("header",      "white,bold",  "black", "bold",     "#fff,bold",  "#111"),
-    ("footer",      "light gray",  "black", None,       "#aaa",       "#111"),
-    ("tab_on",      "white,bold",  "dark cyan", "bold,standout", "#fff,bold", "#068"),
-    ("tab_off",     "light cyan",  "black", None,       "#7ab",       "#111"),
-    ("alive",       "light green", "black", None,       "#6d6",       "#111"),
-    ("status_busy", "light green,bold", "black", "bold", "#6d6,bold", "#111"),
-    ("status_err",  "light red",   "black", None,       "#d66",       "#111"),
-    ("dead",        "light gray",  "black", None,       "#ccc",       "#111"),
-    ("selected",    "white,bold",  "dark cyan", "standout", "#fff,bold", "#068"),
-    ("notify",      "yellow,bold", "black", "bold",     "#ff0,bold",  "#111"),
-    ("status",      "light gray",  "black", None,       "#bbb",       "#111"),
-    ("body",        "light gray",  "black", None,       "#ccc",       "#111"),
-    ("col_header",  "dark cyan",   "black", None,       "#9cc",       "#181818"),
-]
-
 # Launcher-first order (ADR-0001): startup lands on 项目 (the tmux-first
 # dispatch entry), then 会话 / 后台. In lockstep with `self.views` below.
 TAB_NAMES = ["项目", "会话", "后台"]
@@ -80,6 +59,10 @@ FOOTER_PREFIX = " Tab 切换 · q 退出 · r 刷新 · "
 
 
 def _make_screen() -> urwid.raw_display.Screen:
+    # The theme query (OSC 11) runs here, before `loop.run()` puts the tty
+    # into urwid's hands; the palette itself lives in `theme.py` (ONE semantic
+    # attr set, dark/light generated from a single spec).
+    mode = theme.detect_mode()
     screen = urwid.raw_display.Screen()
     try:
         curses.setupterm()
@@ -88,7 +71,7 @@ def _make_screen() -> urwid.raw_display.Screen:
             screen.set_terminal_properties(colors=256)
     except Exception:
         pass
-    screen.register_palette(PALETTE)
+    screen.register_palette(theme.palette(mode))
     return screen
 
 

@@ -81,6 +81,7 @@ csctl skill uninstall
 
 # Options
 csctl --workspace ~/projects   # Override workspace root
+csctl --theme light            # Force the TUI palette (auto/dark/light)
 csctl --version
 ```
 
@@ -91,6 +92,7 @@ csctl --version
 | `CSCTL_WORKSPACE` | `~/workspace` | Workspace root directory |
 | `CSCTL_RC_SESSION` | `rc` | tmux session name for RC servers |
 | `CSCTL_RC_STAGGER` | `2` | Seconds between starting RC servers |
+| `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via OSC 11 / `$COLORFGBG`) / `dark` / `light`. tmux typically doesn't answer the OSC 11 query, so inside tmux `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |
 | `XDG_CONFIG_HOME` | `~/.config` | Config directory base |
 
 RC auto-start list is stored at `$XDG_CONFIG_HOME/csctl/rc-enabled`.

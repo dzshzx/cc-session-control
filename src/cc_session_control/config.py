@@ -18,6 +18,8 @@ class Config:
         self.rc_stagger: int = int(os.environ.get("CSCTL_RC_STAGGER", "2"))
         # Age threshold (days) for the time/global-keyed cleanup strategy.
         self.cleanup_age_days: int = int(os.environ.get("CSCTL_CLEANUP_AGE_DAYS", "14"))
+        # TUI palette: "auto" (detect the terminal background) | "dark" | "light".
+        self.theme: str = os.environ.get("CSCTL_THEME", "auto")
         self._workspace: Path | None = None
 
     @property

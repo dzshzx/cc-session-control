@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Adaptive terminal theme**: the TUI detects the terminal background at
+  startup (`CSCTL_THEME`/`--theme` override → OSC 11 query → `$COLORFGBG` →
+  dark) and registers a dark or light palette accordingly (new top-level
+  `theme.py`; both palettes are generated from ONE spec so the semantic attr
+  set can't diverge). List/body attrs now use the terminal's default
+  background instead of forcing near-black, so csctl blends into the
+  terminal's own theme; light terminals get dark-on-light foregrounds kept
+  ≥ 4.5:1. The OSC 11 query ships with a DA1 sentinel, so terminals that
+  ignore it (tmux without an explicit bg — the common csctl case, measured
+  0.3ms) answer in one round-trip instead of stalling startup for the full
+  reply timeout; inside tmux `auto` therefore falls back to dark — force
+  `light` explicitly on a light terminal.
+
 ## 0.7.1 (2026-07-07)
 
 ### Changed

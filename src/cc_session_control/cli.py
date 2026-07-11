@@ -17,6 +17,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"csctl {__version__}")
     parser.add_argument("--workspace", type=Path, help="Override workspace root directory")
+    parser.add_argument(
+        "--theme", choices=("auto", "dark", "light"),
+        help="TUI palette (default: auto-detect the terminal background; env CSCTL_THEME)",
+    )
 
     sub = parser.add_subparsers(dest="command")
 
@@ -67,10 +71,12 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _apply_workspace(args: argparse.Namespace) -> None:
+def _apply_global_flags(args: argparse.Namespace) -> None:
+    from .config import cfg
     if args.workspace:
-        from .config import cfg
         cfg.workspace = args.workspace
+    if args.theme:
+        cfg.theme = args.theme
 
 
 def _cmd_rc(args: argparse.Namespace) -> None:
@@ -311,7 +317,7 @@ def _cmd_tui(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
-    _apply_workspace(args)
+    _apply_global_flags(args)
 
     if args.command == "rc":
         _cmd_rc(args)

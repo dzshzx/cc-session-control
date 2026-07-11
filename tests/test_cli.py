@@ -96,3 +96,17 @@ def test_prune_sweep_zombies_refuses_without_proc(tmp_path, monkeypatch, capsys)
     out = capsys.readouterr().out
     assert "Refused" in out
     assert os.path.exists(os.path.join(sessions_dir, "1.json"))  # nothing removed
+
+
+def test_theme_flag_sets_cfg(monkeypatch):
+    monkeypatch.setattr(cfg, "theme", "auto")
+    args = cli._build_parser().parse_args(["--theme", "light"])
+    cli._apply_global_flags(args)
+    assert cfg.theme == "light"
+
+
+def test_theme_flag_absent_keeps_cfg(monkeypatch):
+    monkeypatch.setattr(cfg, "theme", "auto")
+    args = cli._build_parser().parse_args([])
+    cli._apply_global_flags(args)
+    assert cfg.theme == "auto"
