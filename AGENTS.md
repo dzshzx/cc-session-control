@@ -1,12 +1,18 @@
-# Agent Rules
+# Codex 项目契约
 
-完整开发指南（架构、命令、不变量）在 `CLAUDE.md`；建议会话开始时读一次 @CLAUDE.md，同一会话内不必重读。领域词汇表在 `CONTEXT.md`（Live Session、Bridge Environment 等）。
-通用行为契约与机器事实由全局指令层承载；本文件只记非 Claude agent 需额外知道的项目事实。
+## 范围与架构
 
-## 项目边界
+- `csctl` 是仅限 Linux/WSL 的本地 sessions、后台 agents 和 Remote Control 操作员 TUI。它读取 `~/.claude`、检查 `/proc`，并调用本地 CLI 与 tmux。没有 `/proc` 时，显示降级状态，并拒绝无法证明当前 session 安全的破坏性操作。
+- 保持 tmux-first 模型：每个项目的 tmux window 是主要的 session 生命周期载体；Remote Control 是次要入口。所有 tmux subprocess 调用都属于 `data/tmux.py`。
+- `data/` 以自底向上的 DAG 管理外部状态读写。`data/proc.py` 是唯一的 `/proc` 接缝，`data/liveness.py` 是 liveness 权威，`config.py::cfg` 是唯一的路径权威。`views/` 只消费 `data/` 和 `actions/`，不得反向 import；worker 刷新只填充 pending data，urwid widget 只能在 main loop 上变更。
 
-- csctl 是面向 Claude Code 自身 sessions/agents/Remote-Control 的操作员工具：它读取 `~/.claude` 的磁盘状态，遍历 `/proc`，并 shell 调用 `claude` + `tmux`（tmux-first，ADR-0001）。仅限 Linux/WSL。
-- 贡献约束（CONTRIBUTING.md）：处处加 type hints；禁止硬编码机器路径——护栏 `grep -rn --include='*.py' '/home/' src/` 必须无输出。
-- 版本号单一来源于 `src/cc_session_control/__init__.py`；只能通过 `python scripts/bump_version.py {patch|minor|major}` 步进；带注解的 `vX.Y.Z` tag 会经 Trusted Publishing 发布到 PyPI。
-- 对通用「不吞错」规则的有意例外：data 函数吞掉错误并返回安全空值——TUI 绝不能崩溃。不要「修复」这一点。
-- 测试：`uv run --extra dev pytest tests/`；优先用 `tmp_path`/`monkeypatch` 造假，而非触碰实时的 `~/.claude` 或 tmux 状态。
+## 外部失败
+
+- 只对可预期、可恢复的外部失败返回带类型的安全值（`[]`、`{}`、`False` 或 `None`）：缺失或畸形的运行时文件、`/proc` 扫描期间进程消失，以及 tmux/CLI 探测不可用、超时或返回非零。操作必须把相应的失败或降级状态暴露给操作员。
+- 不得新增兜底式 `except Exception`。解析器、invariant 和编程错误必须带上下文地在 UI 或 CLI 错误边界保持可观察；绝不能变成看似成功的空结果。
+
+## 开发护栏
+
+- 使用 type hints。不得硬编码机器路径；`grep -rn --include='*.py' '/home/' src/` 必须无输出。
+- 全量运行 `uv run --extra dev pytest tests/`，或运行聚焦节点，例如 `uv run --extra dev pytest tests/test_views.py::test_sessions_view_filter_logic`。用 `tmp_path` 和 `monkeypatch` 造假，不要触碰实时 `~/.claude` 或 tmux 状态。
+- 唯一版本源是 `src/cc_session_control/__init__.py`。用 `python scripts/bump_version.py {patch|minor|major}` 步进；匹配的带注解 `vX.Y.Z` tag 是 PyPI Trusted Publishing 的发布触发器。
