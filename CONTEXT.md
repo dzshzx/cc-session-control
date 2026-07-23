@@ -58,9 +58,15 @@ gate, which inherits trust down the directory tree (verified on claude
 (rc-enabled list, tmux window metadata, claude.json lookups); the display name
 is a derived basename. An entry with an explicit False flag under a trusted
 ancestor IS a project — that footprint means "dialog suppressed, never asked",
-not "declined" (declining writes no entry at all).
+not "declined" (declining writes no entry at all). Platform temp directories
+(`tempfile.gettempdir()`, `/tmp`, `/var/tmp`, and anything beneath them) are
+working space, not projects: trust discovery alone never lists them — the
+trust state itself stays untouched, so a deliberately trusted `/tmp` keeps
+suppressing dialogs for scratch sessions — while explicitly actionable
+entries (autostart list, existing rc window) stay listed.
 _Avoid_: workspace-relative short names as identity, reading the raw
-`hasTrustDialogAccepted` flag as the trust set, assuming a workspace root
+`hasTrustDialogAccepted` flag as the trust set, assuming a workspace root,
+treating a trusted temp root as a project
 
 **Remote Control** (umbrella term — two distinct concepts, do not conflate):
 

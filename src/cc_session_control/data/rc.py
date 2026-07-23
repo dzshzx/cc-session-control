@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shlex
+import tempfile
 import time
 
 from ..config import cfg
@@ -161,6 +162,27 @@ def _trusted_in(projects: dict) -> set[str]:
     }
 
 
+# Platform temp roots — working space, never projects. Keeping a temp root
+# trusted (so throwaway sessions skip the dialog) must not surface it in the
+# launcher; this is a MEMBERSHIP rule, the trust state itself is untouched.
+_TEMP_ROOTS = frozenset(
+    os.path.normpath(p) for p in (tempfile.gettempdir(), "/tmp", "/var/tmp")
+)
+
+
+def _is_temp_path(path: str) -> bool:
+    """PURE: is `path` a platform temp root, or beneath one?
+
+    Same segment-boundary matching as `models.effective_trust` (normpath
+    only; `/tmpfoo` is not under `/tmp`).
+    """
+    target = os.path.normpath(path)
+    for root in _TEMP_ROOTS:
+        if target == root or target.startswith(root.rstrip("/") + "/"):
+            return True
+    return False
+
+
 def trusted_projects() -> list[str]:
     """Absolute paths of every effectively-trusted claude.json project entry.
 
@@ -258,6 +280,11 @@ def scan() -> list[RCProject]:
             # is dropped instead of rendered as a ✖ 缺失 row. Missing-dir
             # projects that ARE actionable (in the autostart list, or with a
             # live/dead tmux window) stay listed.
+            continue
+        if _is_temp_path(path) and path not in enabled and win is None:
+            # Temp dirs reached via trust discovery alone are dropped —
+            # same escape hatch as above: explicitly actionable entries
+            # (autostart list, existing rc window) stay listed.
             continue
         if win is not None:
             status = "dead" if win.dead else "running"

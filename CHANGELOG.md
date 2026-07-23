@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.4 (2026-07-23)
+
+### Changed
+
+- **Platform temp directories are excluded from 项目 membership**: paths at or
+  beneath `tempfile.gettempdir()`, `/tmp`, or `/var/tmp` no longer surface in
+  the 项目 tab / `csctl rc status` via trust discovery alone. This is a
+  membership rule, not a trust rule — `~/.claude.json` is untouched, so a
+  deliberately trusted `/tmp` keeps suppressing dialogs for scratch sessions
+  while its basename no longer shows up as a launchable "project". Explicitly
+  actionable entries (in the autostart list, or holding an rc tmux window)
+  stay listed, mirroring the existing missing-dir residue escape. Single
+  predicate: `rc._is_temp_path` (segment-boundary matching, normpath only).
+
 ## 0.7.3 (2026-07-23)
 
 ### Added

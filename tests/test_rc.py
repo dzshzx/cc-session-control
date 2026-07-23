@@ -193,6 +193,8 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
     monkeypatch.setattr(rc, "list_enabled", lambda: [])
     monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    # tmp_path is under the real temp root — neutralize the membership filter.
+    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
 
     rows = {p.name: p for p in rc.scan()}
     assert rows["proj"].spawn_mode == "new-window"
@@ -243,6 +245,8 @@ def test_scan_marks_missing_directory(tmp_path, monkeypatch):
         rc, "_tmux_windows",
         lambda: [TmuxWindow("@1", "gone-running", False, 5, gone_running)],
     )
+    # tmp_path is under the real temp root — neutralize the membership filter.
+    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
 
     rows = {p.directory: p for p in rc.scan()}
     assert set(rows) == {str(alive), gone_enabled, gone_running}

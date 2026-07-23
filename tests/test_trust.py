@@ -92,8 +92,9 @@ def test_empty_inputs():
 
 # --- scan-level membership (path-keyed, inheritance-aware) ------------------
 
-def _wire_scan(tmp_path, monkeypatch, projects, enabled=()):
+def _wire_scan(tmp_path, monkeypatch, projects, enabled=(), temp_roots=()):
     import json
+    import os
 
     from cc_session_control.data import rc
 
@@ -102,6 +103,10 @@ def _wire_scan(tmp_path, monkeypatch, projects, enabled=()):
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
     monkeypatch.setattr(rc, "list_enabled", lambda: list(enabled))
     monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    # pytest tmp_path lives under the REAL platform temp root, so the temp-dir
+    # membership filter is neutralized unless a test injects roots explicitly.
+    monkeypatch.setattr(rc, "_TEMP_ROOTS",
+                        frozenset(os.path.normpath(p) for p in temp_roots))
     return rc
 
 
@@ -131,6 +136,80 @@ def test_scan_excludes_untrusted_entry(tmp_path, monkeypatch):
     })
 
     assert rc.scan() == []
+
+
+# --- temp-dir membership filter (trust untouched, discovery only) -----------
+
+def test_is_temp_path_segment_boundary(monkeypatch):
+    from cc_session_control.data import rc
+
+    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset({"/tmp"}))
+    assert rc._is_temp_path("/tmp") is True
+    assert rc._is_temp_path("/tmp/x/y") is True
+    assert rc._is_temp_path("/tmpfoo") is False
+    assert rc._is_temp_path("/home/u/tmp") is False
+
+
+def test_scan_drops_temp_root_and_subtree(tmp_path, monkeypatch):
+    # The motivating shape: /tmp itself trusted (kept trusted on purpose so
+    # scratchpad sessions skip the dialog) must not surface as a project.
+    troot = tmp_path / "t"
+    sub = troot / "scratch"
+    sub.mkdir(parents=True)
+    rc = _wire_scan(tmp_path, monkeypatch, {
+        str(troot): {"hasTrustDialogAccepted": True},
+        str(sub): {"hasTrustDialogAccepted": False},
+    }, temp_roots={str(troot)})
+
+    assert rc.scan() == []
+    # Trust itself is NOT touched — the start gate still passes.
+    assert rc.is_trusted(str(sub)) is True
+
+
+def test_scan_keeps_enabled_temp_project(tmp_path, monkeypatch):
+    troot = tmp_path / "t"
+    sub = troot / "demo"
+    sub.mkdir(parents=True)
+    rc = _wire_scan(tmp_path, monkeypatch, {
+        str(troot): {"hasTrustDialogAccepted": True},
+    }, enabled=(str(sub),), temp_roots={str(troot)})
+
+    rows = {p.directory for p in rc.scan()}
+    assert rows == {str(sub)}
+
+
+def test_scan_keeps_temp_project_with_rc_window(tmp_path, monkeypatch):
+    from cc_session_control.data import tmux
+
+    troot = tmp_path / "t"
+    sub = troot / "served"
+    sub.mkdir(parents=True)
+    # A server's claude leaves the suppressed-False footprint, so the path
+    # IS enumerated (windows join rows, they don't create membership).
+    rc = _wire_scan(tmp_path, monkeypatch, {
+        str(troot): {"hasTrustDialogAccepted": True},
+        str(sub): {"hasTrustDialogAccepted": False},
+    }, temp_roots={str(troot)})
+    monkeypatch.setattr(rc, "_tmux_windows", lambda: [
+        tmux.TmuxWindow(wid="@1", name="served", dead=False, pid=42,
+                        path=str(sub)),
+    ])
+
+    rows = {p.directory: p for p in rc.scan()}
+    assert set(rows) == {str(sub)}
+    assert rows[str(sub)].status == "running"
+
+
+def test_scan_temp_root_does_not_cover_sibling(tmp_path, monkeypatch):
+    # Segment boundary: a "t-ext" sibling of temp root "t" stays listed.
+    troot = tmp_path / "t"
+    sibling = tmp_path / "t-ext"
+    sibling.mkdir(parents=True)
+    rc = _wire_scan(tmp_path, monkeypatch, {
+        str(sibling): {"hasTrustDialogAccepted": True},
+    }, temp_roots={str(troot)})
+
+    assert {p.directory for p in rc.scan()} == {str(sibling)}
 
 
 # --- rc-enabled migration (legacy short names → absolute paths) -------------
