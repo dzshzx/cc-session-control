@@ -63,6 +63,9 @@ _PROJECT_COLS = [
 class RCRow(urwid.WidgetWrap):
     def __init__(self, project: RCProject) -> None:
         self.project = project
+        # Focus identity for the shared rebuild — activity ordering may move
+        # this row between refreshes; the cursor follows the path key.
+        self.row_key = project.directory
         status_text = _STATUS_MAP.get(project.status, project.status)
         attr = _STATUS_ATTR.get(project.status, "dead")
         directory = project.directory
@@ -221,9 +224,12 @@ class RCView(ListTabView):
     def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
         """Worker-thread data fetch. Only sets pending fields — no widgets."""
         if snapshot is not None:
-            self.set_pending(snapshot.rc_projects)
+            self.set_pending(
+                rc.order_by_activity(snapshot.rc_projects, snapshot.sessions))
             self._pending_servers = snapshot.rc_servers
         else:
+            # Self-fetch fallback (snapshot build failure / unit tests) has no
+            # session scan — degrades to scan()'s path order by design.
             self.set_pending(rc.scan())
             self._pending_servers = rc.scan_servers()
 

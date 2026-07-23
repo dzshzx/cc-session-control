@@ -2,6 +2,17 @@
 
 ## 0.7.3 (2026-07-23)
 
+### Added
+
+- **Activity ordering for the 项目 tab and `csctl rc status`**: projects sort
+  by their most recent session activity (exact-cwd join against the shared
+  world snapshot; the CLI runs one transcript scan, like `csctl resume`), and
+  never-active projects sink path-ascending — broad-root members such as a
+  trusted `/tmp` no longer crowd the launcher's top. The cursor follows the
+  focused project's identity (`row_key`) across refresh reorders instead of
+  sticking to a list position; the no-snapshot fallback keeps plain path
+  order. Single ordering source: `rc.order_by_activity`.
+
 ### Changed
 
 - **项目 membership is path-keyed with effective trust — the workspace-root

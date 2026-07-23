@@ -17,7 +17,14 @@ import shlex
 import time
 
 from ..config import cfg
-from ..models import EnvRecord, RCProject, RCServer, effective_trust, split_env_id
+from ..models import (
+    EnvRecord,
+    RCProject,
+    RCServer,
+    Session,
+    effective_trust,
+    split_env_id,
+)
 from . import environments, proc, tmux
 
 # Cloud bridge env id printed to a managed server's pane (`environment=env_…`).
@@ -269,6 +276,32 @@ def scan() -> list[RCProject]:
             dir_exists=dir_exists,
         ))
     return result
+
+
+def order_by_activity(
+    projects: list[RCProject], sessions: list[Session]
+) -> list[RCProject]:
+    """PURE: most-recently-active projects first (exact-cwd session join).
+
+    THE one ordering — the 项目 tab and `csctl rc status` both call it, so the
+    two surfaces can't diverge. A session counts toward the project whose
+    directory equals its cwd (normpath); no ancestor roll-up — a subdirectory
+    where claude ran is a member itself. Never-active projects sink,
+    path-ascending, so broad-root members (a trusted `/tmp`) stay out of the
+    way instead of crowding the launcher's top.
+    """
+    latest: dict[str, float] = {}
+    for s in sessions:
+        if not s.cwd:
+            continue
+        key = os.path.normpath(s.cwd)
+        if s.mtime > latest.get(key, 0.0):
+            latest[key] = s.mtime
+    return sorted(
+        projects,
+        key=lambda p: (-latest.get(os.path.normpath(p.directory), 0.0),
+                       p.directory),
+    )
 
 
 def _capture_env_id(target: str) -> str:

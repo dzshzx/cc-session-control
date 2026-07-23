@@ -85,7 +85,11 @@ def _cmd_rc(args: argparse.Namespace) -> None:
     sub = args.rc_command
 
     if sub == "status":
-        projects = rc.scan()
+        from .data.sessions import scan as scan_sessions
+
+        # Same ordering as the 项目 tab (rc.order_by_activity — single
+        # source); costs one transcript scan, like `csctl resume`.
+        projects = rc.order_by_activity(rc.scan(), scan_sessions())
         for p in projects:
             icon = {"running": "[running]", "dead": "[dead   ]", "stopped": "[stopped]"}.get(p.status, p.status)
             auto = "auto" if p.auto_start else "    "

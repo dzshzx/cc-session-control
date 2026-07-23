@@ -612,6 +612,25 @@ def test_rc_view_o_key_starts_rc_server(monkeypatch):
     assert any("已启动 p1" in m for m in app._notifications)
 
 
+def test_rc_view_focus_follows_project_across_reorder():
+    # Activity ordering may move rows between refreshes; the cursor must stay
+    # on the same project (row_key identity), not the same list position.
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    a = _make_project(name="a", directory="/tmp/a")
+    b = _make_project(name="b", directory="/tmp/b")
+    view._pending = [a, b]
+    view.apply_data()
+    view.walker.set_focus(1)                       # cursor on /tmp/b
+
+    view._pending = [b, a]                         # reorder (activity flip)
+    view.apply_data()
+
+    focused = view.walker.get_focus()[0]
+    assert focused.project.directory == "/tmp/b"   # followed identity, not index
+
+
 def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
     import cc_session_control.views.rc as rc_view_mod
 

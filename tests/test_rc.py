@@ -199,6 +199,29 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
     assert rows["other"].spawn_mode is None          # key present, mode unset
 
 
+def test_order_by_activity_recent_first_never_active_sink():
+    from cc_session_control.models import RCProject, Session
+
+    def proj(d):
+        return RCProject(name=d.rsplit("/", 1)[-1], directory=d, trusted=True,
+                         in_list=False, status="stopped", auto_start=False)
+
+    def sess(cwd, mtime):
+        return Session(sid="s", cwd=cwd, label="", mtime=mtime, prompts=0,
+                       pid=None, alive=False, current=False)
+
+    projects = [proj("/a"), proj("/b"), proj("/c"), proj("/z-never")]
+    sessions = [
+        sess("/b", 100.0), sess("/b", 30.0),      # max wins
+        sess("/c", 50.0),
+        sess("/c/sub", 999.0),                    # subdir does NOT roll up
+        sess("", 999.0),                          # empty cwd ignored
+    ]
+
+    ordered = rc.order_by_activity(projects, sessions)
+    assert [p.directory for p in ordered] == ["/b", "/c", "/a", "/z-never"]
+
+
 def test_scan_marks_missing_directory(tmp_path, monkeypatch):
     """A missing-dir project stays listed (dir_exists=False) only while it is
     still actionable — in the autostart list or holding a tmux window. Pure

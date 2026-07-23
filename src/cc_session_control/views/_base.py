@@ -47,12 +47,25 @@ class ListTabView:
     # --- rendering plumbing ---
 
     def _rebuild(self) -> None:
-        """Rebuild the list walker in place, preserving the focused position."""
-        focus_pos = self.walker.get_focus()[1] if self.walker else 0
+        """Rebuild the list walker in place, preserving the focused row.
+
+        When the focused row declares a `row_key` identity, focus follows that
+        key across the rebuild — rows may reorder between refreshes (e.g. 项目
+        activity ordering) and the cursor must stay on the same item, not the
+        same list position. Rows without `row_key` keep the positional
+        behavior."""
+        focused, focus_pos = self.walker.get_focus() if self.walker else (None, 0)
+        focus_key = getattr(focused, "row_key", None)
         self.walker.clear()
         self._build_rows()
         if self.walker and focus_pos is not None:
-            self.walker.set_focus(min(focus_pos, len(self.walker) - 1))
+            pos = min(focus_pos, len(self.walker) - 1)
+            if focus_key is not None:
+                for i, w in enumerate(self.walker):
+                    if getattr(w, "row_key", None) == focus_key:
+                        pos = i
+                        break
+            self.walker.set_focus(pos)
         self.status.original_widget.set_text(self._status_text())
 
     def _build_rows(self) -> None:
