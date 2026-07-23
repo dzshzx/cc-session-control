@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.7.3 (2026-07-23)
+
+### Changed
+
+- **项目 membership is path-keyed with effective trust — the workspace-root
+  concept is gone**: the 项目 tab (and `csctl rc status`) now lists every
+  `~/.claude.json` project that is *effectively trusted* — its own entry or
+  any ancestor entry has `hasTrustDialogAccepted: true` — and whose directory
+  exists, wherever it lives on disk. No more single `~/workspace` assumption,
+  so projects under any layout (e.g. `~/workspace-external/*`) appear. This
+  also fixes the inverted subdirectory case: claude suppresses the trust
+  dialog under a trusted ancestor and records an explicit-False flag (verified
+  on claude 2.1.218 — declining the dialog writes no entry at all), so a real
+  project created under a trusted parent now shows up instead of being
+  filtered out. The single predicate is `models.effective_trust` (ancestor
+  matching by path-segment boundary; normpath only, never realpath).
+- **Absolute path is the primary key everywhere**: `RCProject.directory` keys
+  every join; `RCProject.name` is a derived basename for display only.
+  `rc-enabled` stores absolute paths — legacy short-name lines are migrated in
+  place on first read (atomic tmp+rename rewrite, comment lines preserved)
+  using a frozen copy of the old workspace detection, including one final
+  `CSCTL_WORKSPACE` read. `csctl rc add/rm/stop` take directory paths
+  (`csctl rc add .` still works); `rc status`/`rc list` print paths.
+- **Managed RC windows are joined by path metadata, not by name**: `start_one`
+  declares `@csctl_path` on the window (with `pane_current_path` as adoption
+  fallback for pre-0.7.3 windows) and kill/capture address the server-unique
+  `#{window_id}` — window names are cosmetic, so basename collisions can no
+  longer hit the wrong window via tmux's prefix matching. The RC server
+  `--name` is now the project basename (was `ws/<short-name>`); existing
+  running servers keep their old `ws/` display name until restarted.
+
+### Removed
+
+- `--workspace` CLI flag, `CSCTL_WORKSPACE` environment variable (still read
+  once during rc-enabled migration), and `config._detect_workspace`.
+
 ## 0.7.2 (2026-07-11)
 
 ### Added
