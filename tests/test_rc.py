@@ -13,6 +13,7 @@ import json
 
 from cc_session_control.data import proc, rc
 from cc_session_control.data.proc import ProcRC
+from cc_session_control.data.tmux import TmuxWindow
 from cc_session_control.models import EnvRecord, RCServer
 
 
@@ -90,10 +91,11 @@ def test_scan_rc_servers_degrades_without_proc(monkeypatch):
 # --- managed vs external classification (AC5) ------------------------------
 
 def test_scan_servers_classifies_managed_and_external(monkeypatch):
-    # tmux owns window "foo" whose pane pid is 111 -> managed; pid 222 is only
+    # tmux owns window @1 whose pane pid is 111 -> managed; pid 222 is only
     # in /proc -> external.
-    monkeypatch.setattr(rc, "_tmux_window_pids", lambda: {"foo": 111})
-    monkeypatch.setattr(rc, "_tmux_pane_alive", lambda target: True)
+    monkeypatch.setattr(
+        rc, "_tmux_windows", lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+    )
     monkeypatch.setattr(rc, "_capture_env_id", lambda target: "")
     monkeypatch.setattr(
         rc.proc, "scan_rc_servers",
@@ -114,9 +116,10 @@ def test_scan_servers_classifies_managed_and_external(monkeypatch):
 
 def test_scan_servers_managed_window_without_proc_match(monkeypatch):
     # tmux window present but the pid isn't in /proc (dead pane) -> still listed
-    # managed, falling back to the window name, status from pane_alive.
-    monkeypatch.setattr(rc, "_tmux_window_pids", lambda: {"foo": 111})
-    monkeypatch.setattr(rc, "_tmux_pane_alive", lambda target: False)
+    # managed, falling back to window name + path, status from pane_dead.
+    monkeypatch.setattr(
+        rc, "_tmux_windows", lambda: [TmuxWindow("@1", "foo", True, 111, "/a")],
+    )
     monkeypatch.setattr(rc, "_capture_env_id", lambda target: "")
     monkeypatch.setattr(rc.proc, "scan_rc_servers", lambda: [])
 
@@ -124,6 +127,7 @@ def test_scan_servers_managed_window_without_proc_match(monkeypatch):
     assert len(servers) == 1
     assert servers[0].managed is True
     assert servers[0].name == "foo"
+    assert servers[0].cwd == "/a"
     assert servers[0].status == "dead"
 
 
@@ -131,11 +135,14 @@ def test_scan_servers_managed_window_without_proc_match(monkeypatch):
 
 def test_scan_servers_captures_env_id_into_ledger(monkeypatch):
     captured: list[list[EnvRecord]] = []
-    monkeypatch.setattr(rc, "_tmux_window_pids", lambda: {"foo": 111})
-    monkeypatch.setattr(rc, "_tmux_pane_alive", lambda target: True)
+    targets: list[str] = []
+    monkeypatch.setattr(
+        rc, "_tmux_windows", lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+    )
     monkeypatch.setattr(
         rc, "_tmux_capture_pane",
-        lambda target: "starting...\nenvironment=env_abc123XYZ\nready",
+        lambda target: targets.append(target)
+        or "starting...\nenvironment=env_abc123XYZ\nready",
     )
     monkeypatch.setattr(rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")])
     monkeypatch.setattr(rc.environments, "upsert", lambda recs: captured.append(recs))
@@ -143,6 +150,7 @@ def test_scan_servers_captures_env_id_into_ledger(monkeypatch):
     servers = rc.scan_servers()
 
     assert servers[0].env_id == "env_abc123XYZ"
+    assert targets == ["@1"]             # addressed by unique window id, not name
     assert len(captured) == 1
     rec = captured[0][0]
     assert rec.prefix == "env"
@@ -152,8 +160,9 @@ def test_scan_servers_captures_env_id_into_ledger(monkeypatch):
 
 def test_scan_servers_no_env_id_no_upsert(monkeypatch):
     calls: list[object] = []
-    monkeypatch.setattr(rc, "_tmux_window_pids", lambda: {"foo": 111})
-    monkeypatch.setattr(rc, "_tmux_pane_alive", lambda target: True)
+    monkeypatch.setattr(
+        rc, "_tmux_windows", lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+    )
     monkeypatch.setattr(rc, "_tmux_capture_pane", lambda target: "no env here")
     monkeypatch.setattr(rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")])
     monkeypatch.setattr(rc.environments, "upsert", lambda recs: calls.append(recs))
@@ -171,36 +180,23 @@ def _write_claude_json(tmp_path, projects):
     return p
 
 
-def test_read_spawn_mode_from_claude_json(tmp_path, monkeypatch):
-    ws = tmp_path / "workspace"
-    ws.mkdir()
-    cj = _write_claude_json(tmp_path, {
-        str(ws / "proj"): {"hasTrustDialogAccepted": True,
-                           "remoteControlSpawnMode": "same-dir"},
-        str(ws / "other"): {"hasTrustDialogAccepted": True},
-    })
-    monkeypatch.setattr(rc.cfg, "claude_json", cj)
-    monkeypatch.setattr(rc.cfg, "workspace", ws)
-
-    assert rc._read_spawn_mode("proj") == "same-dir"
-    assert rc._read_spawn_mode("other") is None      # key present, mode unset
-    assert rc._read_spawn_mode("missing") is None     # key absent entirely
-
-
 def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
-    ws = tmp_path / "workspace"
-    (ws / "proj").mkdir(parents=True)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
     cj = _write_claude_json(tmp_path, {
-        str(ws / "proj"): {"hasTrustDialogAccepted": True,
-                           "remoteControlSpawnMode": "new-window"},
+        str(proj): {"hasTrustDialogAccepted": True,
+                    "remoteControlSpawnMode": "new-window"},
+        str(other): {"hasTrustDialogAccepted": True},
     })
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
-    monkeypatch.setattr(rc.cfg, "workspace", ws)
     monkeypatch.setattr(rc, "list_enabled", lambda: [])
     monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
 
     rows = {p.name: p for p in rc.scan()}
     assert rows["proj"].spawn_mode == "new-window"
+    assert rows["other"].spawn_mode is None          # key present, mode unset
 
 
 def test_scan_marks_missing_directory(tmp_path, monkeypatch):
@@ -208,23 +204,28 @@ def test_scan_marks_missing_directory(tmp_path, monkeypatch):
     still actionable — in the autostart list or holding a tmux window. Pure
     trust residue (only ~/.claude.json references the deleted dir) is dropped:
     csctl can't act on it and never edits claude's files."""
-    ws = tmp_path / "workspace"
-    (ws / "alive").mkdir(parents=True)
+    alive = tmp_path / "alive"
+    alive.mkdir()
+    deleted = str(tmp_path / "deleted")
+    gone_running = str(tmp_path / "gone-running")
+    gone_enabled = str(tmp_path / "gone-enabled")
     cj = _write_claude_json(tmp_path, {
-        str(ws / "alive"): {"hasTrustDialogAccepted": True},
-        str(ws / "deleted"): {"hasTrustDialogAccepted": True},
-        str(ws / "gone-running"): {"hasTrustDialogAccepted": True},
+        str(alive): {"hasTrustDialogAccepted": True},
+        deleted: {"hasTrustDialogAccepted": True},
+        gone_running: {"hasTrustDialogAccepted": True},
     })
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
-    monkeypatch.setattr(rc.cfg, "workspace", ws)
-    monkeypatch.setattr(rc, "list_enabled", lambda: ["gone-enabled"])
-    monkeypatch.setattr(rc, "_tmux_windows", lambda: ["gone-running"])
-    monkeypatch.setattr(rc, "_is_alive", lambda name: True)
+    monkeypatch.setattr(rc, "list_enabled", lambda: [gone_enabled])
+    monkeypatch.setattr(
+        rc, "_tmux_windows",
+        lambda: [TmuxWindow("@1", "gone-running", False, 5, gone_running)],
+    )
 
-    rows = {p.name: p for p in rc.scan()}
-    assert set(rows) == {"alive", "gone-enabled", "gone-running"}
-    assert "deleted" not in rows                     # trust-only residue hidden
-    assert rows["alive"].dir_exists is True
-    assert rows["gone-enabled"].dir_exists is False  # stale rc-enabled entry
-    assert rows["gone-running"].dir_exists is False  # window survives dir removal
-    assert rows["gone-running"].status == "running"
+    rows = {p.directory: p for p in rc.scan()}
+    assert set(rows) == {str(alive), gone_enabled, gone_running}
+    assert deleted not in rows                        # trust-only residue hidden
+    assert rows[str(alive)].dir_exists is True
+    assert rows[str(alive)].name == "alive"           # derived display name
+    assert rows[gone_enabled].dir_exists is False     # stale rc-enabled entry
+    assert rows[gone_running].dir_exists is False     # window survives dir removal
+    assert rows[gone_running].status == "running"

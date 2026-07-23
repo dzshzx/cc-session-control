@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from pathlib import Path
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -16,7 +15,6 @@ def _build_parser() -> argparse.ArgumentParser:
         description="TUI manager for Claude Code sessions and Remote Control",
     )
     parser.add_argument("--version", action="version", version=f"csctl {__version__}")
-    parser.add_argument("--workspace", type=Path, help="Override workspace root directory")
     parser.add_argument(
         "--theme", choices=("auto", "dark", "light"),
         help="TUI palette (default: auto-detect the terminal background; env CSCTL_THEME)",
@@ -29,12 +27,12 @@ def _build_parser() -> argparse.ArgumentParser:
     rc_sub = rc_parser.add_subparsers(dest="rc_command")
     rc_sub.add_parser("status", help="Show RC status for all projects")
     rc_add = rc_sub.add_parser("add", help="Add project to RC list and start")
-    rc_add.add_argument("project", nargs="?", default=".", help="Project name or '.' for current dir")
+    rc_add.add_argument("project", nargs="?", default=".", help="Project directory (default: current dir)")
     rc_rm = rc_sub.add_parser("rm", help="Remove project from RC list and stop")
-    rc_rm.add_argument("project", help="Project name")
+    rc_rm.add_argument("project", help="Project directory")
     rc_sub.add_parser("up", help="Start all listed projects")
     rc_stop = rc_sub.add_parser("stop", help="Stop RC for a project")
-    rc_stop.add_argument("target", help="Project name or 'all'")
+    rc_stop.add_argument("target", help="Project directory or 'all'")
     rc_sub.add_parser("list", help="Show enabled project list")
 
     # prune subcommand
@@ -73,8 +71,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _apply_global_flags(args: argparse.Namespace) -> None:
     from .config import cfg
-    if args.workspace:
-        cfg.workspace = args.workspace
     if args.theme:
         cfg.theme = args.theme
 
@@ -94,31 +90,27 @@ def _cmd_rc(args: argparse.Namespace) -> None:
             icon = {"running": "[running]", "dead": "[dead   ]", "stopped": "[stopped]"}.get(p.status, p.status)
             auto = "auto" if p.auto_start else "    "
             missing = "" if p.dir_exists else "  (directory missing)"
-            print(f"  {icon} {auto}  {p.name}{missing}")
+            print(f"  {icon} {auto}  {p.name}  {p.directory}{missing}")
 
     elif sub == "add":
-        proj = args.project
-        if proj == ".":
-            ws = str(rc.cfg.workspace)
-            cwd = os.getcwd()
-            if cwd.startswith(ws + "/"):
-                proj = cwd[len(ws) + 1:].split("/")[0]
-            else:
-                print(f"Current directory is not under {ws}. Specify project name explicitly.")
-                sys.exit(1)
-        if not rc.is_trusted(proj):
-            print(f"Not trusted: {proj} — run 'claude' in that directory first to accept the trust dialog")
+        path = os.path.abspath(args.project)
+        if not os.path.isdir(path):
+            print(f"No such directory: {path}")
             sys.exit(1)
-        rc.list_add(proj)
-        print(f"Added to list: {proj}")
-        ok = rc.start_one(proj)
+        if not rc.is_trusted(path):
+            print(f"Not trusted: {path} — run 'claude' in that directory first to accept the trust dialog")
+            sys.exit(1)
+        rc.list_add(path)
+        print(f"Added to list: {path}")
+        ok = rc.start_one(path)
         if ok:
-            print(f"Started: ws/{proj}")
+            print(f"Started RC server for {path}")
 
     elif sub == "rm":
-        rc.list_rm(args.project)
-        rc.stop_one(args.project)
-        print(f"Removed and stopped: {args.project}")
+        path = os.path.abspath(args.project)
+        rc.list_rm(path)
+        rc.stop_one(path)
+        print(f"Removed and stopped: {path}")
 
     elif sub == "up":
         enabled = rc.list_enabled()
@@ -133,8 +125,9 @@ def _cmd_rc(args: argparse.Namespace) -> None:
             rc.stop_all()
             print("Stopped all")
         else:
-            ok = rc.stop_one(args.target)
-            print(f"Stopped {args.target}" if ok else f"Not running: {args.target}")
+            path = os.path.abspath(args.target)
+            ok = rc.stop_one(path)
+            print(f"Stopped {path}" if ok else f"Not running: {path}")
 
     elif sub == "list":
         for name in rc.list_enabled():

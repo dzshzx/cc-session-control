@@ -43,8 +43,9 @@ uv tool install --reinstall git+https://github.com/dzshzx/cc-session-control.git
 ```
 
 `csctl` manages the Claude Code state on the machine where it is installed: the
-local `~/.claude`, local `tmux`, and local workspace. Install it separately on
-each machine whose sessions you want to manage. For working *on* the code
+local `~/.claude`, local `tmux`, and the projects recorded in the local
+`~/.claude.json`. Install it separately on each machine whose sessions you want
+to manage. For working *on* the code
 instead of using it, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Usage
@@ -55,9 +56,9 @@ csctl
 
 # Remote Control management (no TUI)
 csctl rc status          # Show all projects and RC status
-csctl rc add .           # Add current project to RC list and start
-csctl rc add myproject   # Add by name
-csctl rc rm myproject    # Remove and stop
+csctl rc add .           # Add current directory to RC list and start
+csctl rc add ~/code/app  # Add by directory path
+csctl rc rm ~/code/app   # Remove and stop
 csctl rc up              # Start all listed projects
 csctl rc stop all        # Stop all RC servers
 csctl rc list            # Show auto-start list
@@ -80,7 +81,6 @@ csctl skill install --force  # Replace an existing skill directory
 csctl skill uninstall
 
 # Options
-csctl --workspace ~/projects   # Override workspace root
 csctl --theme light            # Force the TUI palette (auto/dark/light)
 csctl --version
 ```
@@ -89,7 +89,6 @@ csctl --version
 
 | Environment Variable | Default | Description |
 |---|---|---|
-| `CSCTL_WORKSPACE` | `~/workspace` | Workspace root directory |
 | `CSCTL_RC_SESSION` | `rc` | tmux session name for RC servers |
 | `CSCTL_RC_STAGGER` | `2` | Seconds between starting RC servers |
 | `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via OSC 11 / `$COLORFGBG`) / `dark` / `light`. tmux typically doesn't answer the OSC 11 query, so inside tmux `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |

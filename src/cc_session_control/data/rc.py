@@ -1,4 +1,12 @@
-"""RC workspace management — manage Claude Code Remote Control via tmux."""
+"""RC project management — manage Claude Code Remote Control via tmux.
+
+Projects are keyed by ABSOLUTE DIRECTORY PATH (no workspace-root concept):
+membership = a `~/.claude.json` projects entry that is effectively trusted
+(`models.effective_trust` — claude's own ancestor-inheriting dialog gate).
+`RCProject.name` is a derived basename for display only; every join
+(rc-enabled list, tmux windows via `@csctl_path`, claude.json lookups) uses
+the path.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +17,7 @@ import shlex
 import time
 
 from ..config import cfg
-from ..models import EnvRecord, RCProject, RCServer, split_env_id
+from ..models import EnvRecord, RCProject, RCServer, effective_trust, split_env_id
 from . import environments, proc, tmux
 
 # Cloud bridge env id printed to a managed server's pane (`environment=env_…`).
@@ -22,47 +30,105 @@ def _ensure_list() -> None:
         cfg.rc_list.touch()
 
 
+def _legacy_workspace_root() -> str:
+    """FROZEN pre-0.7.3 workspace detection — rc-enabled migration ONLY.
+
+    Replicates the deleted `config._detect_workspace` order (CSCTL_WORKSPACE
+    override → `~/workspace` → commonpath of claude.json keys → cwd) so legacy
+    short-name lines resolve exactly as the old csctl resolved them. Dead by
+    design once a machine's list has been rewritten; never reuse elsewhere.
+    """
+    env = os.environ.get("CSCTL_WORKSPACE")
+    if env:
+        return env
+    default = os.path.join(os.path.expanduser("~"), "workspace")
+    if os.path.isdir(default):
+        return default
+    try:
+        dirs = [k for k in _load_projects() if "/" in k]
+        if dirs:
+            common = os.path.commonpath(dirs)
+            if os.path.isdir(common) and common != os.path.expanduser("~"):
+                return common
+    except Exception:
+        pass
+    return os.getcwd()
+
+
+def _migrate_lines(lines: list[str]) -> tuple[list[str], bool]:
+    """Absolute-path-ify legacy rc-enabled lines.
+
+    Comments/blank lines pass through verbatim; absolute paths are kept;
+    anything else (pre-0.7.3 short names, including relative `a/b` forms)
+    resolves against the frozen legacy workspace root. Idempotent — a fully
+    migrated file reports changed=False, so no rewrite is triggered.
+    """
+    out: list[str] = []
+    changed = False
+    root: str | None = None
+    for raw in lines:
+        s = raw.strip()
+        if not s or s.startswith("#") or s.startswith("/"):
+            out.append(raw)
+            continue
+        if root is None:
+            root = _legacy_workspace_root()
+        out.append(os.path.join(root, s))
+        changed = True
+    return out, changed
+
+
+def _write_list(lines: list[str]) -> None:
+    """Atomic rc-enabled rewrite (unique tmp + rename) — a concurrent reader
+    never sees a truncated file and concurrent writers cannot interleave."""
+    _ensure_list()
+    tmp = cfg.rc_list.parent / f".{cfg.rc_list.name}.{os.getpid()}.tmp"
+    tmp.write_text("".join(f"{line}\n" for line in lines))
+    os.replace(tmp, cfg.rc_list)
+
+
 def list_enabled() -> list[str]:
     _ensure_list()
     try:
-        return [
-            line.strip() for line in cfg.rc_list.read_text().splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
+        raw = cfg.rc_list.read_text().splitlines()
     except FileNotFoundError:
         return []
+    migrated, changed = _migrate_lines(raw)
+    if changed:
+        _write_list(migrated)
+        raw = migrated
+    return [
+        line.strip() for line in raw
+        if line.strip() and not line.strip().startswith("#")
+    ]
 
 
-def list_has(proj: str) -> bool:
-    return proj in list_enabled()
+def list_has(path: str) -> bool:
+    return path in list_enabled()
 
 
-def list_add(proj: str) -> None:
+def list_add(path: str) -> None:
     _ensure_list()
-    if list_has(proj):
+    if list_has(path):
         return
     with open(cfg.rc_list, "a") as f:
-        f.write(f"{proj}\n")
+        f.write(f"{path}\n")
 
 
-def list_rm(proj: str) -> None:
-    _ensure_list()
+def list_rm(path: str) -> None:
     try:
-        lines = cfg.rc_list.read_text().splitlines(keepends=True)
-        with open(cfg.rc_list, "w") as f:
-            for line in lines:
-                if line.strip() != proj:
-                    f.write(line)
+        lines = cfg.rc_list.read_text().splitlines()
     except FileNotFoundError:
-        pass
+        return
+    _write_list([line for line in lines if line.strip() != path])
 
 
-def toggle_autostart(proj: str) -> bool:
+def toggle_autostart(path: str) -> bool:
     """Toggle project in the autostart list. Returns new state."""
-    if list_has(proj):
-        list_rm(proj)
+    if list_has(path):
+        list_rm(path)
         return False
-    list_add(proj)
+    list_add(path)
     return True
 
 
@@ -79,53 +145,58 @@ def _load_projects() -> dict:
         return {}
 
 
+def _trusted_in(projects: dict) -> set[str]:
+    """Effectively-trusted absolute-path keys of a claude.json projects map."""
+    return {
+        key for key in projects
+        if isinstance(key, str) and key.startswith("/")
+        and effective_trust(key, projects)
+    }
+
+
 def trusted_projects() -> list[str]:
-    prefix = str(cfg.workspace) + "/"
-    projects = []
-    try:
-        for key, val in _load_projects().items():
-            if val.get("hasTrustDialogAccepted") and key.startswith(prefix):
-                name = key[len(prefix):]
-                if "/" not in name:
-                    projects.append(name)
-    except Exception:
-        return []
-    return sorted(projects)
+    """Absolute paths of every effectively-trusted claude.json project entry.
+
+    Membership base of the 项目 tab. Directory existence and residue handling
+    stay in `scan()` (unchanged split)."""
+    return sorted(_trusted_in(_load_projects()))
 
 
-def is_trusted(proj: str) -> bool:
+def is_trusted(path: str) -> bool:
     try:
-        key = f"{cfg.workspace}/{proj}"
-        return bool(_load_projects().get(key, {}).get("hasTrustDialogAccepted", False))
+        return effective_trust(path, _load_projects())
     except Exception:
         return False
 
 
+def _basename(path: str) -> str:
+    """Display name derived from the path — NEVER an identity key."""
+    return os.path.basename(path.rstrip("/")) or path
+
+
 # --- RC-scoped thin delegates over data/tmux.py ---------------------------
 # Bound to `cfg.rc_session`. The generic tmux adapter lives in `data/tmux.py`
-# (the single seam — only its `_tmux_run` touches `subprocess`); these four
-# stay here (rather than inlined at call sites) because `scan`/`scan_servers`
-# and their tests poke these exact RC-scoped names.
+# (the single seam — only its `_tmux_run` touches `subprocess`); these stay
+# here (rather than inlined at call sites) because `scan`/`scan_servers` and
+# their tests poke these exact RC-scoped names.
 
 
-def _tmux_windows() -> list[str]:
-    return tmux.list_windows(cfg.rc_session)
-
-
-def _tmux_window_pids() -> dict[str, int]:
-    return tmux.window_pids(cfg.rc_session)
-
-
-def _tmux_pane_alive(target: str) -> bool:
-    return tmux.pane_alive(target)
+def _tmux_windows() -> list[tmux.TmuxWindow]:
+    return tmux.list_windows_meta(cfg.rc_session)
 
 
 def _tmux_capture_pane(target: str) -> str:
     return tmux.capture_pane(target)
 
 
-def _is_alive(proj: str) -> bool:
-    return _tmux_pane_alive(f"{cfg.rc_session}:{proj}")
+def _window_for(path: str) -> tmux.TmuxWindow | None:
+    """The managed window belonging to `path`, or None (normpath equality on
+    the window's declared/adopted `path` metadata — never by window name)."""
+    norm = os.path.normpath(path)
+    for w in _tmux_windows():
+        if w.path and os.path.normpath(w.path) == norm:
+            return w
+    return None
 
 
 def _read_rc_at_startup(directory: str) -> bool | None:
@@ -139,20 +210,6 @@ def _read_rc_at_startup(directory: str) -> bool | None:
         except Exception:
             continue
     return None
-
-
-def _read_spawn_mode(proj: str) -> str | None:
-    """Project `remoteControlSpawnMode` from ~/.claude.json, or None if unset.
-
-    Lives in the same `projects` map as `hasTrustDialogAccepted` (verified on
-    disk), so it reuses `_load_projects` rather than re-opening claude.json.
-    """
-    try:
-        key = f"{cfg.workspace}/{proj}"
-        val = _load_projects().get(key, {}).get("remoteControlSpawnMode")
-        return str(val) if val else None
-    except Exception:
-        return None
 
 
 def set_rc_at_startup(directory: str, value: bool | None) -> None:
@@ -174,17 +231,20 @@ def set_rc_at_startup(directory: str, value: bool | None) -> None:
 
 
 def scan() -> list[RCProject]:
+    # ONE claude.json load feeds membership, trust flags and spawn modes —
+    # no per-project re-parse.
+    projects_map = _load_projects()
+    trusted = _trusted_in(projects_map)
     enabled = set(list_enabled())
-    trusted = trusted_projects()
-    windows = set(_tmux_windows())
-    all_names = sorted(set(trusted) | enabled)
+    by_path = {
+        os.path.normpath(w.path): w for w in _tmux_windows() if w.path
+    }
 
     result: list[RCProject] = []
-    for name in all_names:
-        directory = str(cfg.workspace / name)
-        in_windows = name in windows
-        dir_exists = os.path.isdir(directory)
-        if not dir_exists and name not in enabled and not in_windows:
+    for path in sorted(trusted | enabled):
+        win = by_path.get(os.path.normpath(path))
+        dir_exists = os.path.isdir(path)
+        if not dir_exists and path not in enabled and win is None:
             # Pure trust residue: the directory is gone and only claude's own
             # trust record (~/.claude.json) still references it. csctl can't
             # act on it (no start, and it never edits claude's files), so it
@@ -192,18 +252,20 @@ def scan() -> list[RCProject]:
             # projects that ARE actionable (in the autostart list, or with a
             # live/dead tmux window) stay listed.
             continue
-        if in_windows:
-            status = "running" if _is_alive(name) else "dead"
+        if win is not None:
+            status = "dead" if win.dead else "running"
         else:
             status = "stopped"
+        entry = projects_map.get(path)
+        spawn = entry.get("remoteControlSpawnMode") if isinstance(entry, dict) else None
         result.append(RCProject(
-            name=name, directory=directory,
-            trusted=name in trusted,
-            in_list=name in enabled,
+            name=_basename(path), directory=path,
+            trusted=path in trusted,
+            in_list=path in enabled,
             status=status,
-            auto_start=name in enabled,
-            rc_at_startup=_read_rc_at_startup(directory),
-            spawn_mode=_read_spawn_mode(name),
+            auto_start=path in enabled,
+            rc_at_startup=_read_rc_at_startup(path),
+            spawn_mode=str(spawn) if spawn else None,
             dir_exists=dir_exists,
         ))
     return result
@@ -233,32 +295,32 @@ def scan_servers() -> list[RCServer]:
     imports rc). Swallows errors → returns whatever it assembled.
     """
     try:
-        window_pids = _tmux_window_pids()
+        windows = _tmux_windows()
         discovered = proc.scan_rc_servers()
     except Exception:
         return []
 
     by_pid = {p.pid: p for p in discovered}
-    managed_pid_set = set(window_pids.values())
+    managed_pid_set = {w.pid for w in windows if w.pid}
 
     servers: list[RCServer] = []
     env_records: list[EnvRecord] = []
 
-    # Managed windows first — tmux is the authority for "managed".
-    for window, pid in window_pids.items():
-        target = f"{cfg.rc_session}:{window}"
-        status = "running" if _tmux_pane_alive(target) else "dead"
-        found = by_pid.get(pid)
-        env_id = _capture_env_id(target)
+    # Managed windows first — tmux is the authority for "managed". Addressed
+    # by the server-unique window id, never by the (collision-prone) name.
+    for w in windows:
+        status = "dead" if w.dead else "running"
+        found = by_pid.get(w.pid) if w.pid else None
+        env_id = _capture_env_id(w.wid)
         if env_id:
             prefix, key = split_env_id(env_id)
             if prefix and key:
                 env_records.append(EnvRecord(prefix=prefix, key=key, bound_sid=None))
         servers.append(RCServer(
-            name=found.name if found else window,
-            cwd=found.cwd if found else "",
+            name=found.name if found else w.name,
+            cwd=found.cwd if found else w.path,
             managed=True,
-            pid=pid or None,
+            pid=w.pid or None,
             env_id=env_id or None,
             status=status,
         ))
@@ -277,32 +339,42 @@ def scan_servers() -> list[RCServer]:
     return servers
 
 
-def start_one(proj: str) -> bool:
-    directory = cfg.workspace / proj
-    if not directory.is_dir():
+def start_one(path: str) -> bool:
+    if not os.path.isdir(path):
         return False
-    if not is_trusted(proj):
+    if not is_trusted(path):
         return False
-    if proj in _tmux_windows():
-        if _is_alive(proj):
+    win = _window_for(path)
+    if win is not None:
+        if not win.dead:
             return False
-        if not stop_one(proj):
+        if not stop_one(path):
             return False
 
-    remote_name = f"ws/{proj}"
+    remote_name = _basename(path)
     # Each fresh Remote Control process registers a distinct cloud environment.
     # Keep restart explicit so transient exits do not pile up duplicate mobile
     # environment entries with the same display name.
     cmd = (
-        f"cd {shlex.quote(str(directory))} && exec claude remote-control "
+        f"cd {shlex.quote(path)} && exec claude remote-control "
         f"--name {shlex.quote(remote_name)} --spawn same-dir"
     )
 
-    return tmux.run_in_tmux(cfg.rc_session, proj, cmd) is not None
+    target = tmux.run_in_tmux(cfg.rc_session, tmux.session_name_for(path), cmd)
+    if target is None:
+        return False
+    # Declare the window's project — the collision-safe join key `scan` and
+    # `stop_one` read back. Until this lands, `pane_current_path` (the `cd`
+    # above) covers the same join, so a mid-spawn scan still matches.
+    tmux.set_window_option(target, "@csctl_path", path)
+    return True
 
 
-def stop_one(proj: str) -> bool:
-    return tmux.kill_window(f"{cfg.rc_session}:{proj}")
+def stop_one(path: str) -> bool:
+    win = _window_for(path)
+    if win is None:
+        return False
+    return tmux.kill_window(win.wid)
 
 
 def stop_all() -> bool:

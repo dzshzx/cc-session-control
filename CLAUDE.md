@@ -39,7 +39,7 @@ grep -rn --include='*.py' '/home/' src/      # no hardcoded paths in product sou
 
 ```bash
 csctl rc status                              # RC status for all projects
-csctl rc add <proj> | rc rm <proj>           # add/remove a project from the auto-start list (and start/stop it)
+csctl rc add <dir> | rc rm <dir>             # add/remove a project (by directory path) from the auto-start list (and start/stop it)
 csctl rc up                                  # start every project on the auto-start list
 csctl rc stop <proj> | rc list               # stop one project / show the enabled list
 csctl prune [--sweep-orphans] [--sweep-zombies] [--sweep-aged] [--apply]  # cleanup; dry-run unless --apply
@@ -133,9 +133,9 @@ TUI 无法在自身内部运行 `claude`。resume 家族的动作退出 MainLoop
 
 ### Remote Control：tmux servers、/proc 发现、三个命名空间
 
-**Managed RC servers 是 tmux windows**，位于名为 `rc` 的 session（env `CSCTL_RC_SESSION`）中。`rc.start_one` 启动一个 `claude remote-control --name ws/<proj> --spawn same-dir` 进程。它有意**不**自动重启：每个新的 Remote Control 进程都会注册一个新的 cloud environment，自动重启会堆出一堆同名的重复 mobile/web environment 条目。状态来自 tmux `#{pane_dead}`：`running` / `dead` / `stopped`；重启是显式的用户动作。
+**Managed RC servers 是 tmux windows**，位于名为 `rc` 的 session（env `CSCTL_RC_SESSION`）中。`rc.start_one(path)` 启动一个 `claude remote-control --name <basename> --spawn same-dir` 进程，并在 window 上写入 `@csctl_path` user option——**window 与项目的 join 键是这个路径元数据（外加 `pane_current_path` 对旧 window 的领养 fallback），绝不是 window 名**（名字只是装饰，可重名；tmux 按名寻址还会回退前缀匹配，可能误中）；kill/capture 一律用 server 级唯一的 `#{window_id}`。它有意**不**自动重启：每个新的 Remote Control 进程都会注册一个新的 cloud environment，自动重启会堆出一堆同名的重复 mobile/web environment 条目。状态来自 tmux `#{pane_dead}`：`running` / `dead` / `stopped`；重启是显式的用户动作。
 
-所有 tmux 访问都经单一 seam **`data/tmux.py`**：只有它的 `_tmux_run` 触碰 `subprocess`；其余每个 tmux 调用都是薄动词封装（`run_in_tmux`、`kill_window`、`residency_targets`——`find_session_window` 所构建于其上的批量 residency join，……），保持吞错契约。新的 tmux 操作作为封装加在那里，而不是在别处裸调 `subprocess`。`rc.py` 只保留 RC 领域逻辑和四个绑定到 `cfg.rc_session` 的薄 RC 范围委托（`_tmux_windows`/`_tmux_window_pids`/`_tmux_pane_alive`/`_tmux_capture_pane`，保留为具名 seam 是因为 `scan`/`scan_servers` 及其测试会戳它们）——它不以其他方式触碰 tmux 内部。`actions/session_ops.py` 和 `actions/agent_ops.py` 为 resume/relaunch 的 tmux 调用直接 import `tmux`（不是 `rc`），因此 session-resume 路径绝不依赖 RC 模块。
+所有 tmux 访问都经单一 seam **`data/tmux.py`**：只有它的 `_tmux_run` 触碰 `subprocess`；其余每个 tmux 调用都是薄动词封装（`run_in_tmux`、`kill_window`、`residency_targets`——`find_session_window` 所构建于其上的批量 residency join，……），保持吞错契约。新的 tmux 操作作为封装加在那里，而不是在别处裸调 `subprocess`。`rc.py` 只保留 RC 领域逻辑和绑定到 `cfg.rc_session` 的薄 RC 范围委托（`_tmux_windows`——返回带 `@csctl_path`/`pane_current_path`/`window_id` 元数据的 `tmux.TmuxWindow` 列表——和 `_tmux_capture_pane`，外加按路径 join 的 `_window_for`；保留为具名 seam 是因为 `scan`/`scan_servers` 及其测试会戳它们）——它不以其他方式触碰 tmux 内部。`actions/session_ops.py` 和 `actions/agent_ops.py` 为 resume/relaunch 的 tmux 调用直接 import `tmux`（不是 `rc`），因此 session-resume 路径绝不依赖 RC 模块。
 
 **超出 tmux 的发现（`rc.scan_servers()`）。** RC servers 也通过遍历 `/proc` 找到（`proc.scan_rc_servers` + 纯函数 `proc._match_rc_cmdline`：argv0 basename `claude` *且*一个 `remote-control` 子命令 token *且* `--name`——用 `--remote-control` *flag* 的 codex 被排除）。一个属于 csctl 管理的 tmux pane 的被发现 pid 是 **managed**；否则它是 **external** 且**只读**（csctl 绝不接管/重启它）。Managed servers 的 `env_*` cloud id 从 pane 中 grep 出来并单向推入 ledger。
 
@@ -154,7 +154,7 @@ TUI 无法在自身内部运行 `claude`。resume 家族的动作退出 MainLoop
 - `auto_start`（「开机自启」）——项目在 csctl 自己位于 `$XDG_CONFIG_HOME/csctl/rc-enabled` 的列表中；控制 `csctl rc up` / `A` 键启动什么。
 - `rc_at_startup`（「自动远控」）——`<proj>/.claude/settings.local.json` 中的 per-project `remoteControlAtStartup` flag；控制 **`claude` 自身**是否在启动时开启 Remote Control。三态（`True`/`False`/`None`=未设）。`remoteControlSpawnMode`（也类似三态，`None`=未设）一并搭载在 `RCProject.spawn_mode` 上。
 
-一个项目必须**受信任**（`~/.claude.json` 中的 `hasTrustDialogAccepted`）才能启动 RC。
+**项目成员资格是路径主键、无 workspace root 概念**（0.7.3 起）：项目 tab 列出 `~/.claude.json` `projects` map 中**有效受信任**且目录存在的条目，主键是绝对路径，`RCProject.name` 只是派生 basename 显示名。有效信任 = `models.effective_trust`——**唯一的信任谓词**（成员扫描与 `start_one` gate 共用，绝不重推）：自身或任一祖先条目带 `hasTrustDialogAccepted: true`，按路径分段边界匹配（`workspace` 不覆盖 `workspace-external`）、只 normpath 不 realpath。**显式 `False` 不是否决**——实测（claude 2.1.218）它是「被祖先信任抑制、从未被询问」的落盘痕迹，拒答对话框根本不写条目。`rc-enabled` 自启列表存绝对路径；旧短名行在 `list_enabled` 首读时按冻结的旧探测逻辑（`_legacy_workspace_root`，迁移专用死代码）解析并原子重写一次（tmp+rename，保留注释行）。启动 RC 仍要求项目有效受信任。
 
 ### Cleanup——两种策略，preview 优先（`data/cleanup.py`，R7）
 
@@ -169,7 +169,7 @@ Cleanup 逻辑完全位于 `data/cleanup.py`；Sessions 子菜单和 `csctl prun
 - **UI 字符串是简体中文**（通知、状态、按键提示、帮助屏）。**CLI 子命令输出是英文。** 添加字符串时遵循这一点。
 - Data 函数吞掉错误并返回安全空值（`[]`、`{}`、`False`、`None`）而不抛出——TUI 绝不能因畸形 transcript 或缺失 tmux/claude 而崩溃。
 - 破坏性 cleanup 总是先 preview：`_enter_preview` 在一个 `Overlay` 中显示目标，`_confirm_cleanup` 在第二次 `Enter` 时执行。
-- Config 是 `config.py` 中单一的全局 `cfg = Config()`；测试通过 monkeypatch `cfg` 属性来覆盖路径（例如 `cfg.claude_home`、`cfg.workspace`）。
+- Config 是 `config.py` 中单一的全局 `cfg = Config()`；测试通过 monkeypatch `cfg` 属性来覆盖路径（例如 `cfg.claude_home`、`cfg.claude_json`、`cfg.config_dir`）。
 
 ## 发布与 CI
 

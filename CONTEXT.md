@@ -49,6 +49,19 @@ without enabling Remote Control; the operator stays in csctl.
 _Avoid_: relaunch, RC relaunch (the pre-0.7 behavior that also minted a cloud
 environment)
 
+**Project**:
+A directory recorded in `~/.claude.json`'s `projects` map that is *effectively
+trusted*: its own entry or ANY ancestor entry carries
+`hasTrustDialogAccepted: true`. This mirrors claude's runtime trust-dialog
+gate, which inherits trust down the directory tree (verified on claude
+2.1.218). The absolute directory path is the project's identity everywhere
+(rc-enabled list, tmux window metadata, claude.json lookups); the display name
+is a derived basename. An entry with an explicit False flag under a trusted
+ancestor IS a project — that footprint means "dialog suppressed, never asked",
+not "declined" (declining writes no entry at all).
+_Avoid_: workspace-relative short names as identity, reading the raw
+`hasTrustDialogAccepted` flag as the trust set, assuming a workspace root
+
 **Remote Control** (umbrella term — two distinct concepts, do not conflate):
 
 **Session Remote Control** (secondary control surface — demoted from primary

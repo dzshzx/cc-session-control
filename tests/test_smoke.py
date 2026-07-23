@@ -2,7 +2,6 @@
 
 import subprocess
 import sys
-from pathlib import Path
 
 
 def test_version_flag():
@@ -21,12 +20,6 @@ def test_help_flag():
     )
     assert result.returncode == 0
     assert "rc" in result.stdout
-
-
-def test_config_detect_workspace():
-    from cc_session_control.config import cfg
-    ws = cfg.workspace
-    assert isinstance(ws, Path)
 
 
 def test_clipboard_importable():

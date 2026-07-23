@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Iterable
+from typing import NamedTuple
 
 from . import proc
 
@@ -32,41 +33,58 @@ def _tmux_run(args: list[str]) -> subprocess.CompletedProcess | None:
         return None
 
 
-def list_windows(session: str) -> list[str]:
-    cp = _tmux_run(["list-windows", "-t", session, "-F", "#W"])
+class TmuxWindow(NamedTuple):
+    """One window of a session, with its identity metadata.
+
+    `wid` is tmux's server-unique `@N` window id — THE collision-safe address
+    for kill/capture (window NAMES are cosmetic and may collide; tmux `-t` by
+    name falls back to prefix matching, which can hit the wrong window).
+    `path` is the project directory the window belongs to: the `@csctl_path`
+    window option when csctl declared it at spawn, else `pane_current_path`
+    (adopts pre-0.7.3 windows and hand-made ones). `pid` is the pane root pid
+    (the hosted process itself — spawns use `exec`, replacing the shell).
+    """
+    wid: str
+    name: str
+    dead: bool
+    pid: int | None
+    path: str
+
+
+_WINDOWS_FMT = (
+    "#{window_id}\t#{window_name}\t#{pane_dead}\t#{pane_pid}"
+    "\t#{@csctl_path}\t#{pane_current_path}"
+)
+
+
+def list_windows_meta(session: str) -> list[TmuxWindow]:
+    """All windows of `session` with identity metadata; [] on failure.
+
+    ONE tmux round-trip feeds both project↔window joins (`rc.scan`) and
+    managed-server classification (`rc.scan_servers`)."""
+    cp = _tmux_run(["list-windows", "-t", session, "-F", _WINDOWS_FMT])
     if cp is None:
         return []
-    return [line.strip() for line in cp.stdout.splitlines() if line.strip()]
-
-
-def pane_alive(target: str) -> bool:
-    cp = _tmux_run(["list-panes", "-t", target, "-F", "#{pane_dead}"])
-    if cp is None:
-        return False
-    return cp.stdout.strip().split("\n")[0] == "0"
-
-
-def window_pids(session: str) -> dict[str, int]:
-    """{window_name: pane_pid} for `session`; {} on failure.
-
-    The pane pid IS the hosted process's pid because tmux spawns like
-    `start_one` run `exec claude …` (the shell is replaced). Used to classify
-    /proc-discovered servers as managed (pid in this set) vs external.
-    """
-    cp = _tmux_run(["list-windows", "-t", session, "-F", "#W\t#{pane_pid}"])
-    if cp is None:
-        return {}
-    out: dict[str, int] = {}
+    out: list[TmuxWindow] = []
     for line in cp.stdout.splitlines():
-        name, _, pid_s = line.partition("\t")
-        name = name.strip()
-        try:
-            pid = int(pid_s.strip())
-        except ValueError:
+        parts = line.split("\t")
+        if len(parts) < 6 or not parts[0]:
             continue
-        if name:
-            out[name] = pid
+        try:
+            pid: int | None = int(parts[3])
+        except ValueError:
+            pid = None
+        out.append(TmuxWindow(
+            wid=parts[0], name=parts[1], dead=parts[2] == "1",
+            pid=pid, path=parts[4] or parts[5],
+        ))
     return out
+
+
+def set_window_option(target: str, option: str, value: str) -> bool:
+    """Set a per-window (user) option, e.g. `@csctl_path`; False on failure."""
+    cp = _tmux_run(["set-option", "-w", "-t", target, option, value])
+    return cp is not None and cp.returncode == 0
 
 
 def capture_pane(target: str) -> str:

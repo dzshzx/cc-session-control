@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os.path
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -146,6 +147,32 @@ class RCServer:
     pid: int | None = None
     env_id: str | None = None
     status: Status = "stopped"
+
+
+def effective_trust(path: str, projects: dict) -> bool:
+    """PURE: is `path` trusted per Claude Code's runtime trust-dialog gate?
+
+    THE one trust predicate — membership discovery and the `start_one` gate
+    both call it, never re-derive. Mirrors claude's own behavior (verified on
+    2.1.218): the dialog is suppressed when the cwd or ANY ancestor entry in
+    `projects` (the `~/.claude.json` map) carries `hasTrustDialogAccepted:
+    true`. An inherited subdirectory gets an entry with an EXPLICIT False
+    flag ("suppressed, never asked"), while declining the dialog writes no
+    entry at all — so explicit False must NOT veto. Ancestor matching is by
+    path-segment boundary (`/a/workspace` never covers `/a/workspace-external`)
+    and normalizes with normpath only — never realpath, matching claude's
+    literal-cwd record keeping.
+    """
+    if not path:
+        return False
+    target = os.path.normpath(path)
+    for key, val in projects.items():
+        if not isinstance(val, dict) or not val.get("hasTrustDialogAccepted"):
+            continue
+        root = os.path.normpath(key)
+        if target == root or target.startswith(root.rstrip("/") + "/"):
+            return True
+    return False
 
 
 def split_env_id(value: str | None) -> tuple[str, str]:

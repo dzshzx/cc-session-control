@@ -431,78 +431,110 @@ def test_session_name_for_sanitizes_tmux_separators():
     assert session_name_for("") == "claude"
 
 
+def test_list_windows_meta_parses_and_prefers_declared_path(monkeypatch):
+    from types import SimpleNamespace
+
+    from cc_session_control.data import tmux
+
+    out = (
+        "@1\tfoo\t0\t111\t/declared\t/current\n"
+        "@2\tbar\t1\t222\t\t/fallback\n"
+        "@3\tbaz\t0\tnope\t\t\n"
+        "bogus-line\n"
+    )
+    monkeypatch.setattr(
+        tmux, "_tmux_run", lambda args: SimpleNamespace(returncode=0, stdout=out),
+    )
+
+    wins = tmux.list_windows_meta("rc")
+    assert wins[0] == tmux.TmuxWindow("@1", "foo", False, 111, "/declared")
+    assert wins[1] == tmux.TmuxWindow("@2", "bar", True, 222, "/fallback")
+    assert wins[2].pid is None and wins[2].path == ""
+    assert len(wins) == 3                 # malformed line skipped
+
+
 def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
     from cc_session_control.data import rc, tmux
 
-    proj = "project with space"
-    (tmp_path / proj).mkdir()
+    proj = tmp_path / "project with space"
+    proj.mkdir()
     calls = {}
-    monkeypatch.setattr(rc.cfg, "workspace", tmp_path)
-    monkeypatch.setattr(rc, "is_trusted", lambda name: True)
+    opts = {}
+    monkeypatch.setattr(rc, "is_trusted", lambda path: True)
     monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
     monkeypatch.setattr(tmux, "_tmux_has_session", lambda session: False)
     monkeypatch.setattr(
         tmux,
         "_tmux_new_session",
-        lambda session, window, cmd: calls.__setitem__("cmd", cmd) or True,
+        lambda session, window, cmd: calls.__setitem__("cmd", cmd) or "rc:1",
+    )
+    monkeypatch.setattr(
+        tmux,
+        "set_window_option",
+        lambda target, option, value: opts.__setitem__(option, (target, value)) or True,
     )
 
-    assert rc.start_one(proj) is True
+    assert rc.start_one(str(proj)) is True
 
-    assert f"cd '{tmp_path / proj}'" in calls["cmd"]
+    assert f"cd '{proj}'" in calls["cmd"]
     assert "while true" not in calls["cmd"]
     assert "exec claude remote-control" in calls["cmd"]
-    assert "--name 'ws/project with space'" in calls["cmd"]
+    assert "--name 'project with space'" in calls["cmd"]
+    # The window declares its project path — the join key scan/stop read back.
+    assert opts["@csctl_path"] == ("rc:1", str(proj))
 
 
 def test_start_one_refuses_running_window(tmp_path, monkeypatch):
     from cc_session_control.data import rc, tmux
 
-    proj = "proj"
-    (tmp_path / proj).mkdir()
+    proj = tmp_path / "proj"
+    proj.mkdir()
     calls = {"kill": 0, "new": 0}
-    monkeypatch.setattr(rc.cfg, "workspace", tmp_path)
-    monkeypatch.setattr(rc, "is_trusted", lambda name: True)
-    monkeypatch.setattr(rc, "_tmux_windows", lambda: [proj])
-    monkeypatch.setattr(rc, "_is_alive", lambda name: True)
+    monkeypatch.setattr(rc, "is_trusted", lambda path: True)
+    monkeypatch.setattr(
+        rc, "_tmux_windows",
+        lambda: [tmux.TmuxWindow("@1", "proj", False, 1, str(proj))],
+    )
     monkeypatch.setattr(
         rc,
         "stop_one",
-        lambda name: calls.__setitem__("kill", calls["kill"] + 1) or True,
+        lambda path: calls.__setitem__("kill", calls["kill"] + 1) or True,
     )
     monkeypatch.setattr(
         tmux,
         "_tmux_new_window",
-        lambda *a: calls.__setitem__("new", calls["new"] + 1) or True,
+        lambda *a: calls.__setitem__("new", calls["new"] + 1) or "rc:1",
     )
 
-    assert rc.start_one(proj) is False
+    assert rc.start_one(str(proj)) is False
     assert calls == {"kill": 0, "new": 0}
 
 
 def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
     from cc_session_control.data import rc, tmux
 
-    proj = "proj"
-    (tmp_path / proj).mkdir()
+    proj = tmp_path / "proj"
+    proj.mkdir()
     calls = {"kill": 0, "cmd": None}
-    monkeypatch.setattr(rc.cfg, "workspace", tmp_path)
-    monkeypatch.setattr(rc, "is_trusted", lambda name: True)
-    monkeypatch.setattr(rc, "_tmux_windows", lambda: [proj])
-    monkeypatch.setattr(rc, "_is_alive", lambda name: False)
+    monkeypatch.setattr(rc, "is_trusted", lambda path: True)
+    monkeypatch.setattr(
+        rc, "_tmux_windows",
+        lambda: [tmux.TmuxWindow("@1", "proj", True, 1, str(proj))],
+    )
     monkeypatch.setattr(
         rc,
         "stop_one",
-        lambda name: calls.__setitem__("kill", calls["kill"] + 1) or True,
+        lambda path: calls.__setitem__("kill", calls["kill"] + 1) or True,
     )
     monkeypatch.setattr(tmux, "_tmux_has_session", lambda session: True)
     monkeypatch.setattr(
         tmux,
         "_tmux_new_window",
-        lambda session, window, cmd: calls.__setitem__("cmd", cmd) or True,
+        lambda session, window, cmd: calls.__setitem__("cmd", cmd) or "rc:2",
     )
+    monkeypatch.setattr(tmux, "set_window_option", lambda *a: True)
 
-    assert rc.start_one(proj) is True
+    assert rc.start_one(str(proj)) is True
     assert calls["kill"] == 1
     assert calls["cmd"] is not None
 

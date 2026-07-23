@@ -1,4 +1,4 @@
-"""RC view — the 项目 tab (workspace projects + their Remote Control surface).
+"""RC view — the 项目 tab (trusted projects + their Remote Control surface).
 
 Shows two things:
   1. managed projects (RCProject) with the tri-state `remoteControlAtStartup`
@@ -295,19 +295,19 @@ class RCView(ListTabView):
         if p.status == "running":
             self.app.notify("已在运行")
             return
-        ok = rc.start_one(p.name)
-        self.app.notify(f"已启动 ws/{p.name}" if ok else "启动失败")
+        ok = rc.start_one(p.directory)
+        self.app.notify(f"已启动 {p.name}" if ok else "启动失败")
         self.app.trigger_async_refresh()
 
     def _key_stop(self, p: RCProject) -> None:
         # gated=False: this stop kills a tmux window, not a pid — no R10 gate.
         confirm_stop(
-            self.app, "远控服务", p.name, lambda: self._do_stop_one(p.name),
+            self.app, "远控服务", p.name, lambda: self._do_stop_one(p),
             alive=p.status == "running", gated=False,
         )
 
     def _key_autostart(self, p: RCProject) -> None:
-        new = rc.toggle_autostart(p.name)
+        new = rc.toggle_autostart(p.directory)
         self.app.notify(f"{p.name} 开机自启: {'开' if new else '关'}")
         self.app.trigger_async_refresh()
 
@@ -333,10 +333,10 @@ class RCView(ListTabView):
             return
         self.app.confirm("停止全部远控服务？", self._do_stop_all)
 
-    def _do_stop_one(self, name: str) -> None:
+    def _do_stop_one(self, p: RCProject) -> None:
         """Stop-one body, run only after the y/n confirm accepts."""
-        ok = rc.stop_one(name)
-        self.app.notify(f"已停止 {name}" if ok else "未在运行")
+        ok = rc.stop_one(p.directory)
+        self.app.notify(f"已停止 {p.name}" if ok else "未在运行")
         self.app.trigger_async_refresh()
 
     def _do_stop_all(self) -> None:

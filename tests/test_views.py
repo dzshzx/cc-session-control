@@ -598,7 +598,7 @@ def test_rc_view_o_key_starts_rc_server(monkeypatch):
     from cc_session_control.data import rc as rc_mod
 
     started = []
-    monkeypatch.setattr(rc_mod, "start_one", lambda name: started.append(name) or True)
+    monkeypatch.setattr(rc_mod, "start_one", lambda path: started.append(path) or True)
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
@@ -607,9 +607,9 @@ def test_rc_view_o_key_starts_rc_server(monkeypatch):
 
     view.handle_key("o")
 
-    assert started == ["p1"]
+    assert started == ["/tmp/myproj"]              # start_one takes the PATH key
     assert app.result is None                      # stays in csctl
-    assert any("已启动 ws/p1" in m for m in app._notifications)
+    assert any("已启动 p1" in m for m in app._notifications)
 
 
 def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
