@@ -37,12 +37,20 @@ def _run_rc(args: Namespace) -> int:
                 f"{': ' + scan_result.settings.detail if scan_result.settings.detail else ''}",
                 file=sys.stderr,
             )
+        for issue in scan_result.issues:
+            where = f" ({issue.path})" if issue.path else ""
+            print(
+                "Warning: RC inventory is partial: "
+                f"{issue.source}{where}: {issue.detail}",
+                file=sys.stderr,
+            )
         setting_failure = False
         for project in projects:
             icon = {
                 "running": "[running]",
                 "dead": "[dead   ]",
                 "stopped": "[stopped]",
+                "unknown": "[unknown]",
             }.get(project.status, project.status)
             auto = "auto" if project.auto_start else "    "
             missing = "" if project.dir_exists else "  (directory missing)"
@@ -60,7 +68,13 @@ def _run_rc(args: Namespace) -> int:
                     f"detail={setting.detail}",
                     file=sys.stderr,
                 )
-        return 0 if scan_result.settings.available and not setting_failure else 1
+        return (
+            0
+            if scan_result.settings.available
+            and scan_result.complete
+            and not setting_failure
+            else 1
+        )
 
     if sub == "add":
         path = os.path.abspath(args.project)

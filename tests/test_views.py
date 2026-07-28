@@ -25,6 +25,7 @@ from cc_session_control.data.project_settings import (
 from cc_session_control.data.refresh import RefreshBatch
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import (
+    InventoryIssue,
     RCProject,
     RCServer,
     RCStartupSettingRead,
@@ -855,6 +856,39 @@ def test_rc_view_status_exposes_snapshot_ledger_warning():
     view.apply_refresh(_refresh_batch(snap))
 
     assert "⚠ 环境台账异常 1" in view.status.original_widget.get_text()[0]
+
+
+def test_rc_view_shows_unknown_inventory_status_and_warning():
+    from cc_session_control.data import environments
+
+    issue = InventoryIssue(
+        "tmux list-windows",
+        None,
+        "lost server connection",
+    )
+    project = _make_project(status="unknown")
+    snap = WorldSnapshot(
+        rc_projects=[project],
+        environment_reconciliation=environments.Reconciliation(
+            inventory_issues=(issue,),
+        ),
+    )
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+
+    view.apply_refresh(_refresh_batch(snap))
+
+    assert "未知" in _row_text(view.walker[0])
+    assert "⚠ RC 清单不完整 1" in view.status.original_widget.get_text()[0]
+
+    view.handle_key("o")
+    view.handle_key("s")
+    assert app._submitted_actions == []
+    assert app._notifications == [
+        "RC 清单不可用 — 已拒绝启动",
+        "RC 清单不可用 — 无法确认是否运行",
+    ]
 
 
 def test_rc_view_enter_exits_with_tmux_new():

@@ -238,6 +238,21 @@ def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
 
     monkeypatch.setattr(
         tui_actions.rc,
+        "start_one_result",
+        lambda _path: StartResult(
+            StartState.INVENTORY_UNAVAILABLE,
+            "/project",
+            "tmux list-windows: lost server connection",
+        ),
+    )
+    inventory = tui_actions.start_project("/project", "project")
+    assert inventory.status is ActionStatus.REFUSED
+    assert inventory.message == (
+        "RC 清单不可用 — 已拒绝启动：tmux list-windows: lost server connection"
+    )
+
+    monkeypatch.setattr(
+        tui_actions.rc,
         "set_rc_at_startup",
         lambda *_: SettingWriteResult(
             SettingWriteState.FAILED,

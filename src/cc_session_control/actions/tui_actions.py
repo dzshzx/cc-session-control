@@ -35,6 +35,8 @@ class SessionRequest:
     source: str
     agent_short: str | None
     tmux_target: str | None
+    tmux_inventory_complete: bool
+    tmux_inventory_detail: str
 
     @classmethod
     def from_session(cls, session: Session) -> SessionRequest:
@@ -52,6 +54,8 @@ class SessionRequest:
             source=session.source,
             agent_short=session.agent_short,
             tmux_target=session.tmux_target,
+            tmux_inventory_complete=session.tmux_inventory_complete,
+            tmux_inventory_detail=session.tmux_inventory_detail,
         )
 
     def to_session(self) -> Session:
@@ -69,6 +73,8 @@ class SessionRequest:
             source=self.source,
             agent_short=self.agent_short,
             tmux_target=self.tmux_target,
+            tmux_inventory_complete=self.tmux_inventory_complete,
+            tmux_inventory_detail=self.tmux_inventory_detail,
         )
 
 
@@ -212,6 +218,12 @@ def start_project(path: str, name: str) -> ActionResult:
         return ActionResult.refused(message, needs_refresh=True)
     if result.state is rc.StartState.UNTRUSTED:
         return ActionResult.refused("未信任 — 已拒绝启动", needs_refresh=True)
+    if result.state is rc.StartState.INVENTORY_UNAVAILABLE:
+        detail = f"：{result.detail}" if result.detail else ""
+        return ActionResult.refused(
+            f"RC 清单不可用 — 已拒绝启动{detail}",
+            needs_refresh=True,
+        )
     if result.state is rc.StartState.ALREADY_RUNNING:
         return ActionResult.refused("已在运行", needs_refresh=True)
     if result.state is rc.StartState.NOT_DIRECTORY:

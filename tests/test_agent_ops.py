@@ -216,8 +216,8 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
     )
     monkeypatch.setattr(
         ao.tmux,
-        "find_session_window",
-        lambda pids: "proj:4" if pids == [4242] else None,
+        "find_session_window_result",
+        lambda pids: ao.tmux.SessionWindowResult("proj:4" if pids == [4242] else None),
     )
     job = _make_job(resume_sid="sid-take", cwd="/tmp/proj")
 
@@ -254,7 +254,7 @@ def test_resume_takeover_dead_worker_no_kill(monkeypatch):
     )
     monkeypatch.setattr(
         ao.tmux,
-        "find_session_window",
+        "find_session_window_result",
         lambda pids: (_ for _ in ()).throw(AssertionError("dead: no tmux lookup")),
     )
     job = _make_job(resume_sid="sid-dead", cwd="/tmp/proj")
@@ -262,6 +262,44 @@ def test_resume_takeover_dead_worker_no_kill(monkeypatch):
     assert s.alive is False
     assert s.tmux_target is None
     assert resume_cmd(s) == "cd /tmp/proj && claude --resume sid-dead"
+
+
+def test_prepare_takeover_refuses_incomplete_tmux_inventory(monkeypatch):
+    evidence = liveness.LivenessSnapshot(
+        session_procs=(
+            SessionProc(
+                pid=4242,
+                sid="abcdef0123456789",
+                proc_start="777",
+                proc_alive=True,
+            ),
+        ),
+    )
+    issue = ao.tmux.ResidencyIssue(
+        "tmux list-panes",
+        None,
+        "tmux timed out after 5 seconds",
+    )
+    monkeypatch.setattr(ao.liveness, "liveness_inputs", lambda: evidence)
+    monkeypatch.setattr(
+        ao.tmux,
+        "find_session_window_result",
+        lambda _pids: ao.tmux.SessionWindowResult(issues=(issue,)),
+    )
+    monkeypatch.setattr(
+        ao.tmux,
+        "find_session_window",
+        lambda _pids: (_ for _ in ()).throw(
+            AssertionError("records-only wrapper used by takeover")
+        ),
+    )
+
+    result = ao.prepare_takeover(_make_job())
+
+    assert result.state is ao.TakeoverPreparationState.REFUSED
+    assert result.session is None
+    assert "tmux list-panes" in result.detail
+    assert "tmux timed out after 5 seconds" in result.detail
 
 
 def test_resume_takeover_compatibility_refusal_returns_no_session(monkeypatch):

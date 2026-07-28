@@ -44,6 +44,7 @@ from ..models import (
     AgentJob,
     BridgeEnv,
     EnvRecord,
+    InventoryIssue,
     RCServer,
     SessionProc,
     split_env_id,
@@ -73,6 +74,7 @@ class Reconciliation:
     )
     ledger_history_complete: bool = True
     liveness_issues: tuple[liveness.LivenessIssue, ...] = ()
+    inventory_issues: tuple[InventoryIssue, ...] = ()
     warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -89,13 +91,18 @@ class Reconciliation:
             "liveness_issues",
             tuple(self.liveness_issues),
         )
+        object.__setattr__(
+            self,
+            "inventory_issues",
+            tuple(self.inventory_issues),
+        )
         object.__setattr__(self, "warnings", tuple(self.warnings))
 
     @property
     def evidence_complete(self) -> bool:
         """Whether every liveness source was available for this inventory."""
 
-        return not self.liveness_issues
+        return not self.liveness_issues and not self.inventory_issues
 
     @property
     def success(self) -> bool:
@@ -215,6 +222,7 @@ def reconcile(
     evidence: liveness.LivenessSnapshot,
     rc_servers: Sequence[RCServer] | None = None,
     *,
+    inventory_issues: Sequence[InventoryIssue] = (),
     now: float | None = None,
 ) -> Reconciliation:
     """THE R6 pipeline, in one place: observe (file-referenced) → `upsert` →
@@ -245,13 +253,14 @@ def reconcile(
         evidence.agent_jobs,
         rc_servers,
     )
-    if not evidence.complete:
+    if not evidence.complete or inventory_issues:
         return Reconciliation(
             current=tuple(_current_envs(observed, {})),
             observed=tuple(observed),
             file_referenced=tuple(file_referenced),
             ledger_history_complete=False,
             liveness_issues=evidence.issues,
+            inventory_issues=tuple(inventory_issues),
         )
 
     update = upsert(file_referenced, now=now)

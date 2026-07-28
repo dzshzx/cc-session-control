@@ -17,9 +17,10 @@ don't conflate tmux windows with Remote Control).
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 from typing import NamedTuple
 
 from . import proc
@@ -81,6 +82,26 @@ class TmuxWindow(NamedTuple):
     path: str
 
 
+@dataclass(frozen=True)
+class TmuxIssue:
+    """One expected tmux inventory failure."""
+
+    source: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class WindowInventory:
+    """Known windows plus whether tmux proved the inventory complete."""
+
+    records: tuple[TmuxWindow, ...] = ()
+    issues: tuple[TmuxIssue, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
+
+
 _WINDOWS_FMT = (
     "#{window_id}\t#{window_name}\t#{pane_dead}\t#{pane_pid}"
     "\t#{@csctl_path}\t#{pane_current_path}"
@@ -89,23 +110,45 @@ _CAPTURE_HISTORY_LINES = 2_000
 _CAPTURE_TEXT_CHAR_LIMIT = 1_048_576
 
 
-def list_windows_meta(session: str) -> list[TmuxWindow]:
-    """All windows of `session` with identity metadata; [] on failure.
+def list_windows_inventory(session: str) -> WindowInventory:
+    """Typed window inventory retaining external and malformed evidence.
 
     ONE tmux round-trip feeds both project↔window joins (`rc.scan`) and
     managed-server classification (`rc.scan_servers`)."""
-    cp = _tmux_run(["list-windows", "-t", session, "-F", _WINDOWS_FMT])
+    invocation = _tmux_run_result(["list-windows", "-t", session, "-F", _WINDOWS_FMT])
+    cp = invocation.completed
     if cp is None:
-        return []
+        return WindowInventory(
+            issues=(TmuxIssue("tmux list-windows", invocation.detail),),
+        )
+    if cp.returncode != 0:
+        if _target_not_found(invocation.detail):
+            return WindowInventory()
+        return WindowInventory(
+            issues=(TmuxIssue("tmux list-windows", invocation.detail),),
+        )
     out: list[TmuxWindow] = []
-    for line in cp.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 6 or not parts[0]:
+    issues: list[TmuxIssue] = []
+    for line_number, line in enumerate(cp.stdout.splitlines(), start=1):
+        parts = line.split("\t", 5)
+        if len(parts) != 6 or not parts[0] or parts[2] not in {"0", "1"}:
+            issues.append(
+                TmuxIssue(
+                    "tmux list-windows",
+                    f"malformed row {line_number}: {line!r}",
+                )
+            )
             continue
         try:
-            pid: int | None = int(parts[3])
+            pid = int(parts[3])
         except ValueError:
-            pid = None
+            issues.append(
+                TmuxIssue(
+                    "tmux list-windows",
+                    f"malformed row {line_number}: invalid pane pid {parts[3]!r}",
+                )
+            )
+            continue
         out.append(
             TmuxWindow(
                 wid=parts[0],
@@ -115,7 +158,13 @@ def list_windows_meta(session: str) -> list[TmuxWindow]:
                 path=parts[4] or parts[5],
             )
         )
-    return out
+    return WindowInventory(tuple(out), tuple(issues))
+
+
+def list_windows_meta(session: str) -> list[TmuxWindow]:
+    """Compatibility records-only view of :func:`list_windows_inventory`."""
+
+    return list(list_windows_inventory(session).records)
 
 
 def set_window_option(target: str, option: str, value: str) -> bool:
@@ -271,24 +320,107 @@ def run_in_tmux(session: str, window: str, cmd: str) -> str | None:
     return _tmux_new_session(session, window, cmd)
 
 
-def _tmux_list_all_panes() -> list[tuple[str, int]]:
-    """[("session:window_index", pane_pid)] across ALL tmux sessions; [] on failure."""
-    cp = _tmux_run(
+class TmuxPane(NamedTuple):
+    """One pane root pid and its enterable session/window target."""
+
+    target: str
+    pid: int
+
+
+@dataclass(frozen=True)
+class ResidencyIssue:
+    """One source preventing a complete tmux-residency inventory."""
+
+    source: str
+    path: str | None
+    detail: str
+
+
+@dataclass(frozen=True)
+class PaneInventory:
+    """Known panes plus whether tmux proved the global list complete."""
+
+    records: tuple[TmuxPane, ...] = ()
+    issues: tuple[ResidencyIssue, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
+
+
+@dataclass(frozen=True)
+class ResidencyInventory:
+    """Known pid→target joins plus completeness across tmux and `/proc`."""
+
+    targets: Mapping[int, str] = field(
+        default_factory=lambda: MappingProxyType({}),
+    )
+    issues: tuple[ResidencyIssue, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "targets", MappingProxyType(dict(self.targets)))
+        object.__setattr__(self, "issues", tuple(self.issues))
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
+
+
+def list_panes_inventory() -> PaneInventory:
+    """Typed global pane inventory for residency safety decisions."""
+
+    invocation = _tmux_run_result(
         ["list-panes", "-a", "-F", "#{session_name}:#{window_index}\t#{pane_pid}"]
     )
+    cp = invocation.completed
     if cp is None:
-        return []
-    out: list[tuple[str, int]] = []
-    for line in cp.stdout.splitlines():
+        return PaneInventory(
+            issues=(ResidencyIssue("tmux list-panes", None, invocation.detail),),
+        )
+    if cp.returncode != 0:
+        if _target_not_found(invocation.detail):
+            return PaneInventory()
+        return PaneInventory(
+            issues=(ResidencyIssue("tmux list-panes", None, invocation.detail),),
+        )
+    out: list[TmuxPane] = []
+    issues: list[ResidencyIssue] = []
+    for line_number, line in enumerate(cp.stdout.splitlines(), start=1):
         target, _, pid_s = line.partition("\t")
         try:
-            out.append((target.strip(), int(pid_s.strip())))
+            pid = int(pid_s.strip())
         except ValueError:
+            issues.append(
+                ResidencyIssue(
+                    "tmux list-panes",
+                    None,
+                    f"malformed row {line_number}: {line!r}",
+                )
+            )
             continue
-    return out
+        if not target.strip() or pid <= 0:
+            issues.append(
+                ResidencyIssue(
+                    "tmux list-panes",
+                    None,
+                    f"malformed row {line_number}: {line!r}",
+                )
+            )
+            continue
+        out.append(TmuxPane(target.strip(), pid))
+    return PaneInventory(tuple(out), tuple(issues))
 
 
-def window_containing(panes: list[tuple[str, int]], ancestors: set[int]) -> str | None:
+def _tmux_list_all_panes() -> list[tuple[str, int]]:
+    """Compatibility records-only view of :func:`list_panes_inventory`."""
+
+    return list(list_panes_inventory().records)
+
+
+def window_containing(
+    panes: Sequence[tuple[str, int]],
+    ancestors: set[int],
+) -> str | None:
     """PURE: the pane target whose pane_pid appears in `ancestors`, or None.
 
     A session process hosted by a tmux pane has that pane's pid in its
@@ -299,38 +431,64 @@ def window_containing(panes: list[tuple[str, int]], ancestors: set[int]) -> str 
     return None
 
 
-def residency_targets(pids: Iterable[int]) -> dict[int, str]:
-    """{pid: "session:window_index"} for every pid hosted by a tmux pane.
+def residency_inventory(pids: Iterable[int]) -> ResidencyInventory:
+    """Typed pid→pane join retaining tmux and ancestor-scan uncertainty.
 
     THE batch tmux-residency computation (ADR-0001 badge + actions share it):
     ONE `list-panes -a` for the whole pid set, then each pid's `/proc` ancestor
     chain is matched against the pane root pids — finds windows in ANY tmux
-    session (per-project, rc, user-made). Misses are simply absent from the
-    dict; tmux failure returns {} (swallow-errors contract)."""
+    session (per-project, rc, user-made)."""
     pid_list = list(pids)
     if not pid_list:
-        return {}
-    panes = _tmux_list_all_panes()
-    if not panes:
-        return {}
+        return ResidencyInventory()
+    pane_inventory = list_panes_inventory()
+    panes = list(pane_inventory.records)
+    issues = list(pane_inventory.issues)
     out: dict[int, str] = {}
     for pid in pid_list:
-        target = window_containing(panes, proc.ancestors_of(pid))
+        ancestors = proc.probe_ancestors(pid)
+        issues.extend(
+            ResidencyIssue(issue.source, issue.path, issue.detail)
+            for issue in ancestors.issues
+        )
+        target = window_containing(panes, set(ancestors.pids))
         if target:
             out[pid] = target
-    return out
+    return ResidencyInventory(out, tuple(issues))
+
+
+def residency_targets(pids: Iterable[int]) -> dict[int, str]:
+    """Compatibility records-only view of :func:`residency_inventory`."""
+
+    return dict(residency_inventory(pids).targets)
+
+
+@dataclass(frozen=True)
+class SessionWindowResult:
+    """First matching pane target plus evidence completeness."""
+
+    target: str | None = None
+    issues: tuple[ResidencyIssue, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
+
+
+def find_session_window_result(pids: list[int]) -> SessionWindowResult:
+    """Typed first-target convenience over :func:`residency_inventory`."""
+
+    inventory = residency_inventory(pids)
+    for pid in pids:
+        if pid in inventory.targets:
+            return SessionWindowResult(inventory.targets[pid], inventory.issues)
+    return SessionWindowResult(issues=inventory.issues)
 
 
 def find_session_window(pids: list[int]) -> str | None:
-    """The tmux window ("session:index") hosting any of `pids`, or None.
+    """Compatibility target-only view of :func:`find_session_window_result`."""
 
-    Single-target convenience over `residency_targets` (first hit in `pids`
-    order) — used by the action layer when only one session is in play."""
-    targets = residency_targets(pids)
-    for pid in pids:
-        if pid in targets:
-            return targets[pid]
-    return None
+    return find_session_window_result(pids).target
 
 
 def select_window(target: str) -> bool:

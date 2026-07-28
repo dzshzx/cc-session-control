@@ -73,7 +73,11 @@ def test_enter_refuses_partial_registry_before_takeover_side_effects(monkeypatch
 
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
     monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
-    monkeypatch.setattr(av_mod.agent_ops.tmux, "find_session_window", unexpected)
+    monkeypatch.setattr(
+        av_mod.agent_ops.tmux,
+        "find_session_window_result",
+        unexpected,
+    )
     app, view = _view(_job())
     app.confirm = unexpected
     app.exit_with = unexpected
@@ -110,7 +114,11 @@ def test_terminal_refuses_unknown_proc_before_takeover_side_effects(monkeypatch)
 
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
     monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
-    monkeypatch.setattr(av_mod.agent_ops.tmux, "find_session_window", unexpected)
+    monkeypatch.setattr(
+        av_mod.agent_ops.tmux,
+        "find_session_window_result",
+        unexpected,
+    )
     app, view = _view(_job())
     app.confirm = unexpected
     app.exit_with = unexpected
@@ -150,8 +158,10 @@ def test_enter_live_takeover_uses_one_complete_generation(monkeypatch):
     monkeypatch.setattr(av_mod.proc, "probe_current_ancestors", unexpected)
     monkeypatch.setattr(
         av_mod.agent_ops.tmux,
-        "find_session_window",
-        lambda pids: calls["tmux"].append(pids),
+        "find_session_window_result",
+        lambda pids: (
+            calls["tmux"].append(pids) or av_mod.agent_ops.tmux.SessionWindowResult()
+        ),
     )
     app, view = _view(_job(alive=True))
 
@@ -192,8 +202,8 @@ def test_enter_and_terminal_refuse_current_from_snapshot(monkeypatch):
     monkeypatch.setattr(av_mod.proc, "probe_current_ancestors", unexpected)
     monkeypatch.setattr(
         av_mod.agent_ops.tmux,
-        "find_session_window",
-        lambda _pids: None,
+        "find_session_window_result",
+        lambda _pids: av_mod.agent_ops.tmux.SessionWindowResult(),
     )
     app, view = _view(_job(alive=True))
     app.confirm = unexpected
@@ -221,7 +231,11 @@ def test_enter_dead_without_host_uses_one_complete_generation(monkeypatch):
     monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
     monkeypatch.setattr(av_mod.agent_ops.liveness, "live_session_procs", unexpected)
     monkeypatch.setattr(av_mod.proc, "probe_current_ancestors", unexpected)
-    monkeypatch.setattr(av_mod.agent_ops.tmux, "find_session_window", unexpected)
+    monkeypatch.setattr(
+        av_mod.agent_ops.tmux,
+        "find_session_window_result",
+        unexpected,
+    )
     app, view = _view(_job())
     app.confirm = unexpected
 

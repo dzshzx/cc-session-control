@@ -15,7 +15,13 @@ from cc_session_control.config import cfg
 from cc_session_control.data import environment_ledger as ledger
 from cc_session_control.data import environments as env
 from cc_session_control.data import liveness, registry
-from cc_session_control.models import AgentJob, EnvRecord, RCServer, SessionProc
+from cc_session_control.models import (
+    AgentJob,
+    EnvRecord,
+    InventoryIssue,
+    RCServer,
+    SessionProc,
+)
 
 
 def _use_tmp_ledger(tmp_path, monkeypatch):
@@ -254,6 +260,48 @@ def test_reconcile_incomplete_evidence_never_writes_or_classifies_orphans(
     assert writes == []
     assert recon.evidence_complete is False
     assert recon.liveness_issues == evidence.issues
+    assert [item.env_id for item in recon.current] == ["session_LIVE"]
+    assert recon.orphans == ()
+    assert recon.success is False
+
+
+def test_reconcile_incomplete_inventory_never_writes_or_classifies_orphans(
+    monkeypatch,
+):
+    evidence = liveness.LivenessSnapshot(
+        session_procs=(
+            SessionProc(
+                pid=1,
+                sid="sid-live",
+                bridge="session_LIVE",
+                proc_alive=True,
+            ),
+        ),
+    )
+    writes: list[list[EnvRecord]] = []
+    classifications: list[object] = []
+    monkeypatch.setattr(
+        env,
+        "upsert",
+        lambda records, now=None: writes.append(list(records)),
+    )
+    monkeypatch.setattr(
+        env,
+        "_orphan_envs",
+        lambda records, entries: classifications.append((records, entries)),
+    )
+    issue = InventoryIssue(
+        "tmux list-windows",
+        None,
+        "tmux timed out after 5 seconds",
+    )
+
+    recon = env.reconcile(evidence, [], inventory_issues=(issue,))
+
+    assert writes == []
+    assert classifications == []
+    assert recon.evidence_complete is False
+    assert recon.inventory_issues == (issue,)
     assert [item.env_id for item in recon.current] == ["session_LIVE"]
     assert recon.orphans == ()
     assert recon.success is False

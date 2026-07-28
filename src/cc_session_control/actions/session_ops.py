@@ -231,6 +231,9 @@ def _spawn_in_tmux_result(
     incomplete = _resume_liveness_gate()
     if incomplete:
         return TmuxResumeOutcome(None, incomplete)
+    if s.alive and not s.tmux_inventory_complete:
+        detail = s.tmux_inventory_detail or "tmux residency inventory incomplete"
+        return TmuxResumeOutcome(None, detail)
     _, _, should_kill = _resume_plan(s, fork)
     if should_kill and s.pid:
         takeover = take_over_result(s.pid, s.proc_start)

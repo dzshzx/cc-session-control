@@ -220,7 +220,7 @@ def _inject_tmux_residency(
     """Fill `Session.tmux_target` for every ALIVE session, in ONE batch.
 
     Collects all alive sessions' candidate pids, calls
-    `tmux.residency_targets` once (one `list-panes -a` per scan cycle), and
+    `tmux.residency_inventory` once (one `list-panes -a` per scan cycle), and
     returns a replaced session carrying its first hit — any alive pid inside a
     tmux pane makes the session resident (ADR-0001). Dead sessions stay None;
     the badge and the resume/backgrounding actions read this SAME field, so
@@ -228,9 +228,16 @@ def _inject_tmux_residency(
     alive_pids = {
         pid for row in rows if row.alive for pid in _candidate_pids(idx.get(row.sid))
     }
-    targets = tmux.residency_targets(alive_pids)
-    if not targets:
+    inventory = tmux.residency_inventory(alive_pids)
+    targets = inventory.targets
+    if not targets and inventory.complete:
         return rows
+    detail = "; ".join(
+        f"{issue.source}"
+        + (f" ({issue.path})" if issue.path else "")
+        + f": {issue.detail}"
+        for issue in inventory.issues
+    )
     resident: list[Session] = []
     for row in rows:
         target = next(
@@ -241,7 +248,17 @@ def _inject_tmux_residency(
             ),
             None,
         )
-        resident.append(replace(row, tmux_target=target) if target else row)
+        if row.alive:
+            resident.append(
+                replace(
+                    row,
+                    tmux_target=target,
+                    tmux_inventory_complete=inventory.complete,
+                    tmux_inventory_detail=detail,
+                )
+            )
+        else:
+            resident.append(row)
     return resident
 
 

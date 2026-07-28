@@ -13,14 +13,14 @@ from cc_session_control.config import cfg
 from cc_session_control.data import environment_ledger as ledger
 from cc_session_control.data import environments as env
 from cc_session_control.data import liveness, registry, snapshot
-from cc_session_control.data.proc import ProcRC
+from cc_session_control.data.proc import ProcRC, ProcRCInventory
 from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
 from cc_session_control.data.rc_environment import EnvironmentIdCache
 from cc_session_control.data.refresh import RefreshFailure, build_refresh_result
-from cc_session_control.data.tmux import TmuxWindow
+from cc_session_control.data.tmux import TmuxWindow, WindowInventory
 from cc_session_control.models import SessionProc
 
 
@@ -48,12 +48,21 @@ def _stub_sources(monkeypatch, procs):
     monkeypatch.setattr(
         snapshot.rc,
         "scan_result",
-        lambda: snapshot.rc.RCScanResult(
+        lambda *, window_inventory: snapshot.rc.RCScanResult(
             [],
             ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
         ),
     )
-    monkeypatch.setattr(snapshot.rc, "scan_servers", lambda: [])
+    monkeypatch.setattr(
+        snapshot.rc,
+        "_tmux_window_inventory",
+        lambda: WindowInventory(),
+    )
+    monkeypatch.setattr(
+        snapshot.rc,
+        "scan_servers_result",
+        lambda *, window_inventory: snapshot.rc.RCServerScanResult(),
+    )
 
 
 def _ledger_keys(tmp_path):
@@ -212,13 +221,13 @@ def test_incomplete_snapshot_fails_without_mutating_environment_ledger(
 def test_snapshot_reconciliation_owns_single_rc_environment_ledger_update(
     monkeypatch,
 ):
-    actual_scan_servers = snapshot.rc.scan_servers
+    actual_scan_servers = snapshot.rc.scan_servers_result
     _stub_sources(monkeypatch, [])
-    monkeypatch.setattr(snapshot.rc, "scan_servers", actual_scan_servers)
+    monkeypatch.setattr(snapshot.rc, "scan_servers_result", actual_scan_servers)
     monkeypatch.setattr(
         snapshot.rc,
-        "_tmux_windows",
-        lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+        "_tmux_window_inventory",
+        lambda: WindowInventory((TmuxWindow("@1", "foo", False, 111, "/a"),)),
     )
     monkeypatch.setattr(
         snapshot.rc,
@@ -227,8 +236,8 @@ def test_snapshot_reconciliation_owns_single_rc_environment_ledger_update(
     )
     monkeypatch.setattr(
         snapshot.rc.proc,
-        "scan_rc_servers",
-        lambda: [ProcRC(111, "ws/foo", "/a")],
+        "scan_rc_server_inventory",
+        lambda: ProcRCInventory((ProcRC(111, "ws/foo", "/a"),)),
     )
     monkeypatch.setattr(snapshot.rc, "_environment_ids", EnvironmentIdCache())
 
@@ -331,18 +340,26 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
     monkeypatch.setattr(
         snapshot.rc,
         "scan_result",
-        lambda: snapshot.rc.RCScanResult(
+        lambda *, window_inventory: snapshot.rc.RCScanResult(
             [],
             ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
         ),
     )
-    monkeypatch.setattr(snapshot.rc, "_tmux_windows", lambda: [])
+    monkeypatch.setattr(
+        snapshot.rc,
+        "_tmux_window_inventory",
+        lambda: WindowInventory(),
+    )
 
     def scan_rc_procs():
         calls["rc_proc_scan"] += 1
-        return []
+        return ProcRCInventory()
 
-    monkeypatch.setattr(snapshot.rc.proc, "scan_rc_servers", scan_rc_procs)
+    monkeypatch.setattr(
+        snapshot.rc.proc,
+        "scan_rc_server_inventory",
+        scan_rc_procs,
+    )
 
     first = snapshot.build_world_snapshot()
     active_pid["value"] = next(generations)
@@ -365,3 +382,48 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
     assert first.cur is first.liveness_snapshot.cur
     assert [sp.pid for sp in first.session_procs] == [101]
     assert [sp.pid for sp in second.session_procs] == [202]
+
+
+def test_snapshot_reuses_one_window_inventory_for_project_and_server_joins(
+    monkeypatch,
+):
+    inventory = WindowInventory((TmuxWindow("@1", "project", False, 101, "/project"),))
+    reads = 0
+    injected: list[WindowInventory] = []
+
+    def read_windows() -> WindowInventory:
+        nonlocal reads
+        reads += 1
+        return inventory
+
+    def scan_projects(*, window_inventory):
+        injected.append(window_inventory)
+        return snapshot.rc.RCScanResult(
+            [],
+            ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
+        )
+
+    def scan_servers(*, window_inventory):
+        injected.append(window_inventory)
+        return snapshot.rc.RCServerScanResult()
+
+    monkeypatch.setattr(
+        snapshot.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(snapshot.sessions, "scan", lambda _inputs: [])
+    monkeypatch.setattr(snapshot.rc, "_tmux_window_inventory", read_windows)
+    monkeypatch.setattr(snapshot.rc, "scan_result", scan_projects)
+    monkeypatch.setattr(snapshot.rc, "scan_servers_result", scan_servers)
+    monkeypatch.setattr(
+        snapshot.environments,
+        "reconcile",
+        lambda _evidence, _servers, inventory_issues=(): env.Reconciliation(),
+    )
+
+    snapshot.build_world_snapshot()
+
+    assert reads == 1
+    assert injected == [inventory, inventory]
+    assert injected[0] is injected[1]

@@ -339,7 +339,12 @@ def _cmd_env(args: Namespace) -> int:
     # file — only a running server references it). The whole observe → upsert →
     # classify pipeline (and its ordering invariant) lives in reconcile.
     evidence = liveness.liveness_inputs()
-    recon = environments.reconcile(evidence, rc.scan_servers())
+    server_scan = rc.scan_servers_result()
+    recon = environments.reconcile(
+        evidence,
+        server_scan.servers,
+        inventory_issues=server_scan.issues,
+    )
 
     current_label = " (partial)" if not recon.evidence_complete else ""
     print(f"Current bridge environments{current_label}: {len(recon.current)}")
@@ -359,11 +364,18 @@ def _cmd_env(args: Namespace) -> int:
     else:
         print("Orphan environments: unavailable (partial liveness evidence)")
 
-    for issue in recon.liveness_issues:
-        where = f" ({issue.path})" if issue.path else ""
+    for liveness_issue in recon.liveness_issues:
+        where = f" ({liveness_issue.path})" if liveness_issue.path else ""
         print(
             "Warning: environment inventory is partial: "
-            f"{issue.source}{where}: {issue.detail}",
+            f"{liveness_issue.source}{where}: {liveness_issue.detail}",
+            file=sys.stderr,
+        )
+    for inventory_issue in recon.inventory_issues:
+        where = f" ({inventory_issue.path})" if inventory_issue.path else ""
+        print(
+            "Warning: environment inventory is partial: "
+            f"{inventory_issue.source}{where}: {inventory_issue.detail}",
             file=sys.stderr,
         )
     for warning in recon.warnings:

@@ -96,8 +96,10 @@ def build_world_snapshot() -> WorldSnapshot:
     """
     inputs = liveness.liveness_inputs()
     all_sessions = sessions.scan(inputs)
-    rc_scan = rc.scan_result()
-    rc_servers = rc.scan_servers()
+    window_inventory = rc._tmux_window_inventory()
+    rc_scan = rc.scan_result(window_inventory=window_inventory)
+    server_scan = rc.scan_servers_result(window_inventory=window_inventory)
+    rc_servers = server_scan.servers
     # R6 ledger reconciliation (the whole point of the ledger): ONE pipeline —
     # observe (file-referenced membership) → upsert → observe_live (alive-gated
     # CURRENT) — owned by `environments.reconcile`, so the ordering invariant
@@ -109,6 +111,7 @@ def build_world_snapshot() -> WorldSnapshot:
     recon = environments.reconcile(
         inputs,
         rc_servers,
+        inventory_issues=server_scan.issues,
     )
     return WorldSnapshot(
         sessions=tuple(all_sessions),

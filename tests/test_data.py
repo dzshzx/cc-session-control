@@ -319,15 +319,20 @@ def test_residency_targets_batch_join(monkeypatch):
     from cc_session_control.data import tmux
 
     calls = {"panes": 0}
-    panes = [("proj:1", 100), ("other:2", 200)]
+    panes = [tmux.TmuxPane("proj:1", 100), tmux.TmuxPane("other:2", 200)]
     monkeypatch.setattr(
         tmux,
-        "_tmux_list_all_panes",
-        lambda: calls.__setitem__("panes", calls["panes"] + 1) or panes,
+        "list_panes_inventory",
+        lambda: (
+            calls.__setitem__("panes", calls["panes"] + 1)
+            or tmux.PaneInventory(tuple(panes))
+        ),
     )
     ancestors = {4242: {100, 1}, 4343: {200, 1}, 5555: {999}}
     monkeypatch.setattr(
-        tmux.proc, "ancestors_of", lambda pid: ancestors.get(pid, set())
+        tmux.proc,
+        "probe_ancestors",
+        lambda pid: tmux.proc.AncestorProbe(frozenset(ancestors.get(pid, set()))),
     )
 
     out = tmux.residency_targets([4242, 4343, 5555])
@@ -341,7 +346,7 @@ def test_residency_targets_empty_pids_skips_tmux(monkeypatch):
 
     monkeypatch.setattr(
         tmux,
-        "_tmux_list_all_panes",
+        "list_panes_inventory",
         lambda: (_ for _ in ()).throw(AssertionError("no tmux call")),
     )
     assert tmux.residency_targets([]) == {}
@@ -350,20 +355,38 @@ def test_residency_targets_empty_pids_skips_tmux(monkeypatch):
 def test_residency_targets_tmux_failure_returns_empty(monkeypatch):
     from cc_session_control.data import tmux
 
-    monkeypatch.setattr(tmux, "_tmux_list_all_panes", lambda: [])
+    monkeypatch.setattr(
+        tmux,
+        "list_panes_inventory",
+        lambda: tmux.PaneInventory(
+            issues=(
+                tmux.ResidencyIssue(
+                    "tmux list-panes",
+                    None,
+                    "lost server connection",
+                ),
+            )
+        ),
+    )
     assert tmux.residency_targets([4242]) == {}
 
 
 def test_find_session_window_first_hit_over_residency(monkeypatch):
-    # find_session_window is now the single-target convenience over
-    # residency_targets — first hit in pids order, None on no hit.
+    # find_session_window is the target-only compatibility view over the typed
+    # residency result — first hit in pids order, None on no hit.
     from cc_session_control.data import tmux
 
     monkeypatch.setattr(
-        tmux, "residency_targets", lambda pids: {4343: "other:2", 4242: "proj:1"}
+        tmux,
+        "residency_inventory",
+        lambda _pids: tmux.ResidencyInventory({4343: "other:2", 4242: "proj:1"}),
     )
     assert tmux.find_session_window([4242, 4343]) == "proj:1"
-    monkeypatch.setattr(tmux, "residency_targets", lambda pids: {})
+    monkeypatch.setattr(
+        tmux,
+        "residency_inventory",
+        lambda _pids: tmux.ResidencyInventory(),
+    )
     assert tmux.find_session_window([4242]) is None
 
 
@@ -575,8 +598,6 @@ def test_session_name_for_sanitizes_tmux_separators():
 
 
 def test_list_windows_meta_parses_and_prefers_declared_path(monkeypatch):
-    from types import SimpleNamespace
-
     from cc_session_control.data import tmux
 
     out = (
@@ -586,16 +607,22 @@ def test_list_windows_meta_parses_and_prefers_declared_path(monkeypatch):
         "bogus-line\n"
     )
     monkeypatch.setattr(
-        tmux,
-        "_tmux_run",
-        lambda args: SimpleNamespace(returncode=0, stdout=out),
+        tmux.subprocess,
+        "run",
+        lambda argv, **_kwargs: tmux.subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=out,
+            stderr="",
+        ),
     )
 
-    wins = tmux.list_windows_meta("rc")
-    assert wins[0] == tmux.TmuxWindow("@1", "foo", False, 111, "/declared")
-    assert wins[1] == tmux.TmuxWindow("@2", "bar", True, 222, "/fallback")
-    assert wins[2].pid is None and wins[2].path == ""
-    assert len(wins) == 3  # malformed line skipped
+    inventory = tmux.list_windows_inventory("rc")
+    assert inventory.records[0] == tmux.TmuxWindow("@1", "foo", False, 111, "/declared")
+    assert inventory.records[1] == tmux.TmuxWindow("@2", "bar", True, 222, "/fallback")
+    assert len(inventory.records) == 2
+    assert inventory.complete is False
+    assert len(inventory.issues) == 2
 
 
 def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
@@ -614,7 +641,11 @@ def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
     calls = {}
     opts = {}
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: tmux.WindowInventory(),
+    )
     monkeypatch.setattr(tmux, "_tmux_has_session", lambda session: False)
     monkeypatch.setattr(
         tmux,
@@ -654,13 +685,15 @@ def test_start_one_refuses_running_window(tmp_path, monkeypatch):
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
     monkeypatch.setattr(
         rc,
-        "_tmux_windows",
-        lambda: [tmux.TmuxWindow("@1", "proj", False, 1, str(proj))],
+        "_tmux_window_inventory",
+        lambda: tmux.WindowInventory(
+            (tmux.TmuxWindow("@1", "proj", False, 1, str(proj)),)
+        ),
     )
     monkeypatch.setattr(
         rc,
         "stop_one_result",
-        lambda path: (
+        lambda path, *, window_inventory=None: (
             calls.__setitem__("kill", calls["kill"] + 1)
             or rc.StopResult(rc.StopState.STOPPED, path)
         ),
@@ -692,13 +725,15 @@ def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
     monkeypatch.setattr(
         rc,
-        "_tmux_windows",
-        lambda: [tmux.TmuxWindow("@1", "proj", True, 1, str(proj))],
+        "_tmux_window_inventory",
+        lambda: tmux.WindowInventory(
+            (tmux.TmuxWindow("@1", "proj", True, 1, str(proj)),)
+        ),
     )
     monkeypatch.setattr(
         rc,
         "stop_one_result",
-        lambda path: (
+        lambda path, *, window_inventory=None: (
             calls.__setitem__("kill", calls["kill"] + 1)
             or rc.StopResult(rc.StopState.STOPPED, path)
         ),

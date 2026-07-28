@@ -12,8 +12,8 @@ import json
 
 from cc_session_control.config import cfg
 from cc_session_control.data import proc, rc, rc_environment
-from cc_session_control.data.proc import ProcRC
-from cc_session_control.data.tmux import TmuxWindow
+from cc_session_control.data.proc import ProcIssue, ProcRC, ProcRCInventory
+from cc_session_control.data.tmux import TmuxIssue, TmuxWindow, WindowInventory
 from cc_session_control.models import RCServer, RCStartupSettingState
 
 
@@ -96,19 +96,103 @@ def test_scan_rc_servers_degrades_without_proc(monkeypatch):
 # --- managed vs external classification (AC5) ------------------------------
 
 
+def test_start_refuses_incomplete_window_inventory_without_spawning(
+    tmp_path,
+    monkeypatch,
+):
+    spawned: list[tuple] = []
+    monkeypatch.setattr(
+        rc,
+        "trust_decision",
+        lambda _path: rc.TrustDecision.TRUSTED,
+    )
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: WindowInventory(
+            issues=(TmuxIssue("tmux list-windows", "tmux timed out"),),
+        ),
+    )
+    monkeypatch.setattr(
+        rc.tmux,
+        "run_in_tmux",
+        lambda *args: spawned.append(args) or "rc:1",
+    )
+
+    result = rc.start_one_result(str(tmp_path))
+
+    assert result.state is rc.StartState.INVENTORY_UNAVAILABLE
+    assert result.success is False
+    assert "tmux timed out" in result.detail
+    assert spawned == []
+
+
+def test_stop_fails_incomplete_window_inventory_without_killing(monkeypatch):
+    killed: list[str] = []
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: WindowInventory(
+            records=(TmuxWindow("@1", "project", False, 101, "/project"),),
+            issues=(TmuxIssue("tmux list-windows", "malformed row 2"),),
+        ),
+    )
+    monkeypatch.setattr(
+        rc.tmux,
+        "kill_window_result",
+        lambda target: killed.append(target),
+    )
+
+    result = rc.stop_one_result("/project")
+
+    assert result.state is rc.StopState.FAILED
+    assert "malformed row 2" in result.detail
+    assert killed == []
+
+
+def test_project_status_is_unknown_when_window_inventory_is_incomplete(
+    tmp_path,
+    monkeypatch,
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    claude_json = _write_claude_json(
+        tmp_path,
+        {str(project): {"hasTrustDialogAccepted": True}},
+    )
+    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
+    monkeypatch.setattr(rc, "list_enabled", lambda: [])
+    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: WindowInventory(
+            issues=(TmuxIssue("tmux list-windows", "lost server connection"),),
+        ),
+    )
+
+    result = rc.scan_result()
+
+    assert result.complete is False
+    assert result.projects[0].status == "unknown"
+    assert result.issues[0].detail == "lost server connection"
+
+
 def test_scan_servers_classifies_managed_and_external(monkeypatch):
     # tmux owns window @1 whose pane pid is 111 -> managed; pid 222 is only
     # in /proc -> external.
     monkeypatch.setattr(
         rc,
-        "_tmux_windows",
-        lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+        "_tmux_window_inventory",
+        lambda: WindowInventory((TmuxWindow("@1", "foo", False, 111, "/a"),)),
     )
     monkeypatch.setattr(rc, "_capture_env_id", lambda target: "")
     monkeypatch.setattr(
         rc.proc,
-        "scan_rc_servers",
-        lambda: [ProcRC(111, "ws/foo", "/a"), ProcRC(222, "ws/bar", "/b")],
+        "scan_rc_server_inventory",
+        lambda: ProcRCInventory(
+            (ProcRC(111, "ws/foo", "/a"), ProcRC(222, "ws/bar", "/b"))
+        ),
     )
 
     servers = rc.scan_servers(
@@ -125,16 +209,45 @@ def test_scan_servers_classifies_managed_and_external(monkeypatch):
     assert by_name["ws/bar"].cwd == "/b"
 
 
+def test_server_scan_retains_partial_proc_records_and_issues(monkeypatch):
+    window = TmuxWindow("@1", "foo", False, 111, "/a")
+    monkeypatch.setattr(rc, "_capture_env_id", lambda _target: "")
+
+    result = rc.scan_servers_result(
+        window_inventory=WindowInventory((window,)),
+        proc_inventory=ProcRCInventory(
+            records=(ProcRC(111, "ws/foo", "/a"),),
+            issues=(
+                ProcIssue(
+                    "RC process inventory",
+                    "/proc/222/cmdline",
+                    "permission denied",
+                ),
+            ),
+        ),
+        environment_cache=rc_environment.EnvironmentIdCache(),
+    )
+
+    assert [server.name for server in result.servers] == ["ws/foo"]
+    assert result.complete is False
+    assert result.issues[0].path == "/proc/222/cmdline"
+    assert "permission denied" in result.issues[0].detail
+
+
 def test_scan_servers_managed_window_without_proc_match(monkeypatch):
     # tmux window present but the pid isn't in /proc (dead pane) -> still listed
     # managed, falling back to window name + path, status from pane_dead.
     monkeypatch.setattr(
         rc,
-        "_tmux_windows",
-        lambda: [TmuxWindow("@1", "foo", True, 111, "/a")],
+        "_tmux_window_inventory",
+        lambda: WindowInventory((TmuxWindow("@1", "foo", True, 111, "/a"),)),
     )
     monkeypatch.setattr(rc, "_capture_env_id", lambda target: "")
-    monkeypatch.setattr(rc.proc, "scan_rc_servers", lambda: [])
+    monkeypatch.setattr(
+        rc.proc,
+        "scan_rc_server_inventory",
+        lambda: ProcRCInventory(),
+    )
 
     servers = rc.scan_servers(
         environment_cache=rc_environment.EnvironmentIdCache(),
@@ -157,8 +270,8 @@ def test_scan_servers_captures_env_id_without_ledger_side_effect(
     targets: list[str] = []
     monkeypatch.setattr(
         rc,
-        "_tmux_windows",
-        lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+        "_tmux_window_inventory",
+        lambda: WindowInventory((TmuxWindow("@1", "foo", False, 111, "/a"),)),
     )
     monkeypatch.setattr(
         rc,
@@ -168,7 +281,9 @@ def test_scan_servers_captures_env_id_without_ledger_side_effect(
         ),
     )
     monkeypatch.setattr(
-        rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")]
+        rc.proc,
+        "scan_rc_server_inventory",
+        lambda: ProcRCInventory((ProcRC(111, "ws/foo", "/a"),)),
     )
 
     cache = rc_environment.EnvironmentIdCache()
@@ -184,12 +299,14 @@ def test_scan_servers_captures_env_id_without_ledger_side_effect(
 def test_scan_servers_returns_no_env_id_when_capture_has_none(monkeypatch):
     monkeypatch.setattr(
         rc,
-        "_tmux_windows",
-        lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+        "_tmux_window_inventory",
+        lambda: WindowInventory((TmuxWindow("@1", "foo", False, 111, "/a"),)),
     )
     monkeypatch.setattr(rc, "_tmux_capture_pane", lambda target: "no env here")
     monkeypatch.setattr(
-        rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")]
+        rc.proc,
+        "scan_rc_server_inventory",
+        lambda: ProcRCInventory((ProcRC(111, "ws/foo", "/a"),)),
     )
 
     servers = rc.scan_servers(
@@ -216,8 +333,13 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
     cache = CacheSpy()
     project = str(tmp_path)
     window = TmuxWindow("@7", "project", False, 707, project)
+    windows: list[TmuxWindow] = []
     monkeypatch.setattr(rc, "_environment_ids", cache)
-    monkeypatch.setattr(rc, "_window_for", lambda path: None)
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: WindowInventory(tuple(windows)),
+    )
     monkeypatch.setattr(
         rc,
         "trust_decision",
@@ -231,7 +353,7 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
     assert result.state is rc.StartState.STARTED
     assert cache.all == 1
 
-    monkeypatch.setattr(rc, "_window_for", lambda path: window)
+    windows.append(window)
     monkeypatch.setattr(
         rc.tmux,
         "kill_window_result",
@@ -257,7 +379,11 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
 
 def test_stop_one_result_maps_kill_race_to_not_running(monkeypatch):
     window = TmuxWindow("@7", "project", False, 707, "/project")
-    monkeypatch.setattr(rc, "_window_for", lambda path: window)
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: WindowInventory((window,)),
+    )
     monkeypatch.setattr(
         rc.tmux,
         "kill_window_result",
@@ -277,7 +403,11 @@ def test_stop_one_result_maps_kill_race_to_not_running(monkeypatch):
 
 def test_stop_one_result_retains_genuine_tmux_failure(monkeypatch):
     window = TmuxWindow("@7", "project", False, 707, "/project")
-    monkeypatch.setattr(rc, "_window_for", lambda path: window)
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: WindowInventory((window,)),
+    )
     monkeypatch.setattr(
         rc.tmux,
         "kill_window_result",
@@ -495,8 +625,10 @@ def test_scan_marks_missing_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(rc, "list_enabled", lambda: [gone_enabled])
     monkeypatch.setattr(
         rc,
-        "_tmux_windows",
-        lambda: [TmuxWindow("@1", "gone-running", False, 5, gone_running)],
+        "_tmux_window_inventory",
+        lambda: WindowInventory(
+            (TmuxWindow("@1", "gone-running", False, 5, gone_running),)
+        ),
     )
     # tmp_path is under the real temp root — neutralize the membership filter.
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())

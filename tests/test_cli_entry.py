@@ -353,14 +353,16 @@ def test_rc_rm_real_enabled_list_and_tmux_outcomes(
     monkeypatch.setattr(cfg, "rc_session", "isolated-rc")
     rc.list_add(str(project))
 
-    def successful_tmux(args: list[str]) -> subprocess.CompletedProcess[str]:
-        if args[:2] == ["list-windows", "-t"]:
-            stdout = f"@7\tproject\t0\t101\t{project}\t{project}\n"
-        else:
-            stdout = ""
-        return subprocess.CompletedProcess(args, 0, stdout, "")
-
-    monkeypatch.setattr(tmux, "_tmux_run", successful_tmux)
+    inventory = {
+        "value": tmux.WindowInventory(
+            (tmux.TmuxWindow("@7", "project", False, 101, str(project)),)
+        )
+    }
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: inventory["value"],
+    )
     monkeypatch.setattr(
         tmux,
         "kill_window_result",
@@ -375,17 +377,6 @@ def test_rc_rm_real_enabled_list_and_tmux_outcomes(
 
     rc.list_add(str(project))
 
-    def failed_tmux(args: list[str]) -> subprocess.CompletedProcess[str]:
-        if args[:2] == ["list-windows", "-t"]:
-            return subprocess.CompletedProcess(
-                args,
-                0,
-                f"@7\tproject\t0\t101\t{project}\t{project}\n",
-                "",
-            )
-        return subprocess.CompletedProcess(args, 1, "", "tmux denied")
-
-    monkeypatch.setattr(tmux, "_tmux_run", failed_tmux)
     monkeypatch.setattr(
         tmux,
         "kill_window_result",
@@ -402,11 +393,7 @@ def test_rc_rm_real_enabled_list_and_tmux_outcomes(
     assert rc.list_enabled() == []
 
     rc.list_add(str(project))
-    monkeypatch.setattr(
-        tmux,
-        "_tmux_run",
-        lambda args: subprocess.CompletedProcess(args, 1, "", "not found"),
-    )
+    inventory["value"] = tmux.WindowInventory()
     monkeypatch.setattr(
         tmux,
         "kill_window_result",
@@ -760,7 +747,11 @@ def test_env_renders_current_and_orphan_results(
             ),
         ],
     )
-    monkeypatch.setattr(rc, "scan_servers", lambda: [])
+    monkeypatch.setattr(
+        rc,
+        "scan_servers_result",
+        lambda: rc.RCServerScanResult(),
+    )
     monkeypatch.setattr(
         liveness,
         "liveness_inputs",
@@ -769,7 +760,7 @@ def test_env_renders_current_and_orphan_results(
     monkeypatch.setattr(
         environments,
         "reconcile",
-        lambda _evidence, _servers: result,
+        lambda _evidence, _servers, inventory_issues=(): result,
     )
 
     assert cli.main(["env"]) == 0

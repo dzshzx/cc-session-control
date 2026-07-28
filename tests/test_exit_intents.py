@@ -23,7 +23,13 @@ def _complete_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _session(*, alive: bool = False, pid: int | None = None) -> Session:
+def _session(
+    *,
+    alive: bool = False,
+    pid: int | None = None,
+    tmux_inventory_complete: bool = True,
+    tmux_inventory_detail: str = "",
+) -> Session:
     return Session(
         sid="resume",
         cwd="/project",
@@ -33,6 +39,8 @@ def _session(*, alive: bool = False, pid: int | None = None) -> Session:
         pid=pid,
         alive=alive,
         current=False,
+        tmux_inventory_complete=tmux_inventory_complete,
+        tmux_inventory_detail=tmux_inventory_detail,
     )
 
 
@@ -197,6 +205,35 @@ def test_tui_tmux_resume_refuses_incomplete_liveness_without_spawn(
     captured = capsys.readouterr()
     assert "/proc/20/stat" in captured.err
     assert "input/output error" in captured.err
+
+
+def test_tui_tmux_resume_refuses_incomplete_residency_without_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _install_app(
+        monkeypatch,
+        session_ops.TmuxResumeIntent(
+            _session(
+                alive=True,
+                pid=4242,
+                tmux_inventory_complete=False,
+                tmux_inventory_detail=(
+                    "tmux list-panes: tmux timed out after 5 seconds"
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        tmux,
+        "run_in_tmux",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
+    )
+
+    assert cli.main([]) == 1
+    captured = capsys.readouterr()
+    assert "tmux list-panes" in captured.err
+    assert "tmux timed out after 5 seconds" in captured.err
 
 
 def test_tui_terminal_resume_exec_failure_exits_nonzero_with_context_on_stderr(

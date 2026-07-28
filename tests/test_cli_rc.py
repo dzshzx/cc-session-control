@@ -7,7 +7,89 @@ from pathlib import Path
 import pytest
 
 from cc_session_control import cli
-from cc_session_control.data import rc
+from cc_session_control.config import cfg
+from cc_session_control.data import liveness, rc
+from cc_session_control.data.project_settings import (
+    ProjectSettingsResult,
+    ProjectSettingsState,
+)
+from cc_session_control.models import InventoryIssue, RCProject
+
+
+def test_rc_status_reports_unknown_inventory_and_returns_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    issue = InventoryIssue(
+        "tmux list-windows",
+        None,
+        "lost server connection",
+    )
+    project = RCProject(
+        name="project",
+        directory="/project",
+        trusted=True,
+        in_list=True,
+        status="unknown",
+        auto_start=False,
+    )
+    monkeypatch.setattr(
+        rc,
+        "scan_result",
+        lambda: rc.RCScanResult(
+            [project],
+            ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
+            (issue,),
+        ),
+    )
+    monkeypatch.setattr(
+        "cc_session_control.data.sessions.scan",
+        lambda: [],
+    )
+
+    assert cli.main(["rc", "status"]) == 1
+    captured = capsys.readouterr()
+    assert "[unknown]" in captured.out
+    assert "RC inventory is partial" in captured.err
+    assert "lost server connection" in captured.err
+
+
+def test_env_reports_partial_rc_inventory_and_returns_nonzero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    issue = InventoryIssue(
+        "RC process inventory",
+        "/proc/4242/cmdline",
+        "permission denied",
+    )
+    monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
+        rc,
+        "scan_servers_result",
+        lambda: rc.RCServerScanResult(issues=(issue,)),
+    )
+    monkeypatch.setattr(
+        rc,
+        "scan_servers",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("records-only wrapper used by production CLI")
+        ),
+    )
+
+    assert cli.main(["env"]) == 1
+    captured = capsys.readouterr()
+    assert "Current bridge environments (partial): 0" in captured.out
+    assert "Orphan environments: unavailable" in captured.out
+    assert "environment inventory is partial" in captured.err
+    assert "/proc/4242/cmdline" in captured.err
+    assert "permission denied" in captured.err
 
 
 def test_rc_stop_one_reports_all_states(

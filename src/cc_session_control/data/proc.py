@@ -93,6 +93,18 @@ class ProcRC:
     cwd: str = ""
 
 
+@dataclass(frozen=True)
+class ProcRCInventory:
+    """Known RC server processes plus `/proc` scan completeness."""
+
+    records: tuple[ProcRC, ...] = ()
+    issues: tuple[ProcIssue, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
+
+
 def has_proc() -> bool:
     """True if `/proc` is readable (Linux/WSL). Liveness degrades when False."""
     return os.path.isdir(_PROC)
@@ -336,44 +348,107 @@ def _match_rc_cmdline(comm: str, cmdline: str) -> ProcRC | None:
     return ProcRC(pid=0, name=name)
 
 
-def _read_text(path: str) -> str:
+def _rc_issue(path: str, detail: str) -> ProcIssue:
+    return ProcIssue("RC process inventory", path, detail)
+
+
+def _read_inventory_text(
+    path: str,
+) -> tuple[str | None, ProcIssue | None, bool]:
+    """Read one per-pid text file as `(value, issue, disappeared)`."""
+
     try:
-        with open(path, errors="ignore") as fh:
-            return fh.read()
-    except OSError:
-        return ""
+        with open(path) as fh:
+            return fh.read(), None, False
+    except FileNotFoundError:
+        return None, None, True
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return None, None, True
+        return None, _rc_issue(path, str(exc)), False
+    except UnicodeError as exc:
+        return None, _rc_issue(path, f"malformed text: {exc}"), False
 
 
-def _read_link(path: str) -> str:
+def _read_inventory_link(
+    path: str,
+) -> tuple[str | None, ProcIssue | None, bool]:
     try:
-        return os.readlink(path)
-    except OSError:
-        return ""
+        return os.readlink(path), None, False
+    except FileNotFoundError:
+        return None, None, True
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return None, None, True
+        return None, _rc_issue(path, str(exc)), False
 
 
-def scan_rc_servers() -> list[ProcRC]:
-    """Walk `/proc` for Claude project RC server processes (R5).
+def scan_rc_server_inventory() -> ProcRCInventory:
+    """Walk `/proc` without collapsing incomplete process evidence.
 
     Reads each pid's `comm` + `cmdline`, runs the pure `_match_rc_cmdline`, and
     fills `pid` + `cwd` (`readlink /proc/<pid>/cwd`) for matches. Degrades to
-    `[]` off Linux (no `/proc`) and ignores expected per-pid I/O races.
+    an issue off Linux and ignores only confirmed per-pid disappearance races.
     """
     if not has_proc():
-        return []
+        return ProcRCInventory(
+            issues=(_rc_issue(_PROC, f"{_PROC} is unavailable"),),
+        )
     servers: list[ProcRC] = []
+    issues: list[ProcIssue] = []
     try:
         entries = os.listdir(_PROC)
-    except OSError:
-        return []
+    except OSError as exc:
+        return ProcRCInventory(issues=(_rc_issue(_PROC, str(exc)),))
     for entry in entries:
         if not entry.isdigit():
             continue
         pid = int(entry)
-        comm = _read_text(f"{_PROC}/{pid}/comm").strip()
-        cmdline = _read_text(f"{_PROC}/{pid}/cmdline")
+        comm_path = f"{_PROC}/{pid}/comm"
+        comm, issue, disappeared = _read_inventory_text(comm_path)
+        if disappeared:
+            continue
+        if issue is not None:
+            issues.append(issue)
+            continue
+        if comm is None:
+            raise AssertionError("available process comm must carry text")
+
+        cmdline_path = f"{_PROC}/{pid}/cmdline"
+        cmdline, issue, disappeared = _read_inventory_text(cmdline_path)
+        if disappeared:
+            continue
+        if issue is not None:
+            issues.append(issue)
+            continue
+        if cmdline is None:
+            raise AssertionError("available process cmdline must carry text")
+
+        argv = _split_cmdline(cmdline)
+        if (
+            argv
+            and os.path.basename(argv[0]) == "claude"
+            and "remote-control" in argv[1:]
+            and _flag_value(argv, "--name") is None
+        ):
+            issues.append(
+                _rc_issue(cmdline_path, "malformed RC argv: missing --name value")
+            )
+            continue
         match = _match_rc_cmdline(comm, cmdline)
         if match is None:
             continue
-        cwd = _read_link(f"{_PROC}/{pid}/cwd")
+        cwd_path = f"{_PROC}/{pid}/cwd"
+        cwd, issue, disappeared = _read_inventory_link(cwd_path)
+        if disappeared:
+            continue
+        if issue is not None:
+            issues.append(issue)
         servers.append(ProcRC(pid=pid, name=match.name, cwd=cwd or match.cwd))
-    return servers
+    return ProcRCInventory(tuple(servers), tuple(issues))
+
+
+def scan_rc_servers() -> list[ProcRC]:
+    """Compatibility records-only view of :func:`scan_rc_server_inventory`."""
+
+    return list(scan_rc_server_inventory().records)

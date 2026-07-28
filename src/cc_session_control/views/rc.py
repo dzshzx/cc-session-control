@@ -30,7 +30,7 @@ from ..data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
-from ..models import RCProject, RCServer, TrustDecision
+from ..models import InventoryIssue, RCProject, RCServer, TrustDecision
 from ._base import ListTabView
 from ._colspec import ColSpec, header_columns, row_columns
 from ._confirm import confirm_stop
@@ -41,10 +41,20 @@ if TYPE_CHECKING:
     from ..app import App
     from ..data.refresh import RefreshBatch
 
-_STATUS_MAP = {"running": "● 运行中", "dead": "✖ 已退出", "stopped": "○ 已停止"}
+_STATUS_MAP = {
+    "running": "● 运行中",
+    "dead": "✖ 已退出",
+    "stopped": "○ 已停止",
+    "unknown": "？ 未知",
+}
 # Row attr per server/project status — dead (crashed pane) is a semantic error
 # state and gets its own red entry (shape ✖ + word 已退出 + color: 3 channels).
-_STATUS_ATTR = {"running": "alive", "dead": "status_err", "stopped": "dead"}
+_STATUS_ATTR = {
+    "running": "alive",
+    "dead": "status_err",
+    "stopped": "dead",
+    "unknown": "status_err",
+}
 _RC_FOCUS = {
     "alive": "selected",
     "status_err": "selected",
@@ -264,6 +274,7 @@ class RCView(ListTabView):
         self._servers: list[RCServer] = []
         self._settings = ProjectSettingsResult(ProjectSettingsState.MISSING, {})
         self._environment_warnings: tuple[str, ...] = ()
+        self._inventory_issues: tuple[InventoryIssue, ...] = ()
         self._help = False
 
     def keyhints(self) -> str:
@@ -283,7 +294,9 @@ class RCView(ListTabView):
         self._projects = list(batch.ordered_projects)
         self._settings = batch.snapshot.rc_project_settings
         self._servers = list(batch.snapshot.rc_servers)
-        self._environment_warnings = batch.snapshot.environment_reconciliation.warnings
+        reconciliation = batch.snapshot.environment_reconciliation
+        self._environment_warnings = reconciliation.warnings
+        self._inventory_issues = reconciliation.inventory_issues
         self._loaded = True
         if not self._help:
             self._rebuild()
@@ -323,9 +336,15 @@ class RCView(ListTabView):
             if self._environment_warnings
             else ""
         )
+        inventory_text = (
+            f" · ⚠ RC 清单不完整 {len(self._inventory_issues)}"
+            if self._inventory_issues
+            else ""
+        )
         return (
             f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}"
-            f"{rc_text}{rc_error_text}{miss_text}{srv_text}{settings_text}{ledger_text}"
+            f"{rc_text}{rc_error_text}{miss_text}{srv_text}{settings_text}"
+            f"{ledger_text}{inventory_text}"
         )
 
     def _close_overlay_mode(self) -> None:
@@ -358,6 +377,9 @@ class RCView(ListTabView):
         if p.trust_decision is TrustDecision.UNTRUSTED:
             self.app.notify("未信任 — 先在该目录跑一次 claude")
             return
+        if p.status == "unknown":
+            self.app.notify("RC 清单不可用 — 已拒绝启动")
+            return
         if p.status == "running":
             self.app.notify("已在运行")
             return
@@ -368,6 +390,9 @@ class RCView(ListTabView):
         )
 
     def _key_stop(self, p: RCProject) -> None:
+        if p.status == "unknown":
+            self.app.notify("RC 清单不可用 — 无法确认是否运行")
+            return
         # gated=False: this stop kills a tmux window, not a pid — no R10 gate.
         confirm_stop(
             self.app,
@@ -414,6 +439,9 @@ class RCView(ListTabView):
         )
 
     def _key_stop_all(self) -> None:
+        if any(p.status == "unknown" for p in self._projects):
+            self.app.notify("RC 清单不可用 — 无法确认是否运行")
+            return
         if not any(p.status == "running" for p in self._projects):
             self.app.notify("本来就没在跑")
             return

@@ -186,6 +186,21 @@ def prepare_takeover(job: AgentJob) -> TakeoverPreparationResult:
         ),
         "",
     )
+    tmux_target: str | None = None
+    if alive and pid:
+        residency = tmux.find_session_window_result([pid])
+        if not residency.complete:
+            detail = "; ".join(
+                f"{issue.source}"
+                + (f" at {issue.path}" if issue.path else "")
+                + f": {issue.detail}"
+                for issue in residency.issues
+            )
+            return TakeoverPreparationResult(
+                TakeoverPreparationState.REFUSED,
+                detail=detail,
+            )
+        tmux_target = residency.target
     session = Session(
         sid=job.resume_sid,
         cwd=job.cwd,
@@ -198,7 +213,7 @@ def prepare_takeover(job: AgentJob) -> TakeoverPreparationResult:
         proc_start=proc_start,
         source="bg",
         agent_short=job.short,
-        tmux_target=tmux.find_session_window([pid]) if alive and pid else None,
+        tmux_target=tmux_target,
     )
     return TakeoverPreparationResult(
         TakeoverPreparationState.READY,

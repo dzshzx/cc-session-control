@@ -125,7 +125,11 @@ def _setup_world(tmp_path, monkeypatch):
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: {1001})
     # No real tmux in unit tests: default to "nothing resident" (tests that
     # exercise the residency injection override this).
-    monkeypatch.setattr(sessions_mod.tmux, "residency_targets", lambda pids: {})
+    monkeypatch.setattr(
+        sessions_mod.tmux,
+        "residency_inventory",
+        lambda _pids: sessions_mod.tmux.ResidencyInventory(),
+    )
 
 
 def test_scan_unifies_sources(tmp_path, monkeypatch):
@@ -179,9 +183,9 @@ def test_scan_injects_tmux_residency_for_alive_sessions(tmp_path, monkeypatch):
 
     def fake_residency(pids):
         seen["pids"] = set(pids)
-        return {1001: "proj1:2"}
+        return sessions_mod.tmux.ResidencyInventory({1001: "proj1:2"})
 
-    monkeypatch.setattr(sessions_mod.tmux, "residency_targets", fake_residency)
+    monkeypatch.setattr(sessions_mod.tmux, "residency_inventory", fake_residency)
 
     rows = {s.sid: s for s in sessions_mod.scan()}
 
@@ -190,6 +194,30 @@ def test_scan_injects_tmux_residency_for_alive_sessions(tmp_path, monkeypatch):
     assert rows[SDK_SID].tmux_target is None  # dead: never resident
     assert 1003 not in seen["pids"]  # dead pid not queried
     assert {1001, 1002, 1004} <= seen["pids"]
+
+
+def test_scan_marks_alive_sessions_when_tmux_residency_is_incomplete(
+    tmp_path,
+    monkeypatch,
+):
+    _setup_world(tmp_path, monkeypatch)
+    issue = sessions_mod.tmux.ResidencyIssue(
+        "tmux list-panes",
+        None,
+        "lost server connection",
+    )
+    monkeypatch.setattr(
+        sessions_mod.tmux,
+        "residency_inventory",
+        lambda _pids: sessions_mod.tmux.ResidencyInventory(issues=(issue,)),
+    )
+
+    rows = {session.sid: session for session in sessions_mod.scan()}
+
+    assert rows[CLI_SID].tmux_inventory_complete is False
+    assert "lost server connection" in rows[CLI_SID].tmux_inventory_detail
+    assert rows[VSC_SID].tmux_inventory_complete is False
+    assert rows[SDK_SID].tmux_inventory_complete is True
 
 
 def test_scan_residency_covers_all_alive_pids_of_a_sid(tmp_path, monkeypatch):
@@ -218,8 +246,10 @@ def test_scan_residency_covers_all_alive_pids_of_a_sid(tmp_path, monkeypatch):
     # Only the OLDER pid 1001 lives in a tmux pane.
     monkeypatch.setattr(
         sessions_mod.tmux,
-        "residency_targets",
-        lambda pids: {1001: "proj1:3"} if 1001 in set(pids) else {},
+        "residency_inventory",
+        lambda pids: sessions_mod.tmux.ResidencyInventory(
+            {1001: "proj1:3"} if 1001 in set(pids) else {}
+        ),
     )
 
     rows = {s.sid: s for s in sessions_mod.scan()}
@@ -322,7 +352,11 @@ def test_scan_uses_injected_generation_liveness_without_reading_sources(
     monkeypatch.setattr(sessions_mod, "alive_map", unexpected)
     monkeypatch.setattr(sessions_mod.registry, "read_agent_jobs", unexpected)
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", unexpected)
-    monkeypatch.setattr(sessions_mod.tmux, "residency_targets", lambda pids: {})
+    monkeypatch.setattr(
+        sessions_mod.tmux,
+        "residency_inventory",
+        lambda _pids: sessions_mod.tmux.ResidencyInventory(),
+    )
 
     rows = sessions_mod.scan(inputs)
 

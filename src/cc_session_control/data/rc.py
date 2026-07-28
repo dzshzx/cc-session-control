@@ -1,11 +1,6 @@
-"""RC project management — manage Claude Code Remote Control via tmux.
+"""Manage path-keyed Claude Code Remote Control projects via tmux.
 
-Projects are keyed by ABSOLUTE DIRECTORY PATH (no workspace-root concept):
-membership = a `~/.claude.json` projects entry that is effectively trusted
-(`models.effective_trust` — claude's own ancestor-inheriting dialog gate).
-`RCProject.name` is a derived basename for display only; every join
-(rc-enabled list, tmux windows via `@csctl_path`, claude.json lookups) uses
-the path.
+Names are display-only; enabled-list, tmux, and settings joins use absolute paths.
 """
 
 from __future__ import annotations
@@ -15,8 +10,6 @@ import shlex
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from enum import Enum
 
 from ..config import cfg
 from ..models import (
@@ -27,7 +20,7 @@ from ..models import (
     TrustDecision,
     effective_trust_decision,
 )
-from . import proc, rc_environment, tmux
+from . import proc, rc_environment, rc_outcomes, tmux
 from .project_settings import (
     ProjectSettingsResult,
     SettingWriteResult,
@@ -36,102 +29,24 @@ from .project_settings import (
     write_rc_at_startup,
 )
 from .rc_enabled import EnabledListStore, migrate_lines
+from .rc_outcomes import (
+    ProjectTrustResult,
+    RCScanResult,
+    RCServerScanResult,
+    RemoveResult,
+    StartManyResult,
+    StartResult,
+    StartState,
+    StopAllResult,
+    StopResult,
+    StopState,
+)
 
 _environment_ids = rc_environment.EnvironmentIdCache()
 
 
-@dataclass(frozen=True)
-class RCScanResult:
-    """Project rows plus the settings evidence used to derive trust."""
-
-    projects: list[RCProject]
-    settings: ProjectSettingsResult
-
-
-@dataclass(frozen=True)
-class ProjectTrustResult:
-    """One trust decision and the settings evidence behind it."""
-
-    decision: TrustDecision
-    settings: ProjectSettingsResult
-
-
-class StartState(Enum):
-    """Observable outcome of starting one project RC server."""
-
-    STARTED = "started"
-    NOT_DIRECTORY = "not-directory"
-    TRUST_UNAVAILABLE = "trust-unavailable"
-    UNTRUSTED = "untrusted"
-    ALREADY_RUNNING = "already-running"
-    STOP_FAILED = "stop-failed"
-    TMUX_FAILED = "tmux-failed"
-
-
-@dataclass(frozen=True)
-class StartResult:
-    state: StartState
-    path: str
-
-    @property
-    def success(self) -> bool:
-        return self.state is StartState.STARTED
-
-
-@dataclass(frozen=True)
-class StartManyResult:
-    started: int = 0
-    unavailable: int = 0
-    untrusted: int = 0
-    failed: int = 0
-
-
-class StopState(Enum):
-    """Observable outcome of stopping managed project RC server(s)."""
-
-    STOPPED = "stopped"
-    NOT_RUNNING = "not-running"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True)
-class StopResult:
-    state: StopState
-    path: str
-    detail: str = ""
-
-    @property
-    def success(self) -> bool:
-        return self.state is StopState.STOPPED
-
-
-@dataclass(frozen=True)
-class StopAllResult:
-    state: StopState
-    session: str
-    detail: str = ""
-
-    @property
-    def success(self) -> bool:
-        return self.state is StopState.STOPPED
-
-
-@dataclass(frozen=True)
-class RemoveResult:
-    """Enabled-list mutation plus the independent managed-window outcome."""
-
-    list_removed: bool
-    stop: StopResult
-
-
 def _legacy_workspace_root() -> str:
-    """FROZEN pre-0.7.3 workspace detection — rc-enabled migration ONLY.
-
-    Replicates the deleted `config._detect_workspace` order (CSCTL_WORKSPACE
-    override → `~/workspace` → commonpath of claude.json keys → cwd) so legacy
-    short-name lines resolve exactly as the old csctl resolved them. Dead by
-    design once a machine's list has been rewritten; never reuse elsewhere.
-    """
+    """FROZEN pre-0.7.3 workspace detection for rc-enabled migration only."""
     env = os.environ.get("CSCTL_WORKSPACE")
     if env:
         return env
@@ -206,9 +121,7 @@ def _trusted_in(projects: Mapping[str, object]) -> set[str]:
     }
 
 
-# Platform temp roots — working space, never projects. Keeping a temp root
-# trusted (so throwaway sessions skip the dialog) must not surface it in the
-# launcher; this is a MEMBERSHIP rule, the trust state itself is untouched.
+# Temp roots are working space, not projects; this affects membership, not trust.
 _TEMP_ROOTS = frozenset(
     os.path.normpath(p) for p in (tempfile.gettempdir(), "/tmp", "/var/tmp")
 )
@@ -260,15 +173,19 @@ def _basename(path: str) -> str:
     return os.path.basename(path.rstrip("/")) or path
 
 
-# --- RC-scoped thin delegates over data/tmux.py ---------------------------
-# Bound to `cfg.rc_session`. The generic tmux adapter lives in `data/tmux.py`
-# (the single seam — only its `_tmux_run` touches `subprocess`); these stay
-# here (rather than inlined at call sites) because `scan`/`scan_servers` and
-# their tests poke these exact RC-scoped names.
+# RC-scoped delegates keep `cfg.rc_session` out of the generic tmux adapter.
+
+
+def _tmux_window_inventory() -> tmux.WindowInventory:
+    """Typed RC-session window inventory used by production decisions."""
+
+    return tmux.list_windows_inventory(cfg.rc_session)
 
 
 def _tmux_windows() -> list[tmux.TmuxWindow]:
-    return tmux.list_windows_meta(cfg.rc_session)
+    """Compatibility records-only window view."""
+
+    return list(_tmux_window_inventory().records)
 
 
 def _tmux_capture_pane(target: str) -> str:
@@ -285,6 +202,21 @@ def _window_for(path: str) -> tmux.TmuxWindow | None:
     return None
 
 
+def _window_for_inventory(
+    path: str,
+    inventory: tmux.WindowInventory,
+) -> tmux.TmuxWindow | None:
+    norm = os.path.normpath(path)
+    return next(
+        (
+            window
+            for window in inventory.records
+            if window.path and os.path.normpath(window.path) == norm
+        ),
+        None,
+    )
+
+
 def set_rc_at_startup(
     directory: str,
     value: bool | None,
@@ -294,14 +226,20 @@ def set_rc_at_startup(
     return write_rc_at_startup(directory, value)
 
 
-def scan_result() -> RCScanResult:
+def scan_result(
+    *,
+    window_inventory: tmux.WindowInventory | None = None,
+) -> RCScanResult:
     # ONE claude.json load feeds membership, trust flags and spawn modes —
     # no per-project re-parse.
     settings = _read_projects()
     projects_map = settings.projects
     trusted = _trusted_in(projects_map)
     enabled = set(list_enabled())
-    by_path = {os.path.normpath(w.path): w for w in _tmux_windows() if w.path}
+    inventory = (
+        _tmux_window_inventory() if window_inventory is None else window_inventory
+    )
+    by_path = {os.path.normpath(w.path): w for w in inventory.records if w.path}
 
     result: list[RCProject] = []
     for path in sorted(trusted | enabled):
@@ -322,6 +260,8 @@ def scan_result() -> RCScanResult:
             continue
         if win is not None:
             status: Status = "dead" if win.dead else "running"
+        elif not inventory.complete:
+            status = "unknown"
         else:
             status = "stopped"
         entry = projects_map.get(path)
@@ -346,7 +286,11 @@ def scan_result() -> RCScanResult:
                 trust_decision=decision,
             )
         )
-    return RCScanResult(result, settings)
+    return RCScanResult(
+        result,
+        settings,
+        rc_outcomes.window_inventory_issues(inventory),
+    )
 
 
 def scan() -> list[RCProject]:
@@ -359,25 +303,19 @@ def order_by_activity(
     projects: Sequence[RCProject],
     sessions: Sequence[Session],
 ) -> list[RCProject]:
-    """PURE: most-recently-active projects first (exact-cwd session join).
+    """Order projects by newest exact-cwd activity, then path."""
 
-    THE one ordering — the 项目 tab and `csctl rc status` both call it, so the
-    two surfaces can't diverge. A session counts toward the project whose
-    directory equals its cwd (normpath); no ancestor roll-up — a subdirectory
-    where claude ran is a member itself. Never-active projects sink,
-    path-ascending, so broad-root members (a trusted `/tmp`) stay out of the
-    way instead of crowding the launcher's top.
-    """
     latest: dict[str, float] = {}
-    for s in sessions:
-        if not s.cwd:
-            continue
-        key = os.path.normpath(s.cwd)
-        if s.mtime > latest.get(key, 0.0):
-            latest[key] = s.mtime
+    for session in sessions:
+        if session.cwd:
+            key = os.path.normpath(session.cwd)
+            latest[key] = max(session.mtime, latest.get(key, 0.0))
     return sorted(
         projects,
-        key=lambda p: (-latest.get(os.path.normpath(p.directory), 0.0), p.directory),
+        key=lambda project: (
+            -latest.get(os.path.normpath(project.directory), 0.0),
+            project.directory,
+        ),
     )
 
 
@@ -391,10 +329,12 @@ def _capture_env_id(target: str) -> str:
     return rc_environment.extract_env_id(_tmux_capture_pane(target))
 
 
-def scan_servers(
+def scan_servers_result(
     *,
+    window_inventory: tmux.WindowInventory | None = None,
+    proc_inventory: proc.ProcRCInventory | None = None,
     environment_cache: rc_environment.EnvironmentIdCache | None = None,
-) -> list[RCServer]:
+) -> RCServerScanResult:
     """All project RC servers: managed (csctl tmux) ∪ external (/proc) — R5/D5.
 
     Managed = tmux windows in `cfg.rc_session` (their pane pid IS the server
@@ -407,8 +347,14 @@ def scan_servers(
     reconciliation, the sole ledger writer. The lower tmux and proc adapters own
     expected external failures; parser and programming failures stay observable.
     """
-    windows = _tmux_windows()
-    discovered = proc.scan_rc_servers()
+    window_scan = (
+        _tmux_window_inventory() if window_inventory is None else window_inventory
+    )
+    process_scan = (
+        proc.scan_rc_server_inventory() if proc_inventory is None else proc_inventory
+    )
+    windows = window_scan.records
+    discovered = process_scan.records
     cache = _environment_ids if environment_cache is None else environment_cache
     captured_env_ids = cache.resolve(windows, _capture_env_id)
 
@@ -434,7 +380,7 @@ def scan_servers(
         )
 
     # External — discovered procs not owned by any managed pane.
-    for p in discovered:
+    for p in discovered if window_scan.complete else ():
         if p.pid in managed_pid_set:
             continue
         servers.append(
@@ -448,23 +394,57 @@ def scan_servers(
             )
         )
 
-    return servers
+    issues = (
+        *rc_outcomes.window_inventory_issues(window_scan),
+        *rc_outcomes.proc_inventory_issues(process_scan),
+    )
+    return RCServerScanResult(tuple(servers), issues)
 
 
-def _start_one_with_trust(path: str, decision: TrustDecision) -> StartResult:
+def scan_servers(
+    *,
+    environment_cache: rc_environment.EnvironmentIdCache | None = None,
+) -> list[RCServer]:
+    """Compatibility records-only view of :func:`scan_servers_result`."""
+
+    return list(scan_servers_result(environment_cache=environment_cache).servers)
+
+
+def _start_one_with_trust(
+    path: str,
+    decision: TrustDecision,
+    *,
+    window_inventory: tmux.WindowInventory | None = None,
+) -> StartResult:
     if not os.path.isdir(path):
         return StartResult(StartState.NOT_DIRECTORY, path)
     if decision is TrustDecision.UNAVAILABLE:
         return StartResult(StartState.TRUST_UNAVAILABLE, path)
     if decision is TrustDecision.UNTRUSTED:
         return StartResult(StartState.UNTRUSTED, path)
-    win = _window_for(path)
+    inventory = (
+        _tmux_window_inventory() if window_inventory is None else window_inventory
+    )
+    issues = rc_outcomes.window_inventory_issues(inventory)
+    if issues:
+        return StartResult(
+            StartState.INVENTORY_UNAVAILABLE,
+            path,
+            rc_outcomes.format_inventory_issues(issues),
+            issues,
+        )
+    win = _window_for_inventory(path, inventory)
     if win is not None:
         if not win.dead:
             return StartResult(StartState.ALREADY_RUNNING, path)
-        stop_result = stop_one_result(path)
+        stop_result = stop_one_result(path, window_inventory=inventory)
         if stop_result.state is StopState.FAILED:
-            return StartResult(StartState.STOP_FAILED, path)
+            return StartResult(
+                StartState.STOP_FAILED,
+                path,
+                stop_result.detail,
+                stop_result.issues,
+            )
 
     remote_name = _basename(path)
     # Each fresh Remote Control process registers a distinct cloud environment.
@@ -498,8 +478,23 @@ def start_one(path: str) -> bool:
     return start_one_result(path).success
 
 
-def stop_one_result(path: str) -> StopResult:
-    win = _window_for(path)
+def stop_one_result(
+    path: str,
+    *,
+    window_inventory: tmux.WindowInventory | None = None,
+) -> StopResult:
+    inventory = (
+        _tmux_window_inventory() if window_inventory is None else window_inventory
+    )
+    issues = rc_outcomes.window_inventory_issues(inventory)
+    if issues:
+        return StopResult(
+            StopState.FAILED,
+            path,
+            rc_outcomes.format_inventory_issues(issues),
+            issues,
+        )
+    win = _window_for_inventory(path, inventory)
     if win is None:
         return StopResult(StopState.NOT_RUNNING, path)
     kill_result = tmux.kill_window_result(win.wid)

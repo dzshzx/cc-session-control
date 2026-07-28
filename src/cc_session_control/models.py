@@ -12,7 +12,16 @@ from typing import Literal
 # Single source of truth for RC status values. The Chinese display labels
 # (views/rc.py) and the CLI icons (cli.py) are presentation-only maps keyed
 # off this vocabulary.
-Status = Literal["running", "dead", "stopped"]
+Status = Literal["running", "dead", "stopped", "unknown"]
+
+
+@dataclass(frozen=True)
+class InventoryIssue:
+    """One incomplete external inventory source for operator-facing results."""
+
+    source: str
+    path: str | None
+    detail: str
 
 
 class TrustDecision(Enum):
@@ -87,8 +96,12 @@ class Session:
     # tmux residency (CONTEXT.md / ADR-0001): non-None means a live pid of this
     # session runs inside a tmux pane; the value is the enterable
     # "session:window_index" target. Batch-computed in sessions.scan() via
-    # tmux.residency_targets — actions and the ⧉ badge read the SAME field.
+    # tmux.residency_inventory — actions and the ⧉ badge read the SAME field.
     tmux_target: str | None = None
+    # False means the global pane or per-pid ancestor inventory was incomplete:
+    # absence of `tmux_target` is unknown, not proof this live session is bare.
+    tmux_inventory_complete: bool = True
+    tmux_inventory_detail: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hidden", frozenset(self.hidden))

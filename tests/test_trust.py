@@ -120,7 +120,11 @@ def _wire_scan(tmp_path, monkeypatch, projects, enabled=(), temp_roots=()):
     cj.write_text(json.dumps({"projects": projects}))
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
     monkeypatch.setattr(rc, "list_enabled", lambda: list(enabled))
-    monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: rc.tmux.WindowInventory(),
+    )
     # pytest tmp_path lives under the REAL platform temp root, so the temp-dir
     # membership filter is neutralized unless a test injects roots explicitly.
     monkeypatch.setattr(
@@ -177,7 +181,11 @@ def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
     claude_json.write_text("{broken")
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
     monkeypatch.setattr(rc, "list_enabled", lambda: [str(project)])
-    monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: rc.tmux.WindowInventory(),
+    )
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
     launches = []
     monkeypatch.setattr(
@@ -267,10 +275,18 @@ def test_scan_keeps_temp_project_with_rc_window(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         rc,
-        "_tmux_windows",
-        lambda: [
-            tmux.TmuxWindow(wid="@1", name="served", dead=False, pid=42, path=str(sub)),
-        ],
+        "_tmux_window_inventory",
+        lambda: tmux.WindowInventory(
+            (
+                tmux.TmuxWindow(
+                    wid="@1",
+                    name="served",
+                    dead=False,
+                    pid=42,
+                    path=str(sub),
+                ),
+            )
+        ),
     )
 
     rows = {p.directory: p for p in rc.scan()}
