@@ -5,6 +5,12 @@ from __future__ import annotations
 from ..data.removal import CleanupExecution
 
 
+def _liveness_issue(result: CleanupExecution) -> str:
+    issue = result.issues[0]
+    where = f"（{issue.path}）" if issue.path else ""
+    return f"{issue.source}{where}：{issue.error}"
+
+
 def _details(result: CleanupExecution) -> list[str]:
     details: list[str] = []
     if result.failed and result.removed:
@@ -26,6 +32,8 @@ def _details(result: CleanupExecution) -> list[str]:
 
 def format_cleanup_notice(result: CleanupExecution, done_template: str) -> str:
     """Summarize multi-target cleanup without turning partial work into success."""
+    if result.issues and not result.removed:
+        return f"判活证据不完整，未删除：{_liveness_issue(result)}"
     completed = len(result.completed)
     details = _details(result)
     if completed and not details:
@@ -45,6 +53,8 @@ def format_cleanup_notice(result: CleanupExecution, done_template: str) -> str:
 
 def format_delete_notice(result: CleanupExecution) -> str:
     """Summarize deletion of one session or background-agent artifact set."""
+    if result.issues and not result.removed:
+        return f"判活证据不完整，未删除：{_liveness_issue(result)}"
     if result.completed and not result.failed:
         return "已删除"
     if result.refused:

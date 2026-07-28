@@ -43,10 +43,11 @@ from pathlib import Path
 
 from ..config import cfg
 from ..models import AgentJob, Session, SessionProc
-from . import liveness, proc, registry
+from . import proc, registry
 from .cleanup_liveness import (
     fill_liveness_inputs,
-    fresh_session_guards,
+    fresh_liveness_inputs,
+    refuse_incomplete_liveness,
 )
 from .removal import (
     CleanupExecution,
@@ -177,12 +178,10 @@ def _gather_known(
     agent_jobs: Sequence[AgentJob] | None = None,
     agents_map: Mapping[str, int | None] | None = None,
     cur: AbstractSet[int] | None = None,
-    *,
-    fresh: bool = False,
 ) -> set[str]:
     """Resolve protected sids, self-fetching omitted liveness inputs."""
     session_procs, agent_jobs, agents_map, cur = fill_liveness_inputs(
-        session_procs, agent_jobs, agents_map, cur, fresh=fresh
+        session_procs, agent_jobs, agents_map, cur
     )
     return known_sids(sessions, session_procs, agent_jobs, agents_map, cur)
 
@@ -236,11 +235,16 @@ def execute_orphan_removals(
         result.refuse(list(entries), "current session cannot be determined")
         return result
     if known is None:
-        try:
-            known = _gather_known(sessions or [], fresh=True)
-        except OSError as exc:
-            result.refuse(list(entries), f"liveness revalidation failed: {exc}")
-            return result
+        evidence = fresh_liveness_inputs()
+        if not evidence.complete:
+            return refuse_incomplete_liveness(result, entries, evidence)
+        known = known_sids(
+            sessions or [],
+            evidence.session_procs,
+            evidence.agent_jobs,
+            evidence.agents_map,
+            evidence.cur,
+        )
     base_by_label = dict(_sid_dir_paths())
     for entry in entries:
         label, _, sid = entry.partition("/")
@@ -305,12 +309,13 @@ def execute_zombie_removals(
         result.refuse(list(pids), "current session cannot be determined")
         return result
     if session_procs is None:
-        try:
-            session_procs = liveness.live_session_procs(max_age=0.0)
-        except OSError as exc:
-            result.refuse(list(pids), f"liveness revalidation failed: {exc}")
-            return result
-    if cur is None:
+        evidence = fresh_liveness_inputs()
+        if not evidence.complete:
+            return refuse_incomplete_liveness(result, pids, evidence)
+        session_procs = list(evidence.session_procs)
+        if cur is None:
+            cur = set(evidence.cur)
+    elif cur is None:
         cur = proc.ancestor_pids()
     still_zombie = set(select_zombie_pids(session_procs, cur))
     for pid in pids:
@@ -469,12 +474,12 @@ def remove_session(s: Session) -> CleanupExecution:
         result = CleanupExecution()
         result.refuse([s.sid], "current session cannot be determined")
         return result
-    try:
-        session_procs, agents_map, cur = fresh_session_guards()
-    except OSError as exc:
-        result = CleanupExecution()
-        result.refuse([s.sid], f"liveness revalidation failed: {exc}")
-        return result
+    evidence = fresh_liveness_inputs()
+    if not evidence.complete:
+        return refuse_incomplete_liveness(CleanupExecution(), [s.sid], evidence)
+    session_procs = list(evidence.session_procs)
+    agents_map = dict(evidence.agents_map)
+    cur = set(evidence.cur)
     if _session_is_protected(s, session_procs, agents_map, cur):
         result = CleanupExecution()
         result.skip(s.sid, "session is now live or current")
@@ -501,20 +506,19 @@ def execute_session_removals(
         result.refuse([s.sid for s in targets], "current session cannot be determined")
         return result
     if session_procs is None or agents_map is None or cur is None:
-        try:
-            fresh_procs, fresh_agents, fresh_cur = fresh_session_guards()
-        except OSError as exc:
-            result.refuse(
+        evidence = fresh_liveness_inputs()
+        if not evidence.complete:
+            return refuse_incomplete_liveness(
+                result,
                 [s.sid for s in targets],
-                f"liveness revalidation failed: {exc}",
+                evidence,
             )
-            return result
         if session_procs is None:
-            session_procs = fresh_procs
+            session_procs = list(evidence.session_procs)
         if agents_map is None:
-            agents_map = fresh_agents
+            agents_map = dict(evidence.agents_map)
         if cur is None:
-            cur = fresh_cur
+            cur = set(evidence.cur)
     for s in targets:
         if _session_is_protected(s, session_procs, agents_map, cur):
             result.skip(s.sid, "session is now live or current")

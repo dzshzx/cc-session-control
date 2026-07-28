@@ -14,6 +14,7 @@ from cc_session_control.data.project_settings import (
 from cc_session_control.data.rc import StartManyResult, StartResult, StartState
 from cc_session_control.data.removal import (
     CleanupExecution,
+    CleanupIssue,
     PathRemoval,
     RemovalStatus,
 )
@@ -105,6 +106,31 @@ def test_cleanup_adapter_reports_partial_and_refused() -> None:
     )
     assert refused_result.status is ActionStatus.REFUSED
     assert refused_result.message.startswith("已拒绝清理：")
+
+
+def test_cleanup_adapter_reports_incomplete_liveness_in_chinese() -> None:
+    refused = CleanupExecution(
+        issues=[
+            CleanupIssue(
+                source="session registry",
+                path="/runtime/sessions/broken.json",
+                error="invalid JSON",
+            )
+        ]
+    )
+    refused.refuse(["one"], "liveness evidence incomplete; nothing deleted")
+
+    result = tui_actions.run_cleanup(
+        lambda _targets: refused,
+        ("one",),
+        "已清理 {n} 项",
+    )
+
+    assert result.status is ActionStatus.REFUSED
+    assert "判活证据不完整，未删除" in result.message
+    assert "session registry" in result.message
+    assert "/runtime/sessions/broken.json" in result.message
+    assert "invalid JSON" in result.message
 
 
 def test_project_batch_result_distinguishes_partial_refused_and_failure(

@@ -110,6 +110,33 @@ def test_failed_generation_keeps_last_good_views_and_notifies():
     ]
 
 
+def test_first_failed_generation_stays_explicit_instead_of_empty_success():
+    completed = Queue()
+
+    def build(generation):
+        completed.put(generation)
+        return RefreshFailure(
+            generation,
+            "claude agents --json",
+            "exit status 7",
+        )
+
+    app = App(refresh_builder=build)
+    views = [_RecorderView() for _ in range(3)]
+    app.views = views
+    notifications = []
+    app.notify = notifications.append
+
+    app.trigger_async_refresh()
+    assert completed.get(timeout=1) == 1
+    app._on_pipe(b"1")
+
+    assert all(not view.applied for view in views)
+    assert notifications == [
+        "刷新失败（claude agents --json）：exit status 7",
+    ]
+
+
 def test_on_pipe_noop_while_exiting():
     app, views = _app_with_recorders()
     app._exiting = True

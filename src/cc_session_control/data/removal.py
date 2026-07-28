@@ -49,6 +49,7 @@ class CleanupExecution:
     refused: list[CleanupNotice] = field(default_factory=list)
     completed: list[str] = field(default_factory=list)
     missing_targets: list[str] = field(default_factory=list)
+    issues: list[CleanupIssue] = field(default_factory=list)
 
     @property
     def removed(self) -> list[PathRemoval]:
@@ -65,7 +66,7 @@ class CleanupExecution:
     @property
     def incomplete(self) -> bool:
         """Whether a requested target was blocked, skipped, or failed."""
-        return bool(self.failed or self.skipped or self.refused)
+        return bool(self.failed or self.skipped or self.refused or self.issues)
 
     def add_removal(self, removal: PathRemoval) -> None:
         self.removals.append(removal)
@@ -88,6 +89,7 @@ class CleanupExecution:
         self.refused.extend(other.refused)
         self.completed.extend(other.completed)
         self.missing_targets.extend(other.missing_targets)
+        self.issues.extend(other.issues)
 
 
 @dataclass(frozen=True)

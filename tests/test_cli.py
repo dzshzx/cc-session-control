@@ -7,6 +7,7 @@ the R10 refusal) so they are reachable by a user, not just by the library.
 
 import json
 import os
+import subprocess
 import time
 import types
 from pathlib import Path
@@ -235,6 +236,35 @@ def test_prune_sweep_orphans_refuses_without_proc(
 
     assert status == 1
     assert "Refused" in captured.err
+    assert orphan.exists()
+
+
+def test_prune_apply_reports_incomplete_liveness_and_preserves_target(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    orphan = tmp_path / "session-env" / "ghost"
+    orphan.mkdir(parents=True)
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    malformed = sessions_dir / "broken.json"
+    malformed.write_text("{bad json")
+    completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    monkeypatch.setattr(proc_mod, "current_determinable", lambda: True)
+    monkeypatch.setattr(proc_mod, "ancestor_pids", lambda: set())
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+
+    status = cli_commands.handle_prune(_args(sweep_orphans=True, apply=True))
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "Liveness evidence incomplete; nothing deleted" in captured.err
+    assert "session registry" in captured.err
+    assert os.fspath(malformed) in captured.err
     assert orphan.exists()
 
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from cc_session_control.config import cfg
 from cc_session_control.data import environments as env
-from cc_session_control.data import snapshot
+from cc_session_control.data import liveness, registry, snapshot
 from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
@@ -25,10 +25,19 @@ def _sp(pid, sid, bridge=None, proc_start="1"):
 
 def _stub_sources(monkeypatch, procs):
     monkeypatch.setattr(
-        snapshot.liveness.registry, "read_session_procs", lambda *a, **k: procs
+        snapshot.liveness.registry,
+        "scan_session_procs",
+        lambda *a, **k: registry.RegistryScan(records=tuple(procs)),
     )
     monkeypatch.setattr(
-        snapshot.liveness.registry, "read_agent_jobs", lambda *a, **k: []
+        snapshot.liveness.registry,
+        "scan_agent_jobs",
+        lambda *a, **k: registry.RegistryScan(),
+    )
+    monkeypatch.setattr(
+        snapshot.liveness,
+        "scan_agents",
+        lambda *a, **k: liveness.AgentsScan(),
     )
     monkeypatch.setattr(snapshot.sessions, "scan", lambda inputs=None: [])
     monkeypatch.setattr(
@@ -169,7 +178,9 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
 
     def read_session_procs(*args, **kwargs):
         calls["registry_sessions"] += 1
-        return [_sp(active_pid["value"], f"sid-{active_pid['value']}")]
+        return registry.RegistryScan(
+            records=(_sp(active_pid["value"], f"sid-{active_pid['value']}"),)
+        )
 
     def pid_alive(pid, proc_start):
         calls["pid_alive"] += 1
@@ -177,11 +188,11 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
 
     def read_jobs(*args, **kwargs):
         calls["jobs"] += 1
-        return []
+        return registry.RegistryScan()
 
     def read_agents(*args, **kwargs):
         calls["agents"] += 1
-        return {}
+        return liveness.AgentsScan()
 
     def read_ancestors():
         calls["ancestors"] += 1
@@ -194,11 +205,11 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
         return []
 
     monkeypatch.setattr(
-        snapshot.liveness.registry, "read_session_procs", read_session_procs
+        snapshot.liveness.registry, "scan_session_procs", read_session_procs
     )
     monkeypatch.setattr(snapshot.liveness.proc, "pid_alive", pid_alive)
-    monkeypatch.setattr(snapshot.liveness.registry, "read_agent_jobs", read_jobs)
-    monkeypatch.setattr(snapshot.liveness, "alive_map", read_agents)
+    monkeypatch.setattr(snapshot.liveness.registry, "scan_agent_jobs", read_jobs)
+    monkeypatch.setattr(snapshot.liveness, "scan_agents", read_agents)
     monkeypatch.setattr(snapshot.liveness.proc, "ancestor_pids", read_ancestors)
     monkeypatch.setattr(snapshot.sessions, "scan", scan_sessions)
     monkeypatch.setattr(

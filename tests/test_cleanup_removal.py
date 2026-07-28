@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import time
 
 from cc_session_control.config import cfg
-from cc_session_control.data import cleanup, cleanup_liveness
+from cc_session_control.data import cleanup, cleanup_liveness, liveness, registry
 from cc_session_control.data.removal import RemovalStatus, remove_path
 from cc_session_control.models import Session, SessionProc
 
@@ -227,11 +228,12 @@ def test_remove_session_rechecks_liveness_before_deleting(tmp_path, monkeypatch)
     monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(cleanup.proc, "ancestor_pids", lambda: set())
     monkeypatch.setattr(
-        cleanup.liveness,
-        "live_session_procs",
-        lambda max_age=5.0: [SessionProc(pid=88, sid="sid-live", proc_alive=True)],
+        cleanup_liveness.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(
+            session_procs=(SessionProc(pid=88, sid="sid-live", proc_alive=True),),
+        ),
     )
-    monkeypatch.setattr(cleanup.liveness, "alive_map", lambda max_age=5.0: {})
 
     result = cleanup.remove_session(target)
 
@@ -279,16 +281,23 @@ def test_session_execution_refuses_visible_liveness_io_failure(
     )
     monkeypatch.setattr(
         cleanup_liveness.liveness,
-        "live_session_procs",
-        lambda max_age=5.0: (_ for _ in ()).throw(
-            PermissionError("cannot scan liveness")
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(
+            issues=(
+                liveness.LivenessIssue(
+                    "session registry",
+                    "/runtime/sessions",
+                    "cannot scan liveness",
+                ),
+            )
         ),
     )
 
     result = cleanup.execute_session_removals([target])
 
     assert len(result.refused) == 1
-    assert "cannot scan liveness" in result.refused[0].reason
+    assert "liveness evidence incomplete" in result.refused[0].reason
+    assert "cannot scan liveness" in result.issues[0].error
     assert transcript.exists()
 
 
@@ -309,10 +318,8 @@ def test_session_execution_does_not_swallow_liveness_programming_error(
     )
     monkeypatch.setattr(
         cleanup_liveness.liveness,
-        "live_session_procs",
-        lambda max_age=5.0: (_ for _ in ()).throw(
-            RuntimeError("broken liveness invariant")
-        ),
+        "liveness_inputs",
+        lambda: (_ for _ in ()).throw(RuntimeError("broken liveness invariant")),
     )
 
     try:
@@ -321,3 +328,124 @@ def test_session_execution_does_not_swallow_liveness_programming_error(
         assert str(exc) == "broken liveness invariant"
     else:
         raise AssertionError("programming error was swallowed")
+
+
+def test_session_execution_refuses_real_malformed_registry_before_removal(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(cleanup.proc, "ancestor_pids", lambda: set())
+    transcript = tmp_path / "sid.jsonl"
+    transcript.write_text("{}")
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    malformed = sessions_dir / "broken.json"
+    malformed.write_text("{bad json")
+    completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    removed: list[str] = []
+    monkeypatch.setattr(
+        cleanup,
+        "_remove_path",
+        lambda target: removed.append(os.fspath(target)),
+    )
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+    target = Session(
+        sid="sid",
+        cwd="/tmp/p",
+        label="session",
+        mtime=0.0,
+        prompts=0,
+        pid=None,
+        alive=False,
+        current=False,
+        file=os.fspath(transcript),
+    )
+
+    result = cleanup.execute_session_removals([target])
+
+    assert removed == []
+    assert len(result.refused) == 1
+    assert result.issues[0].source == "session registry"
+    assert result.issues[0].path == os.fspath(malformed)
+    assert transcript.exists()
+
+
+def test_session_execution_refuses_real_agents_nonzero_before_removal(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(cleanup.proc, "ancestor_pids", lambda: set())
+    transcript = tmp_path / "sid.jsonl"
+    transcript.write_text("{}")
+    completed = subprocess.CompletedProcess(
+        [],
+        9,
+        stdout='[{"sessionId":"sid","pid":99}]',
+        stderr="daemon failed",
+    )
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    removed: list[str] = []
+    monkeypatch.setattr(
+        cleanup,
+        "_remove_path",
+        lambda target: removed.append(os.fspath(target)),
+    )
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+    target = Session(
+        sid="sid",
+        cwd="/tmp/p",
+        label="session",
+        mtime=0.0,
+        prompts=0,
+        pid=None,
+        alive=False,
+        current=False,
+        file=os.fspath(transcript),
+    )
+
+    result = cleanup.execute_session_removals([target])
+
+    assert removed == []
+    assert len(result.refused) == 1
+    assert result.issues[0].source == "claude agents --json"
+    assert "exit status 9" in result.issues[0].error
+    assert transcript.exists()
+
+
+def test_session_execution_allows_normal_complete_empty_protection_sources(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(cleanup.proc, "ancestor_pids", lambda: set())
+    transcript = tmp_path / "sid.jsonl"
+    transcript.write_text("{}")
+    completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+    target = Session(
+        sid="sid",
+        cwd="/tmp/p",
+        label="session",
+        mtime=0.0,
+        prompts=0,
+        pid=None,
+        alive=False,
+        current=False,
+        file=os.fspath(transcript),
+    )
+
+    result = cleanup.execute_session_removals([target])
+
+    assert result.completed == ["sid"]
+    assert not result.incomplete
+    assert not transcript.exists()

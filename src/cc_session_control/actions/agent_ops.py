@@ -27,6 +27,7 @@ from dataclasses import dataclass
 
 from ..config import cfg
 from ..data import cleanup, liveness, proc, registry, tmux
+from ..data.cleanup_liveness import refuse_incomplete_liveness
 from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session
 from . import session_ops
@@ -118,12 +119,11 @@ def remove_job(job: AgentJob) -> CleanupExecution:
     if not proc.current_determinable():
         result.refuse([job.short], "current session cannot be determined")
         return result
-    try:
-        _, alive = job_host(job, max_age=0.0)
-    except OSError as exc:
-        result.refuse([job.short], f"liveness revalidation failed: {exc}")
-        return result
-    if alive:
+    evidence = liveness.liveness_inputs()
+    if not evidence.complete:
+        return refuse_incomplete_liveness(result, [job.short], evidence)
+    live = liveness.live_index(evidence.session_procs, evidence.agents_map).get(job.sid)
+    if live is not None and live.alive:
         result.skip(job.short, "background agent is now live")
         return result
     return cleanup.remove_agent_artifacts(job.short, job.sid)

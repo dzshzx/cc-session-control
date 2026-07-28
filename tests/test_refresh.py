@@ -8,6 +8,7 @@ from threading import Event, ExceptHookArgs, Thread
 import pytest
 
 from cc_session_control.data.cleanup import CleanupPlan
+from cc_session_control.data.liveness import LivenessIssue, LivenessSnapshot
 from cc_session_control.data.refresh import (
     RefreshBatch,
     RefreshCoordinator,
@@ -247,6 +248,44 @@ def test_expected_source_error_is_an_explicit_failure() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         result.detail = "hidden"
+
+
+def test_incomplete_liveness_is_failed_before_cleanup_plan_build() -> None:
+    snapshot = WorldSnapshot(
+        liveness_snapshot=LivenessSnapshot(
+            issues=(
+                LivenessIssue(
+                    "session registry",
+                    "/runtime/sessions/broken.json",
+                    "invalid JSON",
+                ),
+                LivenessIssue(
+                    "claude agents --json",
+                    None,
+                    "exit status 7",
+                ),
+            )
+        )
+    )
+    cleanup_calls = 0
+
+    def make_plan(*args) -> CleanupPlan:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        return CleanupPlan()
+
+    result = build_refresh_result(
+        8,
+        snapshot_builder=lambda: snapshot,
+        cleanup_builder=make_plan,
+    )
+
+    assert isinstance(result, RefreshFailure)
+    assert result.generation == 8
+    assert result.source == "session registry (/runtime/sessions/broken.json)"
+    assert "invalid JSON" in result.detail
+    assert "claude agents --json: exit status 7" in result.detail
+    assert cleanup_calls == 0
 
 
 def test_programming_error_is_not_converted_to_refresh_failure() -> None:

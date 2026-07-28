@@ -16,7 +16,6 @@ from cc_session_control.data import (
     environments,
     liveness,
     rc,
-    registry,
     sessions,
     tmux,
 )
@@ -553,8 +552,11 @@ def test_agents_empty_and_status_rendering(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(registry, "read_agent_jobs", lambda **_kwargs: [])
-    monkeypatch.setattr(liveness, "enrich_jobs", lambda jobs: jobs)
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
 
     assert cli.main(["agents"]) == 0
     assert capsys.readouterr().out == "No background agents found.\n"
@@ -577,12 +579,51 @@ def test_agents_empty_and_status_rendering(
             state="settled",
         ),
     ]
-    monkeypatch.setattr(registry, "read_agent_jobs", lambda **_kwargs: jobs)
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(agent_jobs=tuple(jobs)),
+    )
 
     assert cli.main(["agents"]) == 0
     output = capsys.readouterr().out
     assert "live-id  [live]  tempo=fast  builder  /live" in output
     assert "done-id  [settled]  tempo=-  done-id  /done" in output
+
+
+def test_agents_keeps_partial_inventory_and_warns(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    job = AgentJob(
+        short="partial",
+        sid="sid-partial",
+        resume_sid="sid-partial",
+        cwd="/work",
+        state="settled",
+    )
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(
+            agent_jobs=(job,),
+            issues=(
+                liveness.LivenessIssue(
+                    "job registry",
+                    "/runtime/jobs/broken/state.json",
+                    "invalid JSON",
+                ),
+            ),
+        ),
+    )
+
+    assert cli.main(["agents"]) == 1
+    captured = capsys.readouterr()
+    assert "partial  [settled]" in captured.out
+    assert "Warning: agent inventory is partial" in captured.err
+    assert "job registry" in captured.err
+    assert "/runtime/jobs/broken/state.json" in captured.err
+    assert "invalid JSON" in captured.err
 
 
 def test_env_renders_current_and_orphan_results(

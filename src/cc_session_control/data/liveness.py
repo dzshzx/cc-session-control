@@ -12,13 +12,60 @@ import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from types import MappingProxyType
 
 from ..models import AgentJob, LiveInfo, SessionProc
 from . import proc, registry
 
-_cache: dict[str, int | None] | None = None
+
+class AgentsAvailability(StrEnum):
+    """How much of `claude agents --json` was available to one scan."""
+
+    AVAILABLE = "available"
+    PARTIAL = "partial"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class AgentsIssue:
+    """One expected `claude agents --json` failure."""
+
+    source: str
+    path: str | None
+    detail: str
+
+
+@dataclass(frozen=True)
+class AgentsScan:
+    """Agent liveness records plus their source completeness."""
+
+    records: Mapping[str, int | None] = field(
+        default_factory=lambda: MappingProxyType({}),
+    )
+    issues: tuple[AgentsIssue, ...] = ()
+    availability: AgentsAvailability = AgentsAvailability.AVAILABLE
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "records", MappingProxyType(dict(self.records)))
+        object.__setattr__(self, "issues", tuple(self.issues))
+
+    @property
+    def complete(self) -> bool:
+        return self.availability is AgentsAvailability.AVAILABLE and not self.issues
+
+
+_cache: AgentsScan | None = None
 _cache_time: float = 0.0
+
+
+@dataclass(frozen=True)
+class LivenessIssue:
+    """One incomplete protection source in a generation snapshot."""
+
+    source: str
+    path: str | None
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -31,16 +78,44 @@ class LivenessSnapshot:
     agents_map: Mapping[str, int | None] = field(
         default_factory=lambda: MappingProxyType({}),
     )
+    issues: tuple[LivenessIssue, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "session_procs", tuple(self.session_procs))
         object.__setattr__(self, "cur", frozenset(self.cur))
         object.__setattr__(self, "agent_jobs", tuple(self.agent_jobs))
+        object.__setattr__(self, "issues", tuple(self.issues))
         object.__setattr__(
             self,
             "agents_map",
             MappingProxyType(dict(self.agents_map)),
         )
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
+
+
+def _inject_proc_liveness(
+    session_procs: Sequence[SessionProc],
+) -> list[SessionProc]:
+    return [
+        replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
+        for sp in session_procs
+    ]
+
+
+def _registry_issues(
+    issues: Sequence[registry.RegistryIssue],
+) -> list[LivenessIssue]:
+    return [
+        LivenessIssue(
+            source=issue.source,
+            path=issue.path,
+            detail=issue.detail,
+        )
+        for issue in issues
+    ]
 
 
 def liveness_inputs() -> LivenessSnapshot:
@@ -56,16 +131,28 @@ def liveness_inputs() -> LivenessSnapshot:
     particular, the process verdicts in `agents_map` must never be reused as if
     they described a new generation.
     """
-    session_procs = live_session_procs(max_age=0.0)
+    session_scan = registry.scan_session_procs(max_age=0.0)
+    session_procs = _inject_proc_liveness(session_scan.records)
+    jobs_scan = registry.scan_agent_jobs(max_age=0.0)
     agent_jobs = enrich_jobs(
-        registry.read_agent_jobs(max_age=0.0),
+        jobs_scan.records,
         session_procs,
     )
+    agents_scan = scan_agents(max_age=0.0)
+    issues = [
+        *_registry_issues(session_scan.issues),
+        *_registry_issues(jobs_scan.issues),
+        *(
+            LivenessIssue(issue.source, issue.path, issue.detail)
+            for issue in agents_scan.issues
+        ),
+    ]
     return LivenessSnapshot(
         session_procs=tuple(session_procs),
         cur=frozenset(proc.ancestor_pids()),
         agent_jobs=tuple(agent_jobs),
-        agents_map=alive_map(max_age=0.0),
+        agents_map=agents_scan.records,
+        issues=tuple(issues),
     )
 
 
@@ -83,8 +170,16 @@ def _scrub_dead_pids(
     return {sid: (pid if exists(pid) else None) for sid, pid in mapping.items()}
 
 
-def alive_map(max_age: float = 5.0) -> dict[str, int | None]:
-    """Return {session_id: pid} for all known agents. Cached for max_age seconds.
+def _agents_failure(detail: str) -> AgentsScan:
+    issue = AgentsIssue("claude agents --json", None, detail)
+    return AgentsScan(
+        issues=(issue,),
+        availability=AgentsAvailability.UNAVAILABLE,
+    )
+
+
+def scan_agents(max_age: float = 5.0) -> AgentsScan:
+    """Scan `claude agents --json`, retaining typed availability and issues.
 
     With `/proc` available, pids are scrubbed against process existence at
     cache-refresh time (see `_scrub_dead_pids`). Without `/proc` (R10 degraded
@@ -95,38 +190,89 @@ def alive_map(max_age: float = 5.0) -> dict[str, int | None]:
     if _cache is not None and (now - _cache_time) < max_age:
         return _cache
     try:
-        out = subprocess.run(
+        completed = subprocess.run(
             ["claude", "agents", "--json"],
             capture_output=True,
             text=True,
             timeout=10,
-        ).stdout
-        document = json.loads(out or "[]")
-        result: dict[str, int | None] = {}
-        if isinstance(document, list):
-            for entry in document:
-                if not isinstance(entry, dict):
-                    continue
-                sid = entry.get("sessionId")
-                pid = entry.get("pid")
-                if (
-                    isinstance(sid, str)
-                    and sid
-                    and (pid is None or isinstance(pid, int))
-                ):
-                    result[sid] = pid
-    except (
-        OSError,
-        subprocess.SubprocessError,
-        json.JSONDecodeError,
-        UnicodeError,
-    ):
-        result = {}
+        )
+    except subprocess.TimeoutExpired as exc:
+        result = _agents_failure(str(exc))
+    except (OSError, UnicodeError) as exc:
+        result = _agents_failure(str(exc))
+    else:
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip()
+            detail = f"exit status {completed.returncode}"
+            if stderr:
+                detail += f": {stderr}"
+            result = _agents_failure(detail)
+        else:
+            try:
+                document = json.loads(completed.stdout or "[]")
+            except json.JSONDecodeError as exc:
+                result = _agents_failure(f"invalid JSON: {exc}")
+            except UnicodeError as exc:
+                result = _agents_failure(f"invalid Unicode: {exc}")
+            else:
+                records: dict[str, int | None] = {}
+                issues: list[AgentsIssue] = []
+                if not isinstance(document, list):
+                    result = _agents_failure(
+                        "invalid schema: expected a JSON array",
+                    )
+                else:
+                    for index, entry in enumerate(document):
+                        if not isinstance(entry, dict):
+                            issues.append(
+                                AgentsIssue(
+                                    "claude agents --json",
+                                    None,
+                                    f"invalid schema at entry {index}: "
+                                    "expected an object",
+                                )
+                            )
+                            continue
+                        sid = entry.get("sessionId")
+                        pid = entry.get("pid")
+                        if (
+                            not isinstance(sid, str)
+                            or not sid
+                            or (pid is not None and not isinstance(pid, int))
+                        ):
+                            issues.append(
+                                AgentsIssue(
+                                    "claude agents --json",
+                                    None,
+                                    f"invalid schema at entry {index}: sessionId/pid",
+                                )
+                            )
+                            continue
+                        records[sid] = pid
+                    availability = (
+                        AgentsAvailability.PARTIAL
+                        if issues
+                        else AgentsAvailability.AVAILABLE
+                    )
+                    result = AgentsScan(
+                        records=records,
+                        issues=tuple(issues),
+                        availability=availability,
+                    )
     if proc.has_proc():
-        result = _scrub_dead_pids(result, proc.pid_exists)
+        result = AgentsScan(
+            records=_scrub_dead_pids(dict(result.records), proc.pid_exists),
+            issues=result.issues,
+            availability=result.availability,
+        )
     _cache = result
     _cache_time = now
     return result
+
+
+def alive_map(max_age: float = 5.0) -> dict[str, int | None]:
+    """Compatibility records-only view of :func:`scan_agents`."""
+    return dict(scan_agents(max_age=max_age).records)
 
 
 def invalidate_cache() -> None:
@@ -143,10 +289,7 @@ def live_session_procs(max_age: float = 5.0) -> list[SessionProc]:
     the `replace(sp, proc_alive=pid_alive(...))` idiom. The owned registry and
     `/proc` readers degrade expected I/O failures; programming errors propagate.
     """
-    return [
-        replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
-        for sp in registry.read_session_procs(max_age=max_age)
-    ]
+    return _inject_proc_liveness(registry.read_session_procs(max_age=max_age))
 
 
 def enrich_jobs(

@@ -1,7 +1,11 @@
 """Background-agent lifecycle action tests (R4 / AC4)."""
 
+import json
+import subprocess
+
 import cc_session_control.actions.agent_ops as ao
 from cc_session_control.actions.session_ops import resume_cmd
+from cc_session_control.data import liveness, registry
 from cc_session_control.models import AgentJob, SessionProc
 
 
@@ -68,7 +72,13 @@ def test_respawn_result_retains_tmux_failure(monkeypatch):
 
 def test_remove_job_refuses_live(monkeypatch):
     monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(ao, "job_host", lambda job, **kwargs: (1234, True))
+    monkeypatch.setattr(
+        ao.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(
+            agents_map={"abcdef0123456789": 1234},
+        ),
+    )
     removed_paths = []
     monkeypatch.setattr(
         ao.cleanup, "_remove_path", lambda p: removed_paths.append(p) or True
@@ -81,7 +91,11 @@ def test_remove_job_refuses_live(monkeypatch):
 def test_remove_job_deletes_settled(tmp_path, monkeypatch):
     monkeypatch.setattr(ao.cfg, "claude_home", tmp_path)
     monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(ao, "job_host", lambda job, **kwargs: (None, False))
+    monkeypatch.setattr(
+        ao.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
 
     job = _make_job(short="abcdef01", sid="abcdef0123456789")
 
@@ -113,6 +127,42 @@ def test_remove_job_refuses_without_proc(monkeypatch):
     assert len(result.refused) == 1
     # Refused before even resolving the host pid.
     assert called["host"] == 0
+
+
+def test_remove_job_refuses_real_agents_failure_before_deleting(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(ao.cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(ao.proc, "ancestor_pids", lambda: set())
+    job = _make_job()
+    state = tmp_path / "jobs" / job.short / "state.json"
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({"sessionId": job.sid}))
+    completed = subprocess.CompletedProcess(
+        [],
+        5,
+        stdout='[{"sessionId":"abcdef0123456789","pid":55}]',
+        stderr="agents unavailable",
+    )
+    monkeypatch.setattr(ao.liveness.subprocess, "run", lambda *a, **k: completed)
+    removals = []
+    monkeypatch.setattr(
+        ao.cleanup,
+        "remove_agent_artifacts",
+        lambda *args: removals.append(args),
+    )
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+
+    result = ao.remove_job(job)
+
+    assert removals == []
+    assert len(result.refused) == 1
+    assert result.issues[0].source == "claude agents --json"
+    assert "exit status 5" in result.issues[0].error
+    assert state.exists()
 
 
 # --- watch: read-only path lookup ---

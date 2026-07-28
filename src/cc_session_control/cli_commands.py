@@ -35,6 +35,13 @@ def _print_cleanup_execution(
         details.append(f"refused {len(result.refused)} ({result.refused[0].reason})")
     if result.missing_targets:
         details.append(f"already missing {len(result.missing_targets)}")
+    if result.issues:
+        issue = result.issues[0]
+        where = f" ({issue.path})" if issue.path else ""
+        details.append(
+            "Liveness evidence incomplete; nothing deleted: "
+            f"{issue.source}{where}: {issue.error}"
+        )
 
     if completed and not details:
         print(success.format(n=completed), file=stream)
@@ -91,20 +98,27 @@ def _cmd_prune(args: Namespace) -> int:
         inputs.agent_jobs,
         inputs.agents_map,
     )
+    for liveness_issue in inputs.issues:
+        where = f" ({liveness_issue.path})" if liveness_issue.path else ""
+        print(
+            "Warning: liveness evidence is partial: "
+            f"{liveness_issue.source}{where}: {liveness_issue.detail}",
+            file=sys.stderr,
+        )
     counts = plan.counts()
     print(
         f"Total: {len(sessions)}  Prunable empty: {counts['empty']}  "
         f"short(<=2): {counts['short']}  Orphan dirs: {counts['orphan_dirs']}  "
         f"Zombie files: {counts['zombie_procs']}  Aged: {counts['aged_entries']}"
     )
-    for issue in plan.issues:
-        where = f" ({issue.path})" if issue.path else ""
+    for plan_issue in plan.issues:
+        where = f" ({plan_issue.path})" if plan_issue.path else ""
         print(
-            f"Warning: cleanup preview is partial: {issue.source}{where}: "
-            f"{issue.error}",
+            f"Warning: cleanup preview is partial: {plan_issue.source}{where}: "
+            f"{plan_issue.error}",
             file=sys.stderr,
         )
-    plan_status = 1 if plan.issues else 0
+    plan_status = 1 if plan.issues or not inputs.complete else 0
 
     if args.sweep_orphans:
         if not proc.current_determinable():
@@ -254,19 +268,26 @@ def _cmd_skill(args: Namespace) -> int:
 
 
 def _cmd_agents(args: Namespace) -> int:
-    from .data.liveness import enrich_jobs
-    from .data.registry import read_agent_jobs
+    from .data.liveness import liveness_inputs
 
-    jobs = enrich_jobs(read_agent_jobs(max_age=0.0))
+    inputs = liveness_inputs()
+    jobs = inputs.agent_jobs
     if not jobs:
         print("No background agents found.")
-        return 0
-    for job in jobs:
-        state = "live" if job.host_alive else (job.state or "settled")
-        tempo = job.tempo or "-"
-        name = job.name or job.short
-        print(f"  {job.short}  [{state}]  tempo={tempo}  {name}  {job.cwd}")
-    return 0
+    else:
+        for job in jobs:
+            state = "live" if job.host_alive else (job.state or "settled")
+            tempo = job.tempo or "-"
+            name = job.name or job.short
+            print(f"  {job.short}  [{state}]  tempo={tempo}  {name}  {job.cwd}")
+    for issue in inputs.issues:
+        where = f" ({issue.path})" if issue.path else ""
+        print(
+            f"Warning: agent inventory is partial: {issue.source}{where}: "
+            f"{issue.detail}",
+            file=sys.stderr,
+        )
+    return int(not inputs.complete)
 
 
 def _cmd_env(args: Namespace) -> int:

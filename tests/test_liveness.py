@@ -1,10 +1,13 @@
 """Tests for data/liveness.py — live_index purity and the alive_map cache."""
 
 import dataclasses
+import json
+import subprocess
 
 import pytest
 
-from cc_session_control.data import liveness
+from cc_session_control.config import cfg
+from cc_session_control.data import liveness, registry
 from cc_session_control.models import AgentJob, SessionProc
 
 
@@ -166,37 +169,115 @@ def test_scrub_keeps_live_pid_alive_path_intact():
 
 def test_alive_map_skips_scrub_without_proc(monkeypatch):
     # R10 degraded mode: agents_map is the only liveness source — no scrubbing.
-    import json as _json
-
     liveness.invalidate_cache()
     monkeypatch.setattr(liveness.proc, "has_proc", lambda: False)
-
-    class _CP:
-        stdout = _json.dumps([{"sessionId": "sid", "pid": 424242}])
-
-    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: _CP())
+    completed = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=json.dumps([{"sessionId": "sid", "pid": 424242}]),
+        stderr="",
+    )
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
     assert liveness.alive_map(max_age=0) == {"sid": 424242}
     liveness.invalidate_cache()
 
 
 def test_alive_map_scrubs_with_proc(monkeypatch):
-    import json as _json
-
     liveness.invalidate_cache()
     monkeypatch.setattr(liveness.proc, "has_proc", lambda: True)
     monkeypatch.setattr(liveness.proc, "pid_exists", lambda pid: pid == 111)
-
-    class _CP:
-        stdout = _json.dumps(
+    completed = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=json.dumps(
             [
                 {"sessionId": "live", "pid": 111},
                 {"sessionId": "stale", "pid": 424242},
             ]
-        )
-
-    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: _CP())
+        ),
+        stderr="",
+    )
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
     assert liveness.alive_map(max_age=0) == {"live": 111, "stale": None}
     liveness.invalidate_cache()
+
+
+@pytest.mark.parametrize(
+    ("outcome", "detail"),
+    [
+        (FileNotFoundError("claude executable missing"), "executable missing"),
+        (subprocess.TimeoutExpired(["claude"], 10), "timed out"),
+        (
+            subprocess.CompletedProcess(
+                [],
+                7,
+                stdout='[{"sessionId":"unsafe","pid":77}]',
+                stderr="daemon unavailable",
+            ),
+            "exit status 7",
+        ),
+        (
+            subprocess.CompletedProcess([], 0, stdout="{bad json", stderr=""),
+            "invalid JSON",
+        ),
+    ],
+)
+def test_scan_agents_reports_unavailable_source(monkeypatch, outcome, detail):
+    liveness.invalidate_cache()
+    monkeypatch.setattr(liveness.proc, "has_proc", lambda: False)
+
+    def run(*args, **kwargs):
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(liveness.subprocess, "run", run)
+
+    result = liveness.scan_agents(max_age=0.0)
+
+    assert result.records == {}
+    assert result.availability is liveness.AgentsAvailability.UNAVAILABLE
+    assert result.complete is False
+    assert result.issues[0].source == "claude agents --json"
+    assert detail in result.issues[0].detail
+
+
+def test_scan_agents_keeps_valid_records_but_marks_bad_entries_partial(monkeypatch):
+    liveness.invalidate_cache()
+    monkeypatch.setattr(liveness.proc, "has_proc", lambda: False)
+    completed = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=json.dumps(
+            [
+                {"sessionId": "safe", "pid": 11},
+                {"sessionId": "bad", "pid": "not-an-int"},
+            ]
+        ),
+        stderr="",
+    )
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+
+    result = liveness.scan_agents(max_age=0.0)
+
+    assert result.records == {"safe": 11}
+    assert result.availability is liveness.AgentsAvailability.PARTIAL
+    assert result.complete is False
+    assert "entry 1" in result.issues[0].detail
+
+
+def test_scan_agents_does_not_swallow_programming_typeerror(monkeypatch):
+    liveness.invalidate_cache()
+    completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    monkeypatch.setattr(
+        liveness.json,
+        "loads",
+        lambda _value: (_ for _ in ()).throw(TypeError("parser bug")),
+    )
+
+    with pytest.raises(TypeError, match="parser bug"):
+        liveness.scan_agents(max_age=0.0)
 
 
 # --- is_rc_exposed: AC3 six-case matrix (bridge x pid_alive) ---
@@ -260,14 +341,29 @@ def test_live_session_procs_propagates_programming_errors(monkeypatch):
 def test_liveness_inputs_is_an_immutable_typed_generation_snapshot(monkeypatch):
     procs = [_sp("sid", 101, "1", proc_alive=True)]
     jobs = [AgentJob(short="sid", sid="sid", resume_sid="sid")]
-    monkeypatch.setattr(liveness, "live_session_procs", lambda max_age=5.0: procs)
-    monkeypatch.setattr(liveness.registry, "read_agent_jobs", lambda max_age=5.0: jobs)
-    monkeypatch.setattr(liveness, "alive_map", lambda max_age=5.0: {"sid": 101})
+    monkeypatch.setattr(
+        liveness.registry,
+        "scan_session_procs",
+        lambda max_age=5.0: registry.RegistryScan(records=tuple(procs)),
+    )
+    monkeypatch.setattr(
+        liveness.registry,
+        "scan_agent_jobs",
+        lambda max_age=5.0: registry.RegistryScan(records=tuple(jobs)),
+    )
+    monkeypatch.setattr(
+        liveness,
+        "scan_agents",
+        lambda max_age=5.0: liveness.AgentsScan(records={"sid": 101}),
+    )
     monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: {101})
+    monkeypatch.setattr(liveness.proc, "pid_alive", lambda pid, start: True)
 
     inputs = liveness.liveness_inputs()
 
     assert isinstance(inputs, liveness.LivenessSnapshot)
+    assert inputs.complete is True
+    assert inputs.issues == ()
     assert inputs.session_procs == tuple(procs)
     assert inputs.agent_jobs[0].host_pid == 101
     assert inputs.cur == frozenset({101})
@@ -285,19 +381,22 @@ def test_liveness_inputs_forces_fresh_sources_for_each_generation(monkeypatch):
     def session_procs(max_age=5.0):
         ages["sessions"].append(max_age)
         pid = next(next_pid)
-        return [_sp(f"sid-{pid}", pid, "1", proc_alive=True)]
+        return registry.RegistryScan(
+            records=(_sp(f"sid-{pid}", pid, "1", proc_alive=True),)
+        )
 
-    monkeypatch.setattr(liveness, "live_session_procs", session_procs)
+    monkeypatch.setattr(liveness.registry, "scan_session_procs", session_procs)
     monkeypatch.setattr(
         liveness.registry,
-        "read_agent_jobs",
-        lambda max_age=5.0: ages["jobs"].append(max_age) or [],
+        "scan_agent_jobs",
+        lambda max_age=5.0: ages["jobs"].append(max_age) or registry.RegistryScan(),
     )
     monkeypatch.setattr(
         liveness,
-        "alive_map",
-        lambda max_age=5.0: ages["agents"].append(max_age) or {},
+        "scan_agents",
+        lambda max_age=5.0: ages["agents"].append(max_age) or liveness.AgentsScan(),
     )
+    monkeypatch.setattr(liveness.proc, "pid_alive", lambda pid, start: True)
     monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: set())
 
     first = liveness.liveness_inputs()
@@ -310,3 +409,57 @@ def test_liveness_inputs_forces_fresh_sources_for_each_generation(monkeypatch):
     }
     assert [sp.pid for sp in first.session_procs] == [101]
     assert [sp.pid for sp in second.session_procs] == [202]
+
+
+def test_liveness_inputs_collects_multiple_low_level_source_issues(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / "1.json").write_text('{"pid":1,"sessionId":"safe"}')
+    (sessions / "broken.json").write_text("{bad json")
+    state = tmp_path / "jobs" / "agent" / "state.json"
+    state.parent.mkdir(parents=True)
+    state.write_text('{"state":"running"}')
+    completed = subprocess.CompletedProcess(
+        [],
+        3,
+        stdout='[{"sessionId":"unsafe","pid":3}]',
+        stderr="agent daemon failed",
+    )
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    monkeypatch.setattr(liveness.proc, "pid_alive", lambda pid, start: False)
+    monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: set())
+
+    inputs = liveness.liveness_inputs()
+
+    assert [item.sid for item in inputs.session_procs] == ["safe"]
+    assert inputs.complete is False
+    assert {issue.source for issue in inputs.issues} == {
+        "session registry",
+        "job registry",
+        "claude agents --json",
+    }
+    assert all(issue.detail for issue in inputs.issues)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        inputs.issues = ()
+
+
+def test_liveness_inputs_normal_empty_sources_are_complete(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+    completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: set())
+
+    inputs = liveness.liveness_inputs()
+
+    assert inputs.complete is True
+    assert inputs.issues == ()
+    assert inputs.session_procs == ()
+    assert inputs.agent_jobs == ()
+    assert inputs.agents_map == {}

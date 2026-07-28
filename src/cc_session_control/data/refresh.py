@@ -82,6 +82,19 @@ def build_refresh_result(
     """
     try:
         snapshot = snapshot_builder()
+        evidence = snapshot.liveness_snapshot
+        if evidence is not None and not evidence.complete:
+            first = evidence.issues[0]
+            source = first.source
+            if first.path:
+                source += f" ({first.path})"
+            detail = "; ".join(
+                f"{issue.source}"
+                + (f" ({issue.path})" if issue.path else "")
+                + f": {issue.detail}"
+                for issue in evidence.issues
+            )
+            return RefreshFailure(generation, source, detail)
         plan = cleanup_builder(
             snapshot.sessions,
             snapshot.session_procs,

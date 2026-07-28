@@ -26,6 +26,7 @@ def _hermetic_liveness(monkeypatch):
     the registry TTL cache so cleanup tests stay hermetic and deterministic.
     """
     monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
+    monkeypatch.setattr(liveness, "scan_agents", lambda *a, **k: liveness.AgentsScan())
     registry.invalidate_cache()
     yield
     registry.invalidate_cache()
@@ -409,7 +410,8 @@ def test_remove_session_refuses_when_agent_host_is_live(tmp_path, monkeypatch):
     registry.invalidate_cache()
     # Its jobs/<short> dir + a sid-keyed artifact dir.
     jobs_dir = _mkdir(tmp_path, "jobs", sid[:8])
-    open(os.path.join(jobs_dir, "state.json"), "w").close()
+    with open(os.path.join(jobs_dir, "state.json"), "w") as fh:
+        json.dump({"sessionId": sid}, fh)
     se_dir = _mkdir(tmp_path, "session-env", sid)
 
     result = cleanup.remove_session(_make_session(sid=sid, file=transcript))
@@ -428,7 +430,8 @@ def test_remove_session_removes_jobs_dir_when_no_live_host(tmp_path, monkeypatch
     open(transcript, "w").close()
     registry.invalidate_cache()  # no sessions/<pid>.json -> no live host
     jobs_dir = _mkdir(tmp_path, "jobs", sid[:8])
-    open(os.path.join(jobs_dir, "state.json"), "w").close()
+    with open(os.path.join(jobs_dir, "state.json"), "w") as fh:
+        json.dump({"sessionId": sid}, fh)
 
     result = cleanup.remove_session(_make_session(sid=sid, file=transcript))
     assert result.completed == [sid]
