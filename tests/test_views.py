@@ -2,9 +2,15 @@
 
 import ast
 import os
+from pathlib import Path
 
 import urwid
 
+from cc_session_control.data.project_settings import (
+    SettingWriteFailure,
+    SettingWriteResult,
+    SettingWriteState,
+)
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.actions.session_ops import (
     AttachIntent,
@@ -78,6 +84,13 @@ def _make_project(**overrides):
 def _row_text(row):
     canvas = row.render((120,), focus=False)
     return b"\n".join(canvas.text).decode()
+
+
+def _updated_setting(directory):
+    return SettingWriteResult(
+        SettingWriteState.UPDATED,
+        Path(directory) / ".claude" / "settings.local.json",
+    )
 
 
 def test_views_satisfy_tabview_protocol():
@@ -496,7 +509,8 @@ def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
 
     writes = []
     monkeypatch.setattr(rc_view_mod, "set_rc_at_startup",
-                        lambda directory, value: writes.append((directory, value)))
+                        lambda directory, value:
+                        writes.append((directory, value)) or _updated_setting(directory))
     monkeypatch.setattr(rc_mod, "toggle_autostart", lambda name: False)
 
     app = FakeApp()
@@ -542,9 +556,18 @@ def test_sessions_view_fetch_pending(monkeypatch):
 
 def test_rc_view_fetch_pending(monkeypatch):
     from cc_session_control.data import rc as rc_mod
+    from cc_session_control.data.project_settings import (
+        ProjectSettingsResult,
+        ProjectSettingsState,
+    )
 
     fake = [_make_project(name="p1")]
-    monkeypatch.setattr(rc_mod, "scan", lambda: fake)
+    monkeypatch.setattr(
+        rc_mod, "scan_result",
+        lambda: rc_mod.RCScanResult(
+            fake, ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
+        ),
+    )
 
     app = FakeApp()
     view = RCView(app)
@@ -598,7 +621,11 @@ def test_rc_view_o_key_starts_rc_server(monkeypatch):
     from cc_session_control.data import rc as rc_mod
 
     started = []
-    monkeypatch.setattr(rc_mod, "start_one", lambda path: started.append(path) or True)
+    monkeypatch.setattr(
+        rc_mod, "start_one_result",
+        lambda path:
+        started.append(path) or rc_mod.StartResult(rc_mod.StartState.STARTED, path),
+    )
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
@@ -636,7 +663,8 @@ def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
 
     writes = []
     monkeypatch.setattr(rc_view_mod, "set_rc_at_startup",
-                        lambda directory, value: writes.append((directory, value)))
+                        lambda directory, value:
+                        writes.append((directory, value)) or _updated_setting(directory))
 
     app = FakeApp()
     view = RCView(app)
@@ -648,6 +676,65 @@ def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
 
     assert writes  # toggle routed through the seam, not real disk
     assert any("自动远控" in m for m in app._notifications)
+
+
+def test_rc_view_reports_unavailable_trust_in_status_and_start_refusal(
+    monkeypatch,
+):
+    from cc_session_control.data import rc as rc_mod
+    from cc_session_control.data.project_settings import (
+        ProjectSettingsResult,
+        ProjectSettingsState,
+    )
+    from cc_session_control.models import TrustDecision
+
+    starts = []
+    monkeypatch.setattr(
+        rc_mod, "start_one_result",
+        lambda path: starts.append(path),
+    )
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [
+        _make_project(
+            name="p1",
+            trusted=False,
+            trust_decision=TrustDecision.UNAVAILABLE,
+        ),
+    ]
+    view._pending_settings = ProjectSettingsResult(
+        ProjectSettingsState.MALFORMED, {}, "bad JSON",
+    )
+    view.apply_data()
+
+    assert "项目设置不可用" in view._status_text()
+    view.handle_key("o")
+    assert starts == []
+    assert any("项目设置不可用" in item for item in app._notifications)
+
+
+def test_rc_view_reports_typed_settings_write_failure(monkeypatch):
+    import cc_session_control.views.rc as rc_view_mod
+
+    def fail_write(directory, value):
+        return SettingWriteResult(
+            SettingWriteState.FAILED,
+            Path(directory) / ".claude" / "settings.local.json",
+            SettingWriteFailure.REPLACE,
+            "read-only filesystem",
+        )
+
+    monkeypatch.setattr(rc_view_mod, "set_rc_at_startup", fail_write)
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    view._pending = [_make_project(name="p1", rc_at_startup=None)]
+    view.apply_data()
+
+    view.handle_key("c")
+
+    assert any("配置写入失败（replace）" in item for item in app._notifications)
 
 
 def test_rc_view_a_key_notifies_with_new_label(monkeypatch):
@@ -1133,7 +1220,8 @@ def test_rc_view_c_key_full_tristate_cycle(monkeypatch):
 
     writes = []
     monkeypatch.setattr(rc_view_mod, "set_rc_at_startup",
-                        lambda directory, value: writes.append(value))
+                        lambda directory, value:
+                        writes.append(value) or _updated_setting(directory))
     app = FakeApp()
     view = RCView(app)
     app.views = [view]

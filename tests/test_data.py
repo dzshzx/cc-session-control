@@ -458,9 +458,13 @@ def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
 
     proj = tmp_path / "project with space"
     proj.mkdir()
+    claude_json = tmp_path / ".claude.json"
+    claude_json.write_text(json.dumps({
+        "projects": {str(proj): {"hasTrustDialogAccepted": True}},
+    }))
     calls = {}
     opts = {}
-    monkeypatch.setattr(rc, "is_trusted", lambda path: True)
+    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
     monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
     monkeypatch.setattr(tmux, "_tmux_has_session", lambda session: False)
     monkeypatch.setattr(
@@ -489,8 +493,12 @@ def test_start_one_refuses_running_window(tmp_path, monkeypatch):
 
     proj = tmp_path / "proj"
     proj.mkdir()
+    claude_json = tmp_path / ".claude.json"
+    claude_json.write_text(json.dumps({
+        "projects": {str(proj): {"hasTrustDialogAccepted": True}},
+    }))
     calls = {"kill": 0, "new": 0}
-    monkeypatch.setattr(rc, "is_trusted", lambda path: True)
+    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
     monkeypatch.setattr(
         rc, "_tmux_windows",
         lambda: [tmux.TmuxWindow("@1", "proj", False, 1, str(proj))],
@@ -515,8 +523,12 @@ def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
 
     proj = tmp_path / "proj"
     proj.mkdir()
+    claude_json = tmp_path / ".claude.json"
+    claude_json.write_text(json.dumps({
+        "projects": {str(proj): {"hasTrustDialogAccepted": True}},
+    }))
     calls = {"kill": 0, "cmd": None}
-    monkeypatch.setattr(rc, "is_trusted", lambda path: True)
+    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
     monkeypatch.setattr(
         rc, "_tmux_windows",
         lambda: [tmux.TmuxWindow("@1", "proj", True, 1, str(proj))],

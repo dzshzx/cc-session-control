@@ -6,6 +6,23 @@ import os
 from pathlib import Path
 
 
+def _integer_environment(name: str, default: int, minimum: int) -> int:
+    """Parse one integer variable with contextual, fail-fast validation."""
+
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(
+            f"{name}={raw!r}: expected an integer >= {minimum}",
+        ) from None
+    if value < minimum:
+        raise ValueError(
+            f"{name}={raw!r}: expected an integer >= {minimum}",
+        )
+    return value
+
+
 class Config:
     def __init__(self) -> None:
         self.claude_home: Path = Path.home() / ".claude"
@@ -14,9 +31,13 @@ class Config:
         self.config_dir: Path = Path(xdg) / "csctl"
         self.rc_list: Path = self.config_dir / "rc-enabled"
         self.rc_session: str = os.environ.get("CSCTL_RC_SESSION", "rc")
-        self.rc_stagger: int = int(os.environ.get("CSCTL_RC_STAGGER", "2"))
+        self.rc_stagger: int = _integer_environment(
+            "CSCTL_RC_STAGGER", 2, minimum=0,
+        )
         # Age threshold (days) for the time/global-keyed cleanup strategy.
-        self.cleanup_age_days: int = int(os.environ.get("CSCTL_CLEANUP_AGE_DAYS", "14"))
+        self.cleanup_age_days: int = _integer_environment(
+            "CSCTL_CLEANUP_AGE_DAYS", 14, minimum=1,
+        )
         # TUI palette: "auto" (detect the terminal background) | "dark" | "light".
         self.theme: str = os.environ.get("CSCTL_THEME", "auto")
 

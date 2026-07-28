@@ -77,6 +77,7 @@ def _apply_global_flags(args: argparse.Namespace) -> None:
 
 def _cmd_rc(args: argparse.Namespace) -> None:
     from .data import rc
+    from .models import TrustDecision
 
     if not args.rc_command:
         print("Usage: csctl rc <status|add|rm|up|stop|list>")
@@ -89,7 +90,14 @@ def _cmd_rc(args: argparse.Namespace) -> None:
 
         # Same ordering as the 项目 tab (rc.order_by_activity — single
         # source); costs one transcript scan, like `csctl resume`.
-        projects = rc.order_by_activity(rc.scan(), scan_sessions())
+        scan_result = rc.scan_result()
+        projects = rc.order_by_activity(scan_result.projects, scan_sessions())
+        if not scan_result.settings.available:
+            print(
+                "Project settings unavailable: "
+                f"{scan_result.settings.state.value}"
+                f"{': ' + scan_result.settings.detail if scan_result.settings.detail else ''}"
+            )
         for p in projects:
             icon = {"running": "[running]", "dead": "[dead   ]", "stopped": "[stopped]"}.get(p.status, p.status)
             auto = "auto" if p.auto_start else "    "
@@ -101,14 +109,31 @@ def _cmd_rc(args: argparse.Namespace) -> None:
         if not os.path.isdir(path):
             print(f"No such directory: {path}")
             sys.exit(1)
-        if not rc.is_trusted(path):
+        trust = rc.project_trust(path)
+        if trust.decision is TrustDecision.UNAVAILABLE:
+            print(
+                "Project settings unavailable: "
+                f"{trust.settings.state.value}"
+                f"{': ' + trust.settings.detail if trust.settings.detail else ''}"
+                " — refusing to start"
+            )
+            sys.exit(1)
+        if trust.decision is TrustDecision.UNTRUSTED:
             print(f"Not trusted: {path} — run 'claude' in that directory first to accept the trust dialog")
             sys.exit(1)
         rc.list_add(path)
         print(f"Added to list: {path}")
-        ok = rc.start_one(path)
-        if ok:
+        result = rc.start_one_result(path)
+        if result.state is rc.StartState.STARTED:
             print(f"Started RC server for {path}")
+        elif result.state is rc.StartState.TRUST_UNAVAILABLE:
+            print("Project settings became unavailable — refusing to start")
+            sys.exit(1)
+        elif result.state is rc.StartState.UNTRUSTED:
+            print("Project is no longer trusted — refusing to start")
+            sys.exit(1)
+        else:
+            print(f"RC server was not started: {result.state.value}")
 
     elif sub == "rm":
         path = os.path.abspath(args.project)
@@ -121,8 +146,13 @@ def _cmd_rc(args: argparse.Namespace) -> None:
         if not enabled:
             print("List is empty")
             return
-        count = rc.start_many(enabled)
-        print(f"Started {count} project(s)")
+        result = rc.start_many_result(enabled)
+        print(f"Started {result.started} project(s)")
+        if result.unavailable:
+            print(
+                "Project settings unavailable; refused "
+                f"{result.unavailable} project(s)"
+            )
 
     elif sub == "stop":
         if args.target == "all":
@@ -314,7 +344,10 @@ def _cmd_tui(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
-    _apply_global_flags(args)
+    try:
+        _apply_global_flags(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     if args.command == "rc":
         _cmd_rc(args)

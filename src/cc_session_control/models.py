@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import os.path
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Literal
 
 # Single source of truth for RC status values. The Chinese display labels
 # (views/rc.py) and the CLI icons (cli.py) are presentation-only maps keyed
 # off this vocabulary.
 Status = Literal["running", "dead", "stopped"]
+
+
+class TrustDecision(Enum):
+    """Effective Claude project trust, including unavailable evidence."""
+
+    TRUSTED = "trusted"
+    UNTRUSTED = "untrusted"
+    UNAVAILABLE = "unavailable"
 
 
 @dataclass
@@ -120,6 +130,8 @@ class LiveInfo:
 class RCProject:
     name: str
     directory: str
+    # Compatibility bool for existing callers. New safety decisions must use
+    # ``trust_decision`` so unavailable evidence is not mislabeled untrusted.
     trusted: bool
     in_list: bool
     status: Status
@@ -129,6 +141,15 @@ class RCProject:
     # False when the workspace directory is gone but claude.json / rc-enabled
     # still reference the project — shown as 缺失, start-ops refused.
     dir_exists: bool = True
+    trust_decision: TrustDecision | None = None
+
+    def __post_init__(self) -> None:
+        if self.trust_decision is None:
+            self.trust_decision = (
+                TrustDecision.TRUSTED if self.trusted
+                else TrustDecision.UNTRUSTED
+            )
+        self.trusted = self.trust_decision is TrustDecision.TRUSTED
 
 
 @dataclass
@@ -149,7 +170,10 @@ class RCServer:
     status: Status = "stopped"
 
 
-def effective_trust(path: str, projects: dict) -> bool:
+def effective_trust_decision(
+    path: str,
+    projects: Mapping[str, object] | None,
+) -> TrustDecision:
     """PURE: is `path` trusted per Claude Code's runtime trust-dialog gate?
 
     THE one trust predicate — membership discovery and the `start_one` gate
@@ -162,17 +186,35 @@ def effective_trust(path: str, projects: dict) -> bool:
     path-segment boundary (`/a/workspace` never covers `/a/workspace-external`)
     and normalizes with normpath only — never realpath, matching claude's
     literal-cwd record keeping.
+
+    ``None`` means the settings evidence could not be read or validated.  That
+    state is distinct from a valid project map that does not grant trust.
     """
+    if projects is None:
+        return TrustDecision.UNAVAILABLE
     if not path:
-        return False
+        return TrustDecision.UNTRUSTED
     target = os.path.normpath(path)
     for key, val in projects.items():
-        if not isinstance(val, dict) or not val.get("hasTrustDialogAccepted"):
+        if (
+            not isinstance(key, str)
+            or not isinstance(val, dict)
+            or val.get("hasTrustDialogAccepted") is not True
+        ):
             continue
         root = os.path.normpath(key)
         if target == root or target.startswith(root.rstrip("/") + "/"):
-            return True
-    return False
+            return TrustDecision.TRUSTED
+    return TrustDecision.UNTRUSTED
+
+
+def effective_trust(
+    path: str,
+    projects: Mapping[str, object] | None,
+) -> bool:
+    """Compatibility bool; unavailable evidence always fails closed."""
+
+    return effective_trust_decision(path, projects) is TrustDecision.TRUSTED
 
 
 def split_env_id(value: str | None) -> tuple[str, str]:

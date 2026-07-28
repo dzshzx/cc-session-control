@@ -11,6 +11,10 @@ import json
 from cc_session_control.config import cfg
 from cc_session_control.data import environments as env
 from cc_session_control.data import snapshot
+from cc_session_control.data.project_settings import (
+    ProjectSettingsResult,
+    ProjectSettingsState,
+)
 from cc_session_control.models import SessionProc
 
 
@@ -22,7 +26,12 @@ def _stub_sources(monkeypatch, procs):
     monkeypatch.setattr(snapshot.liveness.registry, "read_session_procs", lambda *a, **k: procs)
     monkeypatch.setattr(snapshot.liveness.registry, "read_agent_jobs", lambda *a, **k: [])
     monkeypatch.setattr(snapshot.sessions, "scan", lambda: [])
-    monkeypatch.setattr(snapshot.rc, "scan", lambda: [])
+    monkeypatch.setattr(
+        snapshot.rc, "scan_result",
+        lambda: snapshot.rc.RCScanResult(
+            [], ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
+        ),
+    )
     monkeypatch.setattr(snapshot.rc, "scan_servers", lambda: [])
 
 

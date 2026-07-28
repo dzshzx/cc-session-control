@@ -10,6 +10,8 @@ import os
 import time
 import types
 
+import pytest
+
 from cc_session_control import cli
 from cc_session_control.config import cfg
 from cc_session_control.data import liveness
@@ -110,3 +112,23 @@ def test_theme_flag_absent_keeps_cfg(monkeypatch):
     args = cli._build_parser().parse_args([])
     cli._apply_global_flags(args)
     assert cfg.theme == "auto"
+
+
+def test_rc_add_reports_unavailable_trust_without_calling_it_untrusted(
+    tmp_path, monkeypatch, capsys,
+):
+    from cc_session_control.data import rc
+
+    project = tmp_path / "app"
+    project.mkdir()
+    claude_json = tmp_path / ".claude.json"
+    claude_json.write_text("{broken")
+    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
+
+    with pytest.raises(SystemExit) as stopped:
+        cli._cmd_rc(types.SimpleNamespace(rc_command="add", project=str(project)))
+
+    output = capsys.readouterr().out
+    assert stopped.value.code == 1
+    assert "Project settings unavailable" in output
+    assert "Not trusted" not in output

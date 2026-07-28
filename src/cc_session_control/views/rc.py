@@ -26,8 +26,13 @@ import urwid
 
 from ..actions.session_ops import TmuxNewIntent
 from ..data import rc
+from ..data.project_settings import (
+    ProjectSettingsResult,
+    ProjectSettingsState,
+    SettingWriteState,
+)
 from ..data.rc import set_rc_at_startup
-from ..models import RCProject, RCServer
+from ..models import RCProject, RCServer, TrustDecision
 from ._base import ListTabView
 from ._colspec import header_columns, row_columns
 from ._confirm import confirm_stop
@@ -201,6 +206,8 @@ class RCView(ListTabView):
         self._servers: list[RCServer] = []
         self._pending: list[RCProject] | None = None
         self._pending_servers: list[RCServer] | None = None
+        self._settings = ProjectSettingsResult(ProjectSettingsState.MISSING, {})
+        self._pending_settings: ProjectSettingsResult | None = None
         self._help = False
 
     def keyhints(self) -> str:
@@ -216,7 +223,9 @@ class RCView(ListTabView):
         return self._help
 
     def load(self) -> None:
-        self._projects = rc.scan()
+        result = rc.scan_result()
+        self._projects = result.projects
+        self._settings = result.settings
         self._servers = rc.scan_servers()
         self._loaded = True
         self._rebuild()
@@ -226,11 +235,14 @@ class RCView(ListTabView):
         if snapshot is not None:
             self.set_pending(
                 rc.order_by_activity(snapshot.rc_projects, snapshot.sessions))
+            self._pending_settings = snapshot.rc_project_settings
             self._pending_servers = snapshot.rc_servers
         else:
             # Self-fetch fallback (snapshot build failure / unit tests) has no
             # session scan — degrades to scan()'s path order by design.
-            self.set_pending(rc.scan())
+            result = rc.scan_result()
+            self.set_pending(result.projects)
+            self._pending_settings = result.settings
             self._pending_servers = rc.scan_servers()
 
     def set_pending(self, projects: list[RCProject]) -> None:
@@ -241,6 +253,9 @@ class RCView(ListTabView):
             self._projects = self._pending
             self._pending = None
             self._loaded = True
+            if self._pending_settings is not None:
+                self._settings = self._pending_settings
+                self._pending_settings = None
             if self._pending_servers is not None:
                 self._servers = self._pending_servers
                 self._pending_servers = None
@@ -266,9 +281,13 @@ class RCView(ListTabView):
         rc_text = f" · 自动远控关 {rc_off}" if rc_off else ""
         miss_text = f" · 目录缺失 {missing}" if missing else ""
         srv_text = f" · 服务 {len(self._servers)}" if self._servers else ""
+        settings_text = (
+            f" · 项目设置不可用（{self._settings.state.value}）"
+            if not self._settings.available else ""
+        )
         return (
             f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}"
-            f"{rc_text}{miss_text}{srv_text}"
+            f"{rc_text}{miss_text}{srv_text}{settings_text}"
         )
 
     def _close_overlay_mode(self) -> None:
@@ -295,14 +314,25 @@ class RCView(ListTabView):
         if not p.dir_exists:
             self.app.notify("目录缺失 — 无法启动（可用 a 键移出自启列表）")
             return
-        if not p.trusted:
+        if p.trust_decision is TrustDecision.UNAVAILABLE:
+            self.app.notify("项目设置不可用 — 已拒绝启动")
+            return
+        if p.trust_decision is TrustDecision.UNTRUSTED:
             self.app.notify("未信任 — 先在该目录跑一次 claude")
             return
         if p.status == "running":
             self.app.notify("已在运行")
             return
-        ok = rc.start_one(p.directory)
-        self.app.notify(f"已启动 {p.name}" if ok else "启动失败")
+        result = rc.start_one_result(p.directory)
+        if result.state is rc.StartState.STARTED:
+            message = f"已启动 {p.name}"
+        elif result.state is rc.StartState.TRUST_UNAVAILABLE:
+            message = "项目设置不可用 — 已拒绝启动"
+        elif result.state is rc.StartState.UNTRUSTED:
+            message = "未信任 — 已拒绝启动"
+        else:
+            message = "启动失败"
+        self.app.notify(message)
         self.app.trigger_async_refresh()
 
     def _key_stop(self, p: RCProject) -> None:
@@ -324,13 +354,21 @@ class RCView(ListTabView):
             return
         # Full 3-cycle so explicit True is reachable again: None→True→False→None.
         new = _NEXT_TRISTATE[p.rc_at_startup]
-        set_rc_at_startup(p.directory, new)
-        self.app.notify(f"{p.name} 自动远控: {_RC_TRISTATE[new]}")
+        result = set_rc_at_startup(p.directory, new)
+        if result.state is SettingWriteState.FAILED:
+            reason = result.failure.value if result.failure is not None else "unknown"
+            self.app.notify(f"配置写入失败（{reason}）: {result.detail}")
+            return
+        suffix = "（无变化）" if result.state is SettingWriteState.UNCHANGED else ""
+        self.app.notify(f"{p.name} 自动远控: {_RC_TRISTATE[new]}{suffix}")
         self.app.trigger_async_refresh()
 
     def _key_start_all(self) -> None:
-        count = rc.start_all_listed()
-        self.app.notify(f"已启动 {count} 个项目")
+        result = rc.start_all_listed_result()
+        message = f"已启动 {result.started} 个项目"
+        if result.unavailable:
+            message += f"；项目设置不可用，拒绝 {result.unavailable} 个"
+        self.app.notify(message)
         self.app.trigger_async_refresh()
 
     def _key_stop_all(self) -> None:

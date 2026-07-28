@@ -16,6 +16,8 @@ import re
 import shlex
 import tempfile
 import time
+from dataclasses import dataclass
+from enum import Enum
 
 from ..config import cfg
 from ..models import (
@@ -23,13 +25,66 @@ from ..models import (
     RCProject,
     RCServer,
     Session,
-    effective_trust,
+    TrustDecision,
+    effective_trust_decision,
     split_env_id,
 )
 from . import environments, proc, tmux
+from .project_settings import (
+    ProjectSettingsResult,
+    SettingWriteResult,
+    read_project_settings,
+    write_rc_at_startup,
+)
 
 # Cloud bridge env id printed to a managed server's pane (`environment=env_…`).
 _ENV_ID_RE = re.compile(r"env_[A-Za-z0-9]+")
+
+
+@dataclass(frozen=True)
+class RCScanResult:
+    """Project rows plus the settings evidence used to derive trust."""
+
+    projects: list[RCProject]
+    settings: ProjectSettingsResult
+
+
+@dataclass(frozen=True)
+class ProjectTrustResult:
+    """One trust decision and the settings evidence behind it."""
+
+    decision: TrustDecision
+    settings: ProjectSettingsResult
+
+
+class StartState(Enum):
+    """Observable outcome of starting one project RC server."""
+
+    STARTED = "started"
+    NOT_DIRECTORY = "not-directory"
+    TRUST_UNAVAILABLE = "trust-unavailable"
+    UNTRUSTED = "untrusted"
+    ALREADY_RUNNING = "already-running"
+    STOP_FAILED = "stop-failed"
+    TMUX_FAILED = "tmux-failed"
+
+
+@dataclass(frozen=True)
+class StartResult:
+    state: StartState
+    path: str
+
+    @property
+    def success(self) -> bool:
+        return self.state is StartState.STARTED
+
+
+@dataclass(frozen=True)
+class StartManyResult:
+    started: int = 0
+    unavailable: int = 0
+    untrusted: int = 0
+    failed: int = 0
 
 
 def _ensure_list() -> None:
@@ -53,12 +108,15 @@ def _legacy_workspace_root() -> str:
     if os.path.isdir(default):
         return default
     try:
-        dirs = [k for k in _load_projects() if "/" in k]
+        dirs = [
+            key for key in _load_projects()
+            if isinstance(key, str) and "/" in key
+        ]
         if dirs:
             common = os.path.commonpath(dirs)
             if os.path.isdir(common) and common != os.path.expanduser("~"):
                 return common
-    except Exception:
+    except (OSError, ValueError):
         pass
     return os.getcwd()
 
@@ -141,16 +199,18 @@ def toggle_autostart(path: str) -> bool:
 
 
 def _load_projects() -> dict:
-    """Read the `projects` map from ~/.claude.json, or {} on any failure.
+    """Compatibility map-only reader; typed callers use ``_read_projects``.
 
-    Single source for the claude.json read shared by trusted_projects /
-    is_trusted, so the open+parse+swallow dance lives in one place.
+    Failures become an empty map only at this legacy boundary. Safety decisions
+    never call it, so they retain ``UNAVAILABLE``.
     """
-    try:
-        with open(cfg.claude_json) as f:
-            return json.load(f).get("projects", {}) or {}
-    except Exception:
-        return {}
+    return _read_projects().projects
+
+
+def _read_projects() -> ProjectSettingsResult:
+    """Typed single source for ``~/.claude.json`` project metadata."""
+
+    return read_project_settings(cfg.claude_json)
 
 
 def _trusted_in(projects: dict) -> set[str]:
@@ -158,7 +218,7 @@ def _trusted_in(projects: dict) -> set[str]:
     return {
         key for key in projects
         if isinstance(key, str) and key.startswith("/")
-        and effective_trust(key, projects)
+        and effective_trust_decision(key, projects) is TrustDecision.TRUSTED
     }
 
 
@@ -191,11 +251,24 @@ def trusted_projects() -> list[str]:
     return sorted(_trusted_in(_load_projects()))
 
 
+def project_trust(path: str) -> ProjectTrustResult:
+    """Effective trust plus typed settings evidence."""
+
+    settings = _read_projects()
+    projects = settings.projects if settings.available else None
+    return ProjectTrustResult(effective_trust_decision(path, projects), settings)
+
+
+def trust_decision(path: str) -> TrustDecision:
+    """Compatibility decision-only view of ``project_trust``."""
+
+    return project_trust(path).decision
+
+
 def is_trusted(path: str) -> bool:
-    try:
-        return effective_trust(path, _load_projects())
-    except Exception:
-        return False
+    """Compatibility bool; unavailable evidence fails closed."""
+
+    return trust_decision(path) is TrustDecision.TRUSTED
 
 
 def _basename(path: str) -> str:
@@ -233,36 +306,31 @@ def _read_rc_at_startup(directory: str) -> bool | None:
         path = os.path.join(directory, ".claude", name)
         try:
             with open(path) as f:
-                val = json.load(f).get("remoteControlAtStartup")
-            if val is not None:
-                return bool(val)
-        except Exception:
+                document = json.load(f)
+        except (OSError, json.JSONDecodeError, UnicodeError):
             continue
+        if not isinstance(document, dict):
+            continue
+        value = document.get("remoteControlAtStartup")
+        if isinstance(value, bool):
+            return value
     return None
 
 
-def set_rc_at_startup(directory: str, value: bool | None) -> None:
-    settings_dir = os.path.join(directory, ".claude")
-    path = os.path.join(settings_dir, "settings.local.json")
-    os.makedirs(settings_dir, exist_ok=True)
-    try:
-        with open(path) as f:
-            data = json.load(f)
-    except Exception:
-        data = {}
-    if value is None:
-        data.pop("remoteControlAtStartup", None)
-    else:
-        data["remoteControlAtStartup"] = value
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+def set_rc_at_startup(
+    directory: str,
+    value: bool | None,
+) -> SettingWriteResult:
+    """Typed compatibility name for the atomic project-settings writer."""
+
+    return write_rc_at_startup(directory, value)
 
 
-def scan() -> list[RCProject]:
+def scan_result() -> RCScanResult:
     # ONE claude.json load feeds membership, trust flags and spawn modes —
     # no per-project re-parse.
-    projects_map = _load_projects()
+    settings = _read_projects()
+    projects_map = settings.projects
     trusted = _trusted_in(projects_map)
     enabled = set(list_enabled())
     by_path = {
@@ -292,17 +360,27 @@ def scan() -> list[RCProject]:
             status = "stopped"
         entry = projects_map.get(path)
         spawn = entry.get("remoteControlSpawnMode") if isinstance(entry, dict) else None
+        decision = effective_trust_decision(
+            path, projects_map if settings.available else None,
+        )
         result.append(RCProject(
             name=_basename(path), directory=path,
-            trusted=path in trusted,
+            trusted=decision is TrustDecision.TRUSTED,
             in_list=path in enabled,
             status=status,
             auto_start=path in enabled,
             rc_at_startup=_read_rc_at_startup(path),
             spawn_mode=str(spawn) if spawn else None,
             dir_exists=dir_exists,
+            trust_decision=decision,
         ))
-    return result
+    return RCScanResult(result, settings)
+
+
+def scan() -> list[RCProject]:
+    """Compatibility list-only scan; new surfaces use ``scan_result``."""
+
+    return scan_result().projects
 
 
 def order_by_activity(
@@ -399,17 +477,19 @@ def scan_servers() -> list[RCServer]:
     return servers
 
 
-def start_one(path: str) -> bool:
+def _start_one_with_trust(path: str, decision: TrustDecision) -> StartResult:
     if not os.path.isdir(path):
-        return False
-    if not is_trusted(path):
-        return False
+        return StartResult(StartState.NOT_DIRECTORY, path)
+    if decision is TrustDecision.UNAVAILABLE:
+        return StartResult(StartState.TRUST_UNAVAILABLE, path)
+    if decision is TrustDecision.UNTRUSTED:
+        return StartResult(StartState.UNTRUSTED, path)
     win = _window_for(path)
     if win is not None:
         if not win.dead:
-            return False
+            return StartResult(StartState.ALREADY_RUNNING, path)
         if not stop_one(path):
-            return False
+            return StartResult(StartState.STOP_FAILED, path)
 
     remote_name = _basename(path)
     # Each fresh Remote Control process registers a distinct cloud environment.
@@ -422,12 +502,24 @@ def start_one(path: str) -> bool:
 
     target = tmux.run_in_tmux(cfg.rc_session, tmux.session_name_for(path), cmd)
     if target is None:
-        return False
+        return StartResult(StartState.TMUX_FAILED, path)
     # Declare the window's project — the collision-safe join key `scan` and
     # `stop_one` read back. Until this lands, `pane_current_path` (the `cd`
     # above) covers the same join, so a mid-spawn scan still matches.
     tmux.set_window_option(target, "@csctl_path", path)
-    return True
+    return StartResult(StartState.STARTED, path)
+
+
+def start_one_result(path: str) -> StartResult:
+    """Start one RC server with tri-state trust evidence."""
+
+    return _start_one_with_trust(path, trust_decision(path))
+
+
+def start_one(path: str) -> bool:
+    """Compatibility bool; unavailable trust still fails closed."""
+
+    return start_one_result(path).success
 
 
 def stop_one(path: str) -> bool:
@@ -442,15 +534,36 @@ def stop_all() -> bool:
 
 
 def start_many(projects: list[str]) -> int:
-    count = 0
-    for proj in projects:
-        if count > 0:
+    """Compatibility count-only view of ``start_many_result``."""
+
+    return start_many_result(projects).started
+
+
+def start_many_result(projects: list[str]) -> StartManyResult:
+    """Start a batch while retaining trust-unavailable refusals."""
+
+    started = unavailable = untrusted = failed = 0
+    for project in projects:
+        if started > 0:
             time.sleep(cfg.rc_stagger)
-        if start_one(proj):
-            count += 1
-    return count
+        result = start_one_result(project)
+        if result.state is StartState.STARTED:
+            started += 1
+        elif result.state is StartState.TRUST_UNAVAILABLE:
+            unavailable += 1
+        elif result.state is StartState.UNTRUSTED:
+            untrusted += 1
+        else:
+            failed += 1
+    return StartManyResult(started, unavailable, untrusted, failed)
 
 
 def start_all_listed() -> int:
     """Start every project currently enabled in the autostart list."""
     return start_many(list_enabled())
+
+
+def start_all_listed_result() -> StartManyResult:
+    """Typed batch result for operator-facing callers."""
+
+    return start_many_result(list_enabled())

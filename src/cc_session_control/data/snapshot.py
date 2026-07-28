@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
 from . import environments, liveness, rc, sessions
+from .project_settings import ProjectSettingsResult, ProjectSettingsState
 
 
 @dataclass
@@ -41,6 +42,11 @@ class WorldSnapshot:
     sessions: list[Session] = field(default_factory=list)
     agent_jobs: list[AgentJob] = field(default_factory=list)
     rc_projects: list[RCProject] = field(default_factory=list)
+    rc_project_settings: ProjectSettingsResult = field(
+        default_factory=lambda: ProjectSettingsResult(
+            ProjectSettingsState.MISSING, {},
+        ),
+    )
     rc_servers: list[RCServer] = field(default_factory=list)
     observed_envs: list[EnvRecord] = field(default_factory=list)
     file_referenced_envs: list[EnvRecord] = field(default_factory=list)
@@ -59,7 +65,7 @@ def build_world_snapshot() -> WorldSnapshot:
     """
     session_procs, cur, agent_jobs, agents_map = liveness.liveness_inputs()
     all_sessions = sessions.scan()
-    rc_projects = rc.scan()
+    rc_scan = rc.scan_result()
     rc_servers = rc.scan_servers()
     # R6 ledger reconciliation (the whole point of the ledger): ONE pipeline —
     # observe (file-referenced membership) → upsert → observe_live (alive-gated
@@ -73,7 +79,8 @@ def build_world_snapshot() -> WorldSnapshot:
     return WorldSnapshot(
         sessions=all_sessions,
         agent_jobs=agent_jobs,
-        rc_projects=rc_projects,
+        rc_projects=rc_scan.projects,
+        rc_project_settings=rc_scan.settings,
         rc_servers=rc_servers,
         observed_envs=recon.observed,
         file_referenced_envs=recon.file_referenced,

@@ -10,7 +10,11 @@ veto, and ancestor matching must respect path-segment boundaries.
 
 from __future__ import annotations
 
-from cc_session_control.models import effective_trust
+from cc_session_control.models import (
+    TrustDecision,
+    effective_trust,
+    effective_trust_decision,
+)
 
 WS = "/home/u/workspace"
 
@@ -90,6 +94,18 @@ def test_empty_inputs():
     assert effective_trust(WS, {}) is False
 
 
+def test_effective_trust_decision_keeps_unavailable_distinct_and_fail_closed():
+    assert (
+        effective_trust_decision(
+            WS + "/proj", {WS: {"hasTrustDialogAccepted": True}},
+        )
+        is TrustDecision.TRUSTED
+    )
+    assert effective_trust_decision(WS + "/proj", {}) is TrustDecision.UNTRUSTED
+    assert effective_trust_decision(WS + "/proj", None) is TrustDecision.UNAVAILABLE
+    assert effective_trust(WS + "/proj", None) is False
+
+
 # --- scan-level membership (path-keyed, inheritance-aware) ------------------
 
 def _wire_scan(tmp_path, monkeypatch, projects, enabled=(), temp_roots=()):
@@ -136,6 +152,35 @@ def test_scan_excludes_untrusted_entry(tmp_path, monkeypatch):
     })
 
     assert rc.scan() == []
+
+
+def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
+    tmp_path, monkeypatch,
+):
+    from cc_session_control.data import rc
+
+    project = tmp_path / "app"
+    project.mkdir()
+    claude_json = tmp_path / ".claude.json"
+    claude_json.write_text("{broken")
+    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
+    monkeypatch.setattr(rc, "list_enabled", lambda: [str(project)])
+    monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
+    launches = []
+    monkeypatch.setattr(
+        rc.tmux, "run_in_tmux",
+        lambda *args, **kwargs: launches.append(args) or "rc:1",
+    )
+
+    scan_result = rc.scan_result()
+    start_result = rc.start_one_result(str(project))
+
+    assert scan_result.settings.state.value == "malformed"
+    assert scan_result.projects[0].trust_decision is TrustDecision.UNAVAILABLE
+    assert scan_result.projects[0].trusted is False
+    assert start_result.state is rc.StartState.TRUST_UNAVAILABLE
+    assert launches == []
 
 
 # --- temp-dir membership filter (trust untouched, discovery only) -----------
