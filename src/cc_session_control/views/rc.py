@@ -1,11 +1,11 @@
 """RC view — the 项目 tab (trusted projects + their Remote Control surface).
 
 Shows two things:
-  1. managed projects (RCProject) with the tri-state `remoteControlAtStartup`
-     and `remoteControlSpawnMode`, plus Enter (start a NEW claude session in
-     the project dir inside tmux, then enter it — the tmux-first launcher,
-     ADR-0001), `o` (start the project RC server, the demoted secondary), and
-     the stop/autostart keys;
+  1. managed projects (RCProject) with typed `remoteControlAtStartup` evidence
+     and `remoteControlSpawnMode`, plus Enter (start a NEW claude session in the
+     project dir inside tmux, then enter it — the tmux-first launcher, ADR-0001),
+     `o` (start the project RC server, the demoted secondary), and the
+     stop/autostart keys;
   2. project RC servers (RCServer) discovered via tmux ∪ /proc, badged
      managed/external — external servers are READ-ONLY (no takeover/restart key).
 
@@ -85,7 +85,11 @@ class RCRow(urwid.WidgetWrap):
                 status_text = "✖ 缺失"
                 attr = "status_err"
         auto = "✓ 开" if project.auto_start else "✗ 关"
-        rc_at = _RC_TRISTATE.get(project.rc_at_startup, "未设置")
+        rc_at = (
+            _RC_TRISTATE[project.rc_at_startup]
+            if project.rc_at_startup_setting.available
+            else "读取失败"
+        )
         spawn = project.spawn_mode or "—"
         name = (
             project.name
@@ -301,8 +305,12 @@ class RCView(ListTabView):
         running = sum(1 for p in self._projects if p.status == "running")
         auto = sum(1 for p in self._projects if p.auto_start)
         rc_off = sum(1 for p in self._projects if p.rc_at_startup is False)
+        rc_errors = sum(
+            1 for p in self._projects if not p.rc_at_startup_setting.available
+        )
         missing = sum(1 for p in self._projects if not p.dir_exists)
         rc_text = f" · 自动远控关 {rc_off}" if rc_off else ""
+        rc_error_text = f" · 自动远控异常 {rc_errors}" if rc_errors else ""
         miss_text = f" · 目录缺失 {missing}" if missing else ""
         srv_text = f" · 服务 {len(self._servers)}" if self._servers else ""
         settings_text = (
@@ -317,7 +325,7 @@ class RCView(ListTabView):
         )
         return (
             f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}"
-            f"{rc_text}{miss_text}{srv_text}{settings_text}{ledger_text}"
+            f"{rc_text}{rc_error_text}{miss_text}{srv_text}{settings_text}{ledger_text}"
         )
 
     def _close_overlay_mode(self) -> None:
@@ -381,6 +389,15 @@ class RCView(ListTabView):
         if not p.dir_exists:
             # set_rc_at_startup would mkdir the deleted project back to life.
             self.app.notify("目录缺失 — 不写入配置")
+            return
+        setting = p.rc_at_startup_setting
+        if not setting.available:
+            source = f"：{setting.source}" if setting.source is not None else ""
+            detail = f"：{setting.detail}" if setting.detail else ""
+            self.app.notify(
+                f"自动远控配置不可用（{setting.state.value}）"
+                f"{source}{detail} — 不写入配置"
+            )
             return
         # Full 3-cycle so explicit True is reachable again: None→True→False→None.
         new = _NEXT_TRISTATE[p.rc_at_startup]

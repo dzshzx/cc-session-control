@@ -15,6 +15,7 @@ from cc_session_control.data.project_settings import (
     read_project_settings,
     write_rc_at_startup,
 )
+from cc_session_control.models import RCStartupSettingState
 
 
 def test_missing_claude_json_is_an_empty_non_failure(tmp_path):
@@ -92,6 +93,147 @@ def test_unreadable_claude_json_is_observable_without_chmod_assumptions(
     result = read_project_settings(path)
 
     assert result.state is ProjectSettingsState.UNREADABLE
+    assert "permission denied" in result.detail
+    assert result.available is False
+
+
+def test_rc_setting_read_uses_base_when_local_is_missing(tmp_path):
+    project = tmp_path / "app"
+    settings = project / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"remoteControlAtStartup": True}))
+
+    result = project_settings.read_rc_at_startup(project)
+
+    assert result.state is RCStartupSettingState.TRUE
+    assert result.value is True
+    assert result.source == settings
+    assert result.available is True
+
+
+@pytest.mark.parametrize(
+    ("local_document", "expected_state", "expected_value"),
+    [
+        (None, RCStartupSettingState.MISSING, None),
+        ({}, RCStartupSettingState.UNSET, None),
+        ({"remoteControlAtStartup": True}, RCStartupSettingState.TRUE, True),
+        ({"remoteControlAtStartup": False}, RCStartupSettingState.FALSE, False),
+    ],
+)
+def test_rc_setting_read_distinguishes_normal_states(
+    tmp_path,
+    local_document,
+    expected_state,
+    expected_value,
+):
+    project = tmp_path / "app"
+    local = project / ".claude" / "settings.local.json"
+    if local_document is not None:
+        local.parent.mkdir(parents=True)
+        local.write_text(json.dumps(local_document))
+
+    result = project_settings.read_rc_at_startup(project)
+
+    assert result.state is expected_state
+    assert result.value is expected_value
+    assert result.available is True
+    assert result.source == (local if local_document is not None else None)
+
+
+def test_rc_setting_read_unset_local_continues_to_base(tmp_path):
+    project = tmp_path / "app"
+    settings_dir = project / ".claude"
+    settings_dir.mkdir(parents=True)
+    (settings_dir / "settings.local.json").write_text("{}")
+    base = settings_dir / "settings.json"
+    base.write_text(json.dumps({"remoteControlAtStartup": False}))
+
+    result = project_settings.read_rc_at_startup(project)
+
+    assert result.state is RCStartupSettingState.FALSE
+    assert result.value is False
+    assert result.source == base
+
+
+def test_rc_setting_read_local_bool_takes_precedence_over_base(tmp_path):
+    project = tmp_path / "app"
+    settings_dir = project / ".claude"
+    settings_dir.mkdir(parents=True)
+    local = settings_dir / "settings.local.json"
+    local.write_text(json.dumps({"remoteControlAtStartup": False}))
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"remoteControlAtStartup": True})
+    )
+
+    result = project_settings.read_rc_at_startup(project)
+
+    assert result.state is RCStartupSettingState.FALSE
+    assert result.value is False
+    assert result.source == local
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_state", "detail"),
+    [
+        (b"{broken", RCStartupSettingState.MALFORMED, ""),
+        (b"\xff", RCStartupSettingState.MALFORMED, ""),
+        (b"[]", RCStartupSettingState.INVALID, "top-level"),
+        (
+            b'{"remoteControlAtStartup": "yes"}',
+            RCStartupSettingState.INVALID,
+            "not a boolean",
+        ),
+    ],
+)
+def test_rc_setting_read_does_not_fallback_past_broken_local_file(
+    tmp_path,
+    raw,
+    expected_state,
+    detail,
+):
+    project = tmp_path / "app"
+    settings_dir = project / ".claude"
+    settings_dir.mkdir(parents=True)
+    local = settings_dir / "settings.local.json"
+    local.write_bytes(raw)
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"remoteControlAtStartup": True})
+    )
+
+    result = project_settings.read_rc_at_startup(project)
+
+    assert result.state is expected_state
+    assert result.value is None
+    assert result.source == local
+    assert detail in result.detail
+    assert result.available is False
+
+
+def test_rc_setting_read_does_not_fallback_past_unreadable_local_file(
+    tmp_path,
+    monkeypatch,
+):
+    project = tmp_path / "app"
+    settings_dir = project / ".claude"
+    settings_dir.mkdir(parents=True)
+    local = settings_dir / "settings.local.json"
+    local.write_text("{}")
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"remoteControlAtStartup": True})
+    )
+    read_bytes = Path.read_bytes
+
+    def deny_local(self):
+        if self == local:
+            raise PermissionError("permission denied")
+        return read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", deny_local)
+
+    result = project_settings.read_rc_at_startup(project)
+
+    assert result.state is RCStartupSettingState.UNREADABLE
+    assert result.source == local
     assert "permission denied" in result.detail
     assert result.available is False
 

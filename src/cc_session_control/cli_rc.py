@@ -37,6 +37,7 @@ def _run_rc(args: Namespace) -> int:
                 f"{': ' + scan_result.settings.detail if scan_result.settings.detail else ''}",
                 file=sys.stderr,
             )
+        setting_failure = False
         for project in projects:
             icon = {
                 "running": "[running]",
@@ -48,7 +49,18 @@ def _run_rc(args: Namespace) -> int:
             print(
                 f"  {icon} {auto}  {project.name}  {project.directory}{missing}",
             )
-        return 0 if scan_result.settings.available else 1
+            setting = project.rc_at_startup_setting
+            if not setting.available:
+                setting_failure = True
+                print(
+                    "Project remoteControlAtStartup unavailable: "
+                    f"project={project.directory}; "
+                    f"state={setting.state.value}; "
+                    f"source={setting.source}; "
+                    f"detail={setting.detail}",
+                    file=sys.stderr,
+                )
+        return 0 if scan_result.settings.available and not setting_failure else 1
 
     if sub == "add":
         path = os.path.abspath(args.project)

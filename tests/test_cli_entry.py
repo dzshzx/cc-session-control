@@ -29,6 +29,8 @@ from cc_session_control.models import (
     BridgeEnv,
     EnvRecord,
     RCProject,
+    RCStartupSettingRead,
+    RCStartupSettingState,
     Session,
     SessionProc,
     Status,
@@ -43,7 +45,15 @@ def _settings(
     return ProjectSettingsResult(state, {}, detail)
 
 
-def _project(path: Path, *, status: Status = "stopped") -> RCProject:
+def _project(
+    path: Path,
+    *,
+    status: Status = "stopped",
+    rc_at_startup_setting: RCStartupSettingRead | None = None,
+) -> RCProject:
+    setting = rc_at_startup_setting or RCStartupSettingRead(
+        RCStartupSettingState.MISSING
+    )
     return RCProject(
         name=path.name,
         directory=str(path),
@@ -51,6 +61,7 @@ def _project(path: Path, *, status: Status = "stopped") -> RCProject:
         in_list=False,
         status=status,
         auto_start=False,
+        rc_at_startup_setting=setting,
     )
 
 
@@ -211,6 +222,38 @@ def test_rc_status_empty_and_unavailable_are_distinct(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "Project settings unavailable: malformed: bad json" in captured.err
+
+
+def test_rc_status_reports_project_setting_failure_and_keeps_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    valid = _project(tmp_path / "valid")
+    source = tmp_path / "broken" / ".claude" / "settings.local.json"
+    broken = _project(
+        tmp_path / "broken",
+        rc_at_startup_setting=RCStartupSettingRead(
+            RCStartupSettingState.MALFORMED,
+            source,
+            "bad json",
+        ),
+    )
+    monkeypatch.setattr(
+        rc,
+        "scan_result",
+        lambda: rc.RCScanResult([broken, valid], _settings()),
+    )
+    monkeypatch.setattr(sessions, "scan", lambda: [])
+
+    assert cli.main(["rc", "status"]) == 1
+    captured = capsys.readouterr()
+    assert "valid" in captured.out
+    assert "broken" in captured.out
+    assert broken.directory in captured.err
+    assert str(source) in captured.err
+    assert "malformed" in captured.err
+    assert "bad json" in captured.err
 
 
 def test_rc_add_rejects_missing_and_untrusted_projects(

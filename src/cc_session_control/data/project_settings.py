@@ -11,6 +11,8 @@ from enum import Enum
 from pathlib import Path
 from typing import IO, Any
 
+from ..models import RCStartupSettingRead, RCStartupSettingState
+
 
 class ProjectSettingsState(Enum):
     """Availability of the project map stored in ``~/.claude.json``."""
@@ -124,6 +126,64 @@ def read_project_settings(path: Path) -> ProjectSettingsResult:
                 f"project {project_path!r} has a non-boolean trust flag",
             )
     return ProjectSettingsResult(ProjectSettingsState.AVAILABLE, projects)
+
+
+def _read_rc_at_startup_file(path: Path) -> RCStartupSettingRead:
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return RCStartupSettingRead(RCStartupSettingState.MISSING, path)
+    except OSError as exc:
+        return RCStartupSettingRead(
+            RCStartupSettingState.UNREADABLE,
+            path,
+            str(exc),
+        )
+
+    try:
+        document = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        return RCStartupSettingRead(
+            RCStartupSettingState.MALFORMED,
+            path,
+            str(exc),
+        )
+    if not isinstance(document, dict):
+        return RCStartupSettingRead(
+            RCStartupSettingState.INVALID,
+            path,
+            "top-level JSON value is not an object",
+        )
+    if "remoteControlAtStartup" not in document:
+        return RCStartupSettingRead(RCStartupSettingState.UNSET, path)
+    value = document["remoteControlAtStartup"]
+    if not isinstance(value, bool):
+        return RCStartupSettingRead(
+            RCStartupSettingState.INVALID,
+            path,
+            "'remoteControlAtStartup' is not a boolean",
+        )
+    state = RCStartupSettingState.TRUE if value else RCStartupSettingState.FALSE
+    return RCStartupSettingRead(state, path)
+
+
+def read_rc_at_startup(directory: str | Path) -> RCStartupSettingRead:
+    """Read the effective startup setting without bypassing broken evidence."""
+
+    settings_dir = Path(directory) / ".claude"
+    first_unset: RCStartupSettingRead | None = None
+    for name in ("settings.local.json", "settings.json"):
+        result = _read_rc_at_startup_file(settings_dir / name)
+        if result.state is RCStartupSettingState.MISSING:
+            continue
+        if result.state is RCStartupSettingState.UNSET:
+            if first_unset is None:
+                first_unset = result
+            continue
+        return result
+    if first_unset is not None:
+        return first_unset
+    return RCStartupSettingRead(RCStartupSettingState.MISSING)
 
 
 def _write_failure(

@@ -10,7 +10,6 @@ the path.
 
 from __future__ import annotations
 
-import json
 import os
 import shlex
 import tempfile
@@ -32,6 +31,7 @@ from .project_settings import (
     ProjectSettingsResult,
     SettingWriteResult,
     read_project_settings,
+    read_rc_at_startup,
     write_rc_at_startup,
 )
 from .rc_enabled import EnabledListStore, migrate_lines
@@ -272,22 +272,6 @@ def _window_for(path: str) -> tmux.TmuxWindow | None:
     return None
 
 
-def _read_rc_at_startup(directory: str) -> bool | None:
-    for name in ("settings.local.json", "settings.json"):
-        path = os.path.join(directory, ".claude", name)
-        try:
-            with open(path) as f:
-                document = json.load(f)
-        except (OSError, json.JSONDecodeError, UnicodeError):
-            continue
-        if not isinstance(document, dict):
-            continue
-        value = document.get("remoteControlAtStartup")
-        if isinstance(value, bool):
-            return value
-    return None
-
-
 def set_rc_at_startup(
     directory: str,
     value: bool | None,
@@ -341,7 +325,7 @@ def scan_result() -> RCScanResult:
                 in_list=path in enabled,
                 status=status,
                 auto_start=path in enabled,
-                rc_at_startup=_read_rc_at_startup(path),
+                rc_at_startup_setting=read_rc_at_startup(path),
                 spawn_mode=str(spawn) if spawn else None,
                 dir_exists=dir_exists,
                 trust_decision=decision,

@@ -24,7 +24,13 @@ from cc_session_control.data.project_settings import (
 )
 from cc_session_control.data.refresh import RefreshBatch
 from cc_session_control.data.snapshot import WorldSnapshot
-from cc_session_control.models import RCProject, RCServer, Session
+from cc_session_control.models import (
+    RCProject,
+    RCServer,
+    RCStartupSettingRead,
+    RCStartupSettingState,
+    Session,
+)
 from cc_session_control.views.rc import RCRow, RCView, ServerRow
 from cc_session_control.views.sessions import SessionRow, SessionsView
 
@@ -107,6 +113,14 @@ def _make_project(**overrides):
         status="stopped",
         auto_start=True,
     )
+    if "rc_at_startup" in overrides:
+        value = overrides.pop("rc_at_startup")
+        state = {
+            None: RCStartupSettingState.UNSET,
+            True: RCStartupSettingState.TRUE,
+            False: RCStartupSettingState.FALSE,
+        }[value]
+        overrides["rc_at_startup_setting"] = RCStartupSettingRead(state)
     defaults.update(overrides)
     return RCProject(**defaults)
 
@@ -763,6 +777,26 @@ def test_rc_view_status_bar_counts_use_new_labels():
     assert "自动远控关 2" in text
 
 
+def test_rc_view_status_counts_per_project_setting_failures():
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    _apply_projects(
+        view,
+        [
+            _make_project(
+                rc_at_startup_setting=RCStartupSettingRead(
+                    RCStartupSettingState.MALFORMED,
+                    Path("/project/.claude/settings.local.json"),
+                    "bad json",
+                )
+            )
+        ],
+    )
+
+    assert "自动远控异常 1" in view.status.original_widget.get_text()[0]
+
+
 def test_rc_view_status_exposes_snapshot_ledger_warning():
     from cc_session_control.data import environments
     from cc_session_control.data.snapshot import WorldSnapshot
@@ -1320,6 +1354,22 @@ def test_rc_row_rc_at_startup_tristate():
     assert "关" in _row_text(RCRow(_make_project(rc_at_startup=False)))
 
 
+def test_rc_row_distinguishes_setting_read_failure_from_unset():
+    row = RCRow(
+        _make_project(
+            rc_at_startup_setting=RCStartupSettingRead(
+                RCStartupSettingState.INVALID,
+                Path("/project/.claude/settings.local.json"),
+                "not a boolean",
+            )
+        )
+    )
+
+    text = _row_text(row)
+    assert "读取失败" in text
+    assert "未设置" not in text
+
+
 def test_rc_row_shows_spawn_mode():
     assert "same-dir" in _row_text(RCRow(_make_project(spawn_mode="same-dir")))
 
@@ -1510,6 +1560,45 @@ def test_rc_view_c_key_full_tristate_cycle(monkeypatch):
         _apply_projects(view, [_make_project(name="p", rc_at_startup=start)])
         view.handle_key("c")
         assert writes[-1] is expected
+
+
+def test_rc_view_c_key_refuses_unavailable_setting_evidence(monkeypatch):
+    import cc_session_control.views.rc as rc_view_mod
+
+    writes = []
+    monkeypatch.setattr(
+        rc_view_mod.tui_actions.rc,
+        "set_rc_at_startup",
+        lambda directory, value: writes.append(value),
+    )
+    source = Path("/project/.claude/settings.local.json")
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    _apply_projects(
+        view,
+        [
+            _make_project(
+                rc_at_startup_setting=RCStartupSettingRead(
+                    RCStartupSettingState.MALFORMED,
+                    source,
+                    "bad json",
+                )
+            )
+        ],
+    )
+
+    view.handle_key("c")
+
+    assert writes == []
+    assert app._submitted_actions == []
+    assert any(
+        "malformed" in message
+        and str(source) in message
+        and "bad json" in message
+        and "不写入配置" in message
+        for message in app._notifications
+    )
 
 
 # === Post-review fix B: Sessions degraded honesty + cleanup parity ==========

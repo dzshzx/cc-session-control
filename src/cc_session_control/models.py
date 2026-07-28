@@ -6,6 +6,7 @@ import os.path
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Literal
 
 # Single source of truth for RC status values. The Chinese display labels
@@ -20,6 +21,44 @@ class TrustDecision(Enum):
     TRUSTED = "trusted"
     UNTRUSTED = "untrusted"
     UNAVAILABLE = "unavailable"
+
+
+class RCStartupSettingState(Enum):
+    """Effective per-project ``remoteControlAtStartup`` read state."""
+
+    TRUE = "true"
+    FALSE = "false"
+    UNSET = "unset"
+    MISSING = "missing"
+    UNREADABLE = "unreadable"
+    MALFORMED = "malformed"
+    INVALID = "invalid"
+
+
+@dataclass(frozen=True)
+class RCStartupSettingRead:
+    """Typed evidence for one effective per-project startup setting."""
+
+    state: RCStartupSettingState
+    source: Path | None = None
+    detail: str = ""
+
+    @property
+    def value(self) -> bool | None:
+        if self.state is RCStartupSettingState.TRUE:
+            return True
+        if self.state is RCStartupSettingState.FALSE:
+            return False
+        return None
+
+    @property
+    def available(self) -> bool:
+        return self.state in {
+            RCStartupSettingState.TRUE,
+            RCStartupSettingState.FALSE,
+            RCStartupSettingState.UNSET,
+            RCStartupSettingState.MISSING,
+        }
 
 
 @dataclass
@@ -139,7 +178,9 @@ class RCProject:
     in_list: bool
     status: Status
     auto_start: bool
-    rc_at_startup: bool | None = None  # per-project remoteControlAtStartup override
+    rc_at_startup_setting: RCStartupSettingRead = field(
+        default_factory=lambda: RCStartupSettingRead(RCStartupSettingState.MISSING)
+    )
     spawn_mode: str | None = None  # per-project remoteControlSpawnMode (None=unset)
     # False when the workspace directory is gone but claude.json / rc-enabled
     # still reference the project — shown as 缺失, start-ops refused.
@@ -152,6 +193,12 @@ class RCProject:
                 TrustDecision.TRUSTED if self.trusted else TrustDecision.UNTRUSTED
             )
         self.trusted = self.trust_decision is TrustDecision.TRUSTED
+
+    @property
+    def rc_at_startup(self) -> bool | None:
+        """Compatibility view of the typed per-project settings evidence."""
+
+        return self.rc_at_startup_setting.value
 
 
 @dataclass

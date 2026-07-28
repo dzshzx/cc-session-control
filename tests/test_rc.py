@@ -14,7 +14,7 @@ from cc_session_control.config import cfg
 from cc_session_control.data import proc, rc, rc_environment
 from cc_session_control.data.proc import ProcRC
 from cc_session_control.data.tmux import TmuxWindow
-from cc_session_control.models import RCServer
+from cc_session_control.models import RCServer, RCStartupSettingState
 
 
 def _nul(*argv: str) -> str:
@@ -280,6 +280,34 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
     rows = {p.name: p for p in rc.scan()}
     assert rows["proj"].spawn_mode == "new-window"
     assert rows["other"].spawn_mode is None  # key present, mode unset
+
+
+def test_scan_preserves_per_project_setting_failure_without_fallback(
+    tmp_path,
+    monkeypatch,
+):
+    project = tmp_path / "project"
+    settings_dir = project / ".claude"
+    settings_dir.mkdir(parents=True)
+    local = settings_dir / "settings.local.json"
+    local.write_text("{broken")
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"remoteControlAtStartup": True})
+    )
+    claude_json = _write_claude_json(
+        tmp_path,
+        {str(project): {"hasTrustDialogAccepted": True}},
+    )
+    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
+    monkeypatch.setattr(rc, "list_enabled", lambda: [])
+    monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
+
+    [row] = rc.scan_result().projects
+
+    assert row.rc_at_startup_setting.state is RCStartupSettingState.MALFORMED
+    assert row.rc_at_startup_setting.source == local
+    assert row.rc_at_startup is None
 
 
 def test_order_by_activity_recent_first_never_active_sink():
