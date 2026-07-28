@@ -1,6 +1,14 @@
 ---
 name: claude-session-doctor
-description: Diagnose and rescue local Claude Code sessions via csctl — list live sessions, fix "/resume can't find it or rejects it", and print the exact resume command for any past session across directories. Use when a Claude session can't be resumed or found, /resume is rejected or shows nothing useful, the user asks which sessions are running, wants to reattach/接回/接管 a session, or is confused by bg agent / daemon / bridge / remote-control behavior. Triggers: 会话找不到, 接回会话, 串会话, 会话好乱, /resume 不行, resume 被拒, 哪些会话在跑, can't resume, session not showing.
+description: >-
+  Diagnose and rescue local Claude Code sessions via csctl: list live
+  sessions, fix resume lookup/rejection problems, and print the exact resume
+  command for past sessions across directories. Use when a Claude session
+  cannot be resumed or found, /resume is rejected or unhelpful, the user asks
+  which sessions are running, wants to reattach/接回/接管 a session, or is
+  confused by bg agent, daemon, bridge, or remote-control behavior. Triggers:
+  会话找不到, 接回会话, 串会话, 会话好乱, /resume 不行, resume 被拒,
+  哪些会话在跑, can't resume, session not showing.
 ---
 
 # Claude Session Doctor (csctl)
@@ -25,7 +33,11 @@ csctl          # 三个 tab（tmux-first，启动落在项目 tab）：项目（
 | **remote-control / bridge** | `claude --remote-control` 或 claude.ai 网页控制本机会话（transcript 带 `bridge-session` + `cse_` 云中继，**计算仍在本机**） | `claude agents` + 网页 |
 | **bg agent** | detach 残留 / fleet 视图派生 / SDK 子 agent | `claude agents` (kind=background) |
 
-**唯一权威判活 = `claude agents --json`**（`ps` 会骗你）。已结束 / blocked 的后台会话仍会被 `claude agents` 列出但 pid 为空——判活要看 pid 是否非空。bg agent 把 daemon 钉住是正常的，跑完自动放。
+**会话与后台 agent 的判活以 csctl 的组合结果为准**：它合并
+`claude agents --json`、session/job registry 与 `/proc`，并用进程存在性清除
+已经死亡但仍被 CLI 列出的 pid。Project RC Server 不出现在
+`claude agents --json`，只能在 Linux/WSL 通过 `/proc` 识别；没有 `/proc`
+时破坏性操作会降级拒绝。bg agent 把 daemon 钉住是正常的，跑完自动放。
 
 ## 看现在有哪些会话/后台 agent 在跑
 
