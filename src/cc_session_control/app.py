@@ -251,10 +251,10 @@ class App:
     def exit_with(self, intent: ExitIntent) -> None:
         """Exit the MainLoop carrying a `session_ops.ExitIntent`.
 
-        Views construct the intent (they know the verb); `cli._cmd_tui` calls
-        `intent.run()` after the loop ends — resume must exec OUTSIDE urwid, so
-        the finalizer cannot run here. App stays variant-agnostic: adding a
-        resume variant touches only the intent class + the view key handler.
+        Views construct the intent (they know the verb); the CLI TUI handler
+        calls `intent.run()` after the loop ends — resume must exec OUTSIDE
+        urwid, so the finalizer cannot run here. App stays variant-agnostic:
+        adding a resume variant touches only the intent class + view key handler.
         """
         self._exit(intent)
 

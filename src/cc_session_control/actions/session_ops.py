@@ -193,9 +193,9 @@ def do_tmux_new(directory: str) -> str | None:
 #
 # The TUI cannot run `claude` (or replace itself with tmux) inside the urwid
 # loop, so a resume-family action exits the MainLoop carrying ONE of these
-# intents and `cli._cmd_tui` calls `intent.run()` afterwards. Each intent owns
-# its own finalizer + failure messages, so adding a variant means adding one
-# class here + one view call — app.py and cli.py stay untouched.
+# intents and the CLI TUI handler calls `intent.run()` afterwards. Each
+# intent owns its own finalizer + failure messages, so adding a variant means
+# adding one class here + one view call — app.py and cli.py stay untouched.
 
 class ExitIntent:
     """What a view asks csctl to do AFTER the MainLoop exits."""

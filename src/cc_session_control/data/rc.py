@@ -86,6 +86,32 @@ class StartManyResult:
     failed: int = 0
 
 
+class StopState(Enum):
+    """Observable outcome of stopping one managed project RC server."""
+
+    STOPPED = "stopped"
+    NOT_RUNNING = "not-running"
+    TMUX_FAILED = "tmux-failed"
+
+
+@dataclass(frozen=True)
+class StopResult:
+    state: StopState
+    path: str
+
+    @property
+    def success(self) -> bool:
+        return self.state is StopState.STOPPED
+
+
+@dataclass(frozen=True)
+class RemoveResult:
+    """Enabled-list mutation plus the independent managed-window outcome."""
+
+    list_removed: bool
+    stop: StopResult
+
+
 def _legacy_workspace_root() -> str:
     """FROZEN pre-0.7.3 workspace detection — rc-enabled migration ONLY.
 
@@ -135,8 +161,8 @@ def list_add(path: str) -> None:
     _enabled_store().add(path)
 
 
-def list_rm(path: str) -> None:
-    _enabled_store().remove(path)
+def list_rm(path: str) -> bool:
+    return _enabled_store().remove(path)
 
 
 def toggle_autostart(path: str) -> bool:
@@ -471,20 +497,34 @@ def start_one(path: str) -> bool:
     return start_one_result(path).success
 
 
-def stop_one(path: str) -> bool:
+def stop_one_result(path: str) -> StopResult:
     win = _window_for(path)
     if win is None:
-        return False
+        return StopResult(StopState.NOT_RUNNING, path)
     stopped = tmux.kill_window(win.wid)
     if stopped:
         _environment_ids.invalidate_window(win.wid)
-    return stopped
+        return StopResult(StopState.STOPPED, path)
+    return StopResult(StopState.TMUX_FAILED, path)
+
+
+def stop_one(path: str) -> bool:
+    """Compatibility bool view of ``stop_one_result``."""
+
+    return stop_one_result(path).success
+
+
+def remove_one_result(path: str) -> RemoveResult:
+    """Remove from autostart and retain whether stopping the window failed."""
+
+    list_removed = list_rm(path)
+    return RemoveResult(list_removed, stop_one_result(path))
 
 
 def remove_one(path: str) -> bool:
     """Remove one project from autostart and stop its managed RC window."""
-    list_rm(path)
-    return stop_one(path)
+
+    return remove_one_result(path).stop.success
 
 
 def stop_all() -> bool:

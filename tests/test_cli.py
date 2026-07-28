@@ -7,18 +7,19 @@ the R10 refusal) so they are reachable by a user, not just by the library.
 
 import json
 import os
-import sys
 import time
 import types
 from pathlib import Path
 
 import pytest
 
-from cc_session_control import cli
+from cc_session_control import cli, cli_commands, cli_rc
 from cc_session_control.config import cfg
 from cc_session_control.data import liveness
 from cc_session_control.data import proc as proc_mod
 from cc_session_control.data import registry, sessions
+from cc_session_control.data.liveness import LivenessSnapshot
+from cc_session_control.models import SessionProc
 
 
 def _args(**kw):
@@ -43,8 +44,84 @@ def _stub_scan(monkeypatch):
     # orphan protected-sid set (H1) and reaches `liveness.alive_map`, so stub
     # that too.
     monkeypatch.setattr(sessions, "scan", lambda inputs=None: [])
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: LivenessSnapshot(),
+    )
     monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
     registry.invalidate_cache()
+
+
+def test_prune_default_dry_run_then_apply(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    _stub_scan(monkeypatch)
+    monkeypatch.setattr(proc_mod, "current_determinable", lambda: True)
+
+    assert cli.main(["prune"]) == 0
+    output = capsys.readouterr().out
+    assert "Would prune 0 session(s)" in output
+    assert "Dry run" in output
+
+    assert cli.main(["prune", "--apply"]) == 0
+    output = capsys.readouterr().out
+    assert "Would prune 0 session(s)" in output
+    assert "No session(s) removed." in output
+
+
+def test_prune_sweep_orphans_dry_run_preserves_target(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    _stub_scan(monkeypatch)
+    orphan = tmp_path / "session-env" / "ghost"
+    orphan.mkdir(parents=True)
+    monkeypatch.setattr(proc_mod, "current_determinable", lambda: True)
+
+    assert cli.main(["prune", "--sweep-orphans"]) == 0
+    output = capsys.readouterr().out
+    assert "Would sweep 1 orphan artifact dir(s)" in output
+    assert "Dry run" in output
+    assert orphan.exists()
+
+
+def test_prune_sweep_zombies_dry_run_preserves_target(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    _stub_scan(monkeypatch)
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    target = sessions_dir / "4242.json"
+    target.write_text("{}")
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: LivenessSnapshot(
+            session_procs=(
+                SessionProc(
+                    pid=4242,
+                    sid="dead",
+                    proc_alive=False,
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(proc_mod, "current_determinable", lambda: True)
+
+    assert cli.main(["prune", "--sweep-zombies"]) == 0
+    output = capsys.readouterr().out
+    assert "Would sweep 1 zombie session file(s)" in output
+    assert "Dry run" in output
+    assert target.exists()
 
 
 def test_prune_sweep_aged_dry_run_then_apply(tmp_path, monkeypatch, capsys):
@@ -57,12 +134,12 @@ def test_prune_sweep_aged_dry_run_then_apply(tmp_path, monkeypatch, capsys):
     stamp = time.time() - 40 * 86400
     os.utime(old, (stamp, stamp))
 
-    assert cli._cmd_prune(_args(sweep_aged=True, apply=False)) == 0
+    assert cli_commands.handle_prune(_args(sweep_aged=True, apply=False)) == 0
     out = capsys.readouterr().out
     assert "Would sweep 1 aged" in out
     assert os.path.exists(old)  # dry run keeps it
 
-    assert cli._cmd_prune(_args(sweep_aged=True, apply=True)) == 0
+    assert cli_commands.handle_prune(_args(sweep_aged=True, apply=True)) == 0
     out = capsys.readouterr().out
     assert "Swept 1 aged" in out
     assert not os.path.exists(old)
@@ -79,8 +156,28 @@ def test_prune_sweep_zombies_apply_keeps_alive_and_current(tmp_path, monkeypatch
     monkeypatch.setattr(proc_mod, "current_determinable", lambda: True)
     monkeypatch.setattr(proc_mod, "ancestor_pids", lambda: set())
     monkeypatch.setattr(proc_mod, "pid_alive", lambda pid, ps: pid == 710575)
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: LivenessSnapshot(
+            session_procs=(
+                SessionProc(
+                    pid=700772,
+                    sid="A",
+                    proc_start="700772",
+                    proc_alive=False,
+                ),
+                SessionProc(
+                    pid=710575,
+                    sid="A",
+                    proc_start="710575",
+                    proc_alive=True,
+                ),
+            ),
+        ),
+    )
 
-    assert cli._cmd_prune(_args(sweep_zombies=True, apply=True)) == 0
+    assert cli_commands.handle_prune(_args(sweep_zombies=True, apply=True)) == 0
     out = capsys.readouterr().out
     assert "Swept 1 zombie" in out
     assert not os.path.exists(os.path.join(sessions_dir, "700772.json"))  # dead
@@ -96,9 +193,9 @@ def test_prune_sweep_zombies_refuses_without_proc(tmp_path, monkeypatch, capsys)
 
     monkeypatch.setattr(proc_mod, "current_determinable", lambda: False)
 
-    assert cli._cmd_prune(_args(sweep_zombies=True, apply=True)) == 1
-    out = capsys.readouterr().out
-    assert "Refused" in out
+    assert cli_commands.handle_prune(_args(sweep_zombies=True, apply=True)) == 1
+    captured = capsys.readouterr()
+    assert "Refused" in captured.err
     assert os.path.exists(os.path.join(sessions_dir, "1.json"))  # nothing removed
 
 
@@ -110,7 +207,7 @@ def test_prune_sweep_orphans_reports_real_success(
     orphan = tmp_path / "session-env" / "ghost"
     orphan.mkdir(parents=True)
 
-    status = cli._cmd_prune(_args(sweep_orphans=True, apply=True))
+    status = cli_commands.handle_prune(_args(sweep_orphans=True, apply=True))
     output = capsys.readouterr().out
 
     assert status == 0
@@ -127,11 +224,11 @@ def test_prune_sweep_orphans_refuses_without_proc(
     orphan.mkdir(parents=True)
     monkeypatch.setattr(proc_mod, "current_determinable", lambda: False)
 
-    status = cli._cmd_prune(_args(sweep_orphans=True, apply=True))
-    output = capsys.readouterr().out
+    status = cli_commands.handle_prune(_args(sweep_orphans=True, apply=True))
+    captured = capsys.readouterr()
 
     assert status == 1
-    assert "Refused" in output
+    assert "Refused" in captured.err
     assert orphan.exists()
 
 
@@ -159,14 +256,14 @@ def test_prune_aged_partial_failure_is_visible_and_nonzero(
 
     monkeypatch.setattr(os, "unlink", fail_one)
 
-    status = cli._cmd_prune(_args(sweep_aged=True, apply=True))
-    output = capsys.readouterr().out
+    status = cli_commands.handle_prune(_args(sweep_aged=True, apply=True))
+    captured = capsys.readouterr()
 
     assert status == 1
-    assert "Partial sweep" in output
-    assert "removed 1" in output
-    assert "failed 1" in output
-    assert "permission denied" in output
+    assert "Partial sweep" in captured.err
+    assert "removed 1" in captured.err
+    assert "failed 1" in captured.err
+    assert "permission denied" in captured.err
     assert not good.exists()
     assert bad.exists()
 
@@ -194,30 +291,12 @@ def test_prune_aged_missing_target_is_not_counted_as_swept(
 
     monkeypatch.setattr(os, "unlink", disappear)
 
-    status = cli._cmd_prune(_args(sweep_aged=True, apply=True))
+    status = cli_commands.handle_prune(_args(sweep_aged=True, apply=True))
     output = capsys.readouterr().out
 
     assert status == 0
     assert "already missing 1" in output
     assert "Swept 1 aged" not in output
-
-
-def test_prune_main_propagates_cleanup_failure_exit_status(monkeypatch):
-    monkeypatch.setattr(
-        cli,
-        "_build_parser",
-        lambda: types.SimpleNamespace(
-            parse_args=lambda: _args(command="prune"),
-            error=lambda message: None,
-        ),
-    )
-    monkeypatch.setattr(cli, "_apply_global_flags", lambda args: None)
-    monkeypatch.setattr(cli, "_cmd_prune", lambda args: 1)
-
-    with pytest.raises(SystemExit) as stopped:
-        cli.main()
-
-    assert stopped.value.code == 1
 
 
 def test_env_command_reports_ledger_failure_on_stderr_and_exits_nonzero(
@@ -241,13 +320,10 @@ def test_env_command_reports_ledger_failure_on_stderr_and_exits_nonzero(
 
     monkeypatch.setattr(Path, "open", deny_ledger)
     monkeypatch.setattr(rc, "scan_servers", lambda: [])
-    monkeypatch.setattr(sys, "argv", ["csctl", "env"])
-
-    with pytest.raises(SystemExit) as stopped:
-        cli.main()
+    status = cli.main(["env"])
 
     captured = capsys.readouterr()
-    assert stopped.value.code == 1
+    assert status == 1
     assert "Current bridge environments: 0" in captured.out
     assert "ledger history incomplete" in captured.out
     assert "history denied" in captured.err
@@ -267,7 +343,7 @@ def test_env_command_sends_recoverable_bad_line_warning_to_stderr(
     cfg.environments_ledger.write_text("{broken\n")
     monkeypatch.setattr(rc, "scan_servers", lambda: [])
 
-    status = cli._cmd_env(types.SimpleNamespace())
+    status = cli_commands.handle_env(types.SimpleNamespace())
 
     captured = capsys.readouterr()
     assert status == 0
@@ -278,15 +354,15 @@ def test_env_command_sends_recoverable_bad_line_warning_to_stderr(
 
 def test_theme_flag_sets_cfg(monkeypatch):
     monkeypatch.setattr(cfg, "theme", "auto")
-    args = cli._build_parser().parse_args(["--theme", "light"])
-    cli._apply_global_flags(args)
+    args = cli.build_parser().parse_args(["--theme", "light"])
+    cli.apply_global_flags(args)
     assert cfg.theme == "light"
 
 
 def test_theme_flag_absent_keeps_cfg(monkeypatch):
     monkeypatch.setattr(cfg, "theme", "auto")
-    args = cli._build_parser().parse_args([])
-    cli._apply_global_flags(args)
+    args = cli.build_parser().parse_args([])
+    cli.apply_global_flags(args)
     assert cfg.theme == "auto"
 
 
@@ -301,13 +377,14 @@ def test_rc_add_reports_unavailable_trust_without_calling_it_untrusted(
     claude_json.write_text("{broken")
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
 
-    with pytest.raises(SystemExit) as stopped:
-        cli._cmd_rc(types.SimpleNamespace(rc_command="add", project=str(project)))
+    status = cli_rc.handle_add(
+        types.SimpleNamespace(rc_command="add", project=str(project)),
+    )
 
-    output = capsys.readouterr().out
-    assert stopped.value.code == 1
-    assert "Project settings unavailable" in output
-    assert "Not trusted" not in output
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "Project settings unavailable" in captured.err
+    assert "Not trusted" not in captured.err
 
 
 def test_tui_exit_intent_runs_only_after_main_loop_returns(monkeypatch):
@@ -329,6 +406,6 @@ def test_tui_exit_intent_runs_only_after_main_loop_returns(monkeypatch):
 
     monkeypatch.setattr(app_mod, "App", FakeApp)
 
-    cli._cmd_tui(types.SimpleNamespace())
+    assert cli_commands.handle_tui(types.SimpleNamespace()) == 0
 
     assert events == ["loop", "intent"]
