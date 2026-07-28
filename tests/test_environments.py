@@ -385,7 +385,7 @@ def test_reconcile_read_failure_keeps_current_and_marks_history_incomplete(
         assert source.read() == original
 
 
-def test_reconcile_salvages_good_history_and_exposes_bad_line_warning(
+def test_reconcile_partial_history_keeps_current_without_rewrite_or_orphans(
     tmp_path,
     monkeypatch,
 ):
@@ -401,6 +401,7 @@ def test_reconcile_salvages_good_history_and_exposes_bad_line_warning(
         }
     )
     path.write_text("{broken\n" + valid + "\n")
+    original = path.read_bytes()
     procs = [
         SessionProc(
             pid=1,
@@ -416,10 +417,14 @@ def test_reconcile_salvages_good_history_and_exposes_bad_line_warning(
     )
 
     assert [item.env_id for item in recon.current] == ["session_LIVE"]
-    assert [item.env_id for item in recon.orphans] == ["session_OLD"]
-    assert recon.ledger.state is ledger.LedgerUpdateState.WRITTEN
+    assert recon.orphans == ()
+    assert recon.ledger.state is ledger.LedgerUpdateState.BLOCKED
+    assert recon.ledger.read is not None
+    assert recon.ledger.read.state is ledger.LedgerReadState.PARTIAL
     assert not recon.ledger_history_complete
     assert any("第 1 行" in warning for warning in recon.warnings)
+    assert any("保留原文件" in warning for warning in recon.warnings)
+    assert path.read_bytes() == original
 
 
 def test_reconcile_write_failure_keeps_readable_orphans_and_current(
@@ -497,7 +502,9 @@ def test_missing_ledger_is_safe(tmp_path, monkeypatch):
     assert env.orphan_envs([]) == []
 
 
-def test_corrupt_ledger_lines_skipped(tmp_path, monkeypatch):
+def test_partial_ledger_is_visible_but_not_rewritten_or_classified(
+    tmp_path, monkeypatch
+):
     _use_tmp_ledger(tmp_path, monkeypatch)
     tmp_path.mkdir(parents=True, exist_ok=True)
     path = tmp_path / "environments.jsonl"
@@ -511,14 +518,17 @@ def test_corrupt_ledger_lines_skipped(tmp_path, monkeypatch):
         }
     )
     path.write_text("{not json\n" + good + '\n{"prefix": "", "key": "x"}\n')
+    original = path.read_bytes()
 
-    orphans = env.orphan_envs([])
-    assert [(e.prefix, e.key) for e in orphans] == [("cse", "AAA")]
-    # A later upsert merges cleanly on top of the salvaged entry.
-    env.upsert([EnvRecord("cse", "AAA", "sid-a")], now=9.0)
-    (row,) = _ledger_lines(tmp_path)
-    assert row["first_seen"] == 1.0  # preserved from the salvaged line
-    assert row["last_seen"] == 9.0
+    read = env.read_ledger()
+    assert read.state is ledger.LedgerReadState.PARTIAL
+    assert ("cse", "AAA") in read.entries
+    assert env.orphan_envs([]) == []
+
+    update = env.upsert([EnvRecord("cse", "AAA", "sid-a")], now=9.0)
+
+    assert update.state is ledger.LedgerUpdateState.BLOCKED
+    assert path.read_bytes() == original
 
 
 # --- observe() builder reads registry, not rc ------------------------------

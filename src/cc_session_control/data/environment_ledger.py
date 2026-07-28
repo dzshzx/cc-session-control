@@ -49,6 +49,7 @@ class LedgerUpdateState(Enum):
 
     WRITTEN = "written"
     UNCHANGED = "unchanged"
+    BLOCKED = "blocked"
     FAILED = "failed"
 
 
@@ -83,6 +84,12 @@ class LedgerRead:
     def usable(self) -> bool:
         return self.state is not LedgerReadState.FAILED
 
+    @property
+    def history_complete(self) -> bool:
+        """Whether this read is safe for mutation and orphan classification."""
+
+        return self.state in (LedgerReadState.READY, LedgerReadState.MISSING)
+
 
 @dataclass(frozen=True)
 class LedgerUpdate:
@@ -103,7 +110,10 @@ class LedgerUpdate:
 
     @property
     def success(self) -> bool:
-        return self.state is not LedgerUpdateState.FAILED
+        return self.state in (
+            LedgerUpdateState.WRITTEN,
+            LedgerUpdateState.UNCHANGED,
+        )
 
     @property
     def warnings(self) -> tuple[LedgerWarning, ...]:
@@ -111,7 +121,7 @@ class LedgerUpdate:
 
     @property
     def history_available(self) -> bool:
-        return self.read is not None and self.read.usable
+        return self.read is not None and self.read.history_complete
 
 
 class _LedgerBoundaryError(OSError):
@@ -263,6 +273,13 @@ def update(
     try:
         with _LedgerLock(target.with_name(f"{target.name}.lock")):
             previous = _read(target)
+            if previous.state is LedgerReadState.PARTIAL:
+                return LedgerUpdate(
+                    LedgerUpdateState.BLOCKED,
+                    _copy_entries(previous.entries),
+                    previous,
+                    detail="partial ledger history is unsafe to rewrite",
+                )
             if not previous.usable:
                 return _failed(
                     previous.failure or LedgerFailure.READ,

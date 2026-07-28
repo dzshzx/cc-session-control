@@ -242,6 +242,8 @@ def reconcile(
     available for explicitly partial display, but ledger persistence and orphan
     classification are skipped. A partial membership set can neither add a
     durable record nor prove that a remembered environment became an orphan.
+    Partial ledger history is handled the same way: its salvaged entries and
+    precise warnings remain visible, but it is neither rewritten nor classified.
     """
     file_referenced = observe(
         evidence.session_procs,
@@ -270,7 +272,11 @@ def reconcile(
     )
     return Reconciliation(
         current=tuple(_current_envs(observed, entries)),
-        orphans=tuple(_orphan_envs(file_referenced, entries)),
+        orphans=(
+            tuple(_orphan_envs(file_referenced, entries))
+            if update.history_available
+            else ()
+        ),
         observed=tuple(observed),
         file_referenced=tuple(file_referenced),
         ledger=update,
@@ -292,12 +298,14 @@ def upsert(
 
     Write-on-change ignores `last_seen` (M2): the file is rewritten only when the
     MEMBERSHIP changes (an env added/dropped, a re-bind, a new `first_seen`) or
-    when the on-disk text is not already canonical (corrupt / legacy line cleanup).
-    A pure clock advance on otherwise-identical membership does NOT rewrite, so a
+    when valid on-disk text is not already canonical (legacy line cleanup).
+    Malformed rows block the entire update and preserve the original bytes. A
+    pure clock advance on otherwise-identical membership does NOT rewrite, so a
     steady-state refresh cycle leaves the file (and its mtime) untouched. The
     persisted copy still carries the advanced `last_seen` whenever a real write
     happens. Expected I/O failures are returned as `LedgerUpdateState.FAILED`;
-    programming errors propagate.
+    unsafe partial history is `LedgerUpdateState.BLOCKED`; programming errors
+    propagate.
     """
     return environment_ledger.update(records, now=now)
 
@@ -354,9 +362,10 @@ def orphan_envs(observed: Sequence[EnvRecord]) -> list[BridgeEnv]:
     the manual-delete candidates: csctl cannot deregister a cloud environment, so
     the user removes them on claude.ai/code. Sorted newest-seen first.
     (Inherently incomplete — see the module docstring's red line.)
+    Partial ledger history cannot prove orphanhood and returns no candidates.
     """
     result = read_ledger()
-    if not result.usable:
+    if not result.history_complete:
         return []
     return _orphan_envs(observed, result.entries)
 
@@ -375,8 +384,8 @@ def _orphan_envs(
 
 def _ledger_warnings(update: LedgerUpdate) -> tuple[str, ...]:
     warnings = [
-        f"环境台账第 {warning.line} 行损坏，已跳过：{warning.detail}；"
-        "孤儿历史可能不完整"
+        f"环境台账第 {warning.line} 行损坏：{warning.detail}；"
+        "已保留原文件并停止更新，孤儿历史不可用"
         for warning in update.warnings
     ]
     if update.failure is not None:

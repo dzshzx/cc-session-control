@@ -111,6 +111,32 @@ def test_update_reports_written_then_unchanged_without_rewriting(
     assert path.stat().st_mtime_ns == original_mtime
 
 
+def test_update_partial_history_is_blocked_and_preserves_original_bytes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = _use_ledger_dir(tmp_path, monkeypatch)
+    original = (
+        b"{broken\n"
+        b'{"prefix":"cse","key":"history","bound_sid":"sid-old",'
+        b'"first_seen":1.0,"last_seen":2.0}\n'
+    )
+    path.write_bytes(original)
+
+    result = ledger.update([EnvRecord("session", "new", "sid-new")], now=30.0)
+
+    assert path.read_bytes() == original
+    assert result.state is ledger.LedgerUpdateState.BLOCKED
+    assert not result.success
+    assert result.read is not None
+    assert result.read.state is ledger.LedgerReadState.PARTIAL
+    assert result.warnings[0].line == 1
+    assert ("cse", "history") in result.entries
+    assert not result.history_available
+    assert result.failure is None
+    assert "partial" in result.detail
+
+
 def test_update_read_failure_never_replaces_existing_history(
     tmp_path: Path,
     monkeypatch,

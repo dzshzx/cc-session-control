@@ -642,7 +642,7 @@ def test_env_command_reports_ledger_failure_on_stderr_and_exits_nonzero(
     assert "Warning:" in captured.err
 
 
-def test_env_command_sends_recoverable_bad_line_warning_to_stderr(
+def test_env_command_reports_partial_ledger_as_blocked_and_preserves_bytes(
     tmp_path,
     monkeypatch,
     capsys,
@@ -653,15 +653,18 @@ def test_env_command_sends_recoverable_bad_line_warning_to_stderr(
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
     cfg.config_dir.mkdir()
     cfg.environments_ledger.write_text("{broken\n")
+    original = cfg.environments_ledger.read_bytes()
     monkeypatch.setattr(rc, "scan_servers", lambda: [])
 
     status = cli_commands.handle_env(types.SimpleNamespace())
 
     captured = capsys.readouterr()
-    assert status == 0
+    assert status == 1
     assert "ledger history incomplete" in captured.out
     assert "第 1 行" in captured.err
+    assert "已保留原文件并停止更新，孤儿历史不可用" in captured.err
     assert "Warning:" in captured.err
+    assert cfg.environments_ledger.read_bytes() == original
 
 
 def test_theme_flag_sets_cfg(monkeypatch):
