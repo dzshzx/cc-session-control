@@ -1,36 +1,8 @@
-"""Cleanup strategies for Claude Code's on-disk state (D6/R7).
+"""Preview-first cleanup policy for session-keyed, pid-keyed, and aged state.
 
-Two strategies, both preview-first: `build_plan` freezes the candidate lists
-once per cycle (`CleanupPlan` — the ONE source for the classified counts, the
-preview overlay, and the CLI dry-run), and the matching `execute_*` write
-deletes AT MOST that frozen list, revalidating every item against fresh
-protection data at execution time (删除 ⊆ 预览 — 宁可少删):
-
-- **Strategy A — key-typed orphan sweep.** Key semantics are PER DIRECTORY,
-  never a blanket `uuid == sessionId` rule:
-    * sid-keyed dirs (`session-env`, `file-history`, `tasks`, `uploads`):
-      orphan = an entry whose name (a sessionId) is not in the PROTECTED sid set.
-      That set (H1 safety, `known_sids`) is the union of transcript sids,
-      registry `sessions/<pid>.json` + `jobs/<short>/state.json` sids, live sids
-      (`claude agents --json`, proc-alive, host-alive jobs), and the current
-      session — so the sweep never deletes artifacts of a registry-known, live,
-      or current session/agent even when its transcript was dropped.
-    * pid-keyed dir (`sessions/<pid>.json`): remove only zombies
-      (`not pid_alive`), excluding the current session's pid AND any live pid —
-      for a resumed multi-pid sid we drop the dead pid files but keep the alive
-      one.
-    * `debug/`: its uuids are debug-run ids, NOT sessionIds — never treated as
-      sid-orphans (it is simply not in the sid-keyed set).
-- **Strategy B — age sweep** for non-session-keyed global dirs
-  (`shell-snapshots`, `telemetry`, `plans`, `backups`, `paste-cache`): remove
-  entries with an mtime older than `cfg.cleanup_age_days`.
-
-`jobs/` is deliberately NOT auto-orphan-swept (only Phase 6's explicit per-job
-remove touches it). All paths come from `cfg.*` props — no inline path joins.
-
-R10 safety: when the "current" session can't be determined (no `/proc`),
-destructive execution returns a typed refusal rather than failing open. Strategy
-B is mtime-only and session-agnostic, so it is not gated on `/proc`.
+Execution is bounded by the frozen plan, fresh liveness evidence, and immutable
+removal anchors. `jobs/` remains explicit-delete only; age cleanup is not R10
+gated because it is session-agnostic.
 """
 
 from __future__ import annotations
@@ -44,6 +16,19 @@ from pathlib import Path
 from ..config import cfg
 from ..models import AgentJob, Session, SessionProc
 from . import proc, registry
+from .cleanup_anchors import (
+    PlanAnchors,
+    pin_plan_targets,
+)
+from .cleanup_anchors import (
+    agent_removal_anchors as _agent_removal_anchors,
+)
+from .cleanup_anchors import (
+    entry_anchors as _raw_entry_anchors,
+)
+from .cleanup_anchors import (
+    session_removal_anchors as _session_removal_anchors,
+)
 from .cleanup_liveness import (
     fill_liveness_inputs,
     fresh_liveness_inputs,
@@ -54,10 +39,11 @@ from .removal import (
     CleanupIssue,
     CleanupPlan,
     PathRemoval,
+    RemovalAnchor,
     RemovalStatus,
-)
-from .removal import (
-    remove_path as _remove_path,
+    anchor_path,
+    inspect_anchored,
+    remove_anchored,
 )
 
 # Dirs keyed by full sessionId — orphan = name not in the known sid set.
@@ -70,6 +56,20 @@ _SECONDS_PER_DAY = 86400
 
 def _is_child_name(name: str) -> bool:
     return name not in ("", ".", "..") and os.sep not in name
+
+
+def _entry_anchors(
+    entries: Sequence[str],
+    bases: Mapping[str, str],
+    result: CleanupExecution | None = None,
+) -> dict[str, RemovalAnchor]:
+    try:
+        return _raw_entry_anchors(entries, bases)
+    except OSError as exc:
+        if result is None:
+            raise
+        result.refuse(entries, f"cannot establish removal anchor: {exc}")
+        return {}
 
 
 def _sid_dir_paths() -> list[tuple[str, str]]:
@@ -86,47 +86,48 @@ def _age_dir_paths() -> list[tuple[str, str]]:
     ]
 
 
-def _sid_keyed_paths(sid: str) -> list[str]:
-    """The sid-keyed artifact dirs (session-env/file-history/tasks/uploads)."""
-    return [os.path.join(p, sid) for _, p in _sid_dir_paths()]
-
-
 def _jobs_path(sid: str) -> str:
     """The 8-char-prefixed `jobs/<short>` dir for a session id."""
     return os.path.join(str(cfg.jobs_dir), sid[:8])
 
 
-def _session_artifact_paths(sid: str) -> list[str]:
-    """All on-disk artifact paths owned by one session id (cfg-derived).
-
-    Covers the sid-keyed dirs plus the 8-char-prefixed `jobs/<short>` dir for
-    this session. Used by `remove_agent_artifacts` (whose caller,
-    `agent_ops.remove_job`, has already alive-gated the job). `remove_session`
-    does NOT use this — it guards the `jobs/<short>` path separately so a LIVE
-    agent worker's jobs dir is never deleted (M3).
-    """
-    return _sid_keyed_paths(sid) + [_jobs_path(sid)]
+def agent_removal_anchors(short: str, sid: str) -> tuple[RemovalAnchor, ...]:
+    return _agent_removal_anchors(
+        short,
+        sid,
+        [base for _, base in _sid_dir_paths()],
+        str(cfg.jobs_dir),
+    )
 
 
-def remove_agent_artifacts(short: str, sid: str) -> CleanupExecution:
-    """Delete a settled background agent's `jobs/<short>` dir + sid artifacts.
+def session_removal_anchors(
+    sessions: Sequence[Session],
+) -> dict[str, tuple[RemovalAnchor, ...]]:
+    return _session_removal_anchors(
+        sessions,
+        [base for _, base in _sid_dir_paths()],
+        str(cfg.jobs_dir),
+    )
 
-    Removes `jobs/<short>` plus every sid-keyed artifact path. The typed result
-    retains every filesystem outcome; duplicate job paths are attempted once.
 
-    The CALLER owns the gates: this function assumes the job has already been
-    alive-gated (a LIVE worker must never reach here) and that
-    `proc.current_determinable()` (R10) has already been checked — it only
-    deletes.
-    """
-    job_dir = os.path.join(str(cfg.jobs_dir), short)
+def remove_agent_artifacts(
+    short: str,
+    sid: str,
+    *,
+    anchors: tuple[RemovalAnchor, ...] | None = None,
+) -> CleanupExecution:
+    """Delete an already-liveness-gated agent's job and sid artifacts."""
     result = CleanupExecution()
-    paths = dict.fromkeys([job_dir, *_session_artifact_paths(sid)])
-    for path in paths:
-        result.add_removal(_remove_path(path))
+    try:
+        pinned = anchors if anchors is not None else agent_removal_anchors(short, sid)
+    except OSError as exc:
+        result.refuse([short], f"cannot establish removal anchor: {exc}")
+        return result
+    for anchor in pinned:
+        result.add_removal(remove_anchored(anchor))
     if result.removed and not result.failed:
         result.complete(short)
-    elif not result.removed and not result.failed:
+    elif not result.removed and not result.incomplete:
         result.mark_missing(short)
     return result
 
@@ -141,21 +142,7 @@ def known_sids(
     agents_map: Mapping[str, int | None],
     cur: AbstractSet[int],
 ) -> set[str]:
-    """Sids whose sid-keyed artifacts must NOT be swept (H1 safety) — PURE.
-
-    A sid-keyed dir is an orphan only when its sid is in NONE of these protected
-    sets, so the sweep never deletes artifacts of a registry-known, live, or
-    current session/agent (the old `{s.sid for s in sessions}` dropped no-cwd
-    bg/bridge stubs and ignored the registry + liveness entirely):
-      - transcript scan (`sessions`), incl. the current one
-      - registry `sessions/<pid>.json` sids (`session_procs`)
-      - registry `jobs/<short>/state.json` sids + resume sids (`agent_jobs`)
-      - live per `claude agents --json` (`agents_map`)
-      - proc-alive in `session_procs` (defeats pid reuse)
-      - host-alive agent jobs
-      - the current (csctl-launching) session (`s.current` / pid in `cur`)
-    Inputs injected so it stays unit-testable.
-    """
+    """Return the union of transcript, registry, live, and current sids."""
     known: set[str] = {s.sid for s in sessions}
     known |= {s.sid for s in sessions if s.current}
     known |= {sp.sid for sp in session_procs}
@@ -194,11 +181,7 @@ def list_orphan_dirs(
     agents_map: Mapping[str, int | None] | None = None,
     cur: AbstractSet[int] | None = None,
 ) -> list[str]:
-    """Orphan sid-keyed artifact entries (`<dir>/<sid>`), preview list.
-
-    An entry is an orphan only when its sid is NOT in the protected set (H1).
-    Refuses (returns []) when current can't be determined (R10).
-    """
+    """Preview unprotected sid-keyed entries; return none in R10 degraded mode."""
     if not proc.current_determinable():
         return []
     known = _gather_known(sessions, session_procs, agent_jobs, agents_map, cur)
@@ -219,18 +202,13 @@ def execute_orphan_removals(
     *,
     sessions: list[Session] | None = None,
     known: set[str] | None = None,
+    anchors: Mapping[str, RemovalAnchor] | None = None,
 ) -> CleanupExecution:
-    """Delete AT MOST the previewed orphan entries (`<label>/<sid>`).
-
-    删除 ⊆ 预览 + revalidation: only entries from the frozen preview list are
-    touched, and each sid is re-checked against a FRESH protection set —
-    `known_sids` over `sessions` (pass a freshly scanned transcript list;
-    scanning here would invert the data DAG) plus the self-fetched registry /
-    liveness / current sources — so a sid that became known between preview
-    and confirm is skipped, never the other way around. `known` overrides the
-    assembly entirely (tests). Refuses without `/proc` (R10).
-    """
+    """Remove only anchored preview orphans after fresh protection revalidation."""
     result = CleanupExecution()
+    base_by_label = dict(_sid_dir_paths())
+    if anchors is None:
+        anchors = _entry_anchors(entries, base_by_label, result)
     if not proc.current_determinable():
         result.refuse(list(entries), "current session cannot be determined")
         return result
@@ -245,7 +223,6 @@ def execute_orphan_removals(
             evidence.agents_map,
             evidence.cur,
         )
-    base_by_label = dict(_sid_dir_paths())
     for entry in entries:
         label, _, sid = entry.partition("/")
         base = base_by_label.get(label)
@@ -255,7 +232,11 @@ def execute_orphan_removals(
         if sid in known:
             result.skip(entry, "session is now protected")
             continue
-        removal = _remove_path(os.path.join(base, sid))
+        anchor = anchors.get(entry)
+        if anchor is None:
+            result.refuse([entry], "removal anchor is missing from preview")
+            continue
+        removal = remove_anchored(anchor)
         result.add_removal(removal)
         if removal.status is RemovalStatus.REMOVED:
             result.complete(entry)
@@ -271,17 +252,7 @@ def select_zombie_pids(
     session_procs: Sequence[SessionProc],
     cur: AbstractSet[int],
 ) -> list[int]:
-    """Removable `sessions/<pid>.json` pids — PURE (no IO), for unit tests.
-
-    A pid file is removable iff its proc is CONFIRMED dead (`proc_alive is
-    False` — the injected verdict) and the pid is neither the current session's
-    nor a live one. For a resumed multi-pid sid this returns only the dead
-    pid(s); the live pid's file is kept because its injected `proc_alive` is
-    True. An UNINJECTED row (`proc_alive is None` — raw registry parse that
-    never went through `liveness.live_session_procs`) is refused, not treated
-    as dead: misusing this with raw rows must fail safe (delete nothing), not
-    classify every session file as a zombie.
-    """
+    """Select confirmed-dead, non-current pids; uninjected verdicts stay safe."""
     out: list[int] = []
     for sp in session_procs:
         if sp.pid in cur:  # current session's pid file — protected
@@ -297,14 +268,22 @@ def execute_zombie_removals(
     *,
     session_procs: list[SessionProc] | None = None,
     cur: set[int] | None = None,
+    anchors: Mapping[int, RemovalAnchor] | None = None,
 ) -> CleanupExecution:
-    """Delete AT MOST the previewed zombie `sessions/<pid>.json` files.
-
-    Each pid is re-selected against FRESH liveness (`session_procs`/`cur`
-    self-fetched when None) — a pid that came back alive (or became current)
-    between preview and confirm is skipped. Refuses without `/proc` (R10).
-    """
+    """Remove anchored preview zombies after fresh liveness revalidation."""
     result = CleanupExecution()
+    if anchors is None:
+        try:
+            anchors = {
+                pid: anchor_path(
+                    cfg.sessions_dir,
+                    cfg.sessions_dir / f"{pid}.json",
+                )
+                for pid in pids
+            }
+        except OSError as exc:
+            result.refuse(pids, f"cannot establish removal anchor: {exc}")
+            return result
     if not proc.current_determinable():
         result.refuse(list(pids), "current session cannot be determined")
         return result
@@ -322,7 +301,11 @@ def execute_zombie_removals(
         if pid not in still_zombie:
             result.skip(pid, "session process is now live or current")
             continue
-        removal = _remove_path(os.path.join(str(cfg.sessions_dir), f"{pid}.json"))
+        anchor = anchors.get(pid)
+        if anchor is None:
+            result.refuse([pid], "removal anchor is missing from preview")
+            continue
+        removal = remove_anchored(anchor)
         result.add_removal(removal)
         if removal.status is RemovalStatus.REMOVED:
             result.complete(pid)
@@ -358,39 +341,41 @@ def list_aged_entries(now: float | None = None) -> list[str]:
 
 
 def execute_aged_removals(
-    entries: list[str], now: float | None = None
+    entries: list[str],
+    now: float | None = None,
+    *,
+    anchors: Mapping[str, RemovalAnchor] | None = None,
 ) -> CleanupExecution:
-    """Delete AT MOST the previewed aged entries (`<label>/<name>`).
-
-    Each entry's mtime is re-checked against the cutoff at execution time — an
-    entry touched since the preview is skipped; entries that newly aged past
-    the cutoff are NOT added (删除 ⊆ 预览). Mtime-only, so not R10-gated.
-    """
+    """Remove anchored preview entries still older than the cutoff."""
     cutoff = _age_cutoff(time.time() if now is None else now)
     base_by_label = dict(_age_dir_paths())
     result = CleanupExecution()
+    if anchors is None:
+        anchors = _entry_anchors(entries, base_by_label, result)
     for entry in entries:
         label, _, name = entry.partition("/")
         base = base_by_label.get(label)
         if not base or not _is_child_name(name):
             result.skip(entry, "not a previewable aged-entry path")
             continue
-        full = os.path.join(base, name)
-        try:
-            if os.lstat(full).st_mtime >= cutoff:
-                result.skip(entry, "entry is no longer old enough")
-                continue
-        except FileNotFoundError:
-            result.add_removal(PathRemoval(Path(full), RemovalStatus.MISSING))
-            result.mark_missing(entry)
+        anchor = anchors.get(entry)
+        if anchor is None:
+            result.refuse([entry], "removal anchor is missing from preview")
             continue
-        except OSError as exc:
-            result.add_removal(PathRemoval(Path(full), RemovalStatus.FAILED, str(exc)))
+        inspection = inspect_anchored(anchor)
+        if isinstance(inspection, PathRemoval):
+            result.add_removal(inspection)
+            if inspection.status is RemovalStatus.MISSING:
+                result.mark_missing(entry)
             continue
-        result.add_removal(_remove_path(full))
-        if result.removals[-1].status is RemovalStatus.REMOVED:
+        if inspection.st_mtime >= cutoff:
+            result.skip(entry, "entry is no longer old enough")
+            continue
+        removal = remove_anchored(anchor)
+        result.add_removal(removal)
+        if removal.status is RemovalStatus.REMOVED:
             result.complete(entry)
-        elif result.removals[-1].status is RemovalStatus.MISSING:
+        elif removal.status is RemovalStatus.MISSING:
             result.mark_missing(entry)
     return result
 
@@ -436,42 +421,38 @@ def _session_is_protected(
 
 
 def _remove_session_paths(
-    session: Session, session_procs: list[SessionProc]
+    session: Session,
+    session_procs: list[SessionProc],
+    anchors: tuple[RemovalAnchor, ...],
 ) -> CleanupExecution:
     result = CleanupExecution()
-    paths: list[str] = []
-    if session.file:
-        paths.append(session.file)
-        if session.file.endswith(".jsonl"):
-            paths.append(session.file[:-6])
-    paths.extend(_sid_keyed_paths(session.sid))
-    for path in dict.fromkeys(paths):
-        result.add_removal(_remove_path(path))
-
     _, host_alive = registry.host_pid_for_sid(session.sid, session_procs)
-    if host_alive:
-        result.skip(_jobs_path(session.sid), "background agent is live")
-    else:
-        result.add_removal(_remove_path(_jobs_path(session.sid)))
+    jobs_target = Path(os.path.abspath(_jobs_path(session.sid)))
+    for anchor in anchors:
+        if anchor.configured_target == jobs_target and host_alive:
+            result.skip(jobs_target, "background agent is live")
+            continue
+        result.add_removal(remove_anchored(anchor))
     if result.removed and not result.failed:
         result.complete(session.sid)
-    elif not result.removed and not result.failed:
+    elif not result.removed and not result.incomplete:
         result.mark_missing(session.sid)
     return result
 
 
-def remove_session(s: Session) -> CleanupExecution:
-    """Delete one session: its `.jsonl`, companion dir, and sid artifacts.
-
-    Refuses when current can't be determined (R10) — without
-    `/proc` we cannot prove `s` is not the launching session.
-
-    M3: the `jobs/<short>` dir is removed ONLY when the sid has no LIVE host pid,
-    so a live background worker's jobs dir is protected exactly like
-    `agent_ops.remove_job` protects it (do not bypass the jobs/ guard).
-    """
+def remove_session(
+    s: Session,
+    *,
+    anchors: tuple[RemovalAnchor, ...] | None = None,
+) -> CleanupExecution:
+    """Delete anchored session artifacts after fresh R10/M3 protection gates."""
+    result = CleanupExecution()
+    try:
+        pinned = anchors if anchors is not None else session_removal_anchors([s])[s.sid]
+    except OSError as exc:
+        result.refuse([s.sid], f"cannot establish removal anchor: {exc}")
+        return result
     if not proc.current_determinable():
-        result = CleanupExecution()
         result.refuse([s.sid], "current session cannot be determined")
         return result
     evidence = fresh_liveness_inputs()
@@ -481,10 +462,9 @@ def remove_session(s: Session) -> CleanupExecution:
     agents_map = dict(evidence.agents_map)
     cur = set(evidence.cur)
     if _session_is_protected(s, session_procs, agents_map, cur):
-        result = CleanupExecution()
         result.skip(s.sid, "session is now live or current")
         return result
-    return _remove_session_paths(s, session_procs)
+    return _remove_session_paths(s, session_procs, pinned)
 
 
 def execute_session_removals(
@@ -493,15 +473,19 @@ def execute_session_removals(
     session_procs: list[SessionProc] | None = None,
     agents_map: dict[str, int | None] | None = None,
     cur: set[int] | None = None,
+    anchors: Mapping[str, tuple[RemovalAnchor, ...]] | None = None,
 ) -> CleanupExecution:
-    """Delete AT MOST the previewed prunable sessions.
-
-    Each target is revalidated against FRESH liveness (self-fetched when the
-    kwargs are None): a session that came alive or became current between
-    preview and confirm is skipped (删除 ⊆ 预览, 宁可少删). Refuses without
-    `/proc` (R10).
-    """
+    """Remove only anchored preview sessions after fresh liveness revalidation."""
     result = CleanupExecution()
+    if anchors is None:
+        try:
+            anchors = session_removal_anchors(targets)
+        except OSError as exc:
+            result.refuse(
+                [s.sid for s in targets],
+                f"cannot establish removal anchor: {exc}",
+            )
+            return result
     if not proc.current_determinable():
         result.refuse([s.sid for s in targets], "current session cannot be determined")
         return result
@@ -523,7 +507,11 @@ def execute_session_removals(
         if _session_is_protected(s, session_procs, agents_map, cur):
             result.skip(s.sid, "session is now live or current")
             continue
-        result.extend(_remove_session_paths(s, session_procs))
+        pinned = anchors.get(s.sid)
+        if pinned is None:
+            result.refuse([s.sid], "removal anchor is missing from preview")
+            continue
+        result.extend(_remove_session_paths(s, session_procs, pinned))
     return result
 
 
@@ -559,24 +547,50 @@ def build_plan(
 ) -> CleanupPlan:
     """Build the cleanup plan from the shared world data (deps injected)."""
     issues: list[CleanupIssue] = []
+    empty = prune_sessions(sessions, max_prompts=0)
+    short = [s for s in prune_sessions(sessions, max_prompts=2) if s.prompts > 0]
+    candidates = list({s.sid: s for s in [*empty, *short]}.values())
+    orphan_entries: list[str] = _plan_source(
+        "orphan_dirs",
+        lambda: list_orphan_dirs(
+            sessions,
+            session_procs=session_procs,
+            agent_jobs=agent_jobs,
+            agents_map=agents_map,
+            cur=cur,
+        ),
+        issues,
+        [],
+    )
+    zombie_pids: list[int] = select_zombie_pids(session_procs, cur)
+    aged_entries: list[str] = _plan_source(
+        "aged_entries", lambda: list_aged_entries(now), issues, []
+    )
+    pinned: PlanAnchors = _plan_source(
+        "removal_anchors",
+        lambda: pin_plan_targets(
+            candidates,
+            orphan_entries,
+            dict(_sid_dir_paths()),
+            zombie_pids,
+            str(cfg.sessions_dir),
+            aged_entries,
+            dict(_age_dir_paths()),
+            [base for _, base in _sid_dir_paths()],
+            str(cfg.jobs_dir),
+        ),
+        issues,
+        PlanAnchors({}, {}, {}, {}),
+    )
     return CleanupPlan(
-        empty=prune_sessions(sessions, max_prompts=0),
-        short=[s for s in prune_sessions(sessions, max_prompts=2) if s.prompts > 0],
-        orphan_entries=_plan_source(
-            "orphan_dirs",
-            lambda: list_orphan_dirs(
-                sessions,
-                session_procs=session_procs,
-                agent_jobs=agent_jobs,
-                agents_map=agents_map,
-                cur=cur,
-            ),
-            issues,
-            [],
-        ),
-        zombie_pids=select_zombie_pids(session_procs, cur),
-        aged_entries=_plan_source(
-            "aged_entries", lambda: list_aged_entries(now), issues, []
-        ),
+        empty=[s for s in empty if s.sid in pinned.sessions],
+        short=[s for s in short if s.sid in pinned.sessions],
+        orphan_entries=[entry for entry in orphan_entries if entry in pinned.orphans],
+        zombie_pids=[pid for pid in zombie_pids if pid in pinned.zombies],
+        aged_entries=[entry for entry in aged_entries if entry in pinned.aged],
         issues=issues,
+        session_anchors=pinned.sessions,
+        orphan_anchors=pinned.orphans,
+        zombie_anchors=pinned.zombies,
+        aged_anchors=pinned.aged,
     )

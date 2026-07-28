@@ -116,6 +116,11 @@ def remove_job(job: AgentJob) -> CleanupExecution:
     can't be determined (no `/proc`, R10) — destructive, must not run blind.
     """
     result = CleanupExecution()
+    try:
+        anchors = cleanup.agent_removal_anchors(job.short, job.sid)
+    except OSError as exc:
+        result.refuse([job.short], f"cannot establish removal anchor: {exc}")
+        return result
     if not proc.current_determinable():
         result.refuse([job.short], "current session cannot be determined")
         return result
@@ -126,7 +131,7 @@ def remove_job(job: AgentJob) -> CleanupExecution:
     if live is not None and live.alive:
         result.skip(job.short, "background agent is now live")
         return result
-    return cleanup.remove_agent_artifacts(job.short, job.sid)
+    return cleanup.remove_agent_artifacts(job.short, job.sid, anchors=anchors)
 
 
 # --- watch (read-only) --------------------------------------------------------

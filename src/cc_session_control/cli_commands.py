@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import sys
 from argparse import Namespace
+from collections.abc import Mapping
 from typing import TextIO
 
 from .cli_streams import run_with_streams
-from .data.removal import CleanupExecution
+from .data.removal import CleanupExecution, RemovalAnchor
 
 
 def _print_cleanup_execution(
@@ -82,6 +83,7 @@ def _cmd_prune(args: Namespace) -> int:
         execute_orphan_removals,
         execute_session_removals,
         prune_sessions,
+        session_removal_anchors,
     )
     from .data.sessions import scan
 
@@ -136,7 +138,11 @@ def _cmd_prune(args: Namespace) -> int:
         # Deletes AT MOST the listed entries, revalidated against fresh
         # protection data (删除 ⊆ 预览 — same executor as the TUI; `sessions`
         # feeds the transcript tier of the protection set).
-        result = execute_orphan_removals(orphans, sessions=scan())
+        result = execute_orphan_removals(
+            orphans,
+            sessions=scan(),
+            anchors=plan.orphan_anchors,
+        )
         status = _print_cleanup_execution(
             result,
             success="Swept {n} orphan dir(s).",
@@ -145,10 +151,16 @@ def _cmd_prune(args: Namespace) -> int:
         return max(status, plan_status)
 
     if args.sweep_zombies:
-        return max(_cmd_prune_zombies(args, plan.zombie_pids), plan_status)
+        return max(
+            _cmd_prune_zombies(args, plan.zombie_pids, plan.zombie_anchors),
+            plan_status,
+        )
 
     if args.sweep_aged:
-        return max(_cmd_prune_aged(args, plan.aged_entries), plan_status)
+        return max(
+            _cmd_prune_aged(args, plan.aged_entries, plan.aged_anchors),
+            plan_status,
+        )
 
     if not proc.current_determinable():
         print(
@@ -158,13 +170,18 @@ def _cmd_prune(args: Namespace) -> int:
         )
         return 1
     targets = prune_sessions(sessions, max_prompts=args.max_prompts)
+    try:
+        anchors = session_removal_anchors(targets)
+    except OSError as exc:
+        print(f"Refused: cannot establish removal anchors: {exc}", file=sys.stderr)
+        return 1
     print(f"Would prune {len(targets)} session(s) (<={args.max_prompts} prompts)")
 
     if not args.apply:
         print("Dry run. Add --apply to execute.")
         return plan_status
 
-    result = execute_session_removals(targets)
+    result = execute_session_removals(targets, anchors=anchors)
     status = _print_cleanup_execution(
         result,
         success="Pruned {n} session(s).",
@@ -173,7 +190,11 @@ def _cmd_prune(args: Namespace) -> int:
     return max(status, plan_status)
 
 
-def _cmd_prune_zombies(args: Namespace, zombies: list[int] | None = None) -> int:
+def _cmd_prune_zombies(
+    args: Namespace,
+    zombies: list[int] | None = None,
+    anchors: Mapping[int, RemovalAnchor] | None = None,
+) -> int:
     """Strategy A pid-keyed sweep of `sessions/<pid>.json` (R7.1) via the CLI.
 
     Reuses the already-gated `data/cleanup` helpers: `select_zombie_pids` keeps
@@ -200,7 +221,7 @@ def _cmd_prune_zombies(args: Namespace, zombies: list[int] | None = None) -> int
     if not args.apply:
         print("Dry run. Add --apply to execute.")
         return 0
-    result = execute_zombie_removals(zombies)
+    result = execute_zombie_removals(zombies, anchors=anchors)
     return _print_cleanup_execution(
         result,
         success="Swept {n} zombie session file(s).",
@@ -208,7 +229,11 @@ def _cmd_prune_zombies(args: Namespace, zombies: list[int] | None = None) -> int
     )
 
 
-def _cmd_prune_aged(args: Namespace, aged: list[str] | None = None) -> int:
+def _cmd_prune_aged(
+    args: Namespace,
+    aged: list[str] | None = None,
+    anchors: Mapping[str, RemovalAnchor] | None = None,
+) -> int:
     """Strategy B age sweep of time/global-keyed dirs (R7.2) via the CLI.
 
     The age sweep is mtime-only and session-agnostic, so (unlike the zombie
@@ -225,7 +250,7 @@ def _cmd_prune_aged(args: Namespace, aged: list[str] | None = None) -> int:
     if not args.apply:
         print("Dry run. Add --apply to execute.")
         return 0
-    result = execute_aged_removals(aged)
+    result = execute_aged_removals(aged, anchors=anchors)
     return _print_cleanup_execution(
         result,
         success="Swept {n} aged entr(y/ies).",

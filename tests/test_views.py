@@ -1680,7 +1680,7 @@ def test_zombie_sweep_preview_and_confirm(monkeypatch):
 
     view._preview_action = dataclasses.replace(
         view._preview_action,
-        execute=lambda pids, **k: (
+        execute=lambda plan, pids, **k: (
             swept.update(pids=pids) or CleanupExecution(completed=["111"])
         ),
     )
@@ -1726,7 +1726,7 @@ def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
 
     view._preview_action = dataclasses.replace(
         view._preview_action,
-        execute=lambda entries, **k: (
+        execute=lambda plan, entries, **k: (
             swept.update(entries=entries)
             or CleanupExecution(completed=["shell-snapshots/old.sh"])
         ),
@@ -1763,7 +1763,7 @@ def test_cleanup_confirmation_reports_partial_failure(monkeypatch, tmp_path):
         ],
     )
     view._preview_action = dataclasses.replace(
-        view._preview_action, execute=lambda targets: partial
+        view._preview_action, execute=lambda plan, targets: partial
     )
 
     view._confirm_cleanup()

@@ -81,7 +81,7 @@ def test_remove_job_refuses_live(monkeypatch):
     )
     removed_paths = []
     monkeypatch.setattr(
-        ao.cleanup, "_remove_path", lambda p: removed_paths.append(p) or True
+        ao.cleanup, "remove_anchored", lambda p: removed_paths.append(p) or True
     )
     result = ao.remove_job(_make_job())
     assert len(result.skipped) == 1

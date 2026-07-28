@@ -42,12 +42,28 @@ if TYPE_CHECKING:
     from ..app import App
 
 
-def _execute_orphans(entries: list[str]) -> CleanupExecution:
+def _execute_sessions(plan: CleanupPlan, targets: list) -> CleanupExecution:
+    return execute_session_removals(targets, anchors=plan.session_anchors)
+
+
+def _execute_orphans(plan: CleanupPlan, entries: list[str]) -> CleanupExecution:
     """Orphan executor with the FULL fresh protection set: a fresh transcript
     scan feeds `known_sids`' transcript tier (the executor can't scan itself —
     data-DAG), closing the window where a sid's transcript appeared between
     preview and confirm without any registry/live trace."""
-    return execute_orphan_removals(entries, sessions=scan())
+    return execute_orphan_removals(
+        entries,
+        sessions=scan(),
+        anchors=plan.orphan_anchors,
+    )
+
+
+def _execute_zombies(plan: CleanupPlan, pids: list[int]) -> CleanupExecution:
+    return execute_zombie_removals(pids, anchors=plan.zombie_anchors)
+
+
+def _execute_aged(plan: CleanupPlan, entries: list[str]) -> CleanupExecution:
+    return execute_aged_removals(entries, anchors=plan.aged_anchors)
 
 
 def _session_line(target: object) -> str:
@@ -68,7 +84,7 @@ class _CleanupAction:
     gated: bool  # R10-gated (age sweep is not)
     targets: Callable[[CleanupPlan], list]  # frozen preview/exec list
     format_row: Callable[[object], str]  # one preview row per target
-    execute: Callable[[list], CleanupExecution]  # revalidating executor
+    execute: Callable[[CleanupPlan, list], CleanupExecution]
     none_notice: str  # "无…需要清理"
     title_tpl: str  # preview overlay title
     done_tpl: str  # post-confirm notify
@@ -84,7 +100,7 @@ _CLEANUP_ACTIONS: tuple[_CleanupAction, ...] = (
         gated=True,
         targets=lambda p: p.empty,
         format_row=_session_line,
-        execute=execute_session_removals,
+        execute=_execute_sessions,
         none_notice="无空壳会话需要清理",
         title_tpl="将清理 {n} 条空壳会话",
         done_tpl="已清理 {n} 条会话",
@@ -96,7 +112,7 @@ _CLEANUP_ACTIONS: tuple[_CleanupAction, ...] = (
         gated=True,
         targets=lambda p: p.short,
         format_row=_session_line,
-        execute=execute_session_removals,
+        execute=_execute_sessions,
         none_notice="无短会话(≤2提问)需要清理",
         title_tpl="将清理 {n} 条短会话(≤2提问)",
         done_tpl="已清理 {n} 条会话",
@@ -120,7 +136,7 @@ _CLEANUP_ACTIONS: tuple[_CleanupAction, ...] = (
         gated=True,
         targets=lambda p: p.zombie_pids,
         format_row=lambda pid: f"sessions/{pid}.json",
-        execute=execute_zombie_removals,
+        execute=_execute_zombies,
         none_notice="无僵尸会话文件需要清理",
         title_tpl="将清理 {n} 个僵尸会话文件",
         done_tpl="已清理 {n} 个僵尸会话文件",
@@ -132,7 +148,7 @@ _CLEANUP_ACTIONS: tuple[_CleanupAction, ...] = (
         gated=False,
         targets=lambda p: p.aged_entries,
         format_row=str,
-        execute=execute_aged_removals,
+        execute=_execute_aged,
         none_notice="无过期文件需要清理",
         title_tpl="将清理 {n} 个过期项",
         done_tpl="已清理 {n} 个过期项",
@@ -238,10 +254,11 @@ class CleanupMixin:
             else target
             for target in self._preview_targets
         )
+        plan = self._plan
         outcome = self.app.submit_action(
             f"session.cleanup.{action.key}",
             lambda: tui_actions.run_cleanup(
-                action.execute,
+                lambda mutable: action.execute(plan, mutable),
                 targets,
                 action.done_tpl,
             ),

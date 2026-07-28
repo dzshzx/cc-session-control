@@ -287,10 +287,10 @@ def test_prune_aged_partial_failure_is_visible_and_nonzero(
     os.utime(bad, (stamp, stamp))
     original_unlink = os.unlink
 
-    def fail_one(path: str) -> None:
-        if os.fspath(path) == os.fspath(bad):
+    def fail_one(path: str, *, dir_fd: int | None = None) -> None:
+        if os.fspath(path) == bad.name:
             raise PermissionError("permission denied")
-        original_unlink(path)
+        original_unlink(path, dir_fd=dir_fd)
 
     monkeypatch.setattr(os, "unlink", fail_one)
 
@@ -323,11 +323,11 @@ def test_prune_aged_missing_target_is_not_counted_as_swept(
 
     original_unlink = os.unlink
 
-    def disappear(path: str) -> None:
-        if os.fspath(path) == os.fspath(old):
-            original_unlink(path)
+    def disappear(path: str, *, dir_fd: int | None = None) -> None:
+        if os.fspath(path) == old.name:
+            original_unlink(path, dir_fd=dir_fd)
             raise FileNotFoundError(path)
-        original_unlink(path)
+        original_unlink(path, dir_fd=dir_fd)
 
     monkeypatch.setattr(os, "unlink", disappear)
 

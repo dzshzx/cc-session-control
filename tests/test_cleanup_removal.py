@@ -17,9 +17,10 @@ def test_remove_directory_reports_permission_error(tmp_path, monkeypatch):
     target = tmp_path / "locked"
     target.mkdir()
 
-    def refuse(path: str) -> None:
+    def refuse(path: str, *, dir_fd: int | None = None) -> None:
         raise PermissionError("read-only filesystem")
 
+    refuse.avoids_symlink_attacks = True
     monkeypatch.setattr(shutil, "rmtree", refuse)
 
     result = remove_path(target)
@@ -53,8 +54,8 @@ def test_remove_path_reports_missing_when_it_disappears_during_delete(
     target.write_text("data")
     original_unlink = os.unlink
 
-    def disappear(path: str) -> None:
-        original_unlink(path)
+    def disappear(path: str, *, dir_fd: int | None = None) -> None:
+        original_unlink(path, dir_fd=dir_fd)
         raise FileNotFoundError(path)
 
     monkeypatch.setattr(os, "unlink", disappear)
@@ -79,11 +80,12 @@ def test_aged_execution_reports_partial_failure(tmp_path, monkeypatch):
     os.utime(bad, (stamp, stamp))
     original_rmtree = shutil.rmtree
 
-    def fail_one(path: str) -> None:
-        if os.fspath(path) == os.fspath(bad):
+    def fail_one(path: str, *, dir_fd: int | None = None) -> None:
+        if os.fspath(path) == bad.name:
             raise PermissionError("permission denied")
-        original_rmtree(path)
+        original_rmtree(path, dir_fd=dir_fd)
 
+    fail_one.avoids_symlink_attacks = True
     monkeypatch.setattr(shutil, "rmtree", fail_one)
 
     result = cleanup.execute_aged_removals(
@@ -179,11 +181,12 @@ def test_orphan_execution_reports_removed_and_failed_paths(tmp_path, monkeypatch
     bad.mkdir()
     original_rmtree = shutil.rmtree
 
-    def fail_one(path: str) -> None:
-        if os.fspath(path) == os.fspath(bad):
+    def fail_one(path: str, *, dir_fd: int | None = None) -> None:
+        if os.fspath(path) == bad.name:
             raise PermissionError("permission denied")
-        original_rmtree(path)
+        original_rmtree(path, dir_fd=dir_fd)
 
+    fail_one.avoids_symlink_attacks = True
     monkeypatch.setattr(shutil, "rmtree", fail_one)
 
     result = cleanup.execute_orphan_removals(
@@ -348,7 +351,7 @@ def test_session_execution_refuses_real_malformed_registry_before_removal(
     removed: list[str] = []
     monkeypatch.setattr(
         cleanup,
-        "_remove_path",
+        "remove_anchored",
         lambda target: removed.append(os.fspath(target)),
     )
     registry.invalidate_cache()
@@ -393,7 +396,7 @@ def test_session_execution_refuses_real_agents_nonzero_before_removal(
     removed: list[str] = []
     monkeypatch.setattr(
         cleanup,
-        "_remove_path",
+        "remove_anchored",
         lambda target: removed.append(os.fspath(target)),
     )
     registry.invalidate_cache()

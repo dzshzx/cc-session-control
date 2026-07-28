@@ -300,9 +300,9 @@ def run_cleanup(
 
 def _delete_result(result: CleanupExecution) -> ActionResult:
     message = format_delete_notice(result)
-    if result.completed and not result.failed:
+    if result.completed and not result.incomplete:
         return ActionResult.success(message, needs_refresh=True)
-    if result.removed and result.failed:
+    if result.removed and result.incomplete:
         return ActionResult.partial(message, needs_refresh=True)
     if result.refused or result.skipped:
         return ActionResult.refused(message, needs_refresh=True)

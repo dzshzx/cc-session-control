@@ -55,12 +55,8 @@ def format_delete_notice(result: CleanupExecution) -> str:
     """Summarize deletion of one session or background-agent artifact set."""
     if result.issues and not result.removed:
         return f"判活证据不完整，未删除：{_liveness_issue(result)}"
-    if result.completed and not result.failed:
+    if result.completed and not result.incomplete:
         return "已删除"
-    if result.refused:
-        return f"拒绝删除：{result.refused[0].reason}"
-    if result.skipped:
-        return f"未删除：{result.skipped[0].reason}"
     if result.failed:
         first = result.failed[0]
         suffix = f"：{first.error}" if first.error else ""
@@ -70,4 +66,12 @@ def format_delete_notice(result: CleanupExecution) -> str:
                 f"失败 {len(result.failed)}{suffix}"
             )
         return f"删除失败{suffix}"
+    if result.removed and result.incomplete:
+        return f"删除部分完成：已删除路径 {len(result.removed)}；" + "；".join(
+            _details(result)
+        )
+    if result.refused:
+        return f"拒绝删除：{result.refused[0].reason}"
+    if result.skipped:
+        return f"未删除：{result.skipped[0].reason}"
     return "无可删除内容"

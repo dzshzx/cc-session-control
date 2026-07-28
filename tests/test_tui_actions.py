@@ -108,6 +108,29 @@ def test_cleanup_adapter_reports_partial_and_refused() -> None:
     assert refused_result.message.startswith("已拒绝清理：")
 
 
+def test_delete_adapter_reports_removed_plus_anchor_refusal_as_partial(
+    monkeypatch,
+) -> None:
+    execution = CleanupExecution(completed=["sid-1"])
+    execution.add_removal(PathRemoval(Path("/safe"), RemovalStatus.REMOVED))
+    execution.add_removal(
+        PathRemoval(
+            Path("/changed"),
+            RemovalStatus.REFUSED,
+            "anchored root identity changed after preview",
+        )
+    )
+    monkeypatch.setattr(tui_actions.cleanup, "remove_session", lambda _: execution)
+
+    result = tui_actions.delete_session(
+        tui_actions.SessionRequest.from_session(_session())
+    )
+
+    assert result.status is ActionStatus.PARTIAL
+    assert result.message.startswith("删除部分完成：")
+    assert "anchored root identity changed" in result.message
+
+
 def test_cleanup_adapter_reports_incomplete_liveness_in_chinese() -> None:
     refused = CleanupExecution(
         issues=[
