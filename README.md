@@ -1,6 +1,7 @@
 # cc-session-control
 
-TUI manager for [Claude Code](https://claude.ai/code) sessions and Remote Control.
+tmux-first TUI and headless CLI for [Claude Code](https://claude.ai/code)
+sessions, background agents, and Remote Control.
 
 **CLI command: `csctl`**
 
@@ -18,7 +19,8 @@ Built with [urwid](https://urwid.org/).
 
 - Python 3.12+
 - [Claude Code](https://claude.ai/code) CLI installed and authenticated
-- tmux (for Remote Control management)
+- tmux (the primary session-lifecycle carrier: launch, resume, background, and
+  survive terminal/SSH disconnects; managed Remote Control servers also use it)
 - Linux / WSL (macOS support is partial — `/proc`-based liveness detection is Linux-only)
 
 ## Installation
@@ -66,6 +68,10 @@ csctl rc list            # Show auto-start list
 # Session cleanup
 csctl prune                          # Dry run: show stats
 csctl prune --max-prompts 1 --apply  # Delete sessions with ≤1 prompt
+csctl prune --sweep-orphans          # Dry run: orphan sid-keyed artifact dirs
+csctl prune --sweep-zombies          # Dry run: dead sessions/<pid>.json files
+csctl prune --sweep-aged             # Dry run: age-keyed global entries
+# Add --apply to exactly one of the sweep commands above to execute it.
 
 # Resume rescue (headless): list sessions across directories with
 # ready-to-copy resume commands (native /resume only searches the cwd
@@ -74,6 +80,10 @@ csctl resume                 # Page 1, 20 per page
 csctl resume mybug           # Keyword: sid/cwd/title, then transcript body
 csctl resume --page 2        # Next page
 csctl resume --all           # Everything, no paging
+
+# Read-only inventory
+csctl agents                 # Background agents: state, tempo, name, cwd
+csctl env                    # Current + orphan bridge environments
 
 # Bundled Claude Code skill (session-doctor knowledge for the agent)
 csctl skill install          # Write SKILL.md to ~/.claude/skills/
@@ -91,10 +101,13 @@ csctl --version
 |---|---|---|
 | `CSCTL_RC_SESSION` | `rc` | tmux session name for RC servers |
 | `CSCTL_RC_STAGGER` | `2` | Seconds between starting RC servers |
+| `CSCTL_CLEANUP_AGE_DAYS` | `14` | Minimum age in days for `csctl prune --sweep-aged` (must be an integer ≥ 1) |
 | `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via OSC 11 / `$COLORFGBG`) / `dark` / `light`. tmux typically doesn't answer the OSC 11 query, so inside tmux `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |
 | `XDG_CONFIG_HOME` | `~/.config` | Config directory base |
 
-RC auto-start list is stored at `$XDG_CONFIG_HOME/csctl/rc-enabled`.
+The RC auto-start list is stored at
+`$XDG_CONFIG_HOME/csctl/rc-enabled`; the bridge-environment ledger is stored
+at `$XDG_CONFIG_HOME/csctl/environments.jsonl`.
 
 ## License
 

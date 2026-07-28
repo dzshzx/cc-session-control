@@ -76,7 +76,14 @@ path.
 
 ## Pre-Release Checks
 
-Run these locally before tagging:
+Complete the
+[Claude Code compatibility checklist](claude-code-compatibility.md) before
+tagging. Tier 1 is required for every release. Tier 2 is also required when
+the candidate Claude Code version differs from the last semantic verification,
+or when any command/schema evidence changes. Record the version, date, exit
+statuses, and anything not proved.
+
+Then run the local quality gate:
 
 ```bash
 uv run --extra dev ruff check src tests scripts

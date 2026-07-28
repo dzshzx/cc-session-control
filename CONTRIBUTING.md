@@ -67,4 +67,5 @@ python scripts/bump_version.py --set 1.2.3   # explicit
 python scripts/bump_version.py --show        # print current, no change
 ```
 
-It edits only `__init__.py` and prints the suggested commit + tag commands.
+It edits only `__init__.py` and prints the suggested commit + annotated-tag
+commands.

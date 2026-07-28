@@ -86,7 +86,10 @@ def main(argv: list[str] | None = None) -> int:
         _PATTERN.sub(f'__version__ = "{new}"', text, count=1), encoding="utf-8"
     )
     print(f"{current} -> {new}")
-    print(f"next: git commit -am 'chore: bump version to {new}' && git tag v{new}")
+    print(
+        f"next: git commit -am 'chore: bump version to {new}' && "
+        f"git tag -a v{new} -m 'v{new}'"
+    )
     return 0
 
 
