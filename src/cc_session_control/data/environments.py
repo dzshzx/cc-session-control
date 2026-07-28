@@ -72,7 +72,20 @@ class Reconciliation:
         ),
     )
     ledger_history_complete: bool = True
+    liveness_issues: tuple[liveness.LivenessIssue, ...] = ()
     warnings: tuple[str, ...] = ()
+
+    @property
+    def evidence_complete(self) -> bool:
+        """Whether every liveness source was available for this inventory."""
+
+        return not self.liveness_issues
+
+    @property
+    def success(self) -> bool:
+        """Whether the result is safe to present as a complete inventory."""
+
+        return self.evidence_complete and self.ledger.success
 
 
 # --- observation builder (reads registry + liveness, never rc) -------------
@@ -183,10 +196,9 @@ def observe_live(
 
 
 def reconcile(
-    session_procs: Sequence[SessionProc] | None = None,
-    agent_jobs: Sequence[AgentJob] | None = None,
+    evidence: liveness.LivenessSnapshot,
     rc_servers: Sequence[RCServer] | None = None,
-    max_age: float = 5.0,
+    *,
     now: float | None = None,
 ) -> Reconciliation:
     """THE R6 pipeline, in one place: observe (file-referenced) → `upsert` →
@@ -198,12 +210,35 @@ def reconcile(
     used to be re-established by hand at each call site; here it is an
     implementation detail. Both consumers (`build_world_snapshot` every cycle
     and `csctl env`) call this instead of re-wiring the pieces. Sources are
-    injectable like `observe`/`observe_live` (None → self-read); `rc_servers`
-    is always passed in (this module never imports rc — DAG unchanged).
+    supplied as one typed liveness snapshot; this seam never falls back to the
+    compatibility readers that discard source issues. `rc_servers` is passed in
+    separately because this module never imports rc (the data DAG stays intact).
+
+    Incomplete liveness is fail-closed: partial current observations remain
+    available for explicitly partial display, but ledger persistence and orphan
+    classification are skipped. A partial membership set can neither add a
+    durable record nor prove that a remembered environment became an orphan.
     """
-    file_referenced = observe(session_procs, agent_jobs, rc_servers, max_age=max_age)
+    file_referenced = observe(
+        evidence.session_procs,
+        evidence.agent_jobs,
+        rc_servers,
+    )
+    observed = observe_live(
+        evidence.session_procs,
+        evidence.agent_jobs,
+        rc_servers,
+    )
+    if not evidence.complete:
+        return Reconciliation(
+            current=_current_envs(observed, {}),
+            observed=observed,
+            file_referenced=file_referenced,
+            ledger_history_complete=False,
+            liveness_issues=evidence.issues,
+        )
+
     update = upsert(file_referenced, now=now)
-    observed = observe_live(session_procs, agent_jobs, rc_servers, max_age=max_age)
     entries = update.entries if update.history_available else {}
     ledger_history_complete = (
         update.success and update.history_available and not update.warnings
@@ -215,6 +250,7 @@ def reconcile(
         file_referenced=file_referenced,
         ledger=update,
         ledger_history_complete=ledger_history_complete,
+        liveness_issues=evidence.issues,
         warnings=_ledger_warnings(update),
     )
 

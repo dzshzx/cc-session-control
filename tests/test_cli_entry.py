@@ -16,6 +16,7 @@ from cc_session_control.data import (
     environments,
     liveness,
     rc,
+    registry,
     sessions,
     tmux,
 )
@@ -26,8 +27,10 @@ from cc_session_control.data.project_settings import (
 from cc_session_control.models import (
     AgentJob,
     BridgeEnv,
+    EnvRecord,
     RCProject,
     Session,
+    SessionProc,
     Status,
     TrustDecision,
 )
@@ -68,7 +71,12 @@ def test_main_accepts_argv_and_returns_success(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(sessions, "scan", lambda: [])
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(sessions, "scan", lambda _inputs: [])
 
     assert cli.main(["resume"]) == 0
     assert capsys.readouterr().out == "No matching sessions.\n"
@@ -476,9 +484,14 @@ def test_resume_keyword_page_limit_and_all_reach_public_renderer(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
         sessions,
         "scan",
-        lambda: [
+        lambda _inputs: [
             _session("sid-one", "apple one"),
             _session("sid-two", "apple two"),
             _session("sid-three", "banana"),
@@ -502,6 +515,127 @@ def test_resume_keyword_page_limit_and_all_reach_public_renderer(
     assert "sid-two" in output
     assert "sid-three" not in output
     assert "-- 2 session(s) --" in output
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "expected_source", "expected_path", "expected_detail"),
+    [
+        (
+            "session",
+            "session registry",
+            "sessions/broken.json",
+            "invalid schema",
+        ),
+        (
+            "job",
+            "job registry",
+            "jobs/denied/state.json",
+            "permission denied",
+        ),
+        (
+            "agents",
+            "claude agents --json",
+            "claude agents --json",
+            "invalid JSON",
+        ),
+    ],
+)
+def test_resume_malformed_or_unreadable_liveness_emits_no_actionable_command(
+    source_kind: str,
+    expected_source: str,
+    expected_path: str,
+    expected_detail: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+    monkeypatch.setattr(liveness.proc, "has_proc", lambda: False)
+    monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: set())
+    if source_kind == "session":
+        broken = cfg.sessions_dir / "broken.json"
+        broken.parent.mkdir(parents=True)
+        broken.write_text("{}")
+    elif source_kind == "job":
+        denied = cfg.jobs_dir / "denied" / "state.json"
+        denied.parent.mkdir(parents=True)
+        denied.write_text("{}")
+        original_read = registry._read_document
+
+        def deny_job(path: str) -> object:
+            if path == str(denied):
+                raise PermissionError("permission denied")
+            return original_read(path)
+
+        monkeypatch.setattr(registry, "_read_document", deny_job)
+    agents_stdout = "{bad json" if source_kind == "agents" else "[]"
+    monkeypatch.setattr(
+        liveness.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=agents_stdout,
+            stderr="",
+        ),
+    )
+    actual_inputs = liveness.liveness_inputs
+    snapshots = 0
+    scans = 0
+
+    def capture_evidence() -> liveness.LivenessSnapshot:
+        nonlocal snapshots
+        snapshots += 1
+        return actual_inputs()
+
+    def reject_scan(inputs: liveness.LivenessSnapshot) -> list[Session]:
+        nonlocal scans
+        scans += 1
+        return [_session("unsafe", "must not render")]
+
+    monkeypatch.setattr(liveness, "liveness_inputs", capture_evidence)
+    monkeypatch.setattr(sessions, "scan", reject_scan)
+
+    assert cli.main(["resume"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "liveness evidence is incomplete" in captured.err
+    assert expected_source in captured.err
+    assert expected_path in captured.err
+    assert expected_detail in captured.err
+    assert "claude --resume" not in captured.err
+    assert snapshots == 1
+    assert scans == 0
+
+
+def test_resume_complete_liveness_is_injected_once(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    evidence = liveness.LivenessSnapshot()
+    snapshots = 0
+    injected = []
+
+    def capture_evidence() -> liveness.LivenessSnapshot:
+        nonlocal snapshots
+        snapshots += 1
+        return evidence
+
+    def capture_scan(inputs: liveness.LivenessSnapshot) -> list[Session]:
+        injected.append(inputs)
+        return [_session("safe", "complete evidence")]
+
+    monkeypatch.setattr(liveness, "liveness_inputs", capture_evidence)
+    monkeypatch.setattr(sessions, "scan", capture_scan)
+
+    assert cli.main(["resume"]) == 0
+    captured = capsys.readouterr()
+    assert "claude --resume safe" in captured.out
+    assert captured.err == ""
+    assert snapshots == 1
+    assert injected == [evidence]
 
 
 def test_skill_install_uninstall_and_refusal_use_real_filesystem(
@@ -649,9 +783,14 @@ def test_env_renders_current_and_orphan_results(
     )
     monkeypatch.setattr(rc, "scan_servers", lambda: [])
     monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
         environments,
         "reconcile",
-        lambda **_kwargs: result,
+        lambda _evidence, _servers: result,
     )
 
     assert cli.main(["env"]) == 0
@@ -661,6 +800,63 @@ def test_env_renders_current_and_orphan_results(
     assert "session_current  sid=sid-current" in captured.out
     assert "Orphan environments" in captured.out
     assert "cse_orphan  sid=-" in captured.out
+
+
+def test_env_incomplete_liveness_is_partial_without_orphan_or_ledger_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    environments.upsert(
+        [
+            EnvRecord(
+                prefix="cse",
+                key="OLD",
+                bound_sid="sid-old",
+            ),
+        ],
+        now=1.0,
+    )
+    original = cfg.environments_ledger.read_bytes()
+    evidence = liveness.LivenessSnapshot(
+        session_procs=(
+            SessionProc(
+                pid=1,
+                sid="sid-live",
+                bridge="session_LIVE",
+                proc_alive=True,
+            ),
+        ),
+        issues=(
+            liveness.LivenessIssue(
+                "session registry",
+                "/runtime/sessions/broken.json",
+                "invalid JSON",
+            ),
+        ),
+    )
+    snapshots = 0
+
+    def capture_evidence() -> liveness.LivenessSnapshot:
+        nonlocal snapshots
+        snapshots += 1
+        return evidence
+
+    monkeypatch.setattr(liveness, "liveness_inputs", capture_evidence)
+    monkeypatch.setattr(rc, "scan_servers", lambda: [])
+
+    assert cli.main(["env"]) == 1
+    captured = capsys.readouterr()
+    assert "Current bridge environments (partial): 1" in captured.out
+    assert "session_LIVE  sid=sid-live" in captured.out
+    assert "Orphan environments: unavailable" in captured.out
+    assert "cse_OLD" not in captured.out
+    assert "session registry" in captured.err
+    assert "/runtime/sessions/broken.json" in captured.err
+    assert "invalid JSON" in captured.err
+    assert cfg.environments_ledger.read_bytes() == original
+    assert snapshots == 1
 
 
 def test_no_command_runs_tui_and_handles_no_intent(

@@ -88,8 +88,7 @@ def build_world_snapshot() -> WorldSnapshot:
     # Cheap and safe on the worker thread: the ledger write is write-on-change
     # + flock + compacted, so re-observing the same set is a no-op rewrite.
     recon = environments.reconcile(
-        inputs.session_procs,
-        inputs.agent_jobs,
+        inputs,
         rc_servers,
     )
     return WorldSnapshot(

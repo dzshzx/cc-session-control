@@ -260,11 +260,23 @@ def _cmd_prune_aged(
 
 def _cmd_resume(args: Namespace) -> int:
     from .actions.resume_list import render
+    from .data import liveness
     from .data.sessions import scan
+
+    inputs = liveness.liveness_inputs()
+    if not inputs.complete:
+        for issue in inputs.issues:
+            where = f" ({issue.path})" if issue.path else ""
+            print(
+                "Refused: liveness evidence is incomplete: "
+                f"{issue.source}{where}: {issue.detail}",
+                file=sys.stderr,
+            )
+        return 1
 
     print(
         render(
-            scan(),
+            scan(inputs),
             keyword=args.keyword,
             page=args.page,
             limit=args.limit,
@@ -316,27 +328,39 @@ def _cmd_agents(args: Namespace) -> int:
 
 
 def _cmd_env(args: Namespace) -> int:
-    from .data import environments, rc
+    from .data import environments, liveness, rc
 
     # Scan RC servers so the env_* namespace is covered too (it has no state
     # file — only a running server references it). The whole observe → upsert →
     # classify pipeline (and its ordering invariant) lives in reconcile.
-    recon = environments.reconcile(rc_servers=rc.scan_servers(), max_age=0.0)
+    evidence = liveness.liveness_inputs()
+    recon = environments.reconcile(evidence, rc.scan_servers())
 
-    print(f"Current bridge environments: {len(recon.current)}")
+    current_label = " (partial)" if not recon.evidence_complete else ""
+    print(f"Current bridge environments{current_label}: {len(recon.current)}")
     for e in recon.current:
         print(f"  {e.env_id}  sid={e.bound_sid or '-'}")
 
-    history_note = (
-        " (ledger history incomplete)" if not recon.ledger_history_complete else ""
-    )
-    print(
-        "Orphan environments (delete manually on claude.ai/code): "
-        f"{len(recon.orphans)}{history_note}",
-    )
-    for e in recon.orphans:
-        print(f"  {e.env_id}  sid={e.bound_sid or '-'}")
+    if recon.evidence_complete:
+        history_note = (
+            " (ledger history incomplete)" if not recon.ledger_history_complete else ""
+        )
+        print(
+            "Orphan environments (delete manually on claude.ai/code): "
+            f"{len(recon.orphans)}{history_note}",
+        )
+        for e in recon.orphans:
+            print(f"  {e.env_id}  sid={e.bound_sid or '-'}")
+    else:
+        print("Orphan environments: unavailable (partial liveness evidence)")
 
+    for issue in recon.liveness_issues:
+        where = f" ({issue.path})" if issue.path else ""
+        print(
+            "Warning: environment inventory is partial: "
+            f"{issue.source}{where}: {issue.detail}",
+            file=sys.stderr,
+        )
     for warning in recon.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 
@@ -345,7 +369,7 @@ def _cmd_env(args: Namespace) -> int:
         "the orphan list is inherently incomplete "
         "(environments minted while csctl was not running are not tracked)."
     )
-    return 0 if recon.ledger.success else 1
+    return int(not recon.success)
 
 
 def _cmd_tui(args: Namespace) -> int:

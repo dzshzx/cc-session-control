@@ -14,7 +14,7 @@ from pathlib import Path
 from cc_session_control.config import cfg
 from cc_session_control.data import environment_ledger as ledger
 from cc_session_control.data import environments as env
-from cc_session_control.data import registry
+from cc_session_control.data import liveness, registry
 from cc_session_control.models import AgentJob, EnvRecord, RCServer, SessionProc
 
 
@@ -222,6 +222,43 @@ def test_orphan_split_when_nothing_observed(tmp_path, monkeypatch):
 # --- reconcile: the ONE observe → upsert → classify pipeline ----------------
 
 
+def test_reconcile_incomplete_evidence_never_writes_or_classifies_orphans(
+    monkeypatch,
+):
+    evidence = liveness.LivenessSnapshot(
+        session_procs=(
+            SessionProc(
+                pid=1,
+                sid="sid-live",
+                bridge="session_LIVE",
+                proc_alive=True,
+            ),
+        ),
+        issues=(
+            liveness.LivenessIssue(
+                "session registry",
+                "/runtime/sessions/broken.json",
+                "invalid JSON",
+            ),
+        ),
+    )
+    writes = []
+    monkeypatch.setattr(
+        env,
+        "upsert",
+        lambda records, now=None: writes.append(records),
+    )
+
+    recon = env.reconcile(evidence, [])
+
+    assert writes == []
+    assert recon.evidence_complete is False
+    assert recon.liveness_issues == evidence.issues
+    assert [item.env_id for item in recon.current] == ["session_LIVE"]
+    assert recon.orphans == []
+    assert recon.success is False
+
+
 def test_reconcile_owns_the_order_invariant(tmp_path, monkeypatch):
     # End-to-end R6: a zombie's stale bridge is file-referenced (kept in the
     # ledger, NOT current), an alive session's bridge is current, and an env
@@ -235,7 +272,9 @@ def test_reconcile_owns_the_order_invariant(tmp_path, monkeypatch):
         SessionProc(pid=2, sid="sid-zomb", bridge="session_ZOMB", proc_alive=False),
     ]
 
-    recon = env.reconcile(procs, [], None)
+    recon = env.reconcile(
+        liveness.LivenessSnapshot(session_procs=tuple(procs)),
+    )
 
     assert {(r.prefix, r.key) for r in recon.file_referenced} == {
         ("session", "LIVE"),
@@ -283,7 +322,10 @@ def test_reconcile_read_failure_keeps_current_and_marks_history_incomplete(
         ),
     ]
 
-    recon = env.reconcile(procs, [], None, now=20.0)
+    recon = env.reconcile(
+        liveness.LivenessSnapshot(session_procs=tuple(procs)),
+        now=20.0,
+    )
 
     assert [item.env_id for item in recon.current] == ["session_LIVE"]
     assert recon.orphans == []
@@ -320,7 +362,10 @@ def test_reconcile_salvages_good_history_and_exposes_bad_line_warning(
         ),
     ]
 
-    recon = env.reconcile(procs, [], None, now=20.0)
+    recon = env.reconcile(
+        liveness.LivenessSnapshot(session_procs=tuple(procs)),
+        now=20.0,
+    )
 
     assert [item.env_id for item in recon.current] == ["session_LIVE"]
     assert [item.env_id for item in recon.orphans] == ["session_OLD"]
@@ -351,7 +396,10 @@ def test_reconcile_write_failure_keeps_readable_orphans_and_current(
         ),
     ]
 
-    recon = env.reconcile(procs, [], None, now=20.0)
+    recon = env.reconcile(
+        liveness.LivenessSnapshot(session_procs=tuple(procs)),
+        now=20.0,
+    )
 
     assert [item.env_id for item in recon.current] == ["session_LIVE"]
     assert [item.env_id for item in recon.orphans] == ["session_OLD"]

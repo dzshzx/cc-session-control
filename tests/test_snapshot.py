@@ -19,6 +19,7 @@ from cc_session_control.data.project_settings import (
     ProjectSettingsState,
 )
 from cc_session_control.data.rc_environment import EnvironmentIdCache
+from cc_session_control.data.refresh import RefreshFailure, build_refresh_result
 from cc_session_control.data.tmux import TmuxWindow
 from cc_session_control.models import SessionProc
 
@@ -157,6 +158,43 @@ def test_snapshot_keeps_current_environment_and_carries_ledger_failure(
         "snapshot history denied" in warning
         for warning in snap.environment_reconciliation.warnings
     )
+
+
+def test_incomplete_snapshot_fails_without_mutating_environment_ledger(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    env.upsert([env.EnvRecord("session", "OLD", "sid-old")], now=1.0)
+    original = cfg.environments_ledger.read_bytes()
+    _stub_sources(monkeypatch, [])
+    evidence = liveness.LivenessSnapshot(
+        session_procs=(
+            SessionProc(
+                pid=1,
+                sid="sid-live",
+                bridge="session_PARTIAL",
+                proc_alive=True,
+            ),
+        ),
+        issues=(
+            liveness.LivenessIssue(
+                "job registry",
+                "/runtime/jobs/broken/state.json",
+                "invalid JSON",
+            ),
+        ),
+    )
+    monkeypatch.setattr(snapshot.liveness, "liveness_inputs", lambda: evidence)
+
+    result = build_refresh_result(
+        8,
+        snapshot_builder=snapshot.build_world_snapshot,
+    )
+
+    assert isinstance(result, RefreshFailure)
+    assert "job registry" in result.source
+    assert cfg.environments_ledger.read_bytes() == original
 
 
 def test_snapshot_reconciliation_owns_single_rc_environment_ledger_update(
