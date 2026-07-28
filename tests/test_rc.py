@@ -3,18 +3,18 @@
 Covers the PURE cmdline matcher (`proc._match_rc_cmdline`, AC5), the
 managed-vs-external classification in `rc.scan_servers` (by injecting a fake
 managed-pid set and a fake `/proc` scan — no real `/proc` or tmux is stood up),
-the one-way `env_*` capture into the ledger, and the `remoteControlSpawnMode`
-read on `rc.scan`.
+read-only `env_*` capture, and the `remoteControlSpawnMode` read on `rc.scan`.
 """
 
 from __future__ import annotations
 
 import json
 
+from cc_session_control.config import cfg
 from cc_session_control.data import proc, rc, rc_environment
 from cc_session_control.data.proc import ProcRC
 from cc_session_control.data.tmux import TmuxWindow
-from cc_session_control.models import EnvRecord, RCServer
+from cc_session_control.models import RCServer
 
 
 def _nul(*argv: str) -> str:
@@ -146,11 +146,14 @@ def test_scan_servers_managed_window_without_proc_match(monkeypatch):
     assert servers[0].status == "dead"
 
 
-# --- env_* capture pushed one-way into the ledger --------------------------
+# --- read-only env_* capture ------------------------------------------------
 
 
-def test_scan_servers_captures_env_id_into_ledger(monkeypatch):
-    captured: list[list[EnvRecord]] = []
+def test_scan_servers_captures_env_id_without_ledger_side_effect(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "config_dir", tmp_path)
     targets: list[str] = []
     monkeypatch.setattr(
         rc,
@@ -167,7 +170,6 @@ def test_scan_servers_captures_env_id_into_ledger(monkeypatch):
     monkeypatch.setattr(
         rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")]
     )
-    monkeypatch.setattr(rc.environments, "upsert", lambda recs: captured.append(recs))
 
     cache = rc_environment.EnvironmentIdCache()
     servers = rc.scan_servers(environment_cache=cache)
@@ -176,15 +178,10 @@ def test_scan_servers_captures_env_id_into_ledger(monkeypatch):
     assert servers[0].env_id == "env_abc123XYZ"
     assert next_servers[0].env_id == "env_abc123XYZ"
     assert targets == ["@1"]  # addressed by unique window id, not name
-    assert len(captured) == 2  # cached id still refreshes ledger evidence
-    rec = captured[0][0]
-    assert rec.prefix == "env"
-    assert rec.key == "abc123XYZ"  # suffix only — env_id property reconstructs
-    assert rec.bound_sid is None
+    assert not cfg.environments_ledger.exists()
 
 
-def test_scan_servers_no_env_id_no_upsert(monkeypatch):
-    calls: list[object] = []
+def test_scan_servers_returns_no_env_id_when_capture_has_none(monkeypatch):
     monkeypatch.setattr(
         rc,
         "_tmux_windows",
@@ -194,13 +191,11 @@ def test_scan_servers_no_env_id_no_upsert(monkeypatch):
     monkeypatch.setattr(
         rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")]
     )
-    monkeypatch.setattr(rc.environments, "upsert", lambda recs: calls.append(recs))
 
     servers = rc.scan_servers(
         environment_cache=rc_environment.EnvironmentIdCache(),
     )
     assert servers[0].env_id is None
-    assert calls == []  # no env captured -> ledger untouched
 
 
 def test_start_stop_remove_and_stop_all_invalidate_capture_cache(

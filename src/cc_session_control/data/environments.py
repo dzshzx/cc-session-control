@@ -8,12 +8,11 @@ claude.ai/code — there is NO local deregister, this module never deletes a
 cloud environment.
 
 Design invariants:
-  - **Passive store.** Callers push observations in (`upsert(records)`); this
-    module never reaches up to collect them. It must NOT import `rc`
-    (`environments` is below `rc` in the import DAG; `rc` calls `upsert` one-way
-    in Phase 5 for the `env_*` namespace). `observe()` is a convenience builder
-    that reads the lower-level `registry` (and accepts `env_*` records passed in,
-    never collected here).
+  - **Passive store.** `reconcile()` is the sole production ledger writer; this
+    module never reaches up to collect observations. It must NOT import `rc`
+    (`environments` is below `rc` in the import DAG). `observe()` is a
+    convenience builder that reads the lower-level `registry` and accepts
+    `env_*` records passed in, never collected here.
   - **Two observation tiers.** `observe()` is the bridge-truthy FILE-REFERENCED
     set — what defines ledger MEMBERSHIP (an env exists in the cloud while any
     on-disk file references it, alive or zombie). `observe_live()` alive-gates the

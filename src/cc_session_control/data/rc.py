@@ -20,16 +20,14 @@ from enum import Enum
 
 from ..config import cfg
 from ..models import (
-    EnvRecord,
     RCProject,
     RCServer,
     Session,
     Status,
     TrustDecision,
     effective_trust_decision,
-    split_env_id,
 )
-from . import environments, proc, rc_environment, tmux
+from . import proc, rc_environment, tmux
 from .project_settings import (
     ProjectSettingsResult,
     SettingWriteResult,
@@ -387,8 +385,8 @@ def _capture_env_id(target: str) -> str:
     """Grep an `env_*` cloud id from a managed server's pane output, or "".
 
     The project RC server leaves zero structured footprint; its cloud env id is
-    only printed to stdout (`environment=env_…`). This is the single signal we
-    can capture locally for the ledger.
+    only printed to stdout (`environment=env_…`). This is the single local
+    observation that environment reconciliation can persist.
     """
     return rc_environment.extract_env_id(_tmux_capture_pane(target))
 
@@ -404,10 +402,10 @@ def scan_servers(
     NOT owned by a managed pane. External servers are READ-ONLY (no
     takeover/restart — review gate; sustains the "no auto-restart RC" rule).
 
-    For managed servers the captured `env_*` cloud id is pushed one-way into the
-    ledger via `environments.upsert` (rc → environments only; environments never
-    imports rc). The lower tmux and proc adapters own expected external failures;
-    parser and programming failures stay observable.
+    For managed servers the captured `env_*` cloud id is returned on `RCServer`;
+    this scan is read-only. The caller passes those observations to environment
+    reconciliation, the sole ledger writer. The lower tmux and proc adapters own
+    expected external failures; parser and programming failures stay observable.
     """
     windows = _tmux_windows()
     discovered = proc.scan_rc_servers()
@@ -418,18 +416,12 @@ def scan_servers(
     managed_pid_set = {w.pid for w in windows if w.pid}
 
     servers: list[RCServer] = []
-    env_records: list[EnvRecord] = []
-
     # Managed windows first — tmux is the authority for "managed". Addressed
     # by the server-unique window id, never by the (collision-prone) name.
     for w in windows:
         status: Status = "dead" if w.dead else "running"
         found = by_pid.get(w.pid) if w.pid else None
         env_id = captured_env_ids.get(w.wid, "")
-        if env_id:
-            prefix, key = split_env_id(env_id)
-            if prefix and key:
-                env_records.append(EnvRecord(prefix=prefix, key=key, bound_sid=None))
         servers.append(
             RCServer(
                 name=found.name if found else w.name,
@@ -456,8 +448,6 @@ def scan_servers(
             )
         )
 
-    if env_records:
-        environments.upsert(env_records)
     return servers
 
 

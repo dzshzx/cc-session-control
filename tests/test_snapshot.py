@@ -10,12 +10,16 @@ import json
 from pathlib import Path
 
 from cc_session_control.config import cfg
+from cc_session_control.data import environment_ledger as ledger
 from cc_session_control.data import environments as env
 from cc_session_control.data import liveness, registry, snapshot
+from cc_session_control.data.proc import ProcRC
 from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
+from cc_session_control.data.rc_environment import EnvironmentIdCache
+from cc_session_control.data.tmux import TmuxWindow
 from cc_session_control.models import SessionProc
 
 
@@ -151,6 +155,64 @@ def test_snapshot_keeps_current_environment_and_carries_ledger_failure(
     assert not snap.environment_reconciliation.ledger_history_complete
     assert any(
         "snapshot history denied" in warning
+        for warning in snap.environment_reconciliation.warnings
+    )
+
+
+def test_snapshot_reconciliation_owns_single_rc_environment_ledger_update(
+    monkeypatch,
+):
+    actual_scan_servers = snapshot.rc.scan_servers
+    _stub_sources(monkeypatch, [])
+    monkeypatch.setattr(snapshot.rc, "scan_servers", actual_scan_servers)
+    monkeypatch.setattr(
+        snapshot.rc,
+        "_tmux_windows",
+        lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+    )
+    monkeypatch.setattr(
+        snapshot.rc,
+        "_tmux_capture_pane",
+        lambda target: "environment=env_CAPTURED",
+    )
+    monkeypatch.setattr(
+        snapshot.rc.proc,
+        "scan_rc_servers",
+        lambda: [ProcRC(111, "ws/foo", "/a")],
+    )
+    monkeypatch.setattr(snapshot.rc, "_environment_ids", EnvironmentIdCache())
+
+    failed = ledger.LedgerUpdate(
+        ledger.LedgerUpdateState.FAILED,
+        read=ledger.LedgerRead(ledger.LedgerReadState.MISSING),
+        failure=ledger.LedgerFailure.WRITE,
+        detail="first write failed",
+    )
+    later_success = ledger.LedgerUpdate(
+        ledger.LedgerUpdateState.WRITTEN,
+        read=ledger.LedgerRead(ledger.LedgerReadState.MISSING),
+    )
+    outcomes = iter((failed, later_success))
+    updates = []
+
+    def record_update(records, now=None):
+        updates.append(records)
+        return next(outcomes)
+
+    monkeypatch.setattr(env, "upsert", record_update)
+
+    snap = snapshot.build_world_snapshot()
+
+    assert [
+        [(record.prefix, record.key) for record in records] for records in updates
+    ] == [[("env", "CAPTURED")]]
+    assert snap.rc_servers[0].env_id == "env_CAPTURED"
+    assert [(record.prefix, record.key) for record in snap.file_referenced_envs] == [
+        ("env", "CAPTURED")
+    ]
+    assert snap.environment_reconciliation.ledger is failed
+    assert any(
+        "first write failed" in warning
         for warning in snap.environment_reconciliation.warnings
     )
 
