@@ -169,6 +169,109 @@ def test_tui_terminal_resume_r10_refusal_exits_nonzero_on_stderr(
     assert "process ancestors at /proc: unavailable" in captured.err
 
 
+@pytest.mark.parametrize(
+    ("takeover", "expected_status", "expected_side_effects"),
+    [
+        (
+            session_ops.TakeOverOutcome(
+                session_ops.TakeOverState.REFUSED,
+                "ancestor chain indeterminate",
+            ),
+            1,
+            [],
+        ),
+        (
+            session_ops.TakeOverOutcome(
+                session_ops.TakeOverState.FAILED,
+                "permission denied",
+            ),
+            1,
+            [],
+        ),
+        (
+            session_ops.TakeOverOutcome(session_ops.TakeOverState.KILLED),
+            0,
+            ["chdir:/project", "exec:claude"],
+        ),
+        (
+            session_ops.TakeOverOutcome(session_ops.TakeOverState.GONE),
+            0,
+            ["chdir:/project", "exec:claude"],
+        ),
+    ],
+)
+def test_tui_live_terminal_resume_requires_successful_takeover_before_exec(
+    takeover: session_ops.TakeOverOutcome,
+    expected_status: int,
+    expected_side_effects: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    side_effects: list[str] = []
+    _install_app(
+        monkeypatch,
+        session_ops.ResumeIntent(_session(alive=True, pid=4242)),
+    )
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda *_args: takeover,
+    )
+    monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: True)
+    monkeypatch.setattr(
+        session_ops.os,
+        "chdir",
+        lambda path: side_effects.append(f"chdir:{path}"),
+    )
+    monkeypatch.setattr(
+        session_ops.os,
+        "execvp",
+        lambda file, _args: side_effects.append(f"exec:{file}"),
+    )
+
+    assert cli.main([]) == expected_status
+    assert side_effects == expected_side_effects
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    if takeover.success:
+        assert captured.err == ""
+    else:
+        assert takeover.detail in captured.err
+
+
+def test_tui_live_terminal_resume_without_pid_fails_closed_before_exec(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    side_effects: list[str] = []
+    _install_app(
+        monkeypatch,
+        session_ops.ResumeIntent(_session(alive=True, pid=None)),
+    )
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
+    )
+    monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: True)
+    monkeypatch.setattr(
+        session_ops.os,
+        "chdir",
+        lambda path: side_effects.append(f"chdir:{path}"),
+    )
+    monkeypatch.setattr(
+        session_ops.os,
+        "execvp",
+        lambda file, _args: side_effects.append(f"exec:{file}"),
+    )
+
+    assert cli.main([]) == 1
+    assert side_effects == []
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "live session takeover requires a pid" in captured.err
+
+
 @pytest.mark.parametrize("pid", [4242, None])
 def test_tui_live_tmux_resume_refuses_incomplete_liveness_without_spawn(
     pid: int | None,

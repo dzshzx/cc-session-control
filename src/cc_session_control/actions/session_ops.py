@@ -63,8 +63,8 @@ def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
 
     Results: "killed" (signalled + settled), "gone" (already dead / recycled —
     nothing to kill), "refused" (R10: current undeterminable), "failed"
-    (signal error, e.g. permissions). Fail-fast callers (terminate/stop) treat
-    "failed" as failure; best-effort callers (the resume family) continue.
+    (signal error, e.g. permissions). A required takeover may continue only
+    after "killed" or "gone"; "refused" and "failed" both fail closed.
     """
     ancestors = proc.probe_current_ancestors()
     if not ancestors.complete:
@@ -185,26 +185,34 @@ def _resume_liveness_gate() -> str:
     return "" if evidence.complete else _liveness_issue_detail(evidence)
 
 
+def _required_takeover_failure(s: Session) -> str:
+    """Return empty only when a required live takeover is proven successful."""
+    if s.pid is None:
+        return "live session takeover requires a pid"
+    outcome = take_over_result(s.pid, s.proc_start)
+    if outcome.success:
+        return ""
+    return outcome.detail or f"takeover {outcome.state.value}"
+
+
 def do_resume_result(s: Session, fork: bool = False) -> ResumeOutcome:
-    """chdir + (kill if needed) + exec claude, with a typed refusal outcome.
+    """chdir + (kill if needed) + exec claude, with a typed failure outcome.
 
     R10: when a takeover kill is required but "current" can't be determined (no
     `/proc`), refuse WITHOUT killing or exec'ing, so we never SIGTERM the
-    launching session (every pid looks dead off `/proc`). A successful exec
-    replaces csctl and never returns; True is the modeled-success return for
-    tests whose system boundary returns.
+    launching session (every pid looks dead off `/proc`). A required live
+    takeover without a pid also fails closed. Only KILLED or GONE may proceed
+    to chdir/exec. A successful exec replaces csctl and never returns; True is
+    the modeled-success return for tests whose system boundary returns.
     """
     cwd, args, should_kill = _resume_plan(s, fork)
     if should_kill:
         incomplete = _resume_liveness_gate()
         if incomplete:
             return ResumeOutcome(False, incomplete)
-        if s.pid:
-            takeover = take_over_result(s.pid, s.proc_start)
-            if takeover.state is TakeOverState.REFUSED:
-                return ResumeOutcome(False, takeover.detail)
-            # "gone"/"failed" fall through: the kill is best-effort here, the
-            # resume itself must still happen.
+        takeover_failure = _required_takeover_failure(s)
+        if takeover_failure:
+            return ResumeOutcome(False, takeover_failure)
     if cwd and os.path.isdir(cwd):
         os.chdir(cwd)
     os.execvp("claude", args)
@@ -226,8 +234,8 @@ def _spawn_in_tmux_result(
     tmux-first dispatch verbs, ADR-0001). A fork is a copy (never kills) and
     gets its own `<sid8>-fork` window so it doesn't shadow the original's.
     Returns a typed outcome containing the exact tmux target, or a detail on
-    liveness refusal or tmux failure. "gone"/"failed" takeover results fall
-    through like :func:`do_resume_result` (best-effort kill).
+    liveness, takeover, or tmux failure. A required live takeover must have a
+    pid and return KILLED or GONE before the tmux window may be created.
     """
     _, _, should_kill = _resume_plan(s, fork)
     if should_kill:
@@ -237,10 +245,10 @@ def _spawn_in_tmux_result(
     if should_kill and not s.tmux_inventory_complete:
         detail = s.tmux_inventory_detail or "tmux residency inventory incomplete"
         return TmuxResumeOutcome(None, detail)
-    if should_kill and s.pid:
-        takeover = take_over_result(s.pid, s.proc_start)
-        if takeover.state is TakeOverState.REFUSED:
-            return TmuxResumeOutcome(None, takeover.detail)
+    if should_kill:
+        takeover_failure = _required_takeover_failure(s)
+        if takeover_failure:
+            return TmuxResumeOutcome(None, takeover_failure)
     window = f"{s.sid[:8]}-fork" if fork else s.sid[:8]
     target = tmux.run_in_tmux(tmux.session_name_for(s.cwd), window, cmd)
     detail = "" if target is not None else "tmux unavailable"

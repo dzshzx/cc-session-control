@@ -153,6 +153,105 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
     ]
 
 
+@pytest.mark.parametrize(
+    ("takeover", "expected_status", "expected_spawns"),
+    [
+        (
+            tui_actions.session_ops.TakeOverOutcome(
+                tui_actions.session_ops.TakeOverState.REFUSED,
+                "ancestor chain indeterminate",
+            ),
+            ActionStatus.FAILURE,
+            [],
+        ),
+        (
+            tui_actions.session_ops.TakeOverOutcome(
+                tui_actions.session_ops.TakeOverState.FAILED,
+                "permission denied",
+            ),
+            ActionStatus.FAILURE,
+            [],
+        ),
+        (
+            tui_actions.session_ops.TakeOverOutcome(
+                tui_actions.session_ops.TakeOverState.KILLED,
+            ),
+            ActionStatus.SUCCESS,
+            [("project", "sid-1", "cd /tmp/project && claude --resume sid-1")],
+        ),
+        (
+            tui_actions.session_ops.TakeOverOutcome(
+                tui_actions.session_ops.TakeOverState.GONE,
+            ),
+            ActionStatus.SUCCESS,
+            [("project", "sid-1", "cd /tmp/project && claude --resume sid-1")],
+        ),
+    ],
+)
+def test_live_background_session_requires_successful_takeover_before_spawn(
+    takeover: tui_actions.session_ops.TakeOverOutcome,
+    expected_status: ActionStatus,
+    expected_spawns: list[tuple[str, str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = tui_actions.SessionRequest.from_session(_session())
+    spawn_calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        tui_actions.session_ops.liveness,
+        "liveness_inputs",
+        lambda: tui_actions.session_ops.liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "take_over_result",
+        lambda *_args: takeover,
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops.tmux,
+        "run_in_tmux",
+        lambda tmux_session, window, cmd: (
+            spawn_calls.append((tmux_session, window, cmd)) or "project:4"
+        ),
+    )
+
+    result = tui_actions.background_session(request)
+
+    assert result.status is expected_status
+    assert spawn_calls == expected_spawns
+    if takeover.success:
+        assert result.message == "已转入后台（tmux project:4）"
+    else:
+        assert takeover.detail in result.message
+
+
+def test_live_background_session_without_pid_fails_closed_before_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = tui_actions.SessionRequest.from_session(
+        replace(_session(), pid=None),
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops.liveness,
+        "liveness_inputs",
+        lambda: tui_actions.session_ops.liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops.tmux,
+        "run_in_tmux",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
+    )
+
+    result = tui_actions.background_session(request)
+
+    assert result.status is ActionStatus.FAILURE
+    assert "live session takeover requires a pid" in result.message
+
+
 def test_cleanup_adapter_reports_partial_and_refused() -> None:
     partial = CleanupExecution(
         removals=[
