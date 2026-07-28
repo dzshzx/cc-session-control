@@ -129,9 +129,12 @@ git push origin master --tags
 ```
 
 The `Release` workflow runs on `v*` tags. After the shared quality gate passes,
-it builds the distributions, smoke tests the wheel and source distribution,
-uploads the built artifacts to the workflow run, and publishes to PyPI through
-Trusted Publishing.
+it also verifies that the triggering tag is an exact `vMAJOR.MINOR.PATCH`
+annotated tag, matches the package version, and points to the checked-out
+commit. Only then does it build the distributions, smoke test the wheel and
+source distribution, upload the built artifacts to the workflow run, and
+publish to PyPI through Trusted Publishing. Production publishing has no manual
+workflow trigger; use the manual TestPyPI workflow for dry runs.
 
 ## Post-Release Verification
 

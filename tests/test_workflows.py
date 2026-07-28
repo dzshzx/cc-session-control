@@ -115,35 +115,62 @@ def test_ci_reuses_quality_gate_runs_matrix_and_builds_once() -> None:
     )
 
 
-def test_release_workflows_require_quality_gate_before_publish() -> None:
-    releases = {
-        "release.yml": "publish",
-        "release-testpypi.yml": "publish-testpypi",
+def test_testpypi_requires_quality_gate_before_publish() -> None:
+    workflow = _load("release-testpypi.yml")
+    jobs = workflow["jobs"]
+
+    assert workflow["permissions"] == {"contents": "read"}
+    assert set(jobs) == {"quality-gate", "publish-testpypi"}
+    assert jobs["quality-gate"] == {
+        "permissions": {"contents": "read"},
+        "uses": QUALITY_GATE_USE,
     }
 
-    for workflow_name, publish_job_name in releases.items():
-        workflow = _load(workflow_name)
-        jobs = workflow["jobs"]
-        assert workflow["permissions"] == {"contents": "read"}
-        assert set(jobs) == {"quality-gate", publish_job_name}
-        assert jobs["quality-gate"] == {
-            "permissions": {"contents": "read"},
-            "uses": QUALITY_GATE_USE,
-        }
-
-        publish = jobs[publish_job_name]
-        assert _needs(publish) == {"quality-gate"}
-        assert publish["permissions"] == {
-            "contents": "read",
-            "id-token": "write",
-        }
-        assert "uv build --no-sources" in _run_commands(publish)
+    publish = jobs["publish-testpypi"]
+    assert _needs(publish) == {"quality-gate"}
+    assert publish["permissions"] == {
+        "contents": "read",
+        "id-token": "write",
+    }
+    assert "uv build --no-sources" in _run_commands(publish)
 
 
-def test_release_triggers_cover_tags_and_manual_runs() -> None:
-    release_triggers = _triggers(_load("release.yml"))
-    assert release_triggers["push"]["tags"] == ["v*"]
-    assert "workflow_dispatch" in release_triggers
+def test_production_release_validates_tag_before_publish() -> None:
+    workflow = _load("release.yml")
+    jobs = workflow["jobs"]
+
+    assert workflow["permissions"] == {"contents": "read"}
+    assert set(jobs) == {"quality-gate", "validate-release-tag", "publish"}
+    assert jobs["quality-gate"] == {
+        "permissions": {"contents": "read"},
+        "uses": QUALITY_GATE_USE,
+    }
+
+    validation = jobs["validate-release-tag"]
+    assert validation["permissions"] == {"contents": "read"}
+    assert validation["runs-on"] == "ubuntu-latest"
+    checkout = next(
+        step
+        for step in validation["steps"]
+        if step.get("name") == "Check out repository"
+    )
+    assert checkout["with"]["fetch-depth"] == 0
+    assert any(step.get("name") == "Set up Python" for step in validation["steps"])
+    assert 'python scripts/validate_release_tag.py "$GITHUB_REF_NAME"' in _run_commands(
+        validation
+    )
+
+    publish = jobs["publish"]
+    assert _needs(publish) == {"quality-gate", "validate-release-tag"}
+    assert publish["permissions"] == {
+        "contents": "read",
+        "id-token": "write",
+    }
+    assert "uv build --no-sources" in _run_commands(publish)
+
+
+def test_production_release_is_tag_only_and_testpypi_is_manual() -> None:
+    assert _triggers(_load("release.yml")) == {"push": {"tags": ["v*"]}}
     assert _triggers(_load("release-testpypi.yml")) == {"workflow_dispatch": None}
 
 
