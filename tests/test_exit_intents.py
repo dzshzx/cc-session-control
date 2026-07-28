@@ -124,18 +124,18 @@ def test_tui_attach_exec_failure_exits_nonzero_with_context_on_stderr(
     assert "tmux executable missing" in captured.err
 
 
+@pytest.mark.parametrize("pid", [4242, None])
 def test_tui_terminal_resume_r10_refusal_exits_nonzero_on_stderr(
+    pid: int | None,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _install_app(
-        monkeypatch,
-        session_ops.ResumeIntent(_session(alive=True, pid=4242)),
-    )
-    monkeypatch.setattr(
-        liveness,
-        "liveness_inputs",
-        lambda: liveness.LivenessSnapshot(
+    liveness_calls = 0
+
+    def incomplete_liveness() -> liveness.LivenessSnapshot:
+        nonlocal liveness_calls
+        liveness_calls += 1
+        return liveness.LivenessSnapshot(
             issues=(
                 liveness.LivenessIssue(
                     "process ancestors",
@@ -143,31 +143,18 @@ def test_tui_terminal_resume_r10_refusal_exits_nonzero_on_stderr(
                     "unavailable",
                 ),
             ),
-        ),
+        )
+
+    _install_app(
+        monkeypatch,
+        session_ops.ResumeIntent(_session(alive=True, pid=pid)),
     )
-
-    assert cli.main([]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "Refused: liveness evidence incomplete" in captured.err
-    assert "process ancestors at /proc: unavailable" in captured.err
-
-
-def test_tui_terminal_resume_refuses_incomplete_liveness_without_exec(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    evidence = liveness.LivenessSnapshot(
-        issues=(
-            liveness.LivenessIssue(
-                "process stat",
-                "/proc/42/stat",
-                "permission denied",
-            ),
-        ),
+    monkeypatch.setattr(liveness, "liveness_inputs", incomplete_liveness)
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
     )
-    _install_app(monkeypatch, session_ops.ResumeIntent(_session()))
-    monkeypatch.setattr(liveness, "liveness_inputs", lambda: evidence)
     monkeypatch.setattr(
         session_ops.os,
         "execvp",
@@ -175,26 +162,44 @@ def test_tui_terminal_resume_refuses_incomplete_liveness_without_exec(
     )
 
     assert cli.main([]) == 1
+    assert liveness_calls == 1
     captured = capsys.readouterr()
-    assert "/proc/42/stat" in captured.err
-    assert "permission denied" in captured.err
+    assert captured.out == ""
+    assert "Refused: liveness evidence incomplete" in captured.err
+    assert "process ancestors at /proc: unavailable" in captured.err
 
 
-def test_tui_tmux_resume_refuses_incomplete_liveness_without_spawn(
+@pytest.mark.parametrize("pid", [4242, None])
+def test_tui_live_tmux_resume_refuses_incomplete_liveness_without_spawn(
+    pid: int | None,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    evidence = liveness.LivenessSnapshot(
-        issues=(
-            liveness.LivenessIssue(
-                "process ancestors",
-                "/proc/20/stat",
-                "input/output error",
+    liveness_calls = 0
+
+    def incomplete_liveness() -> liveness.LivenessSnapshot:
+        nonlocal liveness_calls
+        liveness_calls += 1
+        return liveness.LivenessSnapshot(
+            issues=(
+                liveness.LivenessIssue(
+                    "process stat",
+                    "/proc/4242/stat",
+                    "permission denied",
+                ),
             ),
-        ),
+        )
+
+    _install_app(
+        monkeypatch,
+        session_ops.TmuxResumeIntent(_session(alive=True, pid=pid)),
     )
-    _install_app(monkeypatch, session_ops.TmuxResumeIntent(_session()))
-    monkeypatch.setattr(liveness, "liveness_inputs", lambda: evidence)
+    monkeypatch.setattr(liveness, "liveness_inputs", incomplete_liveness)
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
+    )
     monkeypatch.setattr(
         tmux,
         "run_in_tmux",
@@ -202,9 +207,147 @@ def test_tui_tmux_resume_refuses_incomplete_liveness_without_spawn(
     )
 
     assert cli.main([]) == 1
+    assert liveness_calls == 1
     captured = capsys.readouterr()
-    assert "/proc/20/stat" in captured.err
-    assert "input/output error" in captured.err
+    assert captured.out == ""
+    assert captured.err == (
+        "Failed to resume the session inside tmux: "
+        "process stat at /proc/4242/stat: permission denied.\n"
+    )
+
+
+def test_tui_dead_terminal_resume_skips_liveness_and_execs(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class ExecReplaced(BaseException):
+        pass
+
+    exec_calls: list[tuple[str, list[str]]] = []
+
+    def replace_process(file: str, args: list[str]) -> None:
+        exec_calls.append((file, args))
+        raise ExecReplaced
+
+    _install_app(monkeypatch, session_ops.ResumeIntent(_session()))
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: (_ for _ in ()).throw(AssertionError("must not acquire liveness")),
+    )
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
+    )
+    monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: False)
+    monkeypatch.setattr(session_ops.os, "execvp", replace_process)
+
+    with pytest.raises(ExecReplaced):
+        cli.main([])
+
+    assert exec_calls == [("claude", ["claude", "--resume", "resume"])]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_tui_dead_tmux_resume_skips_liveness_and_spawns(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    spawn_calls: list[tuple[str, str, str]] = []
+    enter_calls: list[str] = []
+    _install_app(monkeypatch, session_ops.TmuxResumeIntent(_session()))
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: (_ for _ in ()).throw(AssertionError("must not acquire liveness")),
+    )
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
+    )
+    monkeypatch.setattr(
+        tmux,
+        "run_in_tmux",
+        lambda session, window, cmd: (
+            spawn_calls.append((session, window, cmd)) or "project:7"
+        ),
+    )
+    monkeypatch.setattr(
+        tmux, "select_window", lambda target: enter_calls.append(target)
+    )
+    monkeypatch.setattr(
+        tmux,
+        "switch_client",
+        lambda target: enter_calls.append(target) or True,
+    )
+    monkeypatch.setenv("TMUX", "resident")
+
+    assert cli.main([]) == 0
+    assert spawn_calls == [
+        ("project", "resume", "cd /project && claude --resume resume")
+    ]
+    assert enter_calls == ["project:7", "project:7"]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_tui_live_fork_skips_incomplete_liveness_and_residency(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    spawn_calls: list[tuple[str, str, str]] = []
+    enter_calls: list[str] = []
+    session = _session(
+        alive=True,
+        pid=4242,
+        tmux_inventory_complete=False,
+        tmux_inventory_detail="tmux list-panes unavailable",
+    )
+    _install_app(monkeypatch, session_ops.TmuxResumeIntent(session, fork=True))
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: (_ for _ in ()).throw(AssertionError("must not acquire liveness")),
+    )
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
+    )
+    monkeypatch.setattr(
+        tmux,
+        "run_in_tmux",
+        lambda tmux_session, window, cmd: (
+            spawn_calls.append((tmux_session, window, cmd)) or "project:8"
+        ),
+    )
+    monkeypatch.setattr(
+        tmux, "select_window", lambda target: enter_calls.append(target)
+    )
+    monkeypatch.setattr(
+        tmux,
+        "switch_client",
+        lambda target: enter_calls.append(target) or True,
+    )
+    monkeypatch.setenv("TMUX", "resident")
+
+    assert cli.main([]) == 0
+    assert spawn_calls == [
+        (
+            "project",
+            "resume-fork",
+            "cd /project && claude --resume resume --fork-session",
+        )
+    ]
+    assert enter_calls == ["project:8", "project:8"]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_tui_tmux_resume_refuses_incomplete_residency_without_spawn(
@@ -228,6 +371,11 @@ def test_tui_tmux_resume_refuses_incomplete_residency_without_spawn(
         tmux,
         "run_in_tmux",
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
+    )
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
     )
 
     assert cli.main([]) == 1

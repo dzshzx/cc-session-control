@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
@@ -119,6 +119,38 @@ def test_stop_session_refuses_unknown_proc_probe_without_signal(monkeypatch) -> 
     assert result.status is ActionStatus.REFUSED
     assert "/proc/42/stat" in result.message
     assert "permission denied" in result.message
+
+
+def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) -> None:
+    session = replace(_session(), alive=False, pid=None)
+    request = tui_actions.SessionRequest.from_session(session)
+    spawn_calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        tui_actions.session_ops.liveness,
+        "liveness_inputs",
+        lambda: (_ for _ in ()).throw(AssertionError("must not acquire liveness")),
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops.tmux,
+        "run_in_tmux",
+        lambda tmux_session, window, cmd: (
+            spawn_calls.append((tmux_session, window, cmd)) or "project:4"
+        ),
+    )
+
+    result = tui_actions.background_session(request)
+
+    assert result.status is ActionStatus.SUCCESS
+    assert result.message == "已转入后台（tmux project:4）"
+    assert result.needs_refresh is True
+    assert spawn_calls == [
+        ("project", "sid-1", "cd /tmp/project && claude --resume sid-1")
+    ]
 
 
 def test_cleanup_adapter_reports_partial_and_refused() -> None:

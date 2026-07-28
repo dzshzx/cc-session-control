@@ -194,16 +194,17 @@ def do_resume_result(s: Session, fork: bool = False) -> ResumeOutcome:
     replaces csctl and never returns; True is the modeled-success return for
     tests whose system boundary returns.
     """
-    incomplete = _resume_liveness_gate()
-    if incomplete:
-        return ResumeOutcome(False, incomplete)
     cwd, args, should_kill = _resume_plan(s, fork)
-    if should_kill and s.pid:
-        takeover = take_over_result(s.pid, s.proc_start)
-        if takeover.state is TakeOverState.REFUSED:
-            return ResumeOutcome(False, takeover.detail)
-        # "gone"/"failed" fall through: the kill is best-effort here, the
-        # resume itself must still happen.
+    if should_kill:
+        incomplete = _resume_liveness_gate()
+        if incomplete:
+            return ResumeOutcome(False, incomplete)
+        if s.pid:
+            takeover = take_over_result(s.pid, s.proc_start)
+            if takeover.state is TakeOverState.REFUSED:
+                return ResumeOutcome(False, takeover.detail)
+            # "gone"/"failed" fall through: the kill is best-effort here, the
+            # resume itself must still happen.
     if cwd and os.path.isdir(cwd):
         os.chdir(cwd)
     os.execvp("claude", args)
@@ -228,13 +229,14 @@ def _spawn_in_tmux_result(
     liveness refusal or tmux failure. "gone"/"failed" takeover results fall
     through like :func:`do_resume_result` (best-effort kill).
     """
-    incomplete = _resume_liveness_gate()
-    if incomplete:
-        return TmuxResumeOutcome(None, incomplete)
-    if s.alive and not s.tmux_inventory_complete:
+    _, _, should_kill = _resume_plan(s, fork)
+    if should_kill:
+        incomplete = _resume_liveness_gate()
+        if incomplete:
+            return TmuxResumeOutcome(None, incomplete)
+    if should_kill and not s.tmux_inventory_complete:
         detail = s.tmux_inventory_detail or "tmux residency inventory incomplete"
         return TmuxResumeOutcome(None, detail)
-    _, _, should_kill = _resume_plan(s, fork)
     if should_kill and s.pid:
         takeover = take_over_result(s.pid, s.proc_start)
         if takeover.state is TakeOverState.REFUSED:
