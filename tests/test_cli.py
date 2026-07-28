@@ -44,7 +44,6 @@ def _stub_scan(monkeypatch):
     # builds the frozen `CleanupPlan` (via `build_plan`), which consults the
     # orphan protected-sid set (H1) and reaches `liveness.alive_map`, so stub
     # that too.
-    monkeypatch.setattr(sessions, "scan", lambda inputs=None: [])
     monkeypatch.setattr(
         sessions,
         "scan_result",

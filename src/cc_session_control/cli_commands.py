@@ -255,28 +255,48 @@ def _cmd_prune_aged(
 def _cmd_resume(args: Namespace) -> int:
     from .actions.resume_list import render
     from .data import liveness
-    from .data.sessions import scan
+    from .data.sessions import scan_result
 
     inputs = liveness.liveness_inputs()
     if not inputs.complete:
-        for issue in inputs.issues:
-            where = f" ({issue.path})" if issue.path else ""
+        for liveness_issue in inputs.issues:
+            where = f" ({liveness_issue.path})" if liveness_issue.path else ""
             print(
                 "Refused: liveness evidence is incomplete: "
-                f"{issue.source}{where}: {issue.detail}",
+                f"{liveness_issue.source}{where}: {liveness_issue.detail}",
                 file=sys.stderr,
             )
         return 1
 
-    print(
-        render(
-            scan(inputs),
-            keyword=args.keyword,
-            page=args.page,
-            limit=args.limit,
-            all_pages=args.all_pages,
-        )
+    transcript_scan = scan_result(inputs)
+    if not transcript_scan.complete:
+        for transcript_issue in transcript_scan.issues:
+            print(
+                "Refused: transcript inventory is incomplete: "
+                f"{transcript_issue.source} ({transcript_issue.path}): "
+                f"{transcript_issue.detail}",
+                file=sys.stderr,
+            )
+        return 1
+
+    render_result = render(
+        list(transcript_scan.sessions),
+        keyword=args.keyword,
+        page=args.page,
+        limit=args.limit,
+        all_pages=args.all_pages,
     )
+    if not render_result.complete:
+        for render_issue in render_result.issues:
+            print(
+                "Refused: transcript body search is incomplete: "
+                f"{render_issue.source} ({render_issue.path}): "
+                f"{render_issue.detail}",
+                file=sys.stderr,
+            )
+        return 1
+
+    print(render_result.text)
     return 0
 
 

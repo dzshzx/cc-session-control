@@ -9,9 +9,31 @@ formats; it must not re-derive takeover decisions.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from ..models import Session
 from .session_ops import resume_cmd
+
+
+@dataclass(frozen=True)
+class ResumeRenderIssue:
+    """One transcript body failure encountered during keyword selection."""
+
+    source: str
+    path: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class ResumeRenderResult:
+    """Complete rendered output, or typed body-read failures and no output."""
+
+    text: str = ""
+    issues: tuple[ResumeRenderIssue, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
 
 
 def keyword_matches(s: Session, keyword: str) -> bool:
@@ -29,11 +51,8 @@ def keyword_matches(s: Session, keyword: str) -> bool:
         return True
     if not s.file:
         return False
-    try:
-        with open(s.file, errors="ignore") as fh:
-            return any(kw in line.lower() for line in fh)
-    except OSError:
-        return False
+    with open(s.file, errors="ignore") as fh:
+        return any(kw in line.lower() for line in fh)
 
 
 def paginate(
@@ -76,11 +95,28 @@ def render(
     page: int = 1,
     limit: int = 20,
     all_pages: bool = False,
-) -> str:
+) -> ResumeRenderResult:
     """Full `csctl resume` output for an already-scanned session list."""
-    matched = [s for s in rows if keyword_matches(s, keyword)]
+    matched: list[Session] = []
+    issues: list[ResumeRenderIssue] = []
+    for session in rows:
+        try:
+            if keyword_matches(session, keyword):
+                matched.append(session)
+        except OSError as exc:
+            issues.append(
+                ResumeRenderIssue(
+                    "session transcript body",
+                    session.file or "",
+                    str(exc),
+                )
+            )
+    if issues:
+        return ResumeRenderResult(issues=tuple(issues))
     if not matched:
-        return f"No matching sessions{f' (keyword: {keyword})' if keyword else ''}."
+        return ResumeRenderResult(
+            f"No matching sessions{f' (keyword: {keyword})' if keyword else ''}."
+        )
 
     page_rows, page, pages = paginate(matched, page, limit, all_pages)
     out: list[str] = []
@@ -100,4 +136,4 @@ def render(
         out.append(
             f"-- page {page}/{pages}, {total} session(s) --    " + " | ".join(hints)
         )
-    return "\n".join(out)
+    return ResumeRenderResult("\n".join(out))

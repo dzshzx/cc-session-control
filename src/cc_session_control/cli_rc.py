@@ -23,25 +23,33 @@ def _run_rc(args: Namespace) -> int:
 
     sub = args.rc_command
     if sub == "status":
-        from .data.sessions import scan as scan_sessions
+        from .data.sessions import scan_result as scan_sessions_result
 
-        scan_result = rc.scan_result()
+        rc_scan_result = rc.scan_result()
+        transcript_scan_result = scan_sessions_result()
         projects = rc.order_by_activity(
-            scan_result.projects,
-            scan_sessions(),
+            rc_scan_result.projects,
+            list(transcript_scan_result.sessions),
         )
-        if not scan_result.settings.available:
+        if not rc_scan_result.settings.available:
             print(
                 "Project settings unavailable: "
-                f"{scan_result.settings.state.value}"
-                f"{': ' + scan_result.settings.detail if scan_result.settings.detail else ''}",
+                f"{rc_scan_result.settings.state.value}"
+                f"{': ' + rc_scan_result.settings.detail if rc_scan_result.settings.detail else ''}",
                 file=sys.stderr,
             )
-        for issue in scan_result.issues:
-            where = f" ({issue.path})" if issue.path else ""
+        for rc_issue in rc_scan_result.issues:
+            where = f" ({rc_issue.path})" if rc_issue.path else ""
             print(
                 "Warning: RC inventory is partial: "
-                f"{issue.source}{where}: {issue.detail}",
+                f"{rc_issue.source}{where}: {rc_issue.detail}",
+                file=sys.stderr,
+            )
+        for transcript_issue in transcript_scan_result.issues:
+            print(
+                "Warning: transcript inventory is partial: "
+                f"{transcript_issue.source} ({transcript_issue.path}): "
+                f"{transcript_issue.detail}",
                 file=sys.stderr,
             )
         setting_failure = False
@@ -70,8 +78,9 @@ def _run_rc(args: Namespace) -> int:
                 )
         return (
             0
-            if scan_result.settings.available
-            and scan_result.complete
+            if rc_scan_result.settings.available
+            and rc_scan_result.complete
+            and transcript_scan_result.complete
             and not setting_failure
             else 1
         )

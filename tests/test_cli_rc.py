@@ -8,12 +8,12 @@ import pytest
 
 from cc_session_control import cli
 from cc_session_control.config import cfg
-from cc_session_control.data import liveness, rc
+from cc_session_control.data import liveness, rc, sessions
 from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
-from cc_session_control.models import InventoryIssue, RCProject
+from cc_session_control.models import InventoryIssue, RCProject, Session
 
 
 def test_rc_status_reports_unknown_inventory_and_returns_nonzero(
@@ -43,8 +43,9 @@ def test_rc_status_reports_unknown_inventory_and_returns_nonzero(
         ),
     )
     monkeypatch.setattr(
-        "cc_session_control.data.sessions.scan",
-        lambda: [],
+        sessions,
+        "scan_result",
+        lambda: sessions.SessionScanResult(),
     )
 
     assert cli.main(["rc", "status"]) == 1
@@ -52,6 +53,44 @@ def test_rc_status_reports_unknown_inventory_and_returns_nonzero(
     assert "[unknown]" in captured.out
     assert "RC inventory is partial" in captured.err
     assert "lost server connection" in captured.err
+
+
+def test_rc_status_orders_known_rows_but_reports_partial_transcripts(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    older = RCProject("older", "/older", True, True, "dead", False)
+    newer = RCProject("newer", "/newer", True, True, "running", False)
+    rows = (
+        Session("old", "/older", "old", 1, 1, None, False, False),
+        Session("new", "/newer", "new", 2, 1, None, False, False),
+    )
+    issue = sessions.TranscriptIssue(
+        "session transcript",
+        "/runtime/projects/newer/unreadable.jsonl",
+        "permission denied",
+    )
+    monkeypatch.setattr(
+        rc,
+        "scan_result",
+        lambda: rc.RCScanResult(
+            [older, newer],
+            ProjectSettingsResult(ProjectSettingsState.AVAILABLE, {}),
+        ),
+    )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda: sessions.SessionScanResult(rows, (issue,)),
+    )
+
+    assert cli.main(["rc", "status"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out.index("newer") < captured.out.index("older")
+    assert "transcript inventory is partial" in captured.err
+    assert issue.path in captured.err
+    assert issue.detail in captured.err
+    assert "RC inventory is partial" not in captured.err
 
 
 def test_env_reports_partial_rc_inventory_and_returns_nonzero(

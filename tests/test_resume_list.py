@@ -52,7 +52,11 @@ def test_keyword_matches_metadata_then_body(tmp_path):
 def test_keyword_body_fallback_survives_missing_file(tmp_path):
     s = _session(tmp_path)
     s = types.SimpleNamespace(**{**s.__dict__, "file": str(tmp_path / "gone.jsonl")})
-    assert not resume_list.keyword_matches(s, "anything")
+    result = resume_list.render([s], keyword="anything")
+    assert not result.complete
+    assert result.text == ""
+    assert result.issues[0].source == "session transcript body"
+    assert result.issues[0].path == str(tmp_path / "gone.jsonl")
 
 
 def test_paginate_clamps_and_slices(tmp_path):
@@ -99,7 +103,7 @@ def test_format_current_session_never_prints_kill(tmp_path):
 
 def test_render_reports_paging_hints(tmp_path):
     rows = [_session(tmp_path, sid=f"s{i:03d}") for i in range(3)]
-    out = resume_list.render(rows, page=1, limit=2)
+    out = resume_list.render(rows, page=1, limit=2).text
     assert "page 1/2, 3 session(s)" in out
     assert "csctl resume --page 2" in out
     assert "csctl resume --all" in out
@@ -107,4 +111,4 @@ def test_render_reports_paging_hints(tmp_path):
 
 def test_render_no_match(tmp_path):
     rows = [_session(tmp_path)]
-    assert "No matching sessions" in resume_list.render(rows, keyword="zzz-none")
+    assert "No matching sessions" in resume_list.render(rows, keyword="zzz-none").text

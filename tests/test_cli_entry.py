@@ -88,7 +88,11 @@ def test_main_accepts_argv_and_returns_success(
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(),
     )
-    monkeypatch.setattr(sessions, "scan", lambda _inputs: [])
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda _inputs: sessions.SessionScanResult(),
+    )
 
     assert cli.main(["resume"]) == 0
     assert capsys.readouterr().out == "No matching sessions.\n"
@@ -163,29 +167,31 @@ def test_rc_status_orders_by_activity_and_marks_missing(
     )
     monkeypatch.setattr(
         sessions,
-        "scan",
-        lambda: [
-            Session(
-                sid="old",
-                cwd=older.directory,
-                label="old",
-                mtime=1,
-                prompts=1,
-                pid=None,
-                alive=False,
-                current=False,
+        "scan_result",
+        lambda: sessions.SessionScanResult(
+            (
+                Session(
+                    sid="old",
+                    cwd=older.directory,
+                    label="old",
+                    mtime=1,
+                    prompts=1,
+                    pid=None,
+                    alive=False,
+                    current=False,
+                ),
+                Session(
+                    sid="new",
+                    cwd=newer.directory,
+                    label="new",
+                    mtime=2,
+                    prompts=1,
+                    pid=None,
+                    alive=False,
+                    current=False,
+                ),
             ),
-            Session(
-                sid="new",
-                cwd=newer.directory,
-                label="new",
-                mtime=2,
-                prompts=1,
-                pid=None,
-                alive=False,
-                current=False,
-            ),
-        ],
+        ),
     )
 
     assert cli.main(["rc", "status"]) == 0
@@ -205,7 +211,11 @@ def test_rc_status_empty_and_unavailable_are_distinct(
         "scan_result",
         lambda: rc.RCScanResult([], _settings()),
     )
-    monkeypatch.setattr(sessions, "scan", lambda: [])
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda: sessions.SessionScanResult(),
+    )
 
     assert cli.main(["rc", "status"]) == 0
     assert capsys.readouterr().out == ""
@@ -244,7 +254,11 @@ def test_rc_status_reports_project_setting_failure_and_keeps_rows(
         "scan_result",
         lambda: rc.RCScanResult([broken, valid], _settings()),
     )
-    monkeypatch.setattr(sessions, "scan", lambda: [])
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda: sessions.SessionScanResult(),
+    )
 
     assert cli.main(["rc", "status"]) == 1
     captured = capsys.readouterr()
@@ -446,9 +460,13 @@ def test_rc_up_empty_success_and_partial_failure(
 
 
 def test_resume_keyword_page_limit_and_all_reach_public_renderer(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    transcript = tmp_path / "body-match.jsonl"
+    transcript.write_text('{"text": "apple from transcript body"}\n')
+    body_match = replace(_session("sid-two", "metadata miss"), file=str(transcript))
     monkeypatch.setattr(
         liveness,
         "liveness_inputs",
@@ -456,12 +474,14 @@ def test_resume_keyword_page_limit_and_all_reach_public_renderer(
     )
     monkeypatch.setattr(
         sessions,
-        "scan",
-        lambda _inputs: [
-            _session("sid-one", "apple one"),
-            _session("sid-two", "apple two"),
-            _session("sid-three", "banana"),
-        ],
+        "scan_result",
+        lambda _inputs: sessions.SessionScanResult(
+            (
+                _session("sid-one", "apple metadata"),
+                body_match,
+                _session("sid-three", "banana"),
+            )
+        ),
     )
 
     assert (
@@ -481,6 +501,69 @@ def test_resume_keyword_page_limit_and_all_reach_public_renderer(
     assert "sid-two" in output
     assert "sid-three" not in output
     assert "-- 2 session(s) --" in output
+
+
+def test_resume_incomplete_transcript_scan_emits_no_inventory_or_command(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    issue = sessions.TranscriptIssue(
+        "session transcript",
+        "/runtime/projects/project/unreadable.jsonl",
+        "permission denied",
+    )
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda _inputs: sessions.SessionScanResult(
+            (_session("unsafe", "partial inventory"),),
+            (issue,),
+        ),
+    )
+
+    assert cli.main(["resume"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "transcript inventory is incomplete" in captured.err
+    assert issue.source in captured.err
+    assert issue.path in captured.err
+    assert issue.detail in captured.err
+    assert "claude --resume" not in captured.err
+
+
+def test_resume_keyword_body_read_race_emits_no_inventory_or_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    transcript = tmp_path / "disappeared.jsonl"
+    transcript.write_text('{"text": "needle"}\n')
+    session = replace(_session("raced", "metadata miss"), file=str(transcript))
+    transcript.unlink()
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda _inputs: sessions.SessionScanResult((session,)),
+    )
+
+    assert cli.main(["resume", "needle"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "transcript body search is incomplete" in captured.err
+    assert "session transcript body" in captured.err
+    assert str(transcript) in captured.err
+    assert "No such file or directory" in captured.err
+    assert "claude --resume" not in captured.err
 
 
 @pytest.mark.parametrize(
@@ -556,13 +639,15 @@ def test_resume_malformed_or_unreadable_liveness_emits_no_actionable_command(
         snapshots += 1
         return actual_inputs()
 
-    def reject_scan(inputs: liveness.LivenessSnapshot) -> list[Session]:
+    def reject_scan(
+        inputs: liveness.LivenessSnapshot,
+    ) -> sessions.SessionScanResult:
         nonlocal scans
         scans += 1
-        return [_session("unsafe", "must not render")]
+        return sessions.SessionScanResult((_session("unsafe", "must not render"),))
 
     monkeypatch.setattr(liveness, "liveness_inputs", capture_evidence)
-    monkeypatch.setattr(sessions, "scan", reject_scan)
+    monkeypatch.setattr(sessions, "scan_result", reject_scan)
 
     assert cli.main(["resume"]) == 1
     captured = capsys.readouterr()
@@ -589,12 +674,14 @@ def test_resume_complete_liveness_is_injected_once(
         snapshots += 1
         return evidence
 
-    def capture_scan(inputs: liveness.LivenessSnapshot) -> list[Session]:
+    def capture_scan(
+        inputs: liveness.LivenessSnapshot,
+    ) -> sessions.SessionScanResult:
         injected.append(inputs)
-        return [_session("safe", "complete evidence")]
+        return sessions.SessionScanResult((_session("safe", "complete evidence"),))
 
     monkeypatch.setattr(liveness, "liveness_inputs", capture_evidence)
-    monkeypatch.setattr(sessions, "scan", capture_scan)
+    monkeypatch.setattr(sessions, "scan_result", capture_scan)
 
     assert cli.main(["resume"]) == 0
     captured = capsys.readouterr()
