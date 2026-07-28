@@ -32,7 +32,6 @@ from ..data.cleanup import (
     execute_zombie_removals,
 )
 from ..data.removal import CleanupExecution
-from ..data.sessions import scan
 from ..models import Session
 from ._confirm import DEGRADED as _DEGRADED
 from ._rows import TextRow, truncate_cells
@@ -47,13 +46,9 @@ def _execute_sessions(plan: CleanupPlan, targets: list) -> CleanupExecution:
 
 
 def _execute_orphans(plan: CleanupPlan, entries: list[str]) -> CleanupExecution:
-    """Orphan executor with the FULL fresh protection set: a fresh transcript
-    scan feeds `known_sids`' transcript tier (the executor can't scan itself —
-    data-DAG), closing the window where a sid's transcript appeared between
-    preview and confirm without any registry/live trace."""
+    """Route preview targets to the self-revalidating public executor."""
     return execute_orphan_removals(
         entries,
-        sessions=scan(),
         anchors=plan.orphan_anchors,
     )
 

@@ -136,11 +136,10 @@ def _cmd_prune(args: Namespace) -> int:
             print("Dry run. Add --apply to execute.")
             return plan_status
         # Deletes AT MOST the listed entries, revalidated against fresh
-        # protection data (删除 ⊆ 预览 — same executor as the TUI; `sessions`
-        # feeds the transcript tier of the protection set).
+        # protection data (删除 ⊆ 预览 — same executor as the TUI). The public
+        # executor owns both fresh liveness and fresh transcript evidence.
         result = execute_orphan_removals(
             list(orphans),
-            sessions=scan(),
             anchors=plan.orphan_anchors,
         )
         status = _print_cleanup_execution(

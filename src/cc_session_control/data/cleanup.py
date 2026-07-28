@@ -13,6 +13,7 @@ from pathlib import Path
 from ..config import cfg
 from ..models import AgentJob, Session, SessionProc
 from . import proc, registry
+from . import sessions as session_data
 from .cleanup_anchors import (
     PlanAnchors,
     pin_plan_targets,
@@ -29,7 +30,6 @@ from .cleanup_anchors import (
 from .cleanup_liveness import (
     fill_liveness_inputs,
     fresh_liveness_inputs,
-    refuse_incomplete_ancestors,
     refuse_incomplete_liveness,
 )
 from .removal import (
@@ -108,26 +108,58 @@ def session_removal_anchors(
     )
 
 
-def remove_agent_artifacts(
-    short: str,
+def _sid_is_protected(
     sid: str,
-    *,
-    anchors: tuple[RemovalAnchor, ...] | None = None,
+    session_procs: Sequence[SessionProc],
+    agents_map: Mapping[str, int | None],
+    cur: AbstractSet[int],
+) -> bool:
+    return (
+        any(sp.sid == sid and sp.proc_alive for sp in session_procs)
+        or bool(agents_map.get(sid))
+        or any(sp.sid == sid and sp.pid in cur for sp in session_procs)
+    )
+
+
+def _remove_agent_artifact_paths(
+    short: str,
+    anchors: tuple[RemovalAnchor, ...],
 ) -> CleanupExecution:
-    """Delete an already-liveness-gated agent's job and sid artifacts."""
     result = CleanupExecution()
-    try:
-        pinned = anchors if anchors is not None else agent_removal_anchors(short, sid)
-    except OSError as exc:
-        result.refuse([short], f"cannot establish removal anchor: {exc}")
-        return result
-    for anchor in pinned:
+    for anchor in anchors:
         result.add_removal(remove_anchored(anchor))
     if result.removed and not result.failed:
         result.complete(short)
     elif not result.removed and not result.incomplete:
         result.mark_missing(short)
     return result
+
+
+def remove_agent_artifacts(
+    short: str,
+    sid: str,
+    *,
+    anchors: tuple[RemovalAnchor, ...] | None = None,
+) -> CleanupExecution:
+    """Delete anchored agent artifacts after fresh liveness revalidation."""
+    result = CleanupExecution()
+    try:
+        pinned = anchors if anchors is not None else agent_removal_anchors(short, sid)
+    except OSError as exc:
+        result.refuse([short], f"cannot establish removal anchor: {exc}")
+        return result
+    evidence = fresh_liveness_inputs()
+    if not evidence.complete:
+        return refuse_incomplete_liveness(result, [short], evidence)
+    if _sid_is_protected(
+        sid,
+        evidence.session_procs,
+        evidence.agents_map,
+        evidence.cur,
+    ):
+        result.skip(short, "background agent is now live or current")
+        return result
+    return _remove_agent_artifact_paths(short, pinned)
 
 
 # --- Strategy A: sid-keyed orphan dirs (H1 protected-sid set) --------------
@@ -198,8 +230,6 @@ def list_orphan_dirs(
 def execute_orphan_removals(
     entries: list[str],
     *,
-    sessions: list[Session] | None = None,
-    known: set[str] | None = None,
     anchors: Mapping[str, RemovalAnchor] | None = None,
 ) -> CleanupExecution:
     """Remove only anchored preview orphans after fresh protection revalidation."""
@@ -207,21 +237,16 @@ def execute_orphan_removals(
     base_by_label = dict(_sid_dir_paths())
     if anchors is None:
         anchors = _entry_anchors(entries, base_by_label, result)
-    if known is None:
-        evidence = fresh_liveness_inputs()
-        if not evidence.complete:
-            return refuse_incomplete_liveness(result, entries, evidence)
-        known = known_sids(
-            sessions or [],
-            evidence.session_procs,
-            evidence.agent_jobs,
-            evidence.agents_map,
-            evidence.cur,
-        )
-    else:
-        ancestors = proc.probe_current_ancestors()
-        if not ancestors.complete:
-            return refuse_incomplete_ancestors(result, entries, ancestors)
+    evidence = fresh_liveness_inputs()
+    if not evidence.complete:
+        return refuse_incomplete_liveness(result, entries, evidence)
+    known = known_sids(
+        session_data.scan(evidence),
+        evidence.session_procs,
+        evidence.agent_jobs,
+        evidence.agents_map,
+        evidence.cur,
+    )
     for entry in entries:
         label, _, sid = entry.partition("/")
         base = base_by_label.get(label)
@@ -265,8 +290,6 @@ def select_zombie_pids(
 def execute_zombie_removals(
     pids: list[int],
     *,
-    session_procs: list[SessionProc] | None = None,
-    cur: set[int] | None = None,
     anchors: Mapping[int, RemovalAnchor] | None = None,
 ) -> CleanupExecution:
     """Remove anchored preview zombies after fresh liveness revalidation."""
@@ -283,19 +306,10 @@ def execute_zombie_removals(
         except OSError as exc:
             result.refuse(pids, f"cannot establish removal anchor: {exc}")
             return result
-    ancestors = proc.probe_current_ancestors()
-    if not ancestors.complete:
-        return refuse_incomplete_ancestors(result, pids, ancestors)
-    if session_procs is None:
-        evidence = fresh_liveness_inputs()
-        if not evidence.complete:
-            return refuse_incomplete_liveness(result, pids, evidence)
-        session_procs = list(evidence.session_procs)
-        if cur is None:
-            cur = set(evidence.cur)
-    elif cur is None:
-        cur = set(ancestors.pids)
-    still_zombie = set(select_zombie_pids(session_procs, cur))
+    evidence = fresh_liveness_inputs()
+    if not evidence.complete:
+        return refuse_incomplete_liveness(result, pids, evidence)
+    still_zombie = set(select_zombie_pids(evidence.session_procs, evidence.cur))
     for pid in pids:
         if pid not in still_zombie:
             result.skip(pid, "session process is now live or current")
@@ -404,16 +418,12 @@ def prune_sessions(sessions: Sequence[Session], max_prompts: int = 0) -> list[Se
 
 def _session_is_protected(
     session: Session,
-    session_procs: list[SessionProc],
-    agents_map: dict[str, int | None],
-    cur: set[int],
+    session_procs: Sequence[SessionProc],
+    agents_map: Mapping[str, int | None],
+    cur: AbstractSet[int],
 ) -> bool:
-    live_sids = {sp.sid for sp in session_procs if sp.proc_alive}
-    live_sids |= {sid for sid, pid in agents_map.items() if pid}
-    current_sids = {sp.sid for sp in session_procs if sp.pid in cur}
     return (
-        session.sid in live_sids
-        or session.sid in current_sids
+        _sid_is_protected(session.sid, session_procs, agents_map, cur)
         or session.current
         or bool(session.pid and session.pid in cur)
     )
@@ -466,9 +476,6 @@ def remove_session(
 def execute_session_removals(
     targets: list[Session],
     *,
-    session_procs: list[SessionProc] | None = None,
-    agents_map: dict[str, int | None] | None = None,
-    cur: set[int] | None = None,
     anchors: Mapping[str, tuple[RemovalAnchor, ...]] | None = None,
 ) -> CleanupExecution:
     """Remove only anchored preview sessions after fresh liveness revalidation."""
@@ -482,27 +489,16 @@ def execute_session_removals(
                 f"cannot establish removal anchor: {exc}",
             )
             return result
-    ancestors = proc.probe_current_ancestors()
-    if not ancestors.complete:
-        return refuse_incomplete_ancestors(
+    evidence = fresh_liveness_inputs()
+    if not evidence.complete:
+        return refuse_incomplete_liveness(
             result,
             [s.sid for s in targets],
-            ancestors,
+            evidence,
         )
-    if session_procs is None or agents_map is None or cur is None:
-        evidence = fresh_liveness_inputs()
-        if not evidence.complete:
-            return refuse_incomplete_liveness(
-                result,
-                [s.sid for s in targets],
-                evidence,
-            )
-        if session_procs is None:
-            session_procs = list(evidence.session_procs)
-        if agents_map is None:
-            agents_map = dict(evidence.agents_map)
-        if cur is None:
-            cur = set(evidence.cur)
+    session_procs = list(evidence.session_procs)
+    agents_map = dict(evidence.agents_map)
+    cur = set(evidence.cur)
     for s in targets:
         if _session_is_protected(s, session_procs, agents_map, cur):
             result.skip(s.sid, "session is now live or current")

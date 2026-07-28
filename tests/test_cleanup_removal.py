@@ -175,6 +175,12 @@ def test_build_plan_does_not_swallow_programming_error(tmp_path, monkeypatch):
 
 def test_orphan_execution_reports_removed_and_failed_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(
+        cleanup,
+        "fresh_liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(cleanup.session_data, "scan", lambda inputs: [])
     good = tmp_path / "session-env" / "good"
     bad = tmp_path / "session-env" / "bad"
     good.mkdir(parents=True)
@@ -189,10 +195,7 @@ def test_orphan_execution_reports_removed_and_failed_paths(tmp_path, monkeypatch
     fail_one.avoids_symlink_attacks = True
     monkeypatch.setattr(shutil, "rmtree", fail_one)
 
-    result = cleanup.execute_orphan_removals(
-        ["session-env/good", "session-env/bad"],
-        known=set(),
-    )
+    result = cleanup.execute_orphan_removals(["session-env/good", "session-env/bad"])
 
     assert [item.path for item in result.removed] == [good]
     assert [item.path for item in result.failed] == [bad]

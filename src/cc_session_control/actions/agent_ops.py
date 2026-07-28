@@ -30,7 +30,6 @@ from enum import Enum
 from ..config import cfg
 from ..data import cleanup, liveness, registry, tmux
 from ..data import proc as proc
-from ..data.cleanup_liveness import refuse_incomplete_liveness
 from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session
 from . import session_ops
@@ -115,21 +114,14 @@ def respawn(job: AgentJob) -> str:
 def remove_job(job: AgentJob) -> CleanupExecution:
     """Remove a SETTLED background agent: `jobs/<short>/` + its sid artifacts.
 
-    Refuses for a LIVE worker (`job_host` reports alive) and when "current"
-    can't be determined (no `/proc`, R10) — destructive, must not run blind.
+    The public data-layer executor owns the final fresh liveness check, so no
+    caller-held evidence can authorize deletion.
     """
     result = CleanupExecution()
     try:
         anchors = cleanup.agent_removal_anchors(job.short, job.sid)
     except OSError as exc:
         result.refuse([job.short], f"cannot establish removal anchor: {exc}")
-        return result
-    evidence = liveness.liveness_inputs()
-    if not evidence.complete:
-        return refuse_incomplete_liveness(result, [job.short], evidence)
-    live = liveness.live_index(evidence.session_procs, evidence.agents_map).get(job.sid)
-    if live is not None and live.alive:
-        result.skip(job.short, "background agent is now live")
         return result
     return cleanup.remove_agent_artifacts(job.short, job.sid, anchors=anchors)
 

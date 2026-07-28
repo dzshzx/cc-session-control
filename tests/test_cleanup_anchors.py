@@ -390,9 +390,14 @@ def test_orphan_execution_refuses_replaced_base_and_preserves_external(
     sentinel = outside_target / "keep.txt"
     sentinel.write_text("keep")
     base.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        cleanup,
+        "fresh_liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(cleanup.session_data, "scan", lambda inputs: [])
     result = cleanup.execute_orphan_removals(
         plan.orphan_entries,
-        known=set(),
         anchors=plan.orphan_anchors,
     )
 
@@ -424,10 +429,13 @@ def test_zombie_execution_refuses_root_inode_replacement(
     replacement = cfg.sessions_dir / "77.json"
     replacement.parent.mkdir(parents=True)
     replacement.write_text("keep")
+    monkeypatch.setattr(
+        cleanup,
+        "fresh_liveness_inputs",
+        lambda: liveness.LivenessSnapshot(session_procs=(proc,)),
+    )
     result = cleanup.execute_zombie_removals(
         plan.zombie_pids,
-        session_procs=[proc],
-        cur=set(),
         anchors=plan.zombie_anchors,
     )
 

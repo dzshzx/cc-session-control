@@ -154,18 +154,16 @@ def test_remove_job_refuses_real_agents_failure_before_deleting(
         stderr="agents unavailable",
     )
     monkeypatch.setattr(ao.liveness.subprocess, "run", lambda *a, **k: completed)
-    removals = []
     monkeypatch.setattr(
         ao.cleanup,
-        "remove_agent_artifacts",
-        lambda *args: removals.append(args),
+        "remove_anchored",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not delete")),
     )
     registry.invalidate_cache()
     liveness.invalidate_cache()
 
     result = ao.remove_job(job)
 
-    assert removals == []
     assert len(result.refused) == 1
     assert result.issues[0].source == "claude agents --json"
     assert "exit status 5" in result.issues[0].error
