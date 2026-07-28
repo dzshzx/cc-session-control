@@ -5,11 +5,18 @@ from __future__ import annotations
 import glob
 import json
 import os
+from collections.abc import Set as AbstractSet
 
 from ..config import cfg
 from ..models import LiveInfo, Session
 from . import registry, tmux
-from .liveness import alive_map, is_rc_exposed, live_index, live_session_procs
+from .liveness import (
+    LivenessSnapshot,
+    alive_map,
+    is_rc_exposed,
+    live_index,
+    live_session_procs,
+)
 from .proc import ancestor_pids as _ancestor_pids  # /proc walk moved to proc.py
 
 _NOISE = (
@@ -37,7 +44,7 @@ def _clean_text(t: str) -> str:
 def _parse_transcript(
     path: str,
     idx: dict[str, LiveInfo],
-    cur: set[int],
+    cur: AbstractSet[int],
     job_shorts: set[str],
 ) -> Session | None:
     """Parse one transcript .jsonl into a Session, or None if it has no cwd.
@@ -194,7 +201,7 @@ def _inject_tmux_residency(rows: list[Session], idx: dict[str, LiveInfo]) -> Non
                 break
 
 
-def scan() -> list[Session]:
+def scan(inputs: LivenessSnapshot | None = None) -> list[Session]:
     """Unified transcript-driven session scan.
 
     Merges the three liveness/identity sources once per scan — registry
@@ -203,13 +210,23 @@ def scan() -> list[Session]:
     rc-exposure, and batch-injects tmux residency (`tmux_target`). Scan stays
     transcript-driven: an agent-only sid (present in the live index but with no
     transcript) is surfaced by the Agents tab, not here.
+
+    When `inputs` is supplied by `build_world_snapshot`, this is an injected
+    fast path: no registry or targeted `/proc` liveness read is repeated. With
+    no injection, the standalone CLI-compatible path self-fetches as before.
     """
     root = str(cfg.projects_root)
-    session_procs = live_session_procs()
-    agents = alive_map()
+    if inputs is None:
+        session_procs = live_session_procs()
+        agents = alive_map()
+        job_shorts = {j.short for j in registry.read_agent_jobs()}
+        cur = _ancestor_pids()
+    else:
+        session_procs = inputs.session_procs
+        agents = inputs.agents_map
+        job_shorts = {j.short for j in inputs.agent_jobs}
+        cur = inputs.cur
     idx = live_index(session_procs, agents)
-    job_shorts = {j.short for j in registry.read_agent_jobs()}
-    cur = _ancestor_pids()
     rows: list[Session] = []
 
     for f in glob.glob(os.path.join(root, "*", "*.jsonl")):

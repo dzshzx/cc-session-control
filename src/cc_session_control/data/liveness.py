@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-from collections.abc import Callable
-from dataclasses import replace
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 
 from ..models import AgentJob, LiveInfo, SessionProc
 from . import proc, registry
@@ -20,27 +21,52 @@ _cache: dict[str, int | None] | None = None
 _cache_time: float = 0.0
 
 
-def liveness_inputs() -> tuple[
-    list[SessionProc], set[int], list[AgentJob], dict[str, int | None]
-]:
-    """The shared liveness inputs — `(session_procs, cur, agent_jobs,
-    agents_map)` — fetched ONCE, jobs already host-enriched.
+@dataclass(frozen=True)
+class LivenessSnapshot:
+    """Immutable liveness evidence captured for exactly one refresh generation."""
+
+    session_procs: tuple[SessionProc, ...] = ()
+    cur: frozenset[int] = frozenset()
+    agent_jobs: tuple[AgentJob, ...] = ()
+    agents_map: Mapping[str, int | None] = field(
+        default_factory=lambda: MappingProxyType({}),
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "session_procs", tuple(self.session_procs))
+        object.__setattr__(self, "cur", frozenset(self.cur))
+        object.__setattr__(self, "agent_jobs", tuple(self.agent_jobs))
+        object.__setattr__(
+            self,
+            "agents_map",
+            MappingProxyType(dict(self.agents_map)),
+        )
+
+
+def liveness_inputs() -> LivenessSnapshot:
+    """Capture the shared liveness inputs once for one caller generation.
 
     `build_world_snapshot` and `cleanup`'s protection-set assembly consume this,
     so the refresh generation and cleanup protection set share one assembly
     instead of a hand-kept mirror that can drift. Expected source failures are
     handled by their owning readers.
+
+    The source registries may have their own caches for non-generation callers,
+    but a refresh generation always asks for fresh source evidence. In
+    particular, the process verdicts in `agents_map` must never be reused as if
+    they described a new generation.
     """
-    session_procs = live_session_procs()
-    try:
-        agent_jobs = enrich_jobs(registry.read_agent_jobs(), session_procs)
-    except Exception:
-        agent_jobs = []
-    try:
-        agents_map = alive_map()
-    except Exception:
-        agents_map = {}
-    return session_procs, proc.ancestor_pids(), agent_jobs, agents_map
+    session_procs = live_session_procs(max_age=0.0)
+    agent_jobs = enrich_jobs(
+        registry.read_agent_jobs(max_age=0.0),
+        session_procs,
+    )
+    return LivenessSnapshot(
+        session_procs=tuple(session_procs),
+        cur=frozenset(proc.ancestor_pids()),
+        agent_jobs=tuple(agent_jobs),
+        agents_map=alive_map(max_age=0.0),
+    )
 
 
 def _scrub_dead_pids(
@@ -110,7 +136,8 @@ def live_session_procs(max_age: float = 5.0) -> list[SessionProc]:
 
 
 def enrich_jobs(
-    jobs: list[AgentJob], session_procs: list[SessionProc] | None = None
+    jobs: Sequence[AgentJob],
+    session_procs: Sequence[SessionProc] | None = None,
 ) -> list[AgentJob]:
     """Fill each job's `host_pid`/`host_alive` — THE one enrich loop.
 
@@ -163,8 +190,8 @@ def _start_key(proc_start: str) -> int:
 
 
 def live_index(
-    session_procs: list[SessionProc],
-    agents_map: dict[str, int | None],
+    session_procs: Sequence[SessionProc],
+    agents_map: Mapping[str, int | None],
 ) -> dict[str, LiveInfo]:
     """PURE merge of registry session files + `claude agents --json`.
 

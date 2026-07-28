@@ -16,6 +16,7 @@ import glob
 import json
 import os
 import time
+from collections.abc import Sequence
 
 from ..config import cfg
 from ..models import AgentJob, SessionProc, split_env_id
@@ -125,7 +126,7 @@ def read_agent_jobs(max_age: float = 5.0) -> list[AgentJob]:
 
 
 def host_pid_for_sid(
-    sid: str, session_procs: list[SessionProc]
+    sid: str, session_procs: Sequence[SessionProc]
 ) -> tuple[int | None, bool]:
     """Join a sid to its host pid via the registry session files — PURE.
 

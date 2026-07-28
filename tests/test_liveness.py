@@ -1,7 +1,11 @@
 """Tests for data/liveness.py — live_index purity and the alive_map cache."""
 
+import dataclasses
+
+import pytest
+
 from cc_session_control.data import liveness
-from cc_session_control.models import SessionProc
+from cc_session_control.models import AgentJob, SessionProc
 
 
 def _sp(sid, pid, proc_start, proc_alive=False, **kw):
@@ -234,3 +238,58 @@ def test_live_session_procs_swallows_errors(monkeypatch):
 
     monkeypatch.setattr(registry, "read_session_procs", boom)
     assert liveness.live_session_procs() == []
+
+
+def test_liveness_inputs_is_an_immutable_typed_generation_snapshot(monkeypatch):
+    procs = [_sp("sid", 101, "1", proc_alive=True)]
+    jobs = [AgentJob(short="sid", sid="sid", resume_sid="sid")]
+    monkeypatch.setattr(liveness, "live_session_procs", lambda max_age=5.0: procs)
+    monkeypatch.setattr(liveness.registry, "read_agent_jobs", lambda max_age=5.0: jobs)
+    monkeypatch.setattr(liveness, "alive_map", lambda max_age=5.0: {"sid": 101})
+    monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: {101})
+
+    inputs = liveness.liveness_inputs()
+
+    assert isinstance(inputs, liveness.LivenessSnapshot)
+    assert inputs.session_procs == tuple(procs)
+    assert inputs.agent_jobs[0].host_pid == 101
+    assert inputs.cur == frozenset({101})
+    assert inputs.agents_map == {"sid": 101}
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        inputs.cur = frozenset()
+    with pytest.raises(TypeError):
+        inputs.agents_map["new"] = 202
+
+
+def test_liveness_inputs_forces_fresh_sources_for_each_generation(monkeypatch):
+    ages = {"sessions": [], "jobs": [], "agents": []}
+    next_pid = iter((101, 202))
+
+    def session_procs(max_age=5.0):
+        ages["sessions"].append(max_age)
+        pid = next(next_pid)
+        return [_sp(f"sid-{pid}", pid, "1", proc_alive=True)]
+
+    monkeypatch.setattr(liveness, "live_session_procs", session_procs)
+    monkeypatch.setattr(
+        liveness.registry,
+        "read_agent_jobs",
+        lambda max_age=5.0: ages["jobs"].append(max_age) or [],
+    )
+    monkeypatch.setattr(
+        liveness,
+        "alive_map",
+        lambda max_age=5.0: ages["agents"].append(max_age) or {},
+    )
+    monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: set())
+
+    first = liveness.liveness_inputs()
+    second = liveness.liveness_inputs()
+
+    assert ages == {
+        "sessions": [0.0, 0.0],
+        "jobs": [0.0, 0.0],
+        "agents": [0.0, 0.0],
+    }
+    assert [sp.pid for sp in first.session_procs] == [101]
+    assert [sp.pid for sp in second.session_procs] == [202]

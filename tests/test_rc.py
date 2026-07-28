@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from cc_session_control.data import proc, rc
+from cc_session_control.data import proc, rc, rc_environment
 from cc_session_control.data.proc import ProcRC
 from cc_session_control.data.tmux import TmuxWindow
 from cc_session_control.models import EnvRecord, RCServer
@@ -102,7 +102,9 @@ def test_scan_servers_classifies_managed_and_external(monkeypatch):
         lambda: [ProcRC(111, "ws/foo", "/a"), ProcRC(222, "ws/bar", "/b")],
     )
 
-    servers = rc.scan_servers()
+    servers = rc.scan_servers(
+        environment_cache=rc_environment.EnvironmentIdCache(),
+    )
     by_name = {s.name: s for s in servers}
 
     assert isinstance(servers[0], RCServer)
@@ -123,7 +125,9 @@ def test_scan_servers_managed_window_without_proc_match(monkeypatch):
     monkeypatch.setattr(rc, "_capture_env_id", lambda target: "")
     monkeypatch.setattr(rc.proc, "scan_rc_servers", lambda: [])
 
-    servers = rc.scan_servers()
+    servers = rc.scan_servers(
+        environment_cache=rc_environment.EnvironmentIdCache(),
+    )
     assert len(servers) == 1
     assert servers[0].managed is True
     assert servers[0].name == "foo"
@@ -147,11 +151,14 @@ def test_scan_servers_captures_env_id_into_ledger(monkeypatch):
     monkeypatch.setattr(rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")])
     monkeypatch.setattr(rc.environments, "upsert", lambda recs: captured.append(recs))
 
-    servers = rc.scan_servers()
+    cache = rc_environment.EnvironmentIdCache()
+    servers = rc.scan_servers(environment_cache=cache)
+    next_servers = rc.scan_servers(environment_cache=cache)
 
     assert servers[0].env_id == "env_abc123XYZ"
+    assert next_servers[0].env_id == "env_abc123XYZ"
     assert targets == ["@1"]             # addressed by unique window id, not name
-    assert len(captured) == 1
+    assert len(captured) == 2             # cached id still refreshes ledger evidence
     rec = captured[0][0]
     assert rec.prefix == "env"
     assert rec.key == "abc123XYZ"        # suffix only — env_id property reconstructs
@@ -167,9 +174,60 @@ def test_scan_servers_no_env_id_no_upsert(monkeypatch):
     monkeypatch.setattr(rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")])
     monkeypatch.setattr(rc.environments, "upsert", lambda recs: calls.append(recs))
 
-    servers = rc.scan_servers()
+    servers = rc.scan_servers(
+        environment_cache=rc_environment.EnvironmentIdCache(),
+    )
     assert servers[0].env_id is None
     assert calls == []  # no env captured -> ledger untouched
+
+
+def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
+    tmp_path,
+    monkeypatch,
+):
+    class CacheSpy:
+        def __init__(self):
+            self.all = 0
+            self.windows: list[str] = []
+
+        def invalidate_all(self):
+            self.all += 1
+
+        def invalidate_window(self, window_id):
+            self.windows.append(window_id)
+
+    cache = CacheSpy()
+    project = str(tmp_path)
+    window = TmuxWindow("@7", "project", False, 707, project)
+    monkeypatch.setattr(rc, "_environment_ids", cache)
+    monkeypatch.setattr(rc, "_window_for", lambda path: None)
+    monkeypatch.setattr(
+        rc,
+        "trust_decision",
+        lambda path: rc.TrustDecision.TRUSTED,
+    )
+    monkeypatch.setattr(rc.tmux, "run_in_tmux", lambda *args: "rc:7")
+    monkeypatch.setattr(rc.tmux, "set_window_option", lambda *args: True)
+
+    result = rc.start_one_result(project)
+
+    assert result.state is rc.StartState.STARTED
+    assert cache.all == 1
+
+    monkeypatch.setattr(rc, "_window_for", lambda path: window)
+    monkeypatch.setattr(rc.tmux, "kill_window", lambda target: True)
+    assert rc.stop_one(project)
+    assert cache.windows == ["@7"]
+
+    removed: list[str] = []
+    monkeypatch.setattr(rc, "list_rm", lambda path: removed.append(path))
+    assert rc.remove_one(project)
+    assert removed == [project]
+    assert cache.windows == ["@7", "@7"]
+
+    monkeypatch.setattr(rc.tmux, "kill_session", lambda session: True)
+    assert rc.stop_all()
+    assert cache.all == 2
 
 
 # --- remoteControlSpawnMode read (AC8 read half) ---------------------------

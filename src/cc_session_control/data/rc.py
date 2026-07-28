@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 import tempfile
 import time
@@ -29,7 +28,7 @@ from ..models import (
     effective_trust_decision,
     split_env_id,
 )
-from . import environments, proc, tmux
+from . import environments, proc, rc_environment, tmux
 from .project_settings import (
     ProjectSettingsResult,
     SettingWriteResult,
@@ -37,8 +36,7 @@ from .project_settings import (
     write_rc_at_startup,
 )
 
-# Cloud bridge env id printed to a managed server's pane (`environment=env_…`).
-_ENV_ID_RE = re.compile(r"env_[A-Za-z0-9]+")
+_environment_ids = rc_environment.EnvironmentIdCache()
 
 
 @dataclass(frozen=True)
@@ -416,11 +414,13 @@ def _capture_env_id(target: str) -> str:
     only printed to stdout (`environment=env_…`). This is the single signal we
     can capture locally for the ledger.
     """
-    m = _ENV_ID_RE.search(_tmux_capture_pane(target))
-    return m.group(0) if m else ""
+    return rc_environment.extract_env_id(_tmux_capture_pane(target))
 
 
-def scan_servers() -> list[RCServer]:
+def scan_servers(
+    *,
+    environment_cache: rc_environment.EnvironmentIdCache | None = None,
+) -> list[RCServer]:
     """All project RC servers: managed (csctl tmux) ∪ external (/proc) — R5/D5.
 
     Managed = tmux windows in `cfg.rc_session` (their pane pid IS the server
@@ -430,13 +430,13 @@ def scan_servers() -> list[RCServer]:
 
     For managed servers the captured `env_*` cloud id is pushed one-way into the
     ledger via `environments.upsert` (rc → environments only; environments never
-    imports rc). Swallows errors → returns whatever it assembled.
+    imports rc). The lower tmux and proc adapters own expected external failures;
+    parser and programming failures stay observable.
     """
-    try:
-        windows = _tmux_windows()
-        discovered = proc.scan_rc_servers()
-    except Exception:
-        return []
+    windows = _tmux_windows()
+    discovered = proc.scan_rc_servers()
+    cache = _environment_ids if environment_cache is None else environment_cache
+    captured_env_ids = cache.resolve(windows, _capture_env_id)
 
     by_pid = {p.pid: p for p in discovered}
     managed_pid_set = {w.pid for w in windows if w.pid}
@@ -449,7 +449,7 @@ def scan_servers() -> list[RCServer]:
     for w in windows:
         status = "dead" if w.dead else "running"
         found = by_pid.get(w.pid) if w.pid else None
-        env_id = _capture_env_id(w.wid)
+        env_id = captured_env_ids.get(w.wid, "")
         if env_id:
             prefix, key = split_env_id(env_id)
             if prefix and key:
@@ -507,6 +507,7 @@ def _start_one_with_trust(path: str, decision: TrustDecision) -> StartResult:
     # `stop_one` read back. Until this lands, `pane_current_path` (the `cd`
     # above) covers the same join, so a mid-spawn scan still matches.
     tmux.set_window_option(target, "@csctl_path", path)
+    _environment_ids.invalidate_all()
     return StartResult(StartState.STARTED, path)
 
 
@@ -526,11 +527,23 @@ def stop_one(path: str) -> bool:
     win = _window_for(path)
     if win is None:
         return False
-    return tmux.kill_window(win.wid)
+    stopped = tmux.kill_window(win.wid)
+    if stopped:
+        _environment_ids.invalidate_window(win.wid)
+    return stopped
+
+
+def remove_one(path: str) -> bool:
+    """Remove one project from autostart and stop its managed RC window."""
+    list_rm(path)
+    return stop_one(path)
 
 
 def stop_all() -> bool:
-    return tmux.kill_session(cfg.rc_session)
+    stopped = tmux.kill_session(cfg.rc_session)
+    if stopped:
+        _environment_ids.invalidate_all()
+    return stopped
 
 
 def start_many(projects: list[str]) -> int:

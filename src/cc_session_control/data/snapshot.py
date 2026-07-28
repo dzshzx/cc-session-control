@@ -14,6 +14,7 @@ programming and invariant errors are not converted into empty view data.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence, Set as AbstractSet
 from dataclasses import dataclass, field
 
 from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
@@ -43,7 +44,7 @@ class WorldSnapshot:
     `select_zombie_pids` WITHOUT a second scan (R11/D8).
     """
     sessions: list[Session] = field(default_factory=list)
-    agent_jobs: list[AgentJob] = field(default_factory=list)
+    agent_jobs: Sequence[AgentJob] = field(default_factory=tuple)
     rc_projects: list[RCProject] = field(default_factory=list)
     rc_project_settings: ProjectSettingsResult = field(
         default_factory=lambda: ProjectSettingsResult(
@@ -56,21 +57,23 @@ class WorldSnapshot:
     environment_reconciliation: environments.Reconciliation = field(
         default_factory=environments.Reconciliation,
     )
-    session_procs: list[SessionProc] = field(default_factory=list)
-    agents_map: dict[str, int | None] = field(default_factory=dict)
-    cur: set[int] = field(default_factory=set)
+    session_procs: Sequence[SessionProc] = field(default_factory=tuple)
+    agents_map: Mapping[str, int | None] = field(default_factory=dict)
+    cur: AbstractSet[int] = field(default_factory=frozenset)
+    liveness_snapshot: liveness.LivenessSnapshot | None = None
 
 
 def build_world_snapshot() -> WorldSnapshot:
     """Compute the shared per-cycle world once (worker thread, R11/D8).
 
-    Heavy scans (transcript glob via `sessions.scan`, `/proc` walk via
-    `rc.scan_servers`) run exactly once here instead of once per tab. The
-    registry reads are ~5s-TTL cached so the few repeat reads inside `scan()`
-    hit the cache. Each data owner handles its expected external failures.
+    Heavy scans (transcript glob via `sessions.scan`, the full `/proc` walk via
+    `rc.scan_servers`) run exactly once here instead of once per tab. Session
+    liveness uses targeted per-pid `/proc` reads, not another full walk; those
+    inputs are captured once and injected into `sessions.scan`. Each data owner
+    handles its expected external failures.
     """
-    session_procs, cur, agent_jobs, agents_map = liveness.liveness_inputs()
-    all_sessions = sessions.scan()
+    inputs = liveness.liveness_inputs()
+    all_sessions = sessions.scan(inputs)
     rc_scan = rc.scan_result()
     rc_servers = rc.scan_servers()
     # R6 ledger reconciliation (the whole point of the ledger): ONE pipeline —
@@ -81,17 +84,22 @@ def build_world_snapshot() -> WorldSnapshot:
     # file-referenced set, surfacing as an orphan / manual-delete candidate.
     # Cheap and safe on the worker thread: the ledger write is write-on-change
     # + flock + compacted, so re-observing the same set is a no-op rewrite.
-    recon = environments.reconcile(session_procs, agent_jobs, rc_servers)
+    recon = environments.reconcile(
+        inputs.session_procs,
+        inputs.agent_jobs,
+        rc_servers,
+    )
     return WorldSnapshot(
         sessions=all_sessions,
-        agent_jobs=agent_jobs,
+        agent_jobs=inputs.agent_jobs,
         rc_projects=rc_scan.projects,
         rc_project_settings=rc_scan.settings,
         rc_servers=rc_servers,
         observed_envs=recon.observed,
         file_referenced_envs=recon.file_referenced,
         environment_reconciliation=recon,
-        session_procs=session_procs,
-        agents_map=agents_map,
-        cur=cur,
+        session_procs=inputs.session_procs,
+        agents_map=inputs.agents_map,
+        cur=inputs.cur,
+        liveness_snapshot=inputs,
     )

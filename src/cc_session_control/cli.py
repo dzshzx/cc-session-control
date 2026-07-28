@@ -139,8 +139,7 @@ def _cmd_rc(args: argparse.Namespace) -> None:
 
     elif sub == "rm":
         path = os.path.abspath(args.project)
-        rc.list_rm(path)
-        rc.stop_one(path)
+        rc.remove_one(path)
         print(f"Removed and stopped: {path}")
 
     elif sub == "up":
@@ -225,13 +224,19 @@ def _cmd_prune(args: argparse.Namespace) -> int:
     )
     from .data.sessions import scan
 
-    sessions = scan()
     # One shared fetch feeds the frozen plan — the SAME assembly build_plan's
     # other callers (the Sessions view, build_world_snapshot) use, so the CLI
     # header and any future TUI parity stay derived from one source (删除 ⊆ 预览
     # still holds: execute_* revalidate against fresh data at apply time).
-    procs, cur, jobs, agents = liveness.liveness_inputs()
-    plan = build_plan(sessions, procs, cur, jobs, agents)
+    inputs = liveness.liveness_inputs()
+    sessions = scan(inputs)
+    plan = build_plan(
+        sessions,
+        inputs.session_procs,
+        inputs.cur,
+        inputs.agent_jobs,
+        inputs.agents_map,
+    )
     counts = plan.counts()
     print(
         f"Total: {len(sessions)}  Prunable empty: {counts['empty']}  "

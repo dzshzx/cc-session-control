@@ -94,7 +94,7 @@ def capture_pane(target: str) -> str:
     server startup is still grep-able after it scrolls off the visible region.
     """
     cp = _tmux_run(["capture-pane", "-p", "-S", "-", "-t", target])
-    if cp is None:
+    if cp is None or cp.returncode != 0:
         return ""
     return cp.stdout
 

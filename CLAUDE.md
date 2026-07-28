@@ -56,7 +56,7 @@ csctl env                                    # list bridge environments (current
 UI 工具库是 **urwid**（唯一的运行时依赖是 `urwid>=2.0.0`）。`src/cc_session_control/` 下分三层：
 
 - **`data/`**——所有触碰外部状态的代码，读*和*写都在这里。它内部是一个 **bottom→top DAG**（无环）：
-  - bottom（纯 IO + 解析）：`proc.py`（唯一的 `/proc` seam——`proc_starttime`/`pid_alive`/`ancestor_pids`/`scan_rc_servers`）、`registry.py`（`sessions/*.json` + `jobs/*/state.json`，约 5s TTL 缓存）、`tmux.py`（唯一的 tmux seam——见下文；本包内只能 import `proc`）。
+  - bottom（纯 IO + 解析）：`proc.py`（唯一的 `/proc` seam——`proc_starttime`/`pid_alive`/`ancestor_pids`/`scan_rc_servers`）、`registry.py`（`sessions/*.json` + `jobs/*/state.json`，约 5s TTL 缓存）、`tmux.py`（唯一的 tmux seam——见下文；本包内只能 import `proc`）、`rc_environment.py`（按 `(window_id, pane_pid)` 缓存 managed RC pane 的 `env_*` 抓取，负结果用有界指数退避）。
   - middle：`liveness.py`（唯一的 liveness 权威——`alive_map`/`invalidate_cache`/纯函数 `live_index`）、`environments.py`（bridge-environment ledger——**绝不能 import `rc`**）、`cleanup.py`（per-dir-key + age 的清理策略）。
   - top（组装）：`sessions.py`（解析 transcripts → `Session`）、`rc.py`（RC 领域逻辑：trust + autostart 列表 + `/proc` 服务器发现 → `RCProject`/`RCServer`；实际 tmux 调用消费 `tmux.py`，单向调用 `environments.upsert`）。
   - `snapshot.py` 位于其余之上（把它们组合成一个 `WorldSnapshot`）；`data/` 里没有任何东西 import 它（只有 `app`/`views` 会）。
@@ -87,7 +87,7 @@ UI 工具库是 **urwid**（唯一的运行时依赖是 `urwid>=2.0.0`）。`src
 
 扫描会触及文件系统、`/proc` 和子进程，所以它不能阻塞 urwid loop，且三个 tab 不能各自重复扫描（R11/D8）。模式（`App.trigger_async_refresh`）：
 
-1. 一个 daemon 线程为整个周期计算**一个** `data/snapshot.py::build_world_snapshot()`（transcripts、registries、`/proc` walk、RC servers——各扫描一次），然后对每个 view 调用 `view.fetch_pending(snapshot)`。build 失败则降级为 `fetch_pending(None)`（每个 view 自取）——而自取复用*同一套*装配，不是镜像：Sessions view 调用 `liveness.liveness_inputs()`（`build_world_snapshot` 自身消费的 `(session_procs, cur, agent_jobs, agents_map)` 元组——cleanup 的保护集装配（`_gather_known`/`execute_session_removals`）也共享它，因为 `liveness` 在 data DAG 中位于 `cleanup` 之下且无环），Agents view 调用 `liveness.enrich_jobs(...)`，RC 则重新调用同样的 `rc.scan()`/`rc.scan_servers()`。view 只写自己的 `_pending` 字段，**绝不直接碰 widget**。
+1. 一个 daemon 线程为整个 generation 计算**一个** `data/snapshot.py::build_world_snapshot()`，再由 `data/refresh.py::build_refresh_result()` 生成一个原子 `RefreshBatch`。`liveness.liveness_inputs()` 返回 generation-local、不可变的 `LivenessSnapshot`；`sessions.scan(inputs)`、agent 投影和 cleanup plan 共用其中同一组 `session_procs` / `cur` / `agent_jobs` / `agents_map`，不再重复逐 PID 的 `/proc` 判活。这里要区分两类成本：session liveness 是 targeted proc reads；RC server discovery 的 `proc.scan_rc_servers()` 才是每 generation 一次完整 `/proc` 遍历。新 generation 强制重新采集 liveness，不把前一代 PID verdict 当作新鲜状态。
 2. 该线程向经 `loop.watch_pipe(self._on_pipe)` 注册的管道写入一个字节。
 3. `_on_pipe` 在 main loop 上运行，对每个 view 调用 `apply_data()`，把 `_pending` 换入 live walker。
 
@@ -137,7 +137,7 @@ TUI 无法在自身内部运行 `claude`。resume 家族的动作退出 MainLoop
 
 所有 tmux 访问都经单一 seam **`data/tmux.py`**：只有它的 `_tmux_run` 触碰 `subprocess`；其余每个 tmux 调用都是薄动词封装（`run_in_tmux`、`kill_window`、`residency_targets`——`find_session_window` 所构建于其上的批量 residency join，……），保持吞错契约。新的 tmux 操作作为封装加在那里，而不是在别处裸调 `subprocess`。`rc.py` 只保留 RC 领域逻辑和绑定到 `cfg.rc_session` 的薄 RC 范围委托（`_tmux_windows`——返回带 `@csctl_path`/`pane_current_path`/`window_id` 元数据的 `tmux.TmuxWindow` 列表——和 `_tmux_capture_pane`，外加按路径 join 的 `_window_for`；保留为具名 seam 是因为 `scan`/`scan_servers` 及其测试会戳它们）——它不以其他方式触碰 tmux 内部。`actions/session_ops.py` 和 `actions/agent_ops.py` 为 resume/relaunch 的 tmux 调用直接 import `tmux`（不是 `rc`），因此 session-resume 路径绝不依赖 RC 模块。
 
-**超出 tmux 的发现（`rc.scan_servers()`）。** RC servers 也通过遍历 `/proc` 找到（`proc.scan_rc_servers` + 纯函数 `proc._match_rc_cmdline`：argv0 basename `claude` *且*一个 `remote-control` 子命令 token *且* `--name`——用 `--remote-control` *flag* 的 codex 被排除）。一个属于 csctl 管理的 tmux pane 的被发现 pid 是 **managed**；否则它是 **external** 且**只读**（csctl 绝不接管/重启它）。Managed servers 的 `env_*` cloud id 从 pane 中 grep 出来并单向推入 ledger。
+**超出 tmux 的发现（`rc.scan_servers()`）。** RC servers 也通过遍历 `/proc` 找到（`proc.scan_rc_servers` + 纯函数 `proc._match_rc_cmdline`：argv0 basename `claude` *且*一个 `remote-control` 子命令 token *且* `--name`——用 `--remote-control` *flag* 的 codex 被排除）。一个属于 csctl 管理的 tmux pane 的被发现 pid 是 **managed**；否则它是 **external** 且**只读**（csctl 绝不接管/重启它）。Managed servers 的 `env_*` cloud id 从 pane 中 grep 出来并单向推入 ledger；`rc_environment.EnvironmentIdCache` 让同一 `(window_id, pane_pid)` 的成功抓取跨 generation 复用，miss 按 monotonic clock 退避并最终重试，窗口消失/PID 改变会 prune，start/stop/remove 会显式失效，所以稳定 pane 不再每 10 秒抓全量 scrollback。
 
 **三个 Remote Control 命名空间——相互独立，绝不通过后缀关联：**
 - **session remote control** → `sessions/<pid>.json` 中的 `bridgeSessionId: session_*`（一个前台 session 暴露自己）。三态：key 缺失（从未开启）/ `null`（瞬态——重新开启会覆盖它）/ string（已暴露）。「现在已暴露」= 上文的 `is_rc_exposed` 谓词。

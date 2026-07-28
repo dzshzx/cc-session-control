@@ -26,7 +26,7 @@ def _sp(pid, sid, bridge=None, proc_start="1"):
 def _stub_sources(monkeypatch, procs):
     monkeypatch.setattr(snapshot.liveness.registry, "read_session_procs", lambda *a, **k: procs)
     monkeypatch.setattr(snapshot.liveness.registry, "read_agent_jobs", lambda *a, **k: [])
-    monkeypatch.setattr(snapshot.sessions, "scan", lambda: [])
+    monkeypatch.setattr(snapshot.sessions, "scan", lambda inputs=None: [])
     monkeypatch.setattr(
         snapshot.rc, "scan_result",
         lambda: snapshot.rc.RCScanResult(
@@ -136,3 +136,93 @@ def test_snapshot_keeps_current_environment_and_carries_ledger_failure(
         "snapshot history denied" in warning
         for warning in snap.environment_reconciliation.warnings
     )
+
+
+def test_snapshot_captures_each_liveness_source_once_per_generation(
+    tmp_path,
+    monkeypatch,
+):
+    """Sessions consumes the generation's injected liveness, not fresh proc reads.
+
+    The liveness side performs targeted pid checks; the RC side performs the one
+    full `/proc` traversal.  Keep those costs distinct in the regression test.
+    """
+    monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    calls = {
+        "registry_sessions": 0,
+        "pid_alive": 0,
+        "jobs": 0,
+        "agents": 0,
+        "ancestors": 0,
+        "rc_proc_scan": 0,
+    }
+    generations = iter((101, 202))
+    active_pid = {"value": next(generations)}
+
+    def read_session_procs(*args, **kwargs):
+        calls["registry_sessions"] += 1
+        return [_sp(active_pid["value"], f"sid-{active_pid['value']}")]
+
+    def pid_alive(pid, proc_start):
+        calls["pid_alive"] += 1
+        return True
+
+    def read_jobs(*args, **kwargs):
+        calls["jobs"] += 1
+        return []
+
+    def read_agents(*args, **kwargs):
+        calls["agents"] += 1
+        return {}
+
+    def read_ancestors():
+        calls["ancestors"] += 1
+        return {active_pid["value"]}
+
+    injected = []
+
+    def scan_sessions(inputs=None):
+        injected.append(inputs)
+        return []
+
+    monkeypatch.setattr(snapshot.liveness.registry, "read_session_procs", read_session_procs)
+    monkeypatch.setattr(snapshot.liveness.proc, "pid_alive", pid_alive)
+    monkeypatch.setattr(snapshot.liveness.registry, "read_agent_jobs", read_jobs)
+    monkeypatch.setattr(snapshot.liveness, "alive_map", read_agents)
+    monkeypatch.setattr(snapshot.liveness.proc, "ancestor_pids", read_ancestors)
+    monkeypatch.setattr(snapshot.sessions, "scan", scan_sessions)
+    monkeypatch.setattr(
+        snapshot.rc,
+        "scan_result",
+        lambda: snapshot.rc.RCScanResult(
+            [], ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
+        ),
+    )
+    monkeypatch.setattr(snapshot.rc, "_tmux_windows", lambda: [])
+
+    def scan_rc_procs():
+        calls["rc_proc_scan"] += 1
+        return []
+
+    monkeypatch.setattr(snapshot.rc.proc, "scan_rc_servers", scan_rc_procs)
+
+    first = snapshot.build_world_snapshot()
+    active_pid["value"] = next(generations)
+    second = snapshot.build_world_snapshot()
+
+    assert calls == {
+        "registry_sessions": 2,
+        "pid_alive": 2,
+        "jobs": 2,
+        "agents": 2,
+        "ancestors": 2,
+        "rc_proc_scan": 2,
+    }
+    assert injected == [first.liveness_snapshot, second.liveness_snapshot]
+    assert first.liveness_snapshot is not second.liveness_snapshot
+    assert first.session_procs is first.liveness_snapshot.session_procs
+    assert first.agent_jobs is first.liveness_snapshot.agent_jobs
+    assert first.agents_map is first.liveness_snapshot.agents_map
+    assert first.cur is first.liveness_snapshot.cur
+    assert [sp.pid for sp in first.session_procs] == [101]
+    assert [sp.pid for sp in second.session_procs] == [202]

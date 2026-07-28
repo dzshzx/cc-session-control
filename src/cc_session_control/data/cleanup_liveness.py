@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence, Set as AbstractSet
+
 from ..models import AgentJob, SessionProc
 from . import liveness, proc, registry
 
 
 def fill_liveness_inputs(
-    session_procs: list[SessionProc] | None,
-    agent_jobs: list[AgentJob] | None,
-    agents_map: dict[str, int | None] | None,
-    cur: set[int] | None,
+    session_procs: Sequence[SessionProc] | None,
+    agent_jobs: Sequence[AgentJob] | None,
+    agents_map: Mapping[str, int | None] | None,
+    cur: AbstractSet[int] | None,
     *,
     fresh: bool = False,
-) -> tuple[list[SessionProc], list[AgentJob], dict[str, int | None], set[int]]:
+) -> tuple[
+    Sequence[SessionProc],
+    Sequence[AgentJob],
+    Mapping[str, int | None],
+    AbstractSet[int],
+]:
     """Fill omitted inputs, bypassing caches for confirmed execution."""
     if (
         session_procs is None
@@ -24,8 +31,13 @@ def fill_liveness_inputs(
         if fresh:
             defaults = fresh_liveness_inputs()
         else:
-            d_procs, d_cur, d_jobs, d_agents = liveness.liveness_inputs()
-            defaults = d_procs, d_jobs, d_agents, d_cur
+            inputs = liveness.liveness_inputs()
+            defaults = (
+                inputs.session_procs,
+                inputs.agent_jobs,
+                inputs.agents_map,
+                inputs.cur,
+            )
         d_procs, d_jobs, d_agents, d_cur = defaults
         session_procs = d_procs if session_procs is None else session_procs
         agent_jobs = d_jobs if agent_jobs is None else agent_jobs

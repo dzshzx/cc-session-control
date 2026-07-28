@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
 from pathlib import Path
 from typing import TypeVar
 
@@ -129,11 +129,11 @@ def remove_agent_artifacts(short: str, sid: str) -> CleanupExecution:
 # --- Strategy A: sid-keyed orphan dirs (H1 protected-sid set) --------------
 
 def known_sids(
-    sessions: list[Session],
-    session_procs: list[SessionProc],
-    agent_jobs: list[AgentJob],
-    agents_map: dict[str, int | None],
-    cur: set[int],
+    sessions: Sequence[Session],
+    session_procs: Sequence[SessionProc],
+    agent_jobs: Sequence[AgentJob],
+    agents_map: Mapping[str, int | None],
+    cur: AbstractSet[int],
 ) -> set[str]:
     """Sids whose sid-keyed artifacts must NOT be swept (H1 safety) — PURE.
 
@@ -167,11 +167,11 @@ def known_sids(
 
 
 def _gather_known(
-    sessions: list[Session],
-    session_procs: list[SessionProc] | None = None,
-    agent_jobs: list[AgentJob] | None = None,
-    agents_map: dict[str, int | None] | None = None,
-    cur: set[int] | None = None,
+    sessions: Sequence[Session],
+    session_procs: Sequence[SessionProc] | None = None,
+    agent_jobs: Sequence[AgentJob] | None = None,
+    agents_map: Mapping[str, int | None] | None = None,
+    cur: AbstractSet[int] | None = None,
     *,
     fresh: bool = False,
 ) -> set[str]:
@@ -182,12 +182,12 @@ def _gather_known(
 
 
 def list_orphan_dirs(
-    sessions: list[Session],
+    sessions: Sequence[Session],
     *,
-    session_procs: list[SessionProc] | None = None,
-    agent_jobs: list[AgentJob] | None = None,
-    agents_map: dict[str, int | None] | None = None,
-    cur: set[int] | None = None,
+    session_procs: Sequence[SessionProc] | None = None,
+    agent_jobs: Sequence[AgentJob] | None = None,
+    agents_map: Mapping[str, int | None] | None = None,
+    cur: AbstractSet[int] | None = None,
 ) -> list[str]:
     """Orphan sid-keyed artifact entries (`<dir>/<sid>`), preview list.
 
@@ -256,7 +256,10 @@ def execute_orphan_removals(
 
 # --- Strategy A: pid-keyed zombie session files ----------------------------
 
-def select_zombie_pids(session_procs: list[SessionProc], cur: set[int]) -> list[int]:
+def select_zombie_pids(
+    session_procs: Sequence[SessionProc],
+    cur: AbstractSet[int],
+) -> list[int]:
     """Removable `sessions/<pid>.json` pids — PURE (no IO), for unit tests.
 
     A pid file is removable iff its proc is CONFIRMED dead (`proc_alive is
@@ -542,10 +545,10 @@ def _plan_source(
 
 def build_plan(
     sessions: list[Session],
-    session_procs: list[SessionProc],
-    cur: set[int],
-    agent_jobs: list[AgentJob] | None = None,
-    agents_map: dict[str, int | None] | None = None,
+    session_procs: Sequence[SessionProc],
+    cur: AbstractSet[int],
+    agent_jobs: Sequence[AgentJob] | None = None,
+    agents_map: Mapping[str, int | None] | None = None,
     now: float | None = None,
 ) -> CleanupPlan:
     """Build the cleanup plan from the shared world data (deps injected)."""

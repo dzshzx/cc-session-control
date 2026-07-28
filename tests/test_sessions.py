@@ -7,10 +7,12 @@ scan() merges three liveness/identity sources (registry sessions/<pid>.json,
 """
 
 import json
+from types import MappingProxyType
 
 from cc_session_control.config import cfg
-from cc_session_control.data import proc, registry
+from cc_session_control.data import liveness, proc, registry
 from cc_session_control.data import sessions as sessions_mod
+from cc_session_control.models import AgentJob, SessionProc
 
 CLI_SID = "cli11111-1111-1111-1111-111111111111"
 VSC_SID = "vsc22222-2222-2222-2222-222222222222"
@@ -202,3 +204,53 @@ def test_scan_excludes_transcript_without_cwd(tmp_path, monkeypatch):
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: set())
 
     assert sessions_mod.scan() == []
+
+
+def test_scan_uses_injected_generation_liveness_without_reading_sources(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    sid = "injected-sid"
+    _write_transcript(tmp_path / "projects", sid, [
+        {"cwd": "/work/injected"},
+        {"type": "user", "message": {"content": "hello"}},
+    ])
+    inputs = liveness.LivenessSnapshot(
+        session_procs=(
+            SessionProc(
+                pid=5150,
+                sid=sid,
+                proc_start="1",
+                proc_alive=True,
+            ),
+        ),
+        cur=frozenset({5150}),
+        agent_jobs=(
+            AgentJob(
+                short=sid[:8],
+                sid=sid,
+                resume_sid=sid,
+                host_pid=5150,
+                host_alive=True,
+            ),
+        ),
+        agents_map=MappingProxyType({sid: 5150}),
+    )
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("injected scan must not re-read liveness sources")
+
+    monkeypatch.setattr(sessions_mod, "live_session_procs", unexpected)
+    monkeypatch.setattr(sessions_mod, "alive_map", unexpected)
+    monkeypatch.setattr(sessions_mod.registry, "read_agent_jobs", unexpected)
+    monkeypatch.setattr(sessions_mod, "_ancestor_pids", unexpected)
+    monkeypatch.setattr(sessions_mod.tmux, "residency_targets", lambda pids: {})
+
+    rows = sessions_mod.scan(inputs)
+
+    assert len(rows) == 1
+    assert rows[0].sid == sid
+    assert rows[0].alive
+    assert rows[0].current
+    assert rows[0].agent_short == sid[:8]

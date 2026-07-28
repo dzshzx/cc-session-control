@@ -10,6 +10,7 @@ warning surfaced on `stop` is a capability red line (R4.5 / AC4).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import urwid
@@ -124,7 +125,7 @@ class AgentsView(ListTabView):
 
     def __init__(self, app: App) -> None:
         super().__init__(app, _AGENTS_HEADER)
-        self._jobs: list[AgentJob] = []
+        self._jobs: Sequence[AgentJob] = ()
         self._mode = "list"
 
     # --- TabView contract ---

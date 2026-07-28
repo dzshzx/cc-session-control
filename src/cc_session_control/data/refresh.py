@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
@@ -60,10 +60,10 @@ SnapshotBuilder: TypeAlias = Callable[[], WorldSnapshot]
 CleanupBuilder: TypeAlias = Callable[
     [
         list[Session],
-        list[SessionProc],
-        set[int],
-        list[AgentJob],
-        dict[str, int | None],
+        Sequence[SessionProc],
+        AbstractSet[int],
+        Sequence[AgentJob],
+        Mapping[str, int | None],
     ],
     CleanupPlan,
 ]

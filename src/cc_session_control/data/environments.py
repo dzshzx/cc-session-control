@@ -38,6 +38,7 @@ incomplete.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from ..models import (
@@ -78,9 +79,9 @@ class Reconciliation:
 # --- observation builder (reads registry + liveness, never rc) -------------
 
 def _collect(
-    session_procs: list[SessionProc],
-    agent_jobs: list[AgentJob],
-    rc_servers: list[RCServer] | None,
+    session_procs: Sequence[SessionProc],
+    agent_jobs: Sequence[AgentJob],
+    rc_servers: Sequence[RCServer] | None,
     *,
     alive_gated: bool,
 ) -> list[EnvRecord]:
@@ -122,9 +123,9 @@ def _collect(
 
 
 def observe(
-    session_procs: list[SessionProc] | None = None,
-    agent_jobs: list[AgentJob] | None = None,
-    rc_servers: list[RCServer] | None = None,
+    session_procs: Sequence[SessionProc] | None = None,
+    agent_jobs: Sequence[AgentJob] | None = None,
+    rc_servers: Sequence[RCServer] | None = None,
     max_age: float = 5.0,
 ) -> list[EnvRecord]:
     """FILE-REFERENCED bridge envs — the ledger MEMBERSHIP set (R6).
@@ -150,9 +151,9 @@ def observe(
 
 
 def observe_live(
-    session_procs: list[SessionProc] | None = None,
-    agent_jobs: list[AgentJob] | None = None,
-    rc_servers: list[RCServer] | None = None,
+    session_procs: Sequence[SessionProc] | None = None,
+    agent_jobs: Sequence[AgentJob] | None = None,
+    rc_servers: Sequence[RCServer] | None = None,
     max_age: float = 5.0,
 ) -> list[EnvRecord]:
     """Alive-gated "currently exposed" bridge envs (R3/R6) — the CURRENT set.
@@ -180,9 +181,9 @@ def observe_live(
 # --- public API ------------------------------------------------------------
 
 def reconcile(
-    session_procs: list[SessionProc] | None = None,
-    agent_jobs: list[AgentJob] | None = None,
-    rc_servers: list[RCServer] | None = None,
+    session_procs: Sequence[SessionProc] | None = None,
+    agent_jobs: Sequence[AgentJob] | None = None,
+    rc_servers: Sequence[RCServer] | None = None,
     max_age: float = 5.0,
     now: float | None = None,
 ) -> Reconciliation:
