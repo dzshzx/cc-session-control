@@ -355,9 +355,9 @@ def _cmd_tui(args: Namespace) -> int:
     result = App().run()
 
     # The intent finalizes itself outside the urwid loop (it may exec-replace
-    # csctl — resume/attach) and prints its own failure messages.
+    # csctl — resume/attach) and returns the process status on failure.
     if isinstance(result, ExitIntent):
-        result.run()
+        return result.run()
     return 0
 
 

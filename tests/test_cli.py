@@ -436,8 +436,9 @@ def test_tui_exit_intent_runs_only_after_main_loop_returns(monkeypatch):
     events = []
 
     class Intent(ExitIntent):
-        def run(self):
+        def run(self) -> int:
             events.append("intent")
+            return 0
 
     intent = Intent()
 

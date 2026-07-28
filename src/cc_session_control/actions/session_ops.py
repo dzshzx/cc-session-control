@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shlex
 import signal
+import sys
 import time
 from dataclasses import dataclass
 from typing import Literal
@@ -104,26 +105,25 @@ def resume_cmd(s: Session, fork: bool = False) -> str:
     return " && ".join(parts)
 
 
-def do_resume(s: Session, fork: bool = False) -> None:
-    """chdir + (kill if needed) + exec claude. Does not return on success.
+def do_resume(s: Session, fork: bool = False) -> bool:
+    """chdir + (kill if needed) + exec claude. Returns False only on refusal.
 
     R10: when a takeover kill is required but "current" can't be determined (no
-    `/proc`), refuse — print a message and return WITHOUT killing or exec'ing, so
-    we never SIGTERM the launching session (every pid looks dead off `/proc`).
+    `/proc`), refuse WITHOUT killing or exec'ing, so we never SIGTERM the
+    launching session (every pid looks dead off `/proc`). A successful exec
+    replaces csctl and never returns; True is the modeled-success return for
+    tests whose system boundary returns.
     """
     cwd, args, should_kill = _resume_plan(s, fork)
     if should_kill and s.pid:
         if take_over(s.pid, s.proc_start) == "refused":
-            print(
-                "Refused: '/proc' unavailable — cannot determine the current "
-                "session, so the old process can't be safely killed (R10)."
-            )
-            return
+            return False
         # "gone"/"failed" fall through: the kill is best-effort here, the
         # resume itself must still happen.
     if cwd and os.path.isdir(cwd):
         os.chdir(cwd)
     os.execvp("claude", args)
+    return True
 
 
 def _spawn_in_tmux(s: Session, cmd: str, fork: bool = False) -> str | None:
@@ -201,8 +201,8 @@ def do_tmux_new(directory: str) -> str | None:
 class ExitIntent:
     """What a view asks csctl to do AFTER the MainLoop exits."""
 
-    def run(self) -> None:
-        """Finalize outside the loop; may exec-replace the csctl process."""
+    def run(self) -> int:
+        """Finalize outside the loop and return a process exit status."""
         raise NotImplementedError
 
 
@@ -214,8 +214,23 @@ class ResumeIntent(ExitIntent):
     session: Session
     fork: bool = False
 
-    def run(self) -> None:
-        do_resume(self.session, fork=self.fork)
+    def run(self) -> int:
+        try:
+            resumed = do_resume(self.session, fork=self.fork)
+        except OSError as exc:
+            print(
+                f"Failed to resume session {self.session.sid} in the terminal: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        if not resumed:
+            print(
+                "Refused: '/proc' unavailable — cannot determine the current "
+                "session, so the old process can't be safely killed (R10).",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
 
 
 @dataclass(frozen=True)
@@ -224,9 +239,22 @@ class AttachIntent(ExitIntent):
 
     target: str
 
-    def run(self) -> None:
-        if not enter_window(self.target):
-            print(f"Failed to enter tmux window {self.target} (is tmux running?)")
+    def run(self) -> int:
+        try:
+            entered = enter_window(self.target)
+        except OSError as exc:
+            print(
+                f"Failed to enter tmux window {self.target}: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        if not entered:
+            print(
+                f"Failed to enter tmux window {self.target} (is tmux running?)",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
 
 
 @dataclass(frozen=True)
@@ -237,14 +265,30 @@ class TmuxResumeIntent(ExitIntent):
     session: Session
     fork: bool = False
 
-    def run(self) -> None:
+    def run(self) -> int:
         target = do_tmux_resume(self.session, fork=self.fork)
         if target is None:
             print(
-                "Failed to resume the session inside tmux (R10 degraded, or tmux unavailable)."
+                "Failed to resume the session inside tmux "
+                "(R10 degraded, or tmux unavailable).",
+                file=sys.stderr,
             )
-        elif not enter_window(target):
-            print(f"Session resumed in tmux window {target}, but attaching failed.")
+            return 1
+        try:
+            entered = enter_window(target)
+        except OSError as exc:
+            print(
+                f"Session resumed in tmux window {target}, but attaching failed: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        if not entered:
+            print(
+                f"Session resumed in tmux window {target}, but attaching failed.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
 
 
 @dataclass(frozen=True)
@@ -253,12 +297,29 @@ class TmuxNewIntent(ExitIntent):
 
     directory: str
 
-    def run(self) -> None:
+    def run(self) -> int:
         target = do_tmux_new(self.directory)
         if target is None:
-            print("Failed to start a new session inside tmux (is tmux available?).")
-        elif not enter_window(target):
-            print(f"Session started in tmux window {target}, but attaching failed.")
+            print(
+                "Failed to start a new session inside tmux (is tmux available?).",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            entered = enter_window(target)
+        except OSError as exc:
+            print(
+                f"Session started in tmux window {target}, but attaching failed: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        if not entered:
+            print(
+                f"Session started in tmux window {target}, but attaching failed.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
 
 
 def enter_window(target: str) -> bool:
@@ -273,10 +334,7 @@ def enter_window(target: str) -> bool:
     session = target.split(":", 1)[0]
     if os.environ.get("TMUX"):
         return tmux.switch_client(target)
-    try:
-        os.execvp("tmux", ["tmux", "attach-session", "-t", session])
-    except OSError:
-        return False
+    os.execvp("tmux", ["tmux", "attach-session", "-t", session])
     return True  # unreachable after a successful exec; keeps type-checkers calm
 
 

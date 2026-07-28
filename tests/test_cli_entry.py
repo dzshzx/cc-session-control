@@ -720,7 +720,7 @@ def test_every_exit_intent_finalizes_once_after_tui_loop(
     monkeypatch.setattr(
         intent_type,
         "run",
-        lambda _self: events.append("intent"),
+        lambda _self: events.append("intent") or 0,
     )
 
     assert cli.main([]) == 0
