@@ -605,6 +605,27 @@ def test_rc_view_status_bar_counts_use_new_labels():
     assert "自动远控关 2" in text
 
 
+def test_rc_view_status_exposes_snapshot_ledger_warning():
+    from cc_session_control.data import environments
+    from cc_session_control.data.snapshot import WorldSnapshot
+
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    snap = WorldSnapshot(
+        rc_projects=[_make_project(name="p1")],
+        environment_reconciliation=environments.Reconciliation(
+            ledger_history_complete=False,
+            warnings=("环境台账操作失败（read）：permission denied",),
+        ),
+    )
+
+    view.fetch_pending(snap)
+    view.apply_data()
+
+    assert "⚠ 环境台账异常 1" in view.status.original_widget.get_text()[0]
+
+
 def test_rc_view_enter_exits_with_tmux_new():
     # Enter = 新建 tmux 会话并进入 (primary); o = 启动远控 (demoted, gated).
     app = FakeApp()

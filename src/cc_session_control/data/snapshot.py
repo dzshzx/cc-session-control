@@ -8,8 +8,9 @@ it (no per-view IO). Views stay back-compatible: `fetch_pending(None)` self-fetc
 
 This is the TOP of the data layer — it composes `sessions` / `rc` / `liveness` /
 `environments`. Nothing in `data/` imports it (only `app`/`views` do), so there
-is no cycle. Errors are swallowed by the callees; `App` additionally guards
-`build_world_snapshot` so a failed build degrades to per-view self-fetch.
+is no cycle. Recoverable external failures are typed by their owning data
+module; `App` additionally guards the snapshot boundary so a failed build
+degrades to per-view self-fetch.
 """
 
 from __future__ import annotations
@@ -33,6 +34,9 @@ class WorldSnapshot:
       - `file_referenced_envs` — bridge-truthy (`observe`): ledger MEMBERSHIP, and
         the set orphans are computed against (`orphan = ledger − file-referenced`).
 
+    `environment_reconciliation` carries the ledger update outcome and any
+    integrity warning so the Projects status can expose degraded history.
+
     `session_procs` (with `/proc` liveness already injected), `agents_map`
     (`claude agents --json`) and `cur` (the ancestor-pid set) are the raw liveness
     inputs `build_world_snapshot` already computes for the scan; they are exposed
@@ -50,6 +54,9 @@ class WorldSnapshot:
     rc_servers: list[RCServer] = field(default_factory=list)
     observed_envs: list[EnvRecord] = field(default_factory=list)
     file_referenced_envs: list[EnvRecord] = field(default_factory=list)
+    environment_reconciliation: environments.Reconciliation = field(
+        default_factory=environments.Reconciliation,
+    )
     session_procs: list[SessionProc] = field(default_factory=list)
     agents_map: dict[str, int | None] = field(default_factory=dict)
     cur: set[int] = field(default_factory=set)
@@ -61,7 +68,7 @@ def build_world_snapshot() -> WorldSnapshot:
     Heavy scans (transcript glob via `sessions.scan`, `/proc` walk via
     `rc.scan_servers`) run exactly once here instead of once per tab. The
     registry reads are ~5s-TTL cached so the few repeat reads inside `scan()`
-    hit the cache. Each callee swallows its own errors and returns safe empties.
+    hit the cache. Each data owner handles its expected external failures.
     """
     session_procs, cur, agent_jobs, agents_map = liveness.liveness_inputs()
     all_sessions = sessions.scan()
@@ -84,6 +91,7 @@ def build_world_snapshot() -> WorldSnapshot:
         rc_servers=rc_servers,
         observed_envs=recon.observed,
         file_referenced_envs=recon.file_referenced,
+        environment_reconciliation=recon,
         session_procs=session_procs,
         agents_map=agents_map,
         cur=cur,

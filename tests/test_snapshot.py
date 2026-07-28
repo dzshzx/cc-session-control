@@ -7,6 +7,7 @@ tests monkeypatch the data sources and point the ledger at a tmp dir.
 """
 
 import json
+from pathlib import Path
 
 from cc_session_control.config import cfg
 from cc_session_control.data import environments as env
@@ -101,3 +102,37 @@ def test_snapshot_reobserve_keeps_single_stable_entry(tmp_path, monkeypatch):
     snapshot.build_world_snapshot()
     assert _ledger_keys(tmp_path) == {("session", "X")}
     assert len(path.read_text().splitlines()) == 1
+
+
+def test_snapshot_keeps_current_environment_and_carries_ledger_failure(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    path = cfg.environments_ledger
+    path.write_text('{"prefix":"session","key":"OLD"}\n')
+    original_open = Path.open
+
+    def deny_ledger(target, *args, **kwargs):
+        if target == path:
+            raise PermissionError("snapshot history denied")
+        return original_open(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", deny_ledger)
+    _stub_sources(monkeypatch, [_sp(1, "sid-live", bridge="session_LIVE")])
+    monkeypatch.setattr(
+        snapshot.liveness.proc,
+        "pid_alive",
+        lambda pid, proc_start: True,
+    )
+
+    snap = snapshot.build_world_snapshot()
+
+    assert [item.env_id for item in snap.environment_reconciliation.current] == [
+        "session_LIVE",
+    ]
+    assert not snap.environment_reconciliation.ledger_history_complete
+    assert any(
+        "snapshot history denied" in warning
+        for warning in snap.environment_reconciliation.warnings
+    )

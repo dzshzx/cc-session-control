@@ -208,6 +208,8 @@ class RCView(ListTabView):
         self._pending_servers: list[RCServer] | None = None
         self._settings = ProjectSettingsResult(ProjectSettingsState.MISSING, {})
         self._pending_settings: ProjectSettingsResult | None = None
+        self._environment_warnings: tuple[str, ...] = ()
+        self._pending_environment_warnings: tuple[str, ...] | None = None
         self._help = False
 
     def keyhints(self) -> str:
@@ -237,6 +239,9 @@ class RCView(ListTabView):
                 rc.order_by_activity(snapshot.rc_projects, snapshot.sessions))
             self._pending_settings = snapshot.rc_project_settings
             self._pending_servers = snapshot.rc_servers
+            self._pending_environment_warnings = (
+                snapshot.environment_reconciliation.warnings
+            )
         else:
             # Self-fetch fallback (snapshot build failure / unit tests) has no
             # session scan — degrades to scan()'s path order by design.
@@ -259,6 +264,9 @@ class RCView(ListTabView):
             if self._pending_servers is not None:
                 self._servers = self._pending_servers
                 self._pending_servers = None
+            if self._pending_environment_warnings is not None:
+                self._environment_warnings = self._pending_environment_warnings
+                self._pending_environment_warnings = None
             if not self._help:
                 self._rebuild()
 
@@ -285,9 +293,13 @@ class RCView(ListTabView):
             f" · 项目设置不可用（{self._settings.state.value}）"
             if not self._settings.available else ""
         )
+        ledger_text = (
+            f" · ⚠ 环境台账异常 {len(self._environment_warnings)}"
+            if self._environment_warnings else ""
+        )
         return (
             f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}"
-            f"{rc_text}{miss_text}{srv_text}{settings_text}"
+            f"{rc_text}{miss_text}{srv_text}{settings_text}{ledger_text}"
         )
 
     def _close_overlay_mode(self) -> None:

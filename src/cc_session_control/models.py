@@ -269,20 +269,3 @@ class BridgeEnv:
     def env_id(self) -> str:
         """Full namespaced id (`cse_<key>` / `session_<key>` / `env_<key>`)."""
         return f"{self.prefix}_{self.key}"
-
-
-@dataclass
-class Reconciliation:
-    """One R6 ledger reconciliation — the output of `environments.reconcile`.
-
-    `current` (alive-gated bound envs) and `orphans` (`ledger − file-referenced`,
-    the manual-delete candidates) are the classified views; `observed` and
-    `file_referenced` are the two observation tiers they were classified
-    against (kept so callers like the snapshot can expose them without
-    re-observing). Lives here, not in `environments.py`, for the 600-line
-    budget.
-    """
-    current: list[BridgeEnv] = field(default_factory=list)
-    orphans: list[BridgeEnv] = field(default_factory=list)
-    observed: list[EnvRecord] = field(default_factory=list)
-    file_referenced: list[EnvRecord] = field(default_factory=list)

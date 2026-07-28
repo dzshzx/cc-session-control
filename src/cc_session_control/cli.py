@@ -393,7 +393,7 @@ def _cmd_agents(args: argparse.Namespace) -> None:
         print(f"  {job.short}  [{state}]  tempo={tempo}  {name}  {job.cwd}")
 
 
-def _cmd_env(args: argparse.Namespace) -> None:
+def _cmd_env(args: argparse.Namespace) -> int:
     from .data import environments, rc
 
     # Scan RC servers so the env_* namespace is covered too (it has no state
@@ -405,15 +405,26 @@ def _cmd_env(args: argparse.Namespace) -> None:
     for e in recon.current:
         print(f"  {e.env_id}  sid={e.bound_sid or '-'}")
 
-    print(f"Orphan environments (delete manually on claude.ai/code): {len(recon.orphans)}")
+    history_note = (
+        " (ledger history incomplete)"
+        if not recon.ledger_history_complete else ""
+    )
+    print(
+        "Orphan environments (delete manually on claude.ai/code): "
+        f"{len(recon.orphans)}{history_note}",
+    )
     for e in recon.orphans:
         print(f"  {e.env_id}  sid={e.bound_sid or '-'}")
+
+    for warning in recon.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
 
     print(
         "Note: csctl cannot deregister cloud environments; "
         "the orphan list is inherently incomplete "
         "(environments minted while csctl was not running are not tracked)."
     )
+    return 0 if recon.ledger.success else 1
 
 
 def _cmd_tui(args: argparse.Namespace) -> None:
@@ -449,7 +460,9 @@ def main() -> None:
     elif args.command == "agents":
         _cmd_agents(args)
     elif args.command == "env":
-        _cmd_env(args)
+        status = _cmd_env(args)
+        if status:
+            raise SystemExit(status)
     elif args.command is None:
         _cmd_tui(args)
     else:

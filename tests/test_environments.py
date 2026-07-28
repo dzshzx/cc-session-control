@@ -9,8 +9,10 @@ first_seen/last_seen are deterministic. The observe() builder test monkeypatches
 import json
 import os
 import time
+from pathlib import Path
 
 from cc_session_control.config import cfg
+from cc_session_control.data import environment_ledger as ledger
 from cc_session_control.data import environments as env
 from cc_session_control.data import registry
 from cc_session_control.models import AgentJob, EnvRecord, RCServer, SessionProc
@@ -235,6 +237,106 @@ def test_reconcile_owns_the_order_invariant(tmp_path, monkeypatch):
         ("session", "GONE", "orphan")]
     ledger_keys = {(r["prefix"], r["key"]) for r in _ledger_lines(tmp_path)}
     assert ledger_keys == {("session", "GONE"), ("session", "LIVE"), ("session", "ZOMB")}
+
+
+def test_reconcile_read_failure_keeps_current_and_marks_history_incomplete(
+    tmp_path,
+    monkeypatch,
+):
+    _use_tmp_ledger(tmp_path, monkeypatch)
+    path = tmp_path / "environments.jsonl"
+    original = b'{"prefix":"session","key":"OLD"}\n'
+    path.write_bytes(original)
+    original_open = Path.open
+
+    def deny_ledger(target, *args, **kwargs):
+        if target == path:
+            raise PermissionError("history denied")
+        return original_open(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", deny_ledger)
+    procs = [
+        SessionProc(
+            pid=1,
+            sid="sid-live",
+            bridge="session_LIVE",
+            proc_alive=True,
+        ),
+    ]
+
+    recon = env.reconcile(procs, [], None, now=20.0)
+
+    assert [item.env_id for item in recon.current] == ["session_LIVE"]
+    assert recon.orphans == []
+    assert recon.ledger.state is ledger.LedgerUpdateState.FAILED
+    assert recon.ledger.failure is ledger.LedgerFailure.READ
+    assert not recon.ledger_history_complete
+    assert any("history denied" in warning for warning in recon.warnings)
+    with original_open(path, "rb") as source:
+        assert source.read() == original
+
+
+def test_reconcile_salvages_good_history_and_exposes_bad_line_warning(
+    tmp_path,
+    monkeypatch,
+):
+    _use_tmp_ledger(tmp_path, monkeypatch)
+    path = tmp_path / "environments.jsonl"
+    valid = json.dumps({
+        "prefix": "session",
+        "key": "OLD",
+        "bound_sid": "sid-old",
+        "first_seen": 1.0,
+        "last_seen": 2.0,
+    })
+    path.write_text("{broken\n" + valid + "\n")
+    procs = [
+        SessionProc(
+            pid=1,
+            sid="sid-live",
+            bridge="session_LIVE",
+            proc_alive=True,
+        ),
+    ]
+
+    recon = env.reconcile(procs, [], None, now=20.0)
+
+    assert [item.env_id for item in recon.current] == ["session_LIVE"]
+    assert [item.env_id for item in recon.orphans] == ["session_OLD"]
+    assert recon.ledger.state is ledger.LedgerUpdateState.WRITTEN
+    assert not recon.ledger_history_complete
+    assert any("第 1 行" in warning for warning in recon.warnings)
+
+
+def test_reconcile_write_failure_keeps_readable_orphans_and_current(
+    tmp_path,
+    monkeypatch,
+):
+    _use_tmp_ledger(tmp_path, monkeypatch)
+    env.upsert([EnvRecord("session", "OLD", "sid-old")], now=10.0)
+    monkeypatch.setattr(
+        ledger.os,
+        "replace",
+        lambda source, target: (_ for _ in ()).throw(
+            OSError("read-only ledger"),
+        ),
+    )
+    procs = [
+        SessionProc(
+            pid=1,
+            sid="sid-live",
+            bridge="session_LIVE",
+            proc_alive=True,
+        ),
+    ]
+
+    recon = env.reconcile(procs, [], None, now=20.0)
+
+    assert [item.env_id for item in recon.current] == ["session_LIVE"]
+    assert [item.env_id for item in recon.orphans] == ["session_OLD"]
+    assert recon.ledger.failure is ledger.LedgerFailure.REPLACE
+    assert not recon.ledger_history_complete
+    assert any("read-only ledger" in warning for warning in recon.warnings)
 
 
 # --- orphans as the manual-delete checklist ---------------------------------

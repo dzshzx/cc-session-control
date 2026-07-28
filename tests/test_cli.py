@@ -7,8 +7,10 @@ the R10 refusal) so they are reachable by a user, not just by the library.
 
 import json
 import os
+import sys
 import time
 import types
+from pathlib import Path
 
 import pytest
 
@@ -216,6 +218,62 @@ def test_prune_main_propagates_cleanup_failure_exit_status(monkeypatch):
         cli.main()
 
     assert stopped.value.code == 1
+
+
+def test_env_command_reports_ledger_failure_on_stderr_and_exits_nonzero(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    from cc_session_control.data import rc
+
+    monkeypatch.setattr(cfg, "config_dir", tmp_path / "config")
+    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
+    cfg.config_dir.mkdir()
+    path = cfg.environments_ledger
+    path.write_text('{"prefix":"session","key":"OLD"}\n')
+    original_open = Path.open
+
+    def deny_ledger(target, *args, **kwargs):
+        if target == path:
+            raise PermissionError("history denied")
+        return original_open(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", deny_ledger)
+    monkeypatch.setattr(rc, "scan_servers", lambda: [])
+    monkeypatch.setattr(sys, "argv", ["csctl", "env"])
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert stopped.value.code == 1
+    assert "Current bridge environments: 0" in captured.out
+    assert "ledger history incomplete" in captured.out
+    assert "history denied" in captured.err
+    assert "Warning:" in captured.err
+
+
+def test_env_command_sends_recoverable_bad_line_warning_to_stderr(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    from cc_session_control.data import rc
+
+    monkeypatch.setattr(cfg, "config_dir", tmp_path / "config")
+    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
+    cfg.config_dir.mkdir()
+    cfg.environments_ledger.write_text("{broken\n")
+    monkeypatch.setattr(rc, "scan_servers", lambda: [])
+
+    status = cli._cmd_env(types.SimpleNamespace())
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "ledger history incomplete" in captured.out
+    assert "第 1 行" in captured.err
+    assert "Warning:" in captured.err
 
 
 def test_theme_flag_sets_cfg(monkeypatch):
