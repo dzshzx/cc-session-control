@@ -14,7 +14,7 @@ from pathlib import Path
 
 from cc_session_control import cli, cli_commands, cli_rc
 from cc_session_control.config import cfg
-from cc_session_control.data import liveness, registry, sessions
+from cc_session_control.data import cleanup, liveness, registry, sessions
 from cc_session_control.data import proc as proc_mod
 from cc_session_control.data.liveness import LivenessSnapshot
 from cc_session_control.models import Session, SessionProc
@@ -305,6 +305,107 @@ def test_prune_sweep_aged_dry_run_then_apply(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Swept 1 aged" in out
     assert not os.path.exists(old)
+
+
+def test_prune_age_only_dry_run_and_apply_skip_session_protection(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
+    root = tmp_path / "shell-snapshots"
+    root.mkdir()
+    old = root / "old.sh"
+    recent = root / "recent.sh"
+    old.write_text("old")
+    recent.write_text("recent")
+    stamp = time.time() - 40 * 86400
+    os.utime(old, (stamp, stamp))
+
+    sources = {
+        "liveness": (liveness, "liveness_inputs"),
+        "transcripts": (sessions, "scan_result"),
+        "ancestors": (proc_mod, "probe_current_ancestors"),
+        "cleanup plan": (cleanup, "build_plan"),
+        "session registry": (registry, "scan_session_procs"),
+        "agent registry": (registry, "scan_agent_jobs"),
+        "agents CLI": (liveness, "scan_agents"),
+    }
+    calls = dict.fromkeys(sources, 0)
+
+    def bomb(source):
+        def fail(*_args, **_kwargs):
+            calls[source] += 1
+            raise AssertionError(f"age-only prune accessed {source}")
+
+        return fail
+
+    for source, (module, attribute) in sources.items():
+        monkeypatch.setattr(module, attribute, bomb(source))
+
+    assert cli.main(["prune", "--sweep-aged"]) == 0
+    captured = capsys.readouterr()
+
+    assert calls == dict.fromkeys(sources, 0)
+    assert "Would sweep 1 aged" in captured.out
+    assert "Dry run" in captured.out
+    assert captured.err == ""
+    assert old.exists()
+    assert recent.exists()
+
+    assert cli.main(["prune", "--sweep-aged", "--apply"]) == 0
+    captured = capsys.readouterr()
+
+    assert calls == dict.fromkeys(sources, 0)
+    assert "Swept 1 aged" in captured.out
+    assert captured.err == ""
+    assert not old.exists()
+    assert recent.exists()
+
+
+def test_prune_orphan_and_aged_flags_keep_orphan_evidence_precedence(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
+    root = tmp_path / "shell-snapshots"
+    root.mkdir()
+    old = root / "old.sh"
+    old.write_text("old")
+    stamp = time.time() - 40 * 86400
+    os.utime(old, (stamp, stamp))
+    issue = liveness.LivenessIssue("process ancestors", "/proc", "unavailable")
+    liveness_calls = 0
+
+    def incomplete_liveness():
+        nonlocal liveness_calls
+        liveness_calls += 1
+        return LivenessSnapshot(issues=(issue,))
+
+    monkeypatch.setattr(liveness, "liveness_inputs", incomplete_liveness)
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda _inputs: (_ for _ in ()).throw(
+            AssertionError("incomplete liveness must stop transcript planning")
+        ),
+    )
+
+    assert (
+        cli.main(
+            ["prune", "--sweep-orphans", "--sweep-aged", "--apply"],
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+
+    assert liveness_calls == 1
+    assert "Refused: liveness evidence is incomplete" in captured.err
+    assert "Would sweep" not in captured.out
+    assert old.exists()
 
 
 def test_prune_sweep_zombies_apply_keeps_alive_and_current(

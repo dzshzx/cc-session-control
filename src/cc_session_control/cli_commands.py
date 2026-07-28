@@ -77,6 +77,11 @@ def _print_cleanup_execution(
 
 
 def _cmd_prune(args: Namespace) -> int:
+    # Age-only cleanup is session-agnostic. Keep orphan/zombie precedence for
+    # multi-flag invocations by routing early only when neither is requested.
+    if args.sweep_aged and not (args.sweep_orphans or args.sweep_zombies):
+        return _cmd_prune_aged(args)
+
     from .data import liveness
     from .data.cleanup import (
         build_plan,
