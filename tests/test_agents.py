@@ -210,8 +210,8 @@ def test_enter_key_tmux_takeover(monkeypatch):
     # non-resident worker resumes inside tmux + enters.
     monkeypatch.setattr(
         av_mod.agent_ops,
-        "resume_takeover",
-        lambda job: _takeover_session(current=False),
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False),
     )
     app, view = _make_view([_make_job()])
     view.handle_key("enter")
@@ -223,8 +223,12 @@ def test_enter_key_resident_worker_attaches_in_place(monkeypatch):
     # A tmux-resident live worker is entered in place — no kill, no confirm.
     monkeypatch.setattr(
         av_mod.agent_ops,
-        "resume_takeover",
-        lambda job: _takeover_session(current=False, alive=True, tmux_target="proj:5"),
+        "prepare_takeover",
+        lambda job: _takeover_ready(
+            current=False,
+            alive=True,
+            tmux_target="proj:5",
+        ),
     )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("enter")
@@ -236,8 +240,8 @@ def test_t_key_terminal_takeover_routes_to_resume_intent(monkeypatch):
     # t = 终端接回 (fallback): bare-terminal resume via the existing path.
     monkeypatch.setattr(
         av_mod.agent_ops,
-        "resume_takeover",
-        lambda job: _takeover_session(current=False),
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False),
     )
     app, view = _make_view([_make_job()])
     view.handle_key("t")
@@ -247,7 +251,9 @@ def test_t_key_terminal_takeover_routes_to_resume_intent(monkeypatch):
 
 def test_enter_and_t_refuse_current(monkeypatch):
     monkeypatch.setattr(
-        av_mod.agent_ops, "resume_takeover", lambda job: _takeover_session(current=True)
+        av_mod.agent_ops,
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=True),
     )
     app, view = _make_view([_make_job()])
     view.handle_key("enter")
@@ -273,13 +279,24 @@ def _takeover_session(current, alive=False, tmux_target=None):
     )
 
 
+def _takeover_ready(current, alive=False, tmux_target=None):
+    return av_mod.agent_ops.TakeoverPreparationResult(
+        av_mod.agent_ops.TakeoverPreparationState.READY,
+        session=_takeover_session(
+            current=current,
+            alive=alive,
+            tmux_target=tmux_target,
+        ),
+    )
+
+
 def test_enter_key_live_worker_confirms_takeover(monkeypatch):
     # B1: takeover of a RUNNING (non-resident) worker kills its host pid →
     # must confirm first, then resume inside tmux.
     monkeypatch.setattr(
         av_mod.agent_ops,
-        "resume_takeover",
-        lambda job: _takeover_session(current=False, alive=True),
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False, alive=True),
     )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("enter")
@@ -293,8 +310,8 @@ def test_enter_key_live_worker_confirms_takeover(monkeypatch):
 def test_t_key_live_worker_confirms_terminal_takeover(monkeypatch):
     monkeypatch.setattr(
         av_mod.agent_ops,
-        "resume_takeover",
-        lambda job: _takeover_session(current=False, alive=True),
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False, alive=True),
     )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("t")
@@ -305,34 +322,36 @@ def test_t_key_live_worker_confirms_terminal_takeover(monkeypatch):
 
 
 def test_enter_key_live_takeover_gated_when_degraded(monkeypatch):
-    # R10: off /proc a live takeover can't safely kill the old pid — the view
-    # must refuse BEFORE the confirm (not exit the TUI into do_resume's refusal).
+    # Typed preparation refuses incomplete evidence before the confirm.
     monkeypatch.setattr(
         av_mod.agent_ops,
-        "resume_takeover",
-        lambda job: _takeover_session(current=False, alive=True),
-    )
-    issue = av_mod.proc.ProcIssue("process ancestors", "/proc", "unavailable")
-    monkeypatch.setattr(
-        av_mod.proc,
-        "probe_current_ancestors",
-        lambda: av_mod.proc.AncestorProbe(frozenset(), (issue,)),
+        "prepare_takeover",
+        lambda job: av_mod.agent_ops.TakeoverPreparationResult(
+            av_mod.agent_ops.TakeoverPreparationState.REFUSED,
+            detail=(
+                "liveness evidence incomplete: process ancestors at /proc: unavailable"
+            ),
+        ),
     )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("enter")
     assert app.result is None
     assert app._confirm_messages == []  # refused before any confirm
-    assert app._notifications[-1] == av_mod._DEGRADED
+    assert "process ancestors at /proc: unavailable" in app._notifications[-1]
 
 
-def test_enter_key_dead_worker_not_gated_when_degraded(monkeypatch):
-    # A dead worker kills nothing — it stays resumable in degraded mode (B3).
+def test_enter_key_prepared_dead_worker_does_not_recheck_liveness(monkeypatch):
+    # Preparation already proved complete evidence; a dead worker kills nothing.
     monkeypatch.setattr(
         av_mod.agent_ops,
-        "resume_takeover",
-        lambda job: _takeover_session(current=False, alive=False),
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False, alive=False),
     )
-    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: False)
+    monkeypatch.setattr(
+        av_mod.proc,
+        "probe_current_ancestors",
+        lambda: (_ for _ in ()).throw(AssertionError("must not rescan")),
+    )
     app, view = _make_view([_make_job()])
     view.handle_key("enter")
     assert isinstance(app.result, TmuxResumeIntent)
@@ -341,8 +360,8 @@ def test_enter_key_dead_worker_not_gated_when_degraded(monkeypatch):
 def test_enter_key_dead_worker_takes_over_directly(monkeypatch):
     monkeypatch.setattr(
         av_mod.agent_ops,
-        "resume_takeover",
-        lambda job: _takeover_session(current=False, alive=False),
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False, alive=False),
     )
     app, view = _make_view([_make_job(host_alive=False)])
     view.handle_key("enter")

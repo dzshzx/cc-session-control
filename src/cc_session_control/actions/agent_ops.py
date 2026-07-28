@@ -3,8 +3,9 @@
 The persistent truth for a background agent lives in `jobs/<short>/state.json`
 (registry.read_agent_jobs → AgentJob); it carries NO pid. So a live worker's host
 pid is resolved by JOINing the job's sid back to `sessions/<pid>.json`
-(`job_host`) — a live worker with no sessions file is therefore unstoppable, a
-documented orphan risk surfaced in `HELP`.
+(the production takeover path does this inside one typed liveness snapshot;
+`job_host` is records-only compatibility) — a live worker with no sessions file
+is therefore unstoppable, a documented orphan risk surfaced in `HELP`.
 
 Capability red lines honoured here:
   - respawn/takeover never replace the csctl process (respawn spawns a tmux
@@ -27,7 +28,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from ..config import cfg
-from ..data import cleanup, liveness, proc, registry, tmux
+from ..data import cleanup, liveness, registry, tmux
+from ..data import proc as proc
 from ..data.cleanup_liveness import refuse_incomplete_liveness
 from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session
@@ -148,23 +150,51 @@ def watch(job: AgentJob) -> str | None:
 # --- resume takeover (reuses the existing foreground resume path) -------------
 
 
-def resume_takeover(job: AgentJob) -> Session:
-    """Adapt a background job into a `Session` for the EXISTING resume path.
+class TakeoverPreparationState(Enum):
+    """Whether one fresh generation permits constructing a takeover session."""
+
+    READY = "ready"
+    REFUSED = "refused"
+
+
+@dataclass(frozen=True)
+class TakeoverPreparationResult:
+    """Typed result of preparing one background-agent takeover."""
+
+    state: TakeoverPreparationState
+    session: Session | None = None
+    detail: str = ""
+
+
+def prepare_takeover(job: AgentJob) -> TakeoverPreparationResult:
+    """Prepare one takeover from exactly one typed liveness generation.
 
     Bringing a bg session to the foreground is just a resume of its
-    `resume_sid`, so this returns a Session the view feeds to the SAME
+    `resume_sid`, so a ready result carries the Session the view feeds to the SAME
     `app.exit_with(ResumeIntent)` → `do_resume` pipeline used for foreground sessions —
     all kill/exec/`_resume_plan` logic is reused, none duplicated (R4.4 takeover).
-    `pid`/`alive` come from the host join so a live worker is killed first
-    (resume = takeover); `current` is computed so the launching session stays
-    protected. `tmux_target` is filled here at action time (the agents list
-    renders no ⧉ badge, so there is no batch snapshot value to reuse) so the
-    tmux-first Enter can enter a resident worker in place. Does NOT itself
-    replace the csctl process.
+    Incomplete registry, process, ancestor, or agents evidence is refused before
+    any tmux lookup. Host identity, liveness, proc-start, and current-session
+    protection all come from the same immutable snapshot.
     """
-    pid, alive = job_host(job)
-    current = bool(pid) and pid in proc.probe_current_ancestors().pids
-    return Session(
+    evidence = liveness.liveness_inputs()
+    if not evidence.complete:
+        return TakeoverPreparationResult(
+            TakeoverPreparationState.REFUSED,
+            detail=_incomplete_liveness_detail(evidence),
+        )
+    pid, alive = registry.host_pid_for_sid(job.sid, evidence.session_procs)
+    proc_start = next(
+        (
+            item.proc_start
+            for item in evidence.session_procs
+            if item.sid == job.sid
+            and item.pid == pid
+            and (not alive or item.proc_alive is True)
+        ),
+        "",
+    )
+    session = Session(
         sid=job.resume_sid,
         cwd=job.cwd,
         label=job.name or job.short,
@@ -172,27 +202,28 @@ def resume_takeover(job: AgentJob) -> Session:
         prompts=0,
         pid=pid,
         alive=alive,
-        current=current,
-        proc_start=_host_start(pid),
+        current=bool(pid) and pid in evidence.cur,
+        proc_start=proc_start,
         source="bg",
         agent_short=job.short,
         tmux_target=tmux.find_session_window([pid]) if alive and pid else None,
     )
-
-
-def _host_start(pid: int | None) -> str:
-    """`proc_start` of the joined host pid ("" when unknown).
-
-    `job_host` deliberately keeps its small `(pid, alive)` shape; this second
-    lookup feeds resume-takeover's later kill-time `pid_alive` recheck. The stop
-    path instead derives both values from one fresh typed liveness snapshot.
-    """
-    if not pid:
-        return ""
-    return next(
-        (sp.proc_start for sp in liveness.live_session_procs() if sp.pid == pid),
-        "",
+    return TakeoverPreparationResult(
+        TakeoverPreparationState.READY,
+        session=session,
     )
+
+
+def resume_takeover(job: AgentJob) -> Session:
+    """Compatibility Session view of :func:`prepare_takeover`.
+
+    Production takeover decisions consume the typed result directly. Callers of
+    this legacy shape receive no executable Session when preparation is refused.
+    """
+    result = prepare_takeover(job)
+    if result.session is None:
+        raise RuntimeError(result.detail)
+    return result.session
 
 
 # --- stop (live workers only) -------------------------------------------------

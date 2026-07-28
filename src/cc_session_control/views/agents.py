@@ -18,7 +18,7 @@ import urwid
 from ..actions import agent_ops, tui_actions
 from ..actions.session_ops import ResumeIntent
 from ..data import proc
-from ..models import AgentJob
+from ..models import AgentJob, Session
 from ._base import ListTabView
 from ._colspec import ColSpec, header_columns, row_columns
 from ._confirm import DEGRADED as _DEGRADED
@@ -213,10 +213,21 @@ class AgentsView(ListTabView):
             lambda: tui_actions.respawn_agent(request),
         )
 
+    def _prepare_takeover(self, job: AgentJob) -> Session | None:
+        prepared = agent_ops.prepare_takeover(job)
+        if prepared.state is agent_ops.TakeoverPreparationState.REFUSED:
+            self.app.notify(f"已拒绝接回：{prepared.detail}")
+            return None
+        if prepared.session is None:
+            raise RuntimeError("ready takeover preparation has no session")
+        return prepared.session
+
     def _takeover(self, job: AgentJob) -> None:
         """Enter — tmux 接回: a tmux-resident worker is entered in place;
         otherwise resume it inside its per-project tmux window (ADR-0001)."""
-        s = agent_ops.resume_takeover(job)
+        s = self._prepare_takeover(job)
+        if s is None:
+            return
         if s.current:
             self.app.notify("不能接回当前会话")
             return
@@ -227,11 +238,14 @@ class AgentsView(ListTabView):
             s,
             "接回后台 agent",
             name=job.name or job.short,
+            gated=False,
         )
 
     def _terminal(self, job: AgentJob) -> None:
         """t — 终端接回 (fallback): bare-terminal resume via the existing path."""
-        s = agent_ops.resume_takeover(job)
+        s = self._prepare_takeover(job)
+        if s is None:
+            return
         if s.current:
             self.app.notify("不能接回当前会话")
             return
@@ -241,6 +255,7 @@ class AgentsView(ListTabView):
             "终端接回后台 agent",
             lambda: self.app.exit_with(ResumeIntent(s)),
             name=job.name or job.short,
+            gated=False,
         )
 
     def _watch(self, job: AgentJob) -> None:

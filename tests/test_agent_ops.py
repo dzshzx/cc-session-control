@@ -194,14 +194,27 @@ def test_watch_none_when_absent(tmp_path, monkeypatch):
 
 
 def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
-    monkeypatch.setattr(ao, "job_host", lambda job: (4242, True))
-    monkeypatch.setattr(ao.proc, "ancestor_pids", lambda: set())
+    calls = {"snapshot": 0}
+    evidence = liveness.LivenessSnapshot(
+        session_procs=(
+            SessionProc(
+                pid=4242,
+                sid="abcdef0123456789",
+                proc_start="777",
+                proc_alive=True,
+            ),
+        ),
+    )
+
+    def snapshot():
+        calls["snapshot"] += 1
+        return evidence
+
+    monkeypatch.setattr(ao.liveness, "liveness_inputs", snapshot)
     monkeypatch.setattr(
-        ao.liveness,
-        "live_session_procs",
-        lambda *a, **k: [
-            SessionProc(pid=4242, sid="sid-take", proc_start="777", proc_alive=True)
-        ],
+        ao,
+        "job_host",
+        lambda *_: (_ for _ in ()).throw(AssertionError("legacy join must not run")),
     )
     monkeypatch.setattr(
         ao.tmux,
@@ -220,6 +233,7 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
     assert s.source == "bg"
     assert s.agent_short == job.short
     assert s.tmux_target == "proj:4"  # resident worker -> tmux Enter attaches in place
+    assert calls["snapshot"] == 1
 
     # The adapter feeds the EXISTING resume machinery unchanged: a live,
     # non-current session is taken over (old pid killed first).
@@ -230,8 +244,16 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
 
 
 def test_resume_takeover_dead_worker_no_kill(monkeypatch):
-    monkeypatch.setattr(ao, "job_host", lambda job: (None, False))
-    monkeypatch.setattr(ao.proc, "ancestor_pids", lambda: set())
+    monkeypatch.setattr(
+        ao.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
+        ao,
+        "job_host",
+        lambda *_: (_ for _ in ()).throw(AssertionError("legacy join must not run")),
+    )
     monkeypatch.setattr(
         ao.tmux,
         "find_session_window",
@@ -242,6 +264,22 @@ def test_resume_takeover_dead_worker_no_kill(monkeypatch):
     assert s.alive is False
     assert s.tmux_target is None
     assert resume_cmd(s) == "cd /tmp/proj && claude --resume sid-dead"
+
+
+def test_resume_takeover_compatibility_refusal_returns_no_session(monkeypatch):
+    issue = liveness.LivenessIssue(
+        "session registry",
+        "/broken/session.json",
+        "invalid JSON",
+    )
+    monkeypatch.setattr(
+        ao.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(issues=(issue,)),
+    )
+
+    with pytest.raises(RuntimeError, match="session registry"):
+        ao.resume_takeover(_make_job())
 
 
 # --- stop_job: only a confirmed-live joined host pid ---

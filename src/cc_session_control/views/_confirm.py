@@ -76,6 +76,7 @@ def confirm_takeover(
     *,
     name: str | None = None,
     fork: bool = False,
+    gated: bool = True,
 ) -> None:
     """Run `on_yes` now, or degrade-gate + confirm first on a live takeover.
 
@@ -84,12 +85,14 @@ def confirm_takeover(
     degrade refusal fires BEFORE the confirm modal — off `/proc` a live
     takeover cannot safely kill the old pid, and refusing here beats exiting
     the TUI only to have `do_resume` print its refusal. Resuming/relaunching a
-    DEAD session kills nothing: no gate, no confirm (B3).
+    DEAD session kills nothing: no gate, no confirm (B3). ``gated=False`` is
+    reserved for callers carrying a complete typed liveness preparation, so
+    confirmation does not mix generations by probing `/proc` again.
     """
     if not would_take_over(s, fork):
         on_yes()
         return
-    if not proc.probe_current_ancestors().complete:
+    if gated and not proc.probe_current_ancestors().complete:
         app.notify(DEGRADED)
         return
     shown = truncate_cells(s.label if name is None else name, CONFIRM_NAME_CELLS)
@@ -103,6 +106,7 @@ def confirm_tmux_takeover(
     *,
     fork: bool = False,
     name: str | None = None,
+    gated: bool = True,
 ) -> None:
     """The tmux-first Enter/f body, shared by the 会话/后台 tabs (ADR-0001).
 
@@ -112,7 +116,8 @@ def confirm_tmux_takeover(
     `TmuxResumeIntent` — resume (or fork) inside its per-project tmux window,
     then enter. A fork is a copy: it never enters the original's window in
     place, it always spawns its own (and never kills, so the confirm path
-    falls straight through).
+    falls straight through). ``gated`` has the same typed-preparation contract
+    as :func:`confirm_takeover`.
     """
     if not fork:
         target = attach_target(s)
@@ -126,4 +131,5 @@ def confirm_tmux_takeover(
         lambda: app.exit_with(TmuxResumeIntent(s, fork=fork)),
         name=name,
         fork=fork,
+        gated=gated,
     )
