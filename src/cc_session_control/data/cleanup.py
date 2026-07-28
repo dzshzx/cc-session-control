@@ -240,8 +240,14 @@ def execute_orphan_removals(
     evidence = fresh_liveness_inputs()
     if not evidence.complete:
         return refuse_incomplete_liveness(result, entries, evidence)
+    transcript_scan = session_data.scan_result(evidence)
+    if not transcript_scan.complete:
+        for issue in transcript_scan.issues:
+            result.issues.append(CleanupIssue(issue.source, issue.detail, issue.path))
+        result.refuse(entries, "transcript evidence incomplete; nothing deleted")
+        return result
     known = known_sids(
-        session_data.scan(evidence),
+        transcript_scan.sessions,
         evidence.session_procs,
         evidence.agent_jobs,
         evidence.agents_map,

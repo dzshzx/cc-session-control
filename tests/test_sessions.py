@@ -6,6 +6,7 @@ scan() merges three liveness/identity sources (registry sessions/<pid>.json,
 (no real /proc) and assert source/liveness/current/rc-exposure/agent-link.
 """
 
+import builtins
 import json
 from types import MappingProxyType
 
@@ -135,7 +136,9 @@ def _setup_world(tmp_path, monkeypatch):
 def test_scan_unifies_sources(tmp_path, monkeypatch):
     _setup_world(tmp_path, monkeypatch)
 
-    rows = {s.sid: s for s in sessions_mod.scan()}
+    result = sessions_mod.scan_result()
+    assert result.complete is True
+    rows = {s.sid: s for s in result.sessions}
     assert set(rows) == {CLI_SID, VSC_SID, SDK_SID, BG_SID}
 
     # source bucket spans all four entrypoints.
@@ -306,7 +309,10 @@ def test_scan_excludes_transcript_without_cwd(tmp_path, monkeypatch):
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: set())
 
-    assert sessions_mod.scan() == []
+    result = sessions_mod.scan_result()
+
+    assert result.complete is True
+    assert result.sessions == ()
 
 
 def test_scan_uses_injected_generation_liveness_without_reading_sources(
@@ -365,3 +371,119 @@ def test_scan_uses_injected_generation_liveness_without_reading_sources(
     assert rows[0].alive
     assert rows[0].current
     assert rows[0].agent_short == sid[:8]
+
+
+def test_scan_result_retains_stat_failure_as_incomplete_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    _setup_world(tmp_path, monkeypatch)
+    denied = tmp_path / "projects" / "proj1" / f"{CLI_SID}.jsonl"
+    real_stat = sessions_mod.os.stat
+
+    def stat(path):
+        if path == str(denied):
+            raise PermissionError("transcript stat denied")
+        return real_stat(path)
+
+    monkeypatch.setattr(sessions_mod.os, "stat", stat)
+
+    result = sessions_mod.scan_result()
+
+    assert result.complete is False
+    assert {row.sid for row in result.sessions} == {VSC_SID, SDK_SID, BG_SID}
+    assert len(result.issues) == 1
+    assert result.issues[0].source == "session transcript"
+    assert result.issues[0].path == str(denied)
+    assert "transcript stat denied" in result.issues[0].detail
+
+
+def test_scan_result_reports_project_directory_enumeration_failure(
+    tmp_path,
+    monkeypatch,
+):
+    _setup_world(tmp_path, monkeypatch)
+    denied = tmp_path / "projects" / "proj1"
+    real_scandir = sessions_mod.os.scandir
+
+    def scandir(path):
+        if sessions_mod.os.fspath(path) == str(denied):
+            raise PermissionError("transcript directory denied")
+        return real_scandir(path)
+
+    monkeypatch.setattr(sessions_mod.os, "scandir", scandir)
+
+    result = sessions_mod.scan_result()
+
+    assert result.sessions == ()
+    assert result.complete is False
+    assert len(result.issues) == 1
+    assert result.issues[0].source == "session transcript inventory"
+    assert result.issues[0].path == str(denied)
+    assert "transcript directory denied" in result.issues[0].detail
+
+
+def test_scan_result_retains_open_failure_as_incomplete_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    _setup_world(tmp_path, monkeypatch)
+    denied = tmp_path / "projects" / "proj1" / f"{CLI_SID}.jsonl"
+    real_open = builtins.open
+
+    def open_file(path, *args, **kwargs):
+        if sessions_mod.os.fspath(path) == str(denied):
+            raise PermissionError("transcript open denied")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", open_file)
+
+    result = sessions_mod.scan_result()
+
+    assert result.complete is False
+    assert {row.sid for row in result.sessions} == {VSC_SID, SDK_SID, BG_SID}
+    assert result.issues[0].path == str(denied)
+    assert "transcript open denied" in result.issues[0].detail
+
+
+def test_scan_result_retains_mid_read_unicode_failure_as_incomplete_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    _setup_world(tmp_path, monkeypatch)
+    broken = tmp_path / "projects" / "proj1" / f"{CLI_SID}.jsonl"
+    broken.write_bytes(b'{"cwd":"/work/proj1"}\n\xff\n')
+
+    result = sessions_mod.scan_result()
+
+    assert result.complete is False
+    assert {row.sid for row in result.sessions} == {VSC_SID, SDK_SID, BG_SID}
+    assert result.issues[0].path == str(broken)
+    assert "codec can't decode byte" in result.issues[0].detail
+
+
+def test_scan_result_ignores_malformed_lines_in_readable_transcript(
+    tmp_path,
+    monkeypatch,
+):
+    _setup_world(tmp_path, monkeypatch)
+    transcript = tmp_path / "projects" / "proj1" / f"{CLI_SID}.jsonl"
+    transcript.write_text('not json\n{"cwd":"/work/proj1"}\n', encoding="utf-8")
+
+    result = sessions_mod.scan_result()
+
+    assert result.complete is True
+    assert CLI_SID in {row.sid for row in result.sessions}
+
+
+def test_scan_result_missing_projects_root_is_complete_empty_state(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+
+    result = sessions_mod.scan_result(liveness.LivenessSnapshot())
+
+    assert result.complete is True
+    assert result.sessions == ()
+    assert result.issues == ()

@@ -86,7 +86,11 @@ def test_orphan_executor_ignores_stale_known_set_and_keeps_fresh_known_sid(
         "liveness_inputs",
         lambda: evidence,
     )
-    monkeypatch.setattr(sessions, "scan", lambda inputs=None: [])
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda inputs=None: sessions.SessionScanResult(),
+    )
 
     result = cleanup.execute_orphan_removals(
         [f"session-env/{sid}"],
@@ -116,8 +120,10 @@ def test_orphan_executor_keeps_transcript_created_after_preview(
     )
     monkeypatch.setattr(
         sessions,
-        "scan",
-        lambda inputs=None: [_session(tmp_path / f"{sid}.jsonl", sid)],
+        "scan_result",
+        lambda inputs=None: sessions.SessionScanResult(
+            (_session(tmp_path / f"{sid}.jsonl", sid),)
+        ),
     )
 
     result = cleanup.execute_orphan_removals(
@@ -129,6 +135,53 @@ def test_orphan_executor_keeps_transcript_created_after_preview(
     )
 
     assert [notice.target for notice in result.skipped] == [f"uploads/{sid}"]
+
+
+def test_orphan_executor_refuses_all_targets_when_transcripts_are_incomplete(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    _complete_ancestors(monkeypatch)
+    targets = [
+        "session-env/unreadable-sid",
+        "uploads/another-unreadable-sid",
+    ]
+    for entry in targets:
+        label, _, sid = entry.partition("/")
+        (tmp_path / label / sid).mkdir(parents=True)
+    monkeypatch.setattr(
+        cleanup_liveness.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    issue = sessions.TranscriptIssue(
+        "session transcript",
+        "/runtime/projects/project/unreadable-sid.jsonl",
+        "permission denied",
+    )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda inputs=None: sessions.SessionScanResult(issues=(issue,)),
+    )
+    _bomb_removal(monkeypatch)
+
+    result = cleanup.execute_orphan_removals(targets)
+
+    assert [notice.target for notice in result.refused] == targets
+    assert all(
+        notice.reason == "transcript evidence incomplete; nothing deleted"
+        for notice in result.refused
+    )
+    assert result.issues == [
+        cleanup.CleanupIssue(
+            "session transcript",
+            "permission denied",
+            "/runtime/projects/project/unreadable-sid.jsonl",
+        )
+    ]
+    assert all((tmp_path / entry).is_dir() for entry in targets)
 
 
 def test_zombie_executor_ignores_stale_dead_row_and_keeps_fresh_live_pid(
@@ -224,7 +277,7 @@ def test_public_executors_refuse_incomplete_typed_liveness(
     )
     monkeypatch.setattr(
         sessions,
-        "scan",
+        "scan_result",
         lambda inputs=None: (_ for _ in ()).throw(
             AssertionError("incomplete evidence must refuse before transcript scan")
         ),
@@ -275,8 +328,8 @@ def test_cli_orphan_apply_does_not_inject_transcript_evidence(
     scan_calls: list[object] = []
     monkeypatch.setattr(
         sessions,
-        "scan",
-        lambda inputs=None: scan_calls.append(inputs) or [],
+        "scan_result",
+        lambda inputs=None: scan_calls.append(inputs) or sessions.SessionScanResult(),
     )
     called: dict[str, object] = {}
 

@@ -46,12 +46,79 @@ def _stub_scan(monkeypatch):
     # that too.
     monkeypatch.setattr(sessions, "scan", lambda inputs=None: [])
     monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda inputs=None: sessions.SessionScanResult(),
+    )
+    monkeypatch.setattr(
         liveness,
         "liveness_inputs",
         lambda: LivenessSnapshot(),
     )
     monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
     registry.invalidate_cache()
+
+
+def test_prune_refuses_incomplete_transcript_preview(monkeypatch, capsys):
+    _stub_scan(monkeypatch)
+    issue = sessions.TranscriptIssue(
+        "session transcript",
+        "/runtime/projects/project/session.jsonl",
+        "permission denied",
+    )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda inputs=None: sessions.SessionScanResult(issues=(issue,)),
+    )
+
+    assert cli.main(["prune"]) == 1
+    captured = capsys.readouterr()
+    assert "Total:" not in captured.out
+    assert "Would prune" not in captured.out
+    assert "Refused: transcript evidence is incomplete" in captured.err
+    assert "/runtime/projects/project/session.jsonl" in captured.err
+    assert "permission denied" in captured.err
+
+
+def test_prune_orphan_apply_reports_fresh_incomplete_transcript_and_preserves_target(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    target = cfg.session_env_dir / "ghost"
+    target.mkdir(parents=True)
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
+        proc_mod,
+        "probe_current_ancestors",
+        lambda: proc_mod.AncestorProbe(frozenset()),
+    )
+    issue = sessions.TranscriptIssue(
+        "session transcript",
+        "/runtime/projects/project/ghost.jsonl",
+        "permission denied",
+    )
+    scans = iter(
+        (
+            sessions.SessionScanResult(),
+            sessions.SessionScanResult(issues=(issue,)),
+        )
+    )
+    monkeypatch.setattr(sessions, "scan_result", lambda inputs=None: next(scans))
+
+    assert cli.main(["prune", "--sweep-orphans", "--apply"]) == 1
+    captured = capsys.readouterr()
+    assert target.is_dir()
+    assert "Swept" not in captured.out
+    assert "Refused: no orphan dir(s) removed" in captured.err
+    assert "/runtime/projects/project/ghost.jsonl" in captured.err
+    assert "permission denied" in captured.err
 
 
 def test_prune_default_dry_run_then_apply(
@@ -272,7 +339,7 @@ def test_prune_apply_reports_incomplete_liveness_and_preserves_target(
     captured = capsys.readouterr()
 
     assert status == 1
-    assert "Liveness evidence incomplete; nothing deleted" in captured.err
+    assert "Protection evidence incomplete; nothing deleted" in captured.err
     assert "session registry" in captured.err
     assert os.fspath(malformed) in captured.err
     assert orphan.exists()

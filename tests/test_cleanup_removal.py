@@ -180,7 +180,11 @@ def test_orphan_execution_reports_removed_and_failed_paths(tmp_path, monkeypatch
         "fresh_liveness_inputs",
         lambda: liveness.LivenessSnapshot(),
     )
-    monkeypatch.setattr(cleanup.session_data, "scan", lambda inputs: [])
+    monkeypatch.setattr(
+        cleanup.session_data,
+        "scan_result",
+        lambda inputs: cleanup.session_data.SessionScanResult(),
+    )
     good = tmp_path / "session-env" / "good"
     bad = tmp_path / "session-env" / "bad"
     good.mkdir(parents=True)

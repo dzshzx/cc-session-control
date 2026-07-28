@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from ..config import cfg
 from ..models import LiveInfo, Session, SessionProc
@@ -31,6 +30,92 @@ _NOISE = (
     "<system-reminder>",
     "caveat:",
 )
+
+
+@dataclass(frozen=True)
+class TranscriptIssue:
+    """One expected transcript source failure."""
+
+    source: str
+    path: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class SessionScanResult:
+    """Transcript-driven session rows plus source completeness."""
+
+    sessions: tuple[Session, ...] = ()
+    issues: tuple[TranscriptIssue, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sessions", tuple(self.sessions))
+        object.__setattr__(self, "issues", tuple(self.issues))
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
+
+
+def _directory_entries(
+    path: str,
+    *,
+    missing_ok: bool,
+) -> tuple[list[os.DirEntry[str]], TranscriptIssue | None]:
+    try:
+        entries = os.scandir(path)
+    except FileNotFoundError:
+        if missing_ok:
+            return [], None
+        return (
+            [],
+            TranscriptIssue(
+                "session transcript inventory",
+                path,
+                "directory disappeared during transcript discovery",
+            ),
+        )
+    except OSError as exc:
+        return (
+            [],
+            TranscriptIssue("session transcript inventory", path, str(exc)),
+        )
+    try:
+        with entries:
+            return list(entries), None
+    except OSError as exc:
+        return (
+            [],
+            TranscriptIssue("session transcript inventory", path, str(exc)),
+        )
+
+
+def _transcript_paths(root: str) -> tuple[list[str], list[TranscriptIssue]]:
+    """Enumerate ``projects/*/*.jsonl`` without hiding source-tree failures."""
+    project_entries, root_issue = _directory_entries(root, missing_ok=True)
+    issues = [root_issue] if root_issue is not None else []
+    project_paths: list[str] = []
+    for entry in project_entries:
+        try:
+            if entry.is_dir():
+                project_paths.append(entry.path)
+        except OSError as exc:
+            issues.append(
+                TranscriptIssue(
+                    "session transcript inventory",
+                    entry.path,
+                    str(exc),
+                )
+            )
+
+    paths: list[str] = []
+    for project_path in project_paths:
+        entries, issue = _directory_entries(project_path, missing_ok=False)
+        if issue is not None:
+            issues.append(issue)
+            continue
+        paths.extend(entry.path for entry in entries if entry.name.endswith(".jsonl"))
+    return paths, issues
 
 
 def _is_noise(t: str) -> bool:
@@ -75,74 +160,64 @@ def _parse_transcript(
     pre-check before json.loads is kept intact for performance.
     """
     sid = os.path.basename(path)[:-6]
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
+    st = os.stat(path)
 
     cwd = title = last_prompt = first_prompt = ""
     hidden: set[str] = set()
     prompts = 0
 
-    try:
-        with open(path, errors="ignore") as fh:
-            for line in fh:
-                if '"sdk-ts"' in line:
-                    hidden.add("sdk")
-                if '"bridge-session"' in line:
-                    hidden.add("bridge")
-                if not cwd and '"cwd"' in line:
-                    document = _json_object(line)
-                    candidate = document.get("cwd") if document is not None else None
-                    if isinstance(candidate, str) and candidate:
-                        cwd = candidate
-                if '"aiTitle"' in line:
-                    document = _json_object(line)
-                    candidate = (
-                        document.get("aiTitle") if document is not None else None
-                    )
-                    if isinstance(candidate, str) and candidate:
-                        title = candidate
-                if '"lastPrompt"' in line:
-                    document = _json_object(line)
-                    candidate = (
-                        document.get("lastPrompt") if document is not None else None
-                    )
-                    if isinstance(candidate, str) and candidate:
-                        last_prompt = candidate
-                if '"type":"user"' in line:
-                    document = _json_object(line)
-                    if document is None:
-                        continue
-                    if document.get("type") != "user":
-                        continue
-                    message = document.get("message")
-                    c = message.get("content") if isinstance(message, dict) else None
-                    if isinstance(c, str):
-                        texts = [c]
-                    elif isinstance(c, list):
-                        texts = []
-                        for block in c:
-                            if not isinstance(block, dict):
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if '"sdk-ts"' in line:
+                hidden.add("sdk")
+            if '"bridge-session"' in line:
+                hidden.add("bridge")
+            if not cwd and '"cwd"' in line:
+                document = _json_object(line)
+                candidate = document.get("cwd") if document is not None else None
+                if isinstance(candidate, str) and candidate:
+                    cwd = candidate
+            if '"aiTitle"' in line:
+                document = _json_object(line)
+                candidate = document.get("aiTitle") if document is not None else None
+                if isinstance(candidate, str) and candidate:
+                    title = candidate
+            if '"lastPrompt"' in line:
+                document = _json_object(line)
+                candidate = document.get("lastPrompt") if document is not None else None
+                if isinstance(candidate, str) and candidate:
+                    last_prompt = candidate
+            if '"type":"user"' in line:
+                document = _json_object(line)
+                if document is None:
+                    continue
+                if document.get("type") != "user":
+                    continue
+                message = document.get("message")
+                c = message.get("content") if isinstance(message, dict) else None
+                if isinstance(c, str):
+                    texts = [c]
+                elif isinstance(c, list):
+                    texts = []
+                    for block in c:
+                        if not isinstance(block, dict):
+                            continue
+                        text = block.get("text")
+                        if block.get("type") == "text" and isinstance(text, str):
+                            texts.append(text)
+                else:
+                    texts = []
+                texts = [t for t in texts if t.strip()]
+                if texts:
+                    prompts += 1
+                    if not first_prompt:
+                        for t in texts:
+                            if _is_noise(t):
                                 continue
-                            text = block.get("text")
-                            if block.get("type") == "text" and isinstance(text, str):
-                                texts.append(text)
-                    else:
-                        texts = []
-                    texts = [t for t in texts if t.strip()]
-                    if texts:
-                        prompts += 1
-                        if not first_prompt:
-                            for t in texts:
-                                if _is_noise(t):
-                                    continue
-                                ct = _clean_text(t)
-                                if ct:
-                                    first_prompt = ct
-                                    break
-    except (OSError, UnicodeError):
-        return None
+                            ct = _clean_text(t)
+                            if ct:
+                                first_prompt = ct
+                                break
 
     if not cwd:
         return None
@@ -262,8 +337,8 @@ def _inject_tmux_residency(
     return resident
 
 
-def scan(inputs: LivenessSnapshot | None = None) -> list[Session]:
-    """Unified transcript-driven session scan.
+def scan_result(inputs: LivenessSnapshot | None = None) -> SessionScanResult:
+    """Unified typed transcript-driven session scan.
 
     Merges the three liveness/identity sources once per scan — registry
     `sessions/<pid>.json`, `claude agents --json`, and `jobs/*/state.json` — then
@@ -293,11 +368,21 @@ def scan(inputs: LivenessSnapshot | None = None) -> list[Session]:
     idx = live_index(session_procs, agents)
     rows: list[Session] = []
 
-    for f in glob.glob(os.path.join(root, "*", "*.jsonl")):
-        row = _parse_transcript(f, idx, cur, job_shorts)
+    transcript_paths, issues = _transcript_paths(root)
+    for f in transcript_paths:
+        try:
+            row = _parse_transcript(f, idx, cur, job_shorts)
+        except (OSError, UnicodeError) as exc:
+            issues.append(TranscriptIssue("session transcript", f, str(exc)))
+            continue
         if row is not None:
             rows.append(row)
 
     rows = _inject_tmux_residency(rows, idx)
     rows.sort(key=lambda r: r.mtime, reverse=True)
-    return rows
+    return SessionScanResult(tuple(rows), tuple(issues))
+
+
+def scan(inputs: LivenessSnapshot | None = None) -> list[Session]:
+    """Compatibility list-only view over :func:`scan_result`."""
+    return list(scan_result(inputs).sessions)

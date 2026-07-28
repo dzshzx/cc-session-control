@@ -72,8 +72,8 @@ def _fresh_execution(
     monkeypatch.setattr(cleanup, "fresh_liveness_inputs", lambda: evidence)
     monkeypatch.setattr(
         cleanup.session_data,
-        "scan",
-        lambda inputs: list(sessions),
+        "scan_result",
+        lambda inputs: cleanup.session_data.SessionScanResult(tuple(sessions)),
     )
 
 

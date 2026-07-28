@@ -95,6 +95,15 @@ def build_refresh_result(
                 for issue in evidence.issues
             )
             return RefreshFailure(generation, source, detail)
+        transcript_scan = snapshot.transcript_scan
+        if not transcript_scan.complete:
+            transcript_issue = transcript_scan.issues[0]
+            source = f"{transcript_issue.source} ({transcript_issue.path})"
+            detail = "; ".join(
+                f"{issue.source} ({issue.path}): {issue.detail}"
+                for issue in transcript_scan.issues
+            )
+            return RefreshFailure(generation, source, detail)
         plan = cleanup_builder(
             snapshot.sessions,
             snapshot.session_procs,

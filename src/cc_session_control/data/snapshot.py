@@ -21,6 +21,7 @@ from types import MappingProxyType
 from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
 from . import environments, liveness, rc, sessions
 from .project_settings import ProjectSettingsResult, ProjectSettingsState
+from .sessions import SessionScanResult
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class WorldSnapshot:
     agents_map: Mapping[str, int | None] = field(default_factory=dict)
     cur: frozenset[int] = frozenset()
     liveness_snapshot: liveness.LivenessSnapshot | None = None
+    transcript_scan: SessionScanResult = field(default_factory=SessionScanResult)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sessions", tuple(self.sessions))
@@ -88,14 +90,25 @@ class WorldSnapshot:
 def build_world_snapshot() -> WorldSnapshot:
     """Compute the shared per-cycle world once (worker thread, R11/D8).
 
-    Heavy scans (transcript glob via `sessions.scan`, the full `/proc` walk via
+    Heavy scans (typed transcript discovery via `sessions.scan_result`, the
+    full `/proc` walk via
     `rc.scan_servers`) run exactly once here instead of once per tab. Session
     liveness uses targeted per-pid `/proc` reads, not another full walk; those
-    inputs are captured once and injected into `sessions.scan`. Each data owner
-    handles its expected external failures.
+    inputs are captured once and injected into `sessions.scan_result`. Each data
+    owner handles its expected external failures.
     """
     inputs = liveness.liveness_inputs()
-    all_sessions = sessions.scan(inputs)
+    transcript_scan = sessions.scan_result(inputs)
+    if not transcript_scan.complete:
+        return WorldSnapshot(
+            sessions=transcript_scan.sessions,
+            session_procs=inputs.session_procs,
+            agents_map=inputs.agents_map,
+            cur=inputs.cur,
+            liveness_snapshot=inputs,
+            transcript_scan=transcript_scan,
+        )
+    all_sessions = transcript_scan.sessions
     window_inventory = rc._tmux_window_inventory()
     rc_scan = rc.scan_result(window_inventory=window_inventory)
     server_scan = rc.scan_servers_result(window_inventory=window_inventory)
@@ -126,4 +139,5 @@ def build_world_snapshot() -> WorldSnapshot:
         agents_map=inputs.agents_map,
         cur=inputs.cur,
         liveness_snapshot=inputs,
+        transcript_scan=transcript_scan,
     )

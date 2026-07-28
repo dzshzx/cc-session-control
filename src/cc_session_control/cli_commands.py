@@ -19,7 +19,7 @@ def _print_cleanup_execution(
 ) -> int:
     """Print one honest apply outcome and return its process status."""
     completed = len(result.completed)
-    incomplete = bool(result.failed or result.skipped or result.refused)
+    incomplete = result.incomplete
     stream = sys.stderr if incomplete else sys.stdout
     details: list[str] = []
     if result.failed and result.removed:
@@ -40,7 +40,7 @@ def _print_cleanup_execution(
         issue = result.issues[0]
         where = f" ({issue.path})" if issue.path else ""
         details.append(
-            "Liveness evidence incomplete; nothing deleted: "
+            "Protection evidence incomplete; nothing deleted: "
             f"{issue.source}{where}: {issue.error}"
         )
 
@@ -85,14 +85,23 @@ def _cmd_prune(args: Namespace) -> int:
         prune_sessions,
         session_removal_anchors,
     )
-    from .data.sessions import scan
+    from .data.sessions import scan_result
 
     # One shared fetch feeds the frozen plan — the SAME assembly build_plan's
     # other callers (the Sessions view, build_world_snapshot) use, so the CLI
     # header and any future TUI parity stay derived from one source (删除 ⊆ 预览
     # still holds: execute_* revalidate against fresh data at apply time).
     inputs = liveness.liveness_inputs()
-    sessions = scan(inputs)
+    transcript_scan = scan_result(inputs)
+    if not transcript_scan.complete:
+        for issue in transcript_scan.issues:
+            print(
+                "Refused: transcript evidence is incomplete: "
+                f"{issue.source} ({issue.path}): {issue.detail}",
+                file=sys.stderr,
+            )
+        return 1
+    sessions = list(transcript_scan.sessions)
     plan = build_plan(
         sessions,
         inputs.session_procs,

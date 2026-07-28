@@ -190,7 +190,7 @@ def test_cleanup_adapter_reports_incomplete_liveness_in_chinese() -> None:
     )
 
     assert result.status is ActionStatus.REFUSED
-    assert "判活证据不完整，未删除" in result.message
+    assert "保护证据不完整，未删除" in result.message
     assert "session registry" in result.message
     assert "/runtime/sessions/broken.json" in result.message
     assert "invalid JSON" in result.message

@@ -44,7 +44,11 @@ def _stub_sources(monkeypatch, procs):
         "scan_agents",
         lambda *a, **k: liveness.AgentsScan(),
     )
-    monkeypatch.setattr(snapshot.sessions, "scan", lambda inputs=None: [])
+    monkeypatch.setattr(
+        snapshot.sessions,
+        "scan_result",
+        lambda inputs=None: snapshot.sessions.SessionScanResult(),
+    )
     monkeypatch.setattr(
         snapshot.rc,
         "scan_result",
@@ -218,6 +222,39 @@ def test_incomplete_snapshot_fails_without_mutating_environment_ledger(
     assert cfg.environments_ledger.read_bytes() == original
 
 
+def test_incomplete_transcript_snapshot_fails_before_cleanup_plan(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    _stub_sources(monkeypatch, [])
+    issue = snapshot.sessions.TranscriptIssue(
+        "session transcript",
+        "/runtime/projects/project/session.jsonl",
+        "permission denied",
+    )
+    monkeypatch.setattr(
+        snapshot.sessions,
+        "scan_result",
+        lambda inputs: snapshot.sessions.SessionScanResult(issues=(issue,)),
+    )
+
+    result = build_refresh_result(
+        9,
+        snapshot_builder=snapshot.build_world_snapshot,
+        cleanup_builder=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("partial transcript evidence must not build a cleanup plan")
+        ),
+    )
+
+    assert result == RefreshFailure(
+        9,
+        "session transcript (/runtime/projects/project/session.jsonl)",
+        "session transcript (/runtime/projects/project/session.jsonl): "
+        "permission denied",
+    )
+
+
 def test_snapshot_reconciliation_owns_single_rc_environment_ledger_update(
     monkeypatch,
 ):
@@ -323,7 +360,7 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
 
     def scan_sessions(inputs=None):
         injected.append(inputs)
-        return []
+        return snapshot.sessions.SessionScanResult()
 
     monkeypatch.setattr(
         snapshot.liveness.registry, "scan_session_procs", read_session_procs
@@ -336,7 +373,7 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
         "probe_current_ancestors",
         read_ancestors,
     )
-    monkeypatch.setattr(snapshot.sessions, "scan", scan_sessions)
+    monkeypatch.setattr(snapshot.sessions, "scan_result", scan_sessions)
     monkeypatch.setattr(
         snapshot.rc,
         "scan_result",
@@ -412,7 +449,11 @@ def test_snapshot_reuses_one_window_inventory_for_project_and_server_joins(
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(),
     )
-    monkeypatch.setattr(snapshot.sessions, "scan", lambda _inputs: [])
+    monkeypatch.setattr(
+        snapshot.sessions,
+        "scan_result",
+        lambda _inputs: snapshot.sessions.SessionScanResult(),
+    )
     monkeypatch.setattr(snapshot.rc, "_tmux_window_inventory", read_windows)
     monkeypatch.setattr(snapshot.rc, "scan_result", scan_projects)
     monkeypatch.setattr(snapshot.rc, "scan_servers_result", scan_servers)
