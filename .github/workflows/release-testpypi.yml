@@ -11,8 +11,15 @@ permissions:
   contents: read
 
 jobs:
+  quality-gate:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/quality-gate.yml
+
   publish-testpypi:
     name: Build and publish to TestPyPI
+    needs:
+      - quality-gate
     runs-on: ubuntu-latest
     environment:
       name: testpypi
@@ -34,15 +41,6 @@ jobs:
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           enable-cache: true
-
-      - name: Run tests
-        run: uv run --extra dev pytest tests/
-
-      - name: Check for hardcoded home paths
-        run: |
-          if grep -rn --include='*.py' '/home/' src/; then
-            exit 1
-          fi
 
       - name: Build distributions
         run: uv build --no-sources
