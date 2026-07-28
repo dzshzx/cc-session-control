@@ -86,17 +86,29 @@ class StartManyResult:
 
 
 class StopState(Enum):
-    """Observable outcome of stopping one managed project RC server."""
+    """Observable outcome of stopping managed project RC server(s)."""
 
     STOPPED = "stopped"
     NOT_RUNNING = "not-running"
-    TMUX_FAILED = "tmux-failed"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True)
 class StopResult:
     state: StopState
     path: str
+    detail: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.state is StopState.STOPPED
+
+
+@dataclass(frozen=True)
+class StopAllResult:
+    state: StopState
+    session: str
+    detail: str = ""
 
     @property
     def success(self) -> bool:
@@ -446,7 +458,8 @@ def _start_one_with_trust(path: str, decision: TrustDecision) -> StartResult:
     if win is not None:
         if not win.dead:
             return StartResult(StartState.ALREADY_RUNNING, path)
-        if not stop_one(path):
+        stop_result = stop_one_result(path)
+        if stop_result.state is StopState.FAILED:
             return StartResult(StartState.STOP_FAILED, path)
 
     remote_name = _basename(path)
@@ -485,11 +498,13 @@ def stop_one_result(path: str) -> StopResult:
     win = _window_for(path)
     if win is None:
         return StopResult(StopState.NOT_RUNNING, path)
-    stopped = tmux.kill_window(win.wid)
-    if stopped:
+    kill_result = tmux.kill_window_result(win.wid)
+    if kill_result.state is tmux.KillState.KILLED:
         _environment_ids.invalidate_window(win.wid)
         return StopResult(StopState.STOPPED, path)
-    return StopResult(StopState.TMUX_FAILED, path)
+    if kill_result.state is tmux.KillState.TARGET_NOT_FOUND:
+        return StopResult(StopState.NOT_RUNNING, path, kill_result.detail)
+    return StopResult(StopState.FAILED, path, kill_result.detail)
 
 
 def stop_one(path: str) -> bool:
@@ -511,11 +526,26 @@ def remove_one(path: str) -> bool:
     return remove_one_result(path).stop.success
 
 
-def stop_all() -> bool:
-    stopped = tmux.kill_session(cfg.rc_session)
-    if stopped:
+def stop_all_result() -> StopAllResult:
+    """Stop the configured RC tmux session without conflating absence/failure."""
+
+    kill_result = tmux.kill_session_result(cfg.rc_session)
+    if kill_result.state is tmux.KillState.KILLED:
         _environment_ids.invalidate_all()
-    return stopped
+        return StopAllResult(StopState.STOPPED, cfg.rc_session)
+    if kill_result.state is tmux.KillState.TARGET_NOT_FOUND:
+        return StopAllResult(
+            StopState.NOT_RUNNING,
+            cfg.rc_session,
+            kill_result.detail,
+        )
+    return StopAllResult(StopState.FAILED, cfg.rc_session, kill_result.detail)
+
+
+def stop_all() -> bool:
+    """Compatibility bool view of :func:`stop_all_result`."""
+
+    return stop_all_result().success
 
 
 def start_many(projects: list[str]) -> int:

@@ -980,7 +980,12 @@ def test_rc_S_key_confirms_then_stops_all(monkeypatch):
 
     stopped = {"n": 0}
     monkeypatch.setattr(
-        rc_mod, "stop_all", lambda: stopped.__setitem__("n", stopped["n"] + 1) or True
+        rc_mod,
+        "stop_all_result",
+        lambda: (
+            stopped.__setitem__("n", stopped["n"] + 1)
+            or rc_mod.StopAllResult(rc_mod.StopState.STOPPED, "rc")
+        ),
     )
     app = FakeApp()
     view = RCView(app)
@@ -1260,8 +1265,11 @@ def test_rc_s_running_confirms_stop(monkeypatch):
     stopped = {"n": 0}
     monkeypatch.setattr(
         rc_mod,
-        "stop_one",
-        lambda name: stopped.__setitem__("n", stopped["n"] + 1) or True,
+        "stop_one_result",
+        lambda path: (
+            stopped.__setitem__("n", stopped["n"] + 1)
+            or rc_mod.StopResult(rc_mod.StopState.STOPPED, path)
+        ),
     )
     app = FakeApp()
     view = RCView(app)

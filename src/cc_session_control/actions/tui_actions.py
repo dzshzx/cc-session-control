@@ -175,17 +175,26 @@ def remove_agent(request: AgentRequest) -> ActionResult:
 
 
 def stop_agent(request: AgentRequest) -> ActionResult:
-    try:
-        stopped = agent_ops.stop_job(request.to_job())
-    except OSError as exc:
-        return ActionResult.failure(f"停止失败: {exc}", needs_refresh=True)
-    if stopped:
+    result = agent_ops.stop_job_result(request.to_job())
+    if result.state is agent_ops.AgentStopState.STOPPED:
         return ActionResult.success(
             "已发送停止信号（可能残留孤儿进程，请手动确认）",
             needs_refresh=True,
         )
-    return ActionResult.refused(
-        "找不到该后台 agent 的进程，无法停止",
+    if result.state is agent_ops.AgentStopState.NOT_RUNNING:
+        return ActionResult.refused(
+            "该后台 agent 未在运行",
+            needs_refresh=True,
+        )
+    if result.state is agent_ops.AgentStopState.REFUSED:
+        detail = result.detail or "安全判定不可用"
+        return ActionResult.refused(
+            f"已拒绝停止：{detail}",
+            needs_refresh=True,
+        )
+    detail = result.detail or "无法发送停止信号"
+    return ActionResult.failure(
+        f"停止失败：{detail}",
         needs_refresh=True,
     )
 
@@ -210,9 +219,13 @@ def start_project(path: str, name: str) -> ActionResult:
 
 
 def stop_project(path: str, name: str) -> ActionResult:
-    if rc.stop_one(path):
+    result = rc.stop_one_result(path)
+    if result.state is rc.StopState.STOPPED:
         return ActionResult.success(f"已停止 {name}", needs_refresh=True)
-    return ActionResult.refused("未在运行", needs_refresh=True)
+    if result.state is rc.StopState.NOT_RUNNING:
+        return ActionResult.refused("未在运行", needs_refresh=True)
+    detail = result.detail or "tmux 操作失败"
+    return ActionResult.failure(f"停止失败：{detail}", needs_refresh=True)
 
 
 def toggle_autostart(path: str, name: str) -> ActionResult:
@@ -271,9 +284,13 @@ def start_all_projects() -> ActionResult:
 
 
 def stop_all_projects() -> ActionResult:
-    if rc.stop_all():
+    result = rc.stop_all_result()
+    if result.state is rc.StopState.STOPPED:
         return ActionResult.success("已停止全部", needs_refresh=True)
-    return ActionResult.refused("本来就没在跑", needs_refresh=True)
+    if result.state is rc.StopState.NOT_RUNNING:
+        return ActionResult.refused("本来就没在跑", needs_refresh=True)
+    detail = result.detail or "tmux 操作失败"
+    return ActionResult.failure(f"停止全部失败：{detail}", needs_refresh=True)
 
 
 def run_cleanup(

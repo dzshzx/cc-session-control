@@ -121,14 +121,15 @@ def _run_rc(args: Namespace) -> int:
         except (OSError, UnicodeError) as exc:
             print(f"Failed to remove {path}: {exc}", file=sys.stderr)
             return 1
-        if remove_result.stop.state is rc.StopState.TMUX_FAILED:
+        if remove_result.stop.state is rc.StopState.FAILED:
             prefix = (
                 "Removed from the enabled list, but "
                 if remove_result.list_removed
                 else ""
             )
+            detail = remove_result.stop.detail or "tmux operation failed"
             print(
-                f"{prefix}failed to stop the RC window: {path}",
+                f"{prefix}failed to stop the RC window: {path}: {detail}",
                 file=sys.stderr,
             )
             return 1
@@ -178,12 +179,16 @@ def _run_rc(args: Namespace) -> int:
 
     if sub == "stop":
         if args.target == "all":
-            if rc.stop_all():
+            stop_all_result = rc.stop_all_result()
+            if stop_all_result.state is rc.StopState.STOPPED:
                 print("Stopped all")
                 return 0
+            if stop_all_result.state is rc.StopState.NOT_RUNNING:
+                print("No RC servers are running", file=sys.stderr)
+                return 1
+            detail = stop_all_result.detail or "tmux operation failed"
             print(
-                "Failed to stop all RC servers "
-                "(the configured tmux session may be unavailable)",
+                f"Failed to stop all RC servers: {detail}",
                 file=sys.stderr,
             )
             return 1
@@ -195,8 +200,9 @@ def _run_rc(args: Namespace) -> int:
         if stop_result.state is rc.StopState.NOT_RUNNING:
             print(f"Not running: {path}", file=sys.stderr)
             return 1
+        detail = stop_result.detail or "tmux operation failed"
         print(
-            f"Failed to stop {path} (tmux unavailable or returned nonzero)",
+            f"Failed to stop {path}: {detail}",
             file=sys.stderr,
         )
         return 1

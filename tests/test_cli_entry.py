@@ -361,6 +361,11 @@ def test_rc_rm_real_enabled_list_and_tmux_outcomes(
         return subprocess.CompletedProcess(args, 0, stdout, "")
 
     monkeypatch.setattr(tmux, "_tmux_run", successful_tmux)
+    monkeypatch.setattr(
+        tmux,
+        "kill_window_result",
+        lambda target: tmux.KillResult(tmux.KillState.KILLED, target),
+    )
 
     assert cli.main(["rc", "rm", str(project)]) == 0
     captured = capsys.readouterr()
@@ -381,6 +386,15 @@ def test_rc_rm_real_enabled_list_and_tmux_outcomes(
         return subprocess.CompletedProcess(args, 1, "", "tmux denied")
 
     monkeypatch.setattr(tmux, "_tmux_run", failed_tmux)
+    monkeypatch.setattr(
+        tmux,
+        "kill_window_result",
+        lambda target: tmux.KillResult(
+            tmux.KillState.FAILED,
+            target,
+            "tmux denied",
+        ),
+    )
     assert cli.main(["rc", "rm", str(project)]) == 1
     captured = capsys.readouterr()
     assert "Removed and stopped" not in captured.out
@@ -392,6 +406,15 @@ def test_rc_rm_real_enabled_list_and_tmux_outcomes(
         tmux,
         "_tmux_run",
         lambda args: subprocess.CompletedProcess(args, 1, "", "not found"),
+    )
+    monkeypatch.setattr(
+        tmux,
+        "kill_window_result",
+        lambda target: tmux.KillResult(
+            tmux.KillState.TARGET_NOT_FOUND,
+            target,
+            "can't find window: @7",
+        ),
     )
     assert cli.main(["rc", "rm", str(project)]) == 0
     captured = capsys.readouterr()
@@ -433,93 +456,6 @@ def test_rc_up_empty_success_and_partial_failure(
     )
     assert cli.main(["rc", "up"]) == 0
     assert capsys.readouterr().out == "Started 2 project(s)\n"
-
-
-def test_rc_stop_one_reports_success_and_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    project = tmp_path / "project"
-    monkeypatch.setattr(
-        rc,
-        "stop_one_result",
-        lambda path: rc.StopResult(rc.StopState.STOPPED, path),
-    )
-
-    assert cli.main(["rc", "stop", str(project)]) == 0
-    assert capsys.readouterr().out == f"Stopped {project}\n"
-
-    monkeypatch.setattr(
-        rc,
-        "stop_one_result",
-        lambda path: rc.StopResult(rc.StopState.NOT_RUNNING, path),
-    )
-    assert cli.main(["rc", "stop", str(project)]) == 1
-    captured = capsys.readouterr()
-    assert "Stopped" not in captured.out
-    assert f"Not running: {project}" in captured.err
-
-    monkeypatch.setattr(
-        rc,
-        "stop_one_result",
-        lambda path: rc.StopResult(rc.StopState.TMUX_FAILED, path),
-    )
-    assert cli.main(["rc", "stop", str(project)]) == 1
-    captured = capsys.readouterr()
-    assert "Stopped" not in captured.out
-    assert "tmux unavailable or returned nonzero" in captured.err
-
-
-@pytest.mark.parametrize(
-    "tmux_result",
-    [
-        None,
-        subprocess.CompletedProcess(
-            ["tmux", "kill-session"],
-            1,
-            "",
-            "failed",
-        ),
-    ],
-)
-def test_rc_stop_all_never_claims_tmux_failure_as_success(
-    tmux_result: subprocess.CompletedProcess[str] | None,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    calls: list[list[str]] = []
-    monkeypatch.setattr(cfg, "rc_session", "only-this-session")
-    monkeypatch.setattr(
-        tmux,
-        "_tmux_run",
-        lambda args: calls.append(args) or tmux_result,
-    )
-
-    assert cli.main(["rc", "stop", "all"]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "Failed to stop all RC servers" in captured.err
-    assert calls == [["kill-session", "-t", "only-this-session"]]
-
-
-def test_rc_stop_all_success_is_scoped_to_configured_session(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    calls: list[list[str]] = []
-    monkeypatch.setattr(cfg, "rc_session", "only-this-session")
-    monkeypatch.setattr(
-        tmux,
-        "_tmux_run",
-        lambda args: calls.append(args) or subprocess.CompletedProcess(args, 0, "", ""),
-    )
-
-    assert cli.main(["rc", "stop", "all"]) == 0
-    captured = capsys.readouterr()
-    assert captured.out == "Stopped all\n"
-    assert captured.err == ""
-    assert calls == [["kill-session", "-t", "only-this-session"]]
 
 
 def test_resume_keyword_page_limit_and_all_reach_public_renderer(

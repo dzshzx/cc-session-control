@@ -1,9 +1,10 @@
 """Generic tmux adapter — THE single tmux seam.
 
-Only `_tmux_run` touches `subprocess`; every other tmux call is a thin verb
-wrapper that keeps the swallow-errors contract (return empty/False/None on any
-failure). Add new tmux operations as wrappers here, not raw `subprocess` calls
-elsewhere.
+Only `_tmux_run_result` touches `subprocess`; `_tmux_run` is its result-only
+compatibility view. Read/spawn wrappers keep the legacy swallow-errors contract
+(return empty/False/None on failure), while kill wrappers expose typed missing
+target vs external-failure outcomes. Add new tmux operations here, not as raw
+`subprocess` calls elsewhere.
 
 Bottom of the `data/` DAG: this module may import only `proc` from this
 package (plus stdlib) — it knows nothing about RC servers or sessions. `rc.py`
@@ -17,22 +18,48 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Iterable
+from dataclasses import dataclass
+from enum import Enum
 from typing import NamedTuple
 
 from . import proc
 
 
-def _tmux_run(args: list[str]) -> subprocess.CompletedProcess | None:
-    """Run one `tmux <args>` command; return the result, or None on failure."""
+@dataclass(frozen=True)
+class _TmuxInvocation:
+    completed: subprocess.CompletedProcess[str] | None
+    detail: str = ""
+
+
+def _tmux_run_result(args: list[str]) -> _TmuxInvocation:
+    """Run one tmux command while retaining expected invocation failures."""
     try:
-        return subprocess.run(
+        completed = subprocess.run(
             ["tmux", *args],
             capture_output=True,
             text=True,
             timeout=5,
         )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    except subprocess.TimeoutExpired as exc:
+        return _TmuxInvocation(None, f"tmux timed out after {exc.timeout} seconds")
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        return _TmuxInvocation(None, detail)
+    detail = (
+        (completed.stderr or "").strip()
+        or (completed.stdout or "").strip()
+        or (
+            f"tmux exited with status {completed.returncode}"
+            if completed.returncode
+            else ""
+        )
+    )
+    return _TmuxInvocation(completed, detail)
+
+
+def _tmux_run(args: list[str]) -> subprocess.CompletedProcess[str] | None:
+    """Compatibility result-only view for non-diagnostic tmux operations."""
+    return _tmux_run_result(args).completed
 
 
 class TmuxWindow(NamedTuple):
@@ -155,14 +182,71 @@ def _tmux_new_session(session: str, name: str, cmd: str) -> str | None:
     return _spawned_target(cp)
 
 
+class KillState(Enum):
+    """Observable outcome of killing one tmux target."""
+
+    KILLED = "killed"
+    TARGET_NOT_FOUND = "target-not-found"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class KillResult:
+    state: KillState
+    target: str
+    detail: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.state is KillState.KILLED
+
+
+_MISSING_TARGET_PREFIXES = (
+    "can't find window:",
+    "can't find session:",
+    "no server running on ",
+)
+
+
+def _target_not_found(detail: str) -> bool:
+    lowered = detail.lower()
+    return lowered.startswith(_MISSING_TARGET_PREFIXES) or (
+        lowered.startswith("error connecting to ")
+        and lowered.endswith("(no such file or directory)")
+    )
+
+
+def _kill_result(args: list[str], target: str) -> KillResult:
+    invocation = _tmux_run_result(args)
+    cp = invocation.completed
+    if cp is None:
+        return KillResult(KillState.FAILED, target, invocation.detail)
+    if cp.returncode == 0:
+        return KillResult(KillState.KILLED, target)
+    detail = invocation.detail
+    if _target_not_found(detail):
+        return KillResult(KillState.TARGET_NOT_FOUND, target, detail)
+    return KillResult(KillState.FAILED, target, detail)
+
+
+def kill_window_result(target: str) -> KillResult:
+    """Kill one window while distinguishing a vanished target from failure."""
+    return _kill_result(["kill-window", "-t", target], target)
+
+
 def kill_window(target: str) -> bool:
-    cp = _tmux_run(["kill-window", "-t", target])
-    return cp is not None and cp.returncode == 0
+    """Compatibility bool view of :func:`kill_window_result`."""
+    return kill_window_result(target).success
+
+
+def kill_session_result(session: str) -> KillResult:
+    """Kill one session while distinguishing absence from external failure."""
+    return _kill_result(["kill-session", "-t", session], session)
 
 
 def kill_session(session: str) -> bool:
-    cp = _tmux_run(["kill-session", "-t", session])
-    return cp is not None and cp.returncode == 0
+    """Compatibility bool view of :func:`kill_session_result`."""
+    return kill_session_result(session).success
 
 
 def session_name_for(cwd: str) -> str:

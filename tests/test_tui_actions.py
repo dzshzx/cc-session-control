@@ -237,3 +237,135 @@ def test_agent_respawn_does_not_claim_success_when_tmux_fails(monkeypatch) -> No
 
     assert result.status is ActionStatus.FAILURE
     assert result.message == "重启失败：无法创建 tmux 窗口"
+
+
+def test_agent_stop_preserves_all_domain_states(monkeypatch) -> None:
+    request = tui_actions.AgentRequest.from_job(_job())
+    cases = [
+        (
+            tui_actions.agent_ops.AgentStopResult(
+                tui_actions.agent_ops.AgentStopState.STOPPED,
+                pid=42,
+            ),
+            ActionStatus.SUCCESS,
+            "已发送停止信号（可能残留孤儿进程，请手动确认）",
+        ),
+        (
+            tui_actions.agent_ops.AgentStopResult(
+                tui_actions.agent_ops.AgentStopState.NOT_RUNNING,
+                detail="no live host",
+            ),
+            ActionStatus.REFUSED,
+            "该后台 agent 未在运行",
+        ),
+        (
+            tui_actions.agent_ops.AgentStopResult(
+                tui_actions.agent_ops.AgentStopState.REFUSED,
+                detail="判活证据不完整",
+            ),
+            ActionStatus.REFUSED,
+            "已拒绝停止：判活证据不完整",
+        ),
+        (
+            tui_actions.agent_ops.AgentStopResult(
+                tui_actions.agent_ops.AgentStopState.FAILED,
+                pid=42,
+                detail="permission denied",
+            ),
+            ActionStatus.FAILURE,
+            "停止失败：permission denied",
+        ),
+    ]
+
+    for domain_result, status, message in cases:
+        monkeypatch.setattr(
+            tui_actions.agent_ops,
+            "stop_job_result",
+            lambda _job, result=domain_result: result,
+        )
+        action = tui_actions.stop_agent(request)
+        assert action.status is status
+        assert action.message == message
+        assert action.needs_refresh is True
+
+
+def test_project_stop_preserves_all_domain_states(monkeypatch) -> None:
+    cases = [
+        (
+            tui_actions.rc.StopResult(
+                tui_actions.rc.StopState.STOPPED,
+                "/project",
+            ),
+            ActionStatus.SUCCESS,
+            "已停止 project",
+        ),
+        (
+            tui_actions.rc.StopResult(
+                tui_actions.rc.StopState.NOT_RUNNING,
+                "/project",
+            ),
+            ActionStatus.REFUSED,
+            "未在运行",
+        ),
+        (
+            tui_actions.rc.StopResult(
+                tui_actions.rc.StopState.FAILED,
+                "/project",
+                "lost server connection",
+            ),
+            ActionStatus.FAILURE,
+            "停止失败：lost server connection",
+        ),
+    ]
+
+    for domain_result, status, message in cases:
+        monkeypatch.setattr(
+            tui_actions.rc,
+            "stop_one_result",
+            lambda _path, result=domain_result: result,
+        )
+        action = tui_actions.stop_project("/project", "project")
+        assert action.status is status
+        assert action.message == message
+        assert action.needs_refresh is True
+
+
+def test_stop_all_projects_preserves_all_domain_states(monkeypatch) -> None:
+    cases = [
+        (
+            tui_actions.rc.StopAllResult(
+                tui_actions.rc.StopState.STOPPED,
+                "rc",
+            ),
+            ActionStatus.SUCCESS,
+            "已停止全部",
+        ),
+        (
+            tui_actions.rc.StopAllResult(
+                tui_actions.rc.StopState.NOT_RUNNING,
+                "rc",
+            ),
+            ActionStatus.REFUSED,
+            "本来就没在跑",
+        ),
+        (
+            tui_actions.rc.StopAllResult(
+                tui_actions.rc.StopState.FAILED,
+                "rc",
+                "timed out",
+            ),
+            ActionStatus.FAILURE,
+            "停止全部失败：timed out",
+        ),
+    ]
+
+    for domain_result, status, message in cases:
+        monkeypatch.setattr(
+            tui_actions.rc,
+            "stop_all_result",
+            lambda result=domain_result: result,
+        )
+        action = tui_actions.stop_all_projects()
+        assert action.status is status
+        assert action.message == message
+        assert action.needs_refresh is True

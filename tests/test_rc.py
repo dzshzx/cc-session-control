@@ -232,7 +232,11 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
     assert cache.all == 1
 
     monkeypatch.setattr(rc, "_window_for", lambda path: window)
-    monkeypatch.setattr(rc.tmux, "kill_window", lambda target: True)
+    monkeypatch.setattr(
+        rc.tmux,
+        "kill_window_result",
+        lambda target: rc.tmux.KillResult(rc.tmux.KillState.KILLED, target),
+    )
     assert rc.stop_one(project)
     assert cache.windows == ["@7"]
 
@@ -242,9 +246,130 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
     assert removed == [project]
     assert cache.windows == ["@7", "@7"]
 
-    monkeypatch.setattr(rc.tmux, "kill_session", lambda session: True)
+    monkeypatch.setattr(
+        rc.tmux,
+        "kill_session_result",
+        lambda session: rc.tmux.KillResult(rc.tmux.KillState.KILLED, session),
+    )
     assert rc.stop_all()
     assert cache.all == 2
+
+
+def test_stop_one_result_maps_kill_race_to_not_running(monkeypatch):
+    window = TmuxWindow("@7", "project", False, 707, "/project")
+    monkeypatch.setattr(rc, "_window_for", lambda path: window)
+    monkeypatch.setattr(
+        rc.tmux,
+        "kill_window_result",
+        lambda target: rc.tmux.KillResult(
+            rc.tmux.KillState.TARGET_NOT_FOUND,
+            target,
+            "can't find window: @7",
+        ),
+    )
+
+    result = rc.stop_one_result("/project")
+
+    assert result.state is rc.StopState.NOT_RUNNING
+    assert result.path == "/project"
+    assert result.detail == "can't find window: @7"
+
+
+def test_stop_one_result_retains_genuine_tmux_failure(monkeypatch):
+    window = TmuxWindow("@7", "project", False, 707, "/project")
+    monkeypatch.setattr(rc, "_window_for", lambda path: window)
+    monkeypatch.setattr(
+        rc.tmux,
+        "kill_window_result",
+        lambda target: rc.tmux.KillResult(
+            rc.tmux.KillState.FAILED,
+            target,
+            "lost server connection",
+        ),
+    )
+
+    result = rc.stop_one_result("/project")
+
+    assert result.state is rc.StopState.FAILED
+    assert result.detail == "lost server connection"
+
+
+def test_stop_all_result_preserves_absent_failed_and_stopped(
+    monkeypatch,
+):
+    class CacheSpy:
+        def __init__(self):
+            self.all = 0
+
+        def invalidate_all(self):
+            self.all += 1
+
+    cache = CacheSpy()
+    monkeypatch.setattr(rc, "_environment_ids", cache)
+    monkeypatch.setattr(rc.cfg, "rc_session", "only-this-session")
+
+    monkeypatch.setattr(
+        rc.tmux,
+        "kill_session_result",
+        lambda session: rc.tmux.KillResult(
+            rc.tmux.KillState.TARGET_NOT_FOUND,
+            session,
+            "can't find session: only-this-session",
+        ),
+    )
+    missing = rc.stop_all_result()
+    assert missing.state is rc.StopState.NOT_RUNNING
+    assert missing.session == "only-this-session"
+    assert missing.detail == "can't find session: only-this-session"
+    assert cache.all == 0
+
+    monkeypatch.setattr(
+        rc.tmux,
+        "kill_session_result",
+        lambda session: rc.tmux.KillResult(
+            rc.tmux.KillState.FAILED,
+            session,
+            "lost server connection",
+        ),
+    )
+    failed = rc.stop_all_result()
+    assert failed.state is rc.StopState.FAILED
+    assert failed.detail == "lost server connection"
+    assert cache.all == 0
+
+    monkeypatch.setattr(
+        rc.tmux,
+        "kill_session_result",
+        lambda session: rc.tmux.KillResult(rc.tmux.KillState.KILLED, session),
+    )
+    stopped = rc.stop_all_result()
+    assert stopped.state is rc.StopState.STOPPED
+    assert stopped.success is True
+    assert cache.all == 1
+
+
+def test_restart_continues_when_dead_window_vanishes_during_stop(
+    tmp_path,
+    monkeypatch,
+):
+    project = str(tmp_path)
+    dead = TmuxWindow("@7", "project", True, 707, project)
+    monkeypatch.setattr(rc, "_window_for", lambda path: dead)
+    monkeypatch.setattr(
+        rc,
+        "stop_one_result",
+        lambda path: rc.StopResult(
+            rc.StopState.NOT_RUNNING,
+            path,
+            "can't find window: @7",
+        ),
+    )
+    monkeypatch.setattr(rc.tmux, "run_in_tmux", lambda *_args: "rc:7")
+    monkeypatch.setattr(rc.tmux, "set_window_option", lambda *_args: True)
+
+    result = rc._start_one_with_trust(project, rc.TrustDecision.TRUSTED)
+
+    assert result.state is rc.StartState.STARTED
 
 
 # --- remoteControlSpawnMode read (AC8 read half) ---------------------------

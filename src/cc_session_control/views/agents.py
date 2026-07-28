@@ -285,9 +285,9 @@ class AgentsView(ListTabView):
     def _do_stop(self, job: AgentJob) -> None:
         """Stop body, run only after the y/n confirm accepts.
 
-        Reached only when "current" is determinable, so a False from `stop_job`
-        means no joined host pid (an unstoppable orphan) — surfaced honestly,
-        separate from the degrade refusal above (R2 split).
+        The worker captures fresh typed liveness evidence again, so a state
+        change after confirmation remains distinguishable as not-running,
+        refused, or failed instead of being flattened into "process missing".
         """
         request = tui_actions.AgentRequest.from_job(job)
         self.app.submit_action(

@@ -398,7 +398,14 @@ def test_s_key_stops_live_with_orphan_warning(monkeypatch):
     # Unified confirm: `s` on a live worker confirms first, then `_last_confirm()`
     # runs the stop body whose notify carries the orphan-risk warning.
     monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(av_mod.agent_ops, "stop_job", lambda job: True)
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "stop_job_result",
+        lambda job: av_mod.agent_ops.AgentStopResult(
+            av_mod.agent_ops.AgentStopState.STOPPED,
+            pid=job.host_pid,
+        ),
+    )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("s")
     assert app._confirm_messages  # a confirm is requested first

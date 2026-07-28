@@ -608,8 +608,11 @@ def test_start_one_refuses_running_window(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         rc,
-        "stop_one",
-        lambda path: calls.__setitem__("kill", calls["kill"] + 1) or True,
+        "stop_one_result",
+        lambda path: (
+            calls.__setitem__("kill", calls["kill"] + 1)
+            or rc.StopResult(rc.StopState.STOPPED, path)
+        ),
     )
     monkeypatch.setattr(
         tmux,
@@ -643,8 +646,11 @@ def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         rc,
-        "stop_one",
-        lambda path: calls.__setitem__("kill", calls["kill"] + 1) or True,
+        "stop_one_result",
+        lambda path: (
+            calls.__setitem__("kill", calls["kill"] + 1)
+            or rc.StopResult(rc.StopState.STOPPED, path)
+        ),
     )
     monkeypatch.setattr(tmux, "_tmux_has_session", lambda session: True)
     monkeypatch.setattr(

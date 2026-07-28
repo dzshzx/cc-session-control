@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import shlex
 from dataclasses import dataclass
+from enum import Enum
 
 from ..config import cfg
 from ..data import cleanup, liveness, proc, registry, tmux
@@ -32,7 +33,7 @@ from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session
 from . import session_ops
 
-# --- host-pid join (shared by stop_job, remove_job, and the view) -------------
+# --- host-pid join (resume-takeover compatibility view) -----------------------
 
 
 def job_host(job: AgentJob, *, max_age: float = 5.0) -> tuple[int | None, bool]:
@@ -186,8 +187,8 @@ def _host_start(pid: int | None) -> str:
     """`proc_start` of the joined host pid ("" when unknown).
 
     `job_host` deliberately keeps its small `(pid, alive)` shape; this second
-    lookup feeds `take_over`'s kill-time `pid_alive` recheck so the pid-reuse
-    window is closed on the bg-agent path too, not just for scanned sessions.
+    lookup feeds resume-takeover's later kill-time `pid_alive` recheck. The stop
+    path instead derives both values from one fresh typed liveness snapshot.
     """
     if not pid:
         return ""
@@ -200,20 +201,99 @@ def _host_start(pid: int | None) -> str:
 # --- stop (live workers only) -------------------------------------------------
 
 
-def stop_job(job: AgentJob) -> bool:
-    """Stop a LIVE background worker via its joined host pid. True iff signalled.
+class AgentStopState(Enum):
+    """Observable outcome of stopping one background agent."""
+
+    STOPPED = "stopped"
+    NOT_RUNNING = "not-running"
+    REFUSED = "refused"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class AgentStopResult:
+    state: AgentStopState
+    pid: int | None = None
+    detail: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.state is AgentStopState.STOPPED
+
+
+def _incomplete_liveness_detail(evidence: liveness.LivenessSnapshot) -> str:
+    issues = []
+    for issue in evidence.issues:
+        location = f" at {issue.path}" if issue.path else ""
+        issues.append(f"{issue.source}{location}: {issue.detail}")
+    return "liveness evidence incomplete: " + "; ".join(issues)
+
+
+def stop_job_result(job: AgentJob) -> AgentStopResult:
+    """Stop one live background agent from one fresh liveness snapshot.
 
     The host pid is JOINed from `sessions/<pid>.json` (`job_host`); only a
-    confirmed-live pid is killed — a worker with no sessions file is unstoppable
-    (no-op False, orphan risk). The kill itself is `session_ops.take_over` (the
-    ONE primitive: R10 gate, recheck, SIGTERM, cache invalidation); the early
-    R10 check here just skips the join IO when the answer is already no.
+    confirmed-live pid is killed. Incomplete source evidence and unavailable
+    current-session determination refuse the destructive action. The same
+    snapshot supplies both the host pid and its proc-start identity, avoiding
+    a second compatibility scan before ``take_over`` rechecks liveness.
+
+    The kill itself is `session_ops.take_over` (the ONE primitive: R10 gate,
+    recheck, SIGTERM, cache invalidation). Its four outcomes map one-for-one to
+    this domain result.
+
     Killing does not always fully reap a `--remote-control`/bg worker (orphan
     risk, see `HELP`).
     """
+    evidence = liveness.liveness_inputs()
+    if not evidence.complete:
+        return AgentStopResult(
+            AgentStopState.REFUSED,
+            detail=_incomplete_liveness_detail(evidence),
+        )
     if not proc.current_determinable():
-        return False
-    pid, alive = job_host(job)
+        return AgentStopResult(
+            AgentStopState.REFUSED,
+            detail="current session cannot be determined",
+        )
+    pid, alive = registry.host_pid_for_sid(job.sid, evidence.session_procs)
     if not alive or not pid:
-        return False
-    return session_ops.take_over(pid, _host_start(pid)) in session_ops.TAKE_OVER_OK
+        return AgentStopResult(
+            AgentStopState.NOT_RUNNING,
+            pid=pid,
+            detail="no live host for background agent",
+        )
+    proc_start = next(
+        (
+            item.proc_start
+            for item in evidence.session_procs
+            if item.sid == job.sid and item.pid == pid
+        ),
+        "",
+    )
+    outcome = session_ops.take_over(pid, proc_start)
+    if outcome == "killed":
+        return AgentStopResult(AgentStopState.STOPPED, pid=pid)
+    if outcome == "gone":
+        return AgentStopResult(
+            AgentStopState.NOT_RUNNING,
+            pid=pid,
+            detail="background agent host is no longer running",
+        )
+    if outcome == "refused":
+        return AgentStopResult(
+            AgentStopState.REFUSED,
+            pid=pid,
+            detail="current session cannot be determined",
+        )
+    return AgentStopResult(
+        AgentStopState.FAILED,
+        pid=pid,
+        detail="failed to signal background agent host",
+    )
+
+
+def stop_job(job: AgentJob) -> bool:
+    """Compatibility bool view of :func:`stop_job_result`."""
+
+    return stop_job_result(job).success

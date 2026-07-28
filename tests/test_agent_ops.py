@@ -3,6 +3,8 @@
 import json
 import subprocess
 
+import pytest
+
 import cc_session_control.actions.agent_ops as ao
 from cc_session_control.actions.session_ops import resume_cmd
 from cc_session_control.data import liveness, registry
@@ -240,60 +242,160 @@ def test_resume_takeover_dead_worker_no_kill(monkeypatch):
 # --- stop_job: only a confirmed-live joined host pid ---
 
 
-def test_stop_job_noop_when_no_host_pid(monkeypatch):
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(ao, "job_host", lambda job: (None, False))
-    kills = {"n": 0}
+def test_stop_job_result_refuses_when_current_session_is_undeterminable(
+    monkeypatch,
+):
     monkeypatch.setattr(
-        ao.os, "kill", lambda *_: kills.__setitem__("n", kills["n"] + 1)
+        ao.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
     )
-    assert ao.stop_job(_make_job()) is False
-    assert kills["n"] == 0
-
-
-def test_stop_job_noop_when_host_dead(monkeypatch):
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(ao, "job_host", lambda job: (1234, False))
-    kills = {"n": 0}
-    monkeypatch.setattr(
-        ao.os, "kill", lambda *_: kills.__setitem__("n", kills["n"] + 1)
-    )
-    assert ao.stop_job(_make_job()) is False
-    assert kills["n"] == 0
-
-
-def test_stop_job_kills_live_host(monkeypatch):
-    # The kill itself is session_ops.take_over — stub/observe it at that seam.
-    import cc_session_control.actions.session_ops as so
-
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(ao, "job_host", lambda job: (4242, True))
-    monkeypatch.setattr(ao.liveness, "live_session_procs", lambda *a, **k: [])
-    calls = {"kill": None, "invalidate": 0}
-    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
-    monkeypatch.setattr(
-        so.os, "kill", lambda pid, sig: calls.__setitem__("kill", (pid, sig))
-    )
-    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(
-        so,
-        "invalidate_cache",
-        lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1),
-    )
-    assert ao.stop_job(_make_job()) is True
-    assert calls["kill"] == (4242, so.signal.SIGTERM)
-    assert calls["invalidate"] == 1
-
-
-def test_stop_job_refuses_without_proc(monkeypatch):
     monkeypatch.setattr(ao.proc, "current_determinable", lambda: False)
-    monkeypatch.setattr(ao, "job_host", lambda job: (4242, True))
-    kills = {"n": 0}
     monkeypatch.setattr(
-        ao.os, "kill", lambda *_: kills.__setitem__("n", kills["n"] + 1)
+        ao.session_ops,
+        "take_over",
+        lambda *_: (_ for _ in ()).throw(AssertionError("must not signal")),
     )
-    assert ao.stop_job(_make_job()) is False
-    assert kills["n"] == 0
+
+    result = ao.stop_job_result(_make_job())
+
+    assert result.state is ao.AgentStopState.REFUSED
+    assert "current session" in result.detail
+
+
+@pytest.mark.parametrize("source", ["session registry", "claude agents --json"])
+def test_stop_job_result_refuses_incomplete_liveness_evidence(
+    source,
+    monkeypatch,
+):
+    evidence = liveness.LivenessSnapshot(
+        issues=(liveness.LivenessIssue(source, "/broken", "invalid"),),
+    )
+    monkeypatch.setattr(ao.liveness, "liveness_inputs", lambda: evidence)
+    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        ao.session_ops,
+        "take_over",
+        lambda *_: (_ for _ in ()).throw(AssertionError("must not signal")),
+    )
+
+    result = ao.stop_job_result(_make_job())
+
+    assert result.state is ao.AgentStopState.REFUSED
+    assert source in result.detail
+    assert "/broken" in result.detail
+
+
+@pytest.mark.parametrize(
+    "session_procs",
+    [
+        (),
+        (
+            SessionProc(
+                pid=4242,
+                sid="abcdef0123456789",
+                proc_start="777",
+                proc_alive=False,
+            ),
+        ),
+    ],
+)
+def test_stop_job_result_reports_missing_or_dead_host_not_running(
+    session_procs,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        ao.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(session_procs=session_procs),
+    )
+    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        ao.session_ops,
+        "take_over",
+        lambda *_: (_ for _ in ()).throw(AssertionError("must not signal")),
+    )
+
+    result = ao.stop_job_result(_make_job())
+
+    assert result.state is ao.AgentStopState.NOT_RUNNING
+
+
+@pytest.mark.parametrize(
+    ("take_over_result", "expected"),
+    [
+        ("killed", "STOPPED"),
+        ("gone", "NOT_RUNNING"),
+        ("refused", "REFUSED"),
+        ("failed", "FAILED"),
+    ],
+)
+def test_stop_job_result_maps_take_over_without_second_scan(
+    take_over_result,
+    expected,
+    monkeypatch,
+):
+    calls = {"snapshot": 0, "take_over": []}
+    evidence = liveness.LivenessSnapshot(
+        session_procs=(
+            SessionProc(
+                pid=4242,
+                sid="abcdef0123456789",
+                proc_start="777",
+                proc_alive=True,
+            ),
+        ),
+    )
+
+    def snapshot():
+        calls["snapshot"] += 1
+        return evidence
+
+    monkeypatch.setattr(ao.liveness, "liveness_inputs", snapshot)
+    monkeypatch.setattr(
+        ao.liveness,
+        "live_session_procs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("compatibility scan must not run")
+        ),
+    )
+    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        ao.session_ops,
+        "take_over",
+        lambda pid, proc_start: (
+            calls["take_over"].append((pid, proc_start)) or take_over_result
+        ),
+    )
+
+    result = ao.stop_job_result(_make_job())
+
+    assert result.state is getattr(ao.AgentStopState, expected)
+    assert result.pid == 4242
+    assert calls == {"snapshot": 1, "take_over": [(4242, "777")]}
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (ao.AgentStopState.STOPPED, True),
+        (ao.AgentStopState.NOT_RUNNING, False),
+        (ao.AgentStopState.REFUSED, False),
+        (ao.AgentStopState.FAILED, False),
+    ],
+)
+def test_stop_job_bool_compatibility_derives_typed_result(
+    state,
+    expected,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        ao,
+        "stop_job_result",
+        lambda _job: ao.AgentStopResult(state),
+    )
+
+    assert ao.stop_job(_make_job()) is expected
 
 
 # --- job_host: join sid -> sessions/<pid>.json ---
