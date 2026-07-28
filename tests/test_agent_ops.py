@@ -219,7 +219,12 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
         "find_session_window_result",
         lambda pids: ao.tmux.SessionWindowResult("proj:4" if pids == [4242] else None),
     )
-    job = _make_job(resume_sid="sid-take", cwd="/tmp/proj")
+    job = _make_job(
+        resume_sid="sid-take",
+        cwd="/tmp/proj",
+        host_pid=4242,
+        host_alive=True,
+    )
 
     s = ao.resume_takeover(job)
     assert s.sid == "sid-take"
@@ -245,7 +250,9 @@ def test_resume_takeover_dead_worker_no_kill(monkeypatch):
     monkeypatch.setattr(
         ao.liveness,
         "liveness_inputs",
-        lambda: liveness.LivenessSnapshot(),
+        lambda: (_ for _ in ()).throw(
+            AssertionError("published dead job must not acquire liveness")
+        ),
     )
     monkeypatch.setattr(
         ao,
@@ -294,7 +301,7 @@ def test_prepare_takeover_refuses_incomplete_tmux_inventory(monkeypatch):
         ),
     )
 
-    result = ao.prepare_takeover(_make_job())
+    result = ao.prepare_takeover(_make_job(host_pid=4242, host_alive=True))
 
     assert result.state is ao.TakeoverPreparationState.REFUSED
     assert result.session is None
@@ -315,7 +322,7 @@ def test_resume_takeover_compatibility_refusal_returns_no_session(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="session registry"):
-        ao.resume_takeover(_make_job())
+        ao.resume_takeover(_make_job(host_pid=4242, host_alive=True))
 
 
 # --- stop_job: only a confirmed-live joined host pid ---

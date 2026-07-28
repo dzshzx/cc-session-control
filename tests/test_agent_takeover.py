@@ -3,7 +3,11 @@
 from collections.abc import Callable
 
 import cc_session_control.views.agents as av_mod
-from cc_session_control.actions.session_ops import ExitIntent, TmuxResumeIntent
+from cc_session_control.actions.session_ops import (
+    ExitIntent,
+    ResumeIntent,
+    TmuxResumeIntent,
+)
 from cc_session_control.data import liveness
 from cc_session_control.models import AgentJob, SessionProc
 from cc_session_control.views.agents import AgentsView
@@ -47,7 +51,9 @@ def _view(job: AgentJob) -> tuple[TakeoverApp, AgentsView]:
     return app, view
 
 
-def test_enter_refuses_partial_registry_before_takeover_side_effects(monkeypatch):
+def test_enter_live_refuses_partial_registry_before_takeover_side_effects(
+    monkeypatch,
+):
     calls = {"snapshot": 0}
     evidence = liveness.LivenessSnapshot(
         issues=(
@@ -78,7 +84,7 @@ def test_enter_refuses_partial_registry_before_takeover_side_effects(monkeypatch
         "find_session_window_result",
         unexpected,
     )
-    app, view = _view(_job())
+    app, view = _view(_job(alive=True))
     app.confirm = unexpected
     app.exit_with = unexpected
 
@@ -93,7 +99,9 @@ def test_enter_refuses_partial_registry_before_takeover_side_effects(monkeypatch
     assert "exit status 5" in app.notifications[-1]
 
 
-def test_terminal_refuses_unknown_proc_before_takeover_side_effects(monkeypatch):
+def test_terminal_live_refuses_unknown_proc_before_takeover_side_effects(
+    monkeypatch,
+):
     calls = {"snapshot": 0}
     evidence = liveness.LivenessSnapshot(
         issues=(
@@ -119,7 +127,7 @@ def test_terminal_refuses_unknown_proc_before_takeover_side_effects(monkeypatch)
         "find_session_window_result",
         unexpected,
     )
-    app, view = _view(_job())
+    app, view = _view(_job(alive=True))
     app.confirm = unexpected
     app.exit_with = unexpected
 
@@ -177,6 +185,40 @@ def test_enter_live_takeover_uses_one_complete_generation(monkeypatch):
     assert app.result.session.proc_start == "generation-one"
 
 
+def test_enter_live_host_gone_in_fresh_generation_resumes_without_takeover(
+    monkeypatch,
+):
+    calls = {"snapshot": 0}
+    evidence = liveness.LivenessSnapshot()
+
+    def snapshot():
+        calls["snapshot"] += 1
+        return evidence
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("gone host must not query tmux or confirm takeover")
+
+    monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
+    monkeypatch.setattr(av_mod.proc, "probe_current_ancestors", unexpected)
+    monkeypatch.setattr(
+        av_mod.agent_ops.tmux,
+        "find_session_window_result",
+        unexpected,
+    )
+    app, view = _view(_job(alive=True))
+    app.confirm = unexpected
+
+    view.handle_key("enter")
+
+    assert calls["snapshot"] == 1
+    assert app.confirm_messages == []
+    assert isinstance(app.result, TmuxResumeIntent)
+    assert app.result.session.alive is False
+    assert app.result.session.pid is None
+    assert app.result.session.current is False
+    assert app.result.session.tmux_target is None
+
+
 def test_enter_and_terminal_refuse_current_from_snapshot(monkeypatch):
     calls = {"snapshot": 0}
     evidence = liveness.LivenessSnapshot(
@@ -216,16 +258,24 @@ def test_enter_and_terminal_refuse_current_from_snapshot(monkeypatch):
     assert sum("不能接回当前会话" in msg for msg in app.notifications) == 2
 
 
-def test_enter_dead_without_host_uses_one_complete_generation(monkeypatch):
+def test_enter_dead_without_host_skips_incomplete_liveness(monkeypatch):
     calls = {"snapshot": 0}
-    evidence = liveness.LivenessSnapshot()
+    evidence = liveness.LivenessSnapshot(
+        issues=(
+            liveness.LivenessIssue(
+                "session registry",
+                "/broken/session.json",
+                "invalid JSON",
+            ),
+        ),
+    )
 
     def snapshot():
         calls["snapshot"] += 1
         return evidence
 
     def unexpected(*_args, **_kwargs):
-        raise AssertionError("dead takeover must not query tmux or confirm")
+        raise AssertionError("dead resume must not query liveness, tmux, or confirm")
 
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
     monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
@@ -241,9 +291,62 @@ def test_enter_dead_without_host_uses_one_complete_generation(monkeypatch):
 
     view.handle_key("enter")
 
-    assert calls["snapshot"] == 1
+    assert calls["snapshot"] == 0
+    assert app.confirm_messages == []
     assert isinstance(app.result, TmuxResumeIntent)
-    assert app.result.session.pid is None
+    assert app.result.session.sid == "abcdef0123456789"
+    assert app.result.session.cwd == "/tmp/proj"
+    assert app.result.session.label == "worker"
+    assert app.result.session.agent_short == "abcdef01"
     assert app.result.session.alive is False
-    assert app.result.session.proc_start == ""
+    assert app.result.session.pid is None
     assert app.result.session.current is False
+    assert app.result.session.proc_start == ""
+    assert app.result.session.tmux_target is None
+
+
+def test_terminal_dead_without_host_skips_incomplete_liveness(monkeypatch):
+    calls = {"snapshot": 0}
+    evidence = liveness.LivenessSnapshot(
+        issues=(
+            liveness.LivenessIssue(
+                "process liveness",
+                "/proc/4242/stat",
+                "permission denied",
+            ),
+        ),
+    )
+
+    def snapshot():
+        calls["snapshot"] += 1
+        return evidence
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("dead resume must not query liveness, tmux, or confirm")
+
+    monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
+    monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
+    monkeypatch.setattr(av_mod.agent_ops.liveness, "live_session_procs", unexpected)
+    monkeypatch.setattr(av_mod.proc, "probe_current_ancestors", unexpected)
+    monkeypatch.setattr(
+        av_mod.agent_ops.tmux,
+        "find_session_window_result",
+        unexpected,
+    )
+    app, view = _view(_job())
+    app.confirm = unexpected
+
+    view.handle_key("t")
+
+    assert calls["snapshot"] == 0
+    assert app.confirm_messages == []
+    assert isinstance(app.result, ResumeIntent)
+    assert app.result.session.sid == "abcdef0123456789"
+    assert app.result.session.cwd == "/tmp/proj"
+    assert app.result.session.label == "worker"
+    assert app.result.session.agent_short == "abcdef01"
+    assert app.result.session.alive is False
+    assert app.result.session.pid is None
+    assert app.result.session.current is False
+    assert app.result.session.proc_start == ""
+    assert app.result.session.tmux_target is None

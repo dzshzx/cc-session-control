@@ -158,17 +158,54 @@ class TakeoverPreparationResult:
     detail: str = ""
 
 
+def _ready_takeover(
+    job: AgentJob,
+    *,
+    pid: int | None = None,
+    alive: bool = False,
+    current: bool = False,
+    proc_start: str = "",
+    tmux_target: str | None = None,
+) -> TakeoverPreparationResult:
+    """Build the existing resume-path adapter for one prepared agent."""
+    return TakeoverPreparationResult(
+        TakeoverPreparationState.READY,
+        session=Session(
+            sid=job.resume_sid,
+            cwd=job.cwd,
+            label=job.name or job.short,
+            mtime=0.0,
+            prompts=0,
+            pid=pid,
+            alive=alive,
+            current=current,
+            proc_start=proc_start,
+            source="bg",
+            agent_short=job.short,
+            tmux_target=tmux_target,
+        ),
+    )
+
+
 def prepare_takeover(job: AgentJob) -> TakeoverPreparationResult:
-    """Prepare one takeover from exactly one typed liveness generation.
+    """Prepare one background-agent resume without widening destructive gates.
 
     Bringing a bg session to the foreground is just a resume of its
     `resume_sid`, so a ready result carries the Session the view feeds to the SAME
     `app.exit_with(ResumeIntent)` → `do_resume` pipeline used for foreground sessions —
     all kill/exec/`_resume_plan` logic is reused, none duplicated (R4.4 takeover).
-    Incomplete registry, process, ancestor, or agents evidence is refused before
-    any tmux lookup. Host identity, liveness, proc-start, and current-session
-    protection all come from the same immutable snapshot.
+
+    The published immutable ``job.host_alive`` decides whether this action can
+    kill. A dead job resumes directly without acquiring liveness or tmux state.
+    A live job acquires exactly one fresh typed generation; incomplete registry,
+    process, ancestor, or agents evidence is refused before any tmux lookup.
+    Host identity, liveness, proc-start, and current-session protection all come
+    from that same generation. If it proves the former host is gone, the action
+    safely contracts to the same non-destructive dead resume.
     """
+    if not job.host_alive:
+        return _ready_takeover(job)
+
     evidence = liveness.liveness_inputs()
     if not evidence.complete:
         return TakeoverPreparationResult(
@@ -176,48 +213,36 @@ def prepare_takeover(job: AgentJob) -> TakeoverPreparationResult:
             detail=_incomplete_liveness_detail(evidence),
         )
     pid, alive = registry.host_pid_for_sid(job.sid, evidence.session_procs)
+    if not alive or pid is None:
+        return _ready_takeover(job)
+
     proc_start = next(
         (
             item.proc_start
             for item in evidence.session_procs
-            if item.sid == job.sid
-            and item.pid == pid
-            and (not alive or item.proc_alive is True)
+            if item.sid == job.sid and item.pid == pid and item.proc_alive is True
         ),
         "",
     )
-    tmux_target: str | None = None
-    if alive and pid:
-        residency = tmux.find_session_window_result([pid])
-        if not residency.complete:
-            detail = "; ".join(
-                f"{issue.source}"
-                + (f" at {issue.path}" if issue.path else "")
-                + f": {issue.detail}"
-                for issue in residency.issues
-            )
-            return TakeoverPreparationResult(
-                TakeoverPreparationState.REFUSED,
-                detail=detail,
-            )
-        tmux_target = residency.target
-    session = Session(
-        sid=job.resume_sid,
-        cwd=job.cwd,
-        label=job.name or job.short,
-        mtime=0.0,
-        prompts=0,
+    residency = tmux.find_session_window_result([pid])
+    if not residency.complete:
+        detail = "; ".join(
+            f"{issue.source}"
+            + (f" at {issue.path}" if issue.path else "")
+            + f": {issue.detail}"
+            for issue in residency.issues
+        )
+        return TakeoverPreparationResult(
+            TakeoverPreparationState.REFUSED,
+            detail=detail,
+        )
+    return _ready_takeover(
+        job,
         pid=pid,
-        alive=alive,
-        current=bool(pid) and pid in evidence.cur,
+        alive=True,
+        current=pid in evidence.cur,
         proc_start=proc_start,
-        source="bg",
-        agent_short=job.short,
-        tmux_target=tmux_target,
-    )
-    return TakeoverPreparationResult(
-        TakeoverPreparationState.READY,
-        session=session,
+        tmux_target=residency.target,
     )
 
 
