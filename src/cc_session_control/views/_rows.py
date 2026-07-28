@@ -17,16 +17,31 @@ from urwid import calc_text_pos, calc_width
 CONFIRM_NAME_CELLS = 30
 
 
-def truncate_cells(text: str, max_cells: int) -> str:
-    """Truncate `text` to at most `max_cells` terminal cells, appending `…`.
+def _cell_prefix(text: str, max_cells: int) -> str:
+    if max_cells <= 0:
+        return ""
+    position, _used = calc_text_pos(text, 0, len(text), max_cells)
+    return text[:position]
 
-    Cell width, not character count: CJK characters occupy 2 cells, so a
-    `[:30]` slice of a Chinese label can be 60 cells wide — this is the
-    display-width-correct replacement for those slices."""
-    if calc_width(text, 0, len(text)) <= max_cells:
+
+def truncate_cells(
+    text: str,
+    width: int,
+    marker: str = "…",
+) -> str:
+    """Truncate text at an urwid cell boundary, without splitting a glyph.
+
+    A marker wider than the available width is itself shortened at a terminal
+    cluster boundary; width zero (or less) always produces an empty string.
+    """
+    if width <= 0:
+        return ""
+    if calc_width(text, 0, len(text)) <= width:
         return text
-    pos, _cols = calc_text_pos(text, 0, len(text), max(max_cells - 1, 0))
-    return text[:pos] + "…"
+    marker_width = calc_width(marker, 0, len(marker))
+    if marker_width > width:
+        return _cell_prefix(marker, width)
+    return _cell_prefix(text, width - marker_width) + marker
 
 
 class TextRow(urwid.WidgetWrap):

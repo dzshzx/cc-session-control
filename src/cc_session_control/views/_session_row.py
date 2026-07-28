@@ -15,6 +15,7 @@ import urwid
 
 from ..models import Session
 from ._colspec import header_columns, row_columns
+from ._rows import truncate_cells
 
 # Transcript-derived hidden tags -> compact Chinese row marker.
 _HIDDEN_MARKERS = {
@@ -115,8 +116,7 @@ class SessionRow(urwid.WidgetWrap):
         when = _rel_time(session.mtime)
         hidden = _hidden_marker(session)
         label = f"[{hidden}] {session.label}" if hidden else session.label
-        if len(label) > 80:
-            label = label[:79] + "…"
+        label = truncate_cells(label, 80)
         cwd = session.cwd.rstrip("/").rsplit("/", 1)[-1] if session.cwd else ""
 
         cols = row_columns(SESSION_COLS, [

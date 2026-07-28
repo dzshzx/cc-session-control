@@ -367,6 +367,78 @@ def test_truncate_cells_by_display_width():
     assert calc_width(out, 0, len(out)) <= 30
 
 
+@pytest.mark.parametrize(
+    ("text", "width", "marker", "expected"),
+    [
+        ("unchanged", 9, "…", "unchanged"),
+        ("abcdef", 5, "…", "abcd…"),
+        ("你好啊", 5, "…", "你好…"),
+        ("e\u0301clair", 2, "…", "e\u0301…"),
+        ("👩\u200d💻abc", 3, "…", "👩\u200d💻…"),
+        ("👍🏽abc", 3, "…", "👍🏽…"),
+        ("🇨🇳abc", 3, "…", "🇨🇳…"),
+        ("abcdef", 2, "界", "界"),
+        ("abcdef", 1, "界", ""),
+        ("abcdef", 1, "..", "."),
+        ("abc", 0, "…", ""),
+        ("abc", 1, "…", "…"),
+        ("abc", 2, "…", "a…"),
+    ],
+)
+def test_truncate_cells_preserves_terminal_clusters_and_width(
+    text, width, marker, expected,
+):
+    from urwid import calc_width
+
+    from cc_session_control.views._rows import truncate_cells
+
+    result = truncate_cells(text, width, marker=marker)
+
+    assert result == expected
+    assert calc_width(result, 0, len(result)) <= width
+
+
+def test_truncate_cells_accepts_public_width_and_marker_call_shapes():
+    from cc_session_control.views._rows import truncate_cells
+
+    assert truncate_cells("abcdef", width=2, marker="..") == ".."
+    assert truncate_cells("abcdef", 1, "..") == "."
+
+
+def test_session_row_label_limit_uses_terminal_cells():
+    from urwid import calc_width
+
+    label = "标" * 50
+    row = SessionRow(_make_session(label=label))
+    text = b"\n".join(row.render((300,), focus=False).text).decode()
+
+    shown = "标" * 39 + "…"
+    assert shown in text
+    assert "标" * 40 not in text
+    assert calc_width(shown, 0, len(shown)) == 79
+
+
+def test_cleanup_preview_label_limit_uses_terminal_cells(monkeypatch):
+    import cc_session_control.views._sessions_cleanup as cleanup_view
+
+    from cc_session_control.data.cleanup import CleanupPlan
+
+    monkeypatch.setattr(cleanup_view.proc, "current_determinable", lambda: True)
+    session = _make_session(label="标" * 40)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._plan = CleanupPlan(empty=[session])
+
+    view._enter_preview("empty")
+
+    canvas = view._body.original_widget.render((200, 40), focus=False)
+    text = b"\n".join(canvas.text).decode()
+    shown = "标" * 29 + "…"
+    assert shown in text
+    assert "标" * 30 not in text
+
+
 def test_confirm_message_truncates_cjk_label_by_cells(monkeypatch):
     # A 40-CJK-char label is 80 cells — the old [:30] slice kept 60 cells of it.
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242,

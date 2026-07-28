@@ -33,7 +33,7 @@ from ..data.sessions import scan
 from ..models import Session
 from ._cleanup_feedback import format_cleanup_notice
 from ._confirm import DEGRADED as _DEGRADED
-from ._rows import TextRow
+from ._rows import TextRow, truncate_cells
 from ._session_row import _ActionRow
 
 
@@ -48,7 +48,7 @@ def _execute_orphans(entries: list[str]) -> CleanupExecution:
 def _session_line(s: Session) -> str:
     when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
     cwd = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
-    return f"{when}  p{s.prompts}  {s.label[:60]}  ({cwd})"
+    return f"{when}  p{s.prompts}  {truncate_cells(s.label, 60)}  ({cwd})"
 
 
 @dataclass(frozen=True)

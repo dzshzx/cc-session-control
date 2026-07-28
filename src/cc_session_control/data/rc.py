@@ -35,6 +35,7 @@ from .project_settings import (
     read_project_settings,
     write_rc_at_startup,
 )
+from .rc_enabled import EnabledListStore, migrate_lines
 
 _environment_ids = rc_environment.EnvironmentIdCache()
 
@@ -85,12 +86,6 @@ class StartManyResult:
     failed: int = 0
 
 
-def _ensure_list() -> None:
-    os.makedirs(cfg.config_dir, exist_ok=True)
-    if not cfg.rc_list.is_file():
-        cfg.rc_list.touch()
-
-
 def _legacy_workspace_root() -> str:
     """FROZEN pre-0.7.3 workspace detection — rc-enabled migration ONLY.
 
@@ -120,80 +115,33 @@ def _legacy_workspace_root() -> str:
 
 
 def _migrate_lines(lines: list[str]) -> tuple[list[str], bool]:
-    """Absolute-path-ify legacy rc-enabled lines.
+    """Compatibility wrapper for legacy migration tests."""
 
-    Comments/blank lines pass through verbatim; absolute paths are kept;
-    anything else (pre-0.7.3 short names, including relative `a/b` forms)
-    resolves against the frozen legacy workspace root. Idempotent — a fully
-    migrated file reports changed=False, so no rewrite is triggered.
-    """
-    out: list[str] = []
-    changed = False
-    root: str | None = None
-    for raw in lines:
-        s = raw.strip()
-        if not s or s.startswith("#") or s.startswith("/"):
-            out.append(raw)
-            continue
-        if root is None:
-            root = _legacy_workspace_root()
-        out.append(os.path.join(root, s))
-        changed = True
-    return out, changed
+    return migrate_lines(lines, _legacy_workspace_root)
 
 
-def _write_list(lines: list[str]) -> None:
-    """Atomic rc-enabled rewrite (unique tmp + rename) — a concurrent reader
-    never sees a truncated file and concurrent writers cannot interleave."""
-    _ensure_list()
-    tmp = cfg.rc_list.parent / f".{cfg.rc_list.name}.{os.getpid()}.tmp"
-    tmp.write_text("".join(f"{line}\n" for line in lines))
-    os.replace(tmp, cfg.rc_list)
-
+def _enabled_store() -> EnabledListStore:
+    return EnabledListStore(cfg.rc_list, _legacy_workspace_root)
 
 def list_enabled() -> list[str]:
-    _ensure_list()
-    try:
-        raw = cfg.rc_list.read_text().splitlines()
-    except FileNotFoundError:
-        return []
-    migrated, changed = _migrate_lines(raw)
-    if changed:
-        _write_list(migrated)
-        raw = migrated
-    return [
-        line.strip() for line in raw
-        if line.strip() and not line.strip().startswith("#")
-    ]
+    return _enabled_store().list()
 
 
 def list_has(path: str) -> bool:
-    return path in list_enabled()
+    return _enabled_store().contains(path)
 
 
 def list_add(path: str) -> None:
-    _ensure_list()
-    if list_has(path):
-        return
-    with open(cfg.rc_list, "a") as f:
-        f.write(f"{path}\n")
+    _enabled_store().add(path)
 
 
 def list_rm(path: str) -> None:
-    try:
-        lines = cfg.rc_list.read_text().splitlines()
-    except FileNotFoundError:
-        return
-    _write_list([line for line in lines if line.strip() != path])
+    _enabled_store().remove(path)
 
 
 def toggle_autostart(path: str) -> bool:
     """Toggle project in the autostart list. Returns new state."""
-    if list_has(path):
-        list_rm(path)
-        return False
-    list_add(path)
-    return True
+    return _enabled_store().toggle(path)
 
 
 def _load_projects() -> dict:
