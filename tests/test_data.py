@@ -134,7 +134,16 @@ def test_terminate_session_invalidates_cache(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
     calls = {"kill": 0, "invalidate": 0}
-    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
+    monkeypatch.setattr(
+        so.proc,
+        "probe_current_ancestors",
+        lambda: so.proc.AncestorProbe(frozenset({999})),
+    )
+    monkeypatch.setattr(
+        so.proc,
+        "probe_pid",
+        lambda pid, start: so.proc.PidProbe(pid, True),
+    )
     monkeypatch.setattr(
         so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1)
     )
@@ -157,7 +166,12 @@ def test_terminate_session_invalidates_cache(monkeypatch):
 def test_take_over_refused_without_proc(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
-    monkeypatch.setattr(so.proc, "current_determinable", lambda: False)
+    issue = so.proc.ProcIssue("process ancestors", "/proc", "unavailable")
+    monkeypatch.setattr(
+        so.proc,
+        "probe_current_ancestors",
+        lambda: so.proc.AncestorProbe(frozenset(), (issue,)),
+    )
     monkeypatch.setattr(
         so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill"))
     )
@@ -169,8 +183,16 @@ def test_take_over_skips_kill_when_pid_gone_or_recycled(monkeypatch):
     # while the confirm modal sat open must NOT be SIGTERMed.
     import cc_session_control.actions.session_ops as so
 
-    monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: False)
+    monkeypatch.setattr(
+        so.proc,
+        "probe_current_ancestors",
+        lambda: so.proc.AncestorProbe(frozenset({999})),
+    )
+    monkeypatch.setattr(
+        so.proc,
+        "probe_pid",
+        lambda pid, start: so.proc.PidProbe(pid, False),
+    )
     monkeypatch.setattr(
         so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill"))
     )
@@ -185,8 +207,16 @@ def test_take_over_skips_kill_when_pid_gone_or_recycled(monkeypatch):
 def test_take_over_failed_on_signal_error(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
-    monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
+    monkeypatch.setattr(
+        so.proc,
+        "probe_current_ancestors",
+        lambda: so.proc.AncestorProbe(frozenset({999})),
+    )
+    monkeypatch.setattr(
+        so.proc,
+        "probe_pid",
+        lambda pid, start: so.proc.PidProbe(pid, True),
+    )
 
     def raise_perm(*_):
         raise PermissionError("nope")
@@ -199,8 +229,16 @@ def test_take_over_kills_settles_and_invalidates(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
     calls = {"kill": None, "sleep": 0, "invalidate": 0}
-    monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
+    monkeypatch.setattr(
+        so.proc,
+        "probe_current_ancestors",
+        lambda: so.proc.AncestorProbe(frozenset({999})),
+    )
+    monkeypatch.setattr(
+        so.proc,
+        "probe_pid",
+        lambda pid, start: so.proc.PidProbe(pid, True),
+    )
     monkeypatch.setattr(
         so.os, "kill", lambda pid, sig: calls.__setitem__("kill", (pid, sig))
     )
@@ -336,8 +374,16 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
     monkeypatch.setattr(so.os, "kill", lambda pid, sig: calls["kill"].append(pid))
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
     monkeypatch.setattr(so, "invalidate_cache", lambda: None)
-    monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
+    monkeypatch.setattr(
+        so.proc,
+        "probe_current_ancestors",
+        lambda: so.proc.AncestorProbe(frozenset({999})),
+    )
+    monkeypatch.setattr(
+        so.proc,
+        "probe_pid",
+        lambda pid, start: so.proc.PidProbe(pid, True),
+    )
     monkeypatch.setattr(
         so.tmux,
         "run_in_tmux",
@@ -373,7 +419,12 @@ def test_do_tmux_resume_dead_session_no_kill(monkeypatch):
 def test_do_tmux_resume_refuses_takeover_when_degraded(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
-    monkeypatch.setattr(so.proc, "current_determinable", lambda: False)
+    issue = so.proc.ProcIssue("process ancestors", "/proc", "unavailable")
+    monkeypatch.setattr(
+        so.proc,
+        "probe_current_ancestors",
+        lambda: so.proc.AncestorProbe(frozenset(), (issue,)),
+    )
     monkeypatch.setattr(
         so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill"))
     )

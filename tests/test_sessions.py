@@ -114,7 +114,11 @@ def _setup_world(tmp_path, monkeypatch):
 
     # pid 1003 (sdk) is a zombie file: registry entry exists but proc is dead.
     alive_pids = {1001, 1002, 1004}
-    monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: pid in alive_pids)
+    monkeypatch.setattr(
+        proc,
+        "probe_pid",
+        lambda pid, start: proc.PidProbe(pid, pid in alive_pids),
+    )
     # No `claude agents --json` data — liveness comes from the registry join.
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     # The cli session launched csctl -> it is the "current" one.
@@ -206,7 +210,11 @@ def test_scan_residency_covers_all_alive_pids_of_a_sid(tmp_path, monkeypatch):
     )
     registry.invalidate_cache()
     alive_pids = {1001, 1002, 1004, 1005}
-    monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: pid in alive_pids)
+    monkeypatch.setattr(
+        proc,
+        "probe_pid",
+        lambda pid, start: proc.PidProbe(pid, pid in alive_pids),
+    )
     # Only the OLDER pid 1001 lives in a tmux pane.
     monkeypatch.setattr(
         sessions_mod.tmux,
@@ -231,7 +239,11 @@ def test_scan_transcript_only_session_is_dead(tmp_path, monkeypatch):
             {"type": "user", "message": {"content": "hello"}},
         ],
     )
-    monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: False)
+    monkeypatch.setattr(
+        proc,
+        "probe_pid",
+        lambda pid, start: proc.PidProbe(pid, False),
+    )
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: set())
 
@@ -256,7 +268,11 @@ def test_scan_excludes_transcript_without_cwd(tmp_path, monkeypatch):
             {"type": "user", "message": {"content": "no cwd here"}},
         ],
     )
-    monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: False)
+    monkeypatch.setattr(
+        proc,
+        "probe_pid",
+        lambda pid, start: proc.PidProbe(pid, False),
+    )
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: set())
 

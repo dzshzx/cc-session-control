@@ -54,7 +54,7 @@ def confirm_stop(
     pid — the RC tab's stop kills a tmux window, not a process, so refusing
     it off `/proc` would be a gate it never needed.
     """
-    if gated and not proc.current_determinable():
+    if gated and not proc.probe_current_ancestors().complete:
         app.notify(DEGRADED)
         return
     if not alive:
@@ -89,7 +89,7 @@ def confirm_takeover(
     if not would_take_over(s, fork):
         on_yes()
         return
-    if not proc.current_determinable():
+    if not proc.probe_current_ancestors().complete:
         app.notify(DEGRADED)
         return
     shown = truncate_cells(s.label if name is None else name, CONFIRM_NAME_CELLS)

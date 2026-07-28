@@ -406,7 +406,11 @@ def test_remove_session_refuses_when_agent_host_is_live(tmp_path, monkeypatch):
     sessions_dir = _mkdir(tmp_path, "sessions")
     with open(os.path.join(sessions_dir, "5555.json"), "w") as fh:
         json.dump({"pid": 5555, "sessionId": sid, "procStart": "999"}, fh)
-    monkeypatch.setattr(cleanup.proc, "pid_alive", lambda pid, ps: pid == 5555)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_pid",
+        lambda pid, start: cleanup.proc.PidProbe(pid, pid == 5555),
+    )
     registry.invalidate_cache()
     # Its jobs/<short> dir + a sid-keyed artifact dir.
     jobs_dir = _mkdir(tmp_path, "jobs", sid[:8])

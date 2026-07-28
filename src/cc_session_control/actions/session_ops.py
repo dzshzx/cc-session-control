@@ -8,10 +8,11 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal
 
 from .. import clipboard
-from ..data import proc, tmux
+from ..data import liveness, proc, tmux
 from ..data.liveness import invalidate_cache
 from ..models import Session
 
@@ -22,7 +23,34 @@ TakeOverResult = Literal["killed", "gone", "refused", "failed"]
 TAKE_OVER_OK = ("killed", "gone")
 
 
-def take_over(pid: int, proc_start: str = "") -> TakeOverResult:
+class TakeOverState(StrEnum):
+    """Typed kill outcome used by every public destructive action."""
+
+    KILLED = "killed"
+    GONE = "gone"
+    REFUSED = "refused"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class TakeOverOutcome:
+    state: TakeOverState
+    detail: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.state in {TakeOverState.KILLED, TakeOverState.GONE}
+
+
+def _proc_issue_detail(issues: tuple[proc.ProcIssue, ...]) -> str:
+    parts = []
+    for issue in issues:
+        location = f" at {issue.path}" if issue.path else ""
+        parts.append(f"{issue.source}{location}: {issue.detail}")
+    return "; ".join(parts)
+
+
+def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
     """THE kill primitive behind every takeover/stop: R10 gate → kill-time
     liveness recheck → SIGTERM → settle → invalidate the liveness cache.
 
@@ -38,31 +66,54 @@ def take_over(pid: int, proc_start: str = "") -> TakeOverResult:
     (signal error, e.g. permissions). Fail-fast callers (terminate/stop) treat
     "failed" as failure; best-effort callers (the resume family) continue.
     """
-    if not proc.current_determinable():
-        return "refused"
-    if not proc.pid_alive(pid, proc_start):
+    ancestors = proc.probe_current_ancestors()
+    if not ancestors.complete:
+        return TakeOverOutcome(
+            TakeOverState.REFUSED,
+            _proc_issue_detail(ancestors.issues),
+        )
+    if pid in ancestors.pids:
+        return TakeOverOutcome(
+            TakeOverState.REFUSED,
+            f"pid {pid} belongs to the current session ancestor chain",
+        )
+    probe = proc.probe_pid(pid, proc_start)
+    if probe.alive is None:
+        issue = probe.issue
+        if issue is None:
+            raise AssertionError("unknown pid probe must carry an issue")
+        return TakeOverOutcome(
+            TakeOverState.REFUSED,
+            _proc_issue_detail((issue,)),
+        )
+    if not probe.alive:
         invalidate_cache()  # already gone — liveness may have changed
-        return "gone"
+        return TakeOverOutcome(TakeOverState.GONE)
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         invalidate_cache()
-        return "gone"
-    except OSError:
-        return "failed"
+        return TakeOverOutcome(TakeOverState.GONE)
+    except OSError as exc:
+        return TakeOverOutcome(TakeOverState.FAILED, str(exc))
     time.sleep(1)
     invalidate_cache()
-    return "killed"
+    return TakeOverOutcome(TakeOverState.KILLED)
+
+
+def take_over(pid: int, proc_start: str = "") -> TakeOverResult:
+    """Compatibility string view; safety decisions use :func:`take_over_result`."""
+    return take_over_result(pid, proc_start).state.value
 
 
 def terminate_session(s: Session) -> bool:
-    """Send SIGTERM via `take_over` (which owns the R10 gate + the
+    """Send SIGTERM via `take_over_result` (which owns the R10 gate + the
     liveness-cache invalidation — terminating is the one session op that
     changes `claude agents` liveness; delete/cleanup only touch already-dead
     sessions, so they don't invalidate)."""
     if not s.pid:
         return False
-    return take_over(s.pid, s.proc_start) in TAKE_OVER_OK
+    return take_over_result(s.pid, s.proc_start).success
 
 
 def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
@@ -72,7 +123,7 @@ def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
     Returns (cwd, args, should_kill). Unified kill semantics: a fork is a copy
     and leaves the original running, while a plain resume takes the session
     over — so we kill only when it is alive, not the current session, and we
-    are NOT forking. `resume_cmd` and `do_resume` both obey this single
+    are NOT forking. `resume_cmd` and `do_resume_result` both obey this single
     decision; they must not re-derive it.
     """
     args = ["claude", "--resume", s.sid]
@@ -88,7 +139,7 @@ def would_take_over(s: Session, fork: bool = False) -> bool:
     The single source of the "needs confirmation" decision for the UI: it reads
     `_resume_plan`'s `should_kill` so views never re-derive `s.alive and not
     s.current` themselves (CLAUDE.md: should_kill is single-point — re-derivation
-    was the old divergence). `do_resume`/`do_tmux_resume` and the confirm gate
+    was the old divergence). The typed resume operations and the confirm gate
     thus agree by construction.
     """
     return _resume_plan(s, fork)[2]
@@ -105,8 +156,37 @@ def resume_cmd(s: Session, fork: bool = False) -> str:
     return " && ".join(parts)
 
 
-def do_resume(s: Session, fork: bool = False) -> bool:
-    """chdir + (kill if needed) + exec claude. Returns False only on refusal.
+@dataclass(frozen=True)
+class ResumeOutcome:
+    success: bool
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class TmuxResumeOutcome:
+    target: str | None
+    detail: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.target is not None
+
+
+def _liveness_issue_detail(evidence: liveness.LivenessSnapshot) -> str:
+    parts = []
+    for issue in evidence.issues:
+        location = f" at {issue.path}" if issue.path else ""
+        parts.append(f"{issue.source}{location}: {issue.detail}")
+    return "; ".join(parts)
+
+
+def _resume_liveness_gate() -> str:
+    evidence = liveness.liveness_inputs()
+    return "" if evidence.complete else _liveness_issue_detail(evidence)
+
+
+def do_resume_result(s: Session, fork: bool = False) -> ResumeOutcome:
+    """chdir + (kill if needed) + exec claude, with a typed refusal outcome.
 
     R10: when a takeover kill is required but "current" can't be determined (no
     `/proc`), refuse WITHOUT killing or exec'ing, so we never SIGTERM the
@@ -114,32 +194,52 @@ def do_resume(s: Session, fork: bool = False) -> bool:
     replaces csctl and never returns; True is the modeled-success return for
     tests whose system boundary returns.
     """
+    incomplete = _resume_liveness_gate()
+    if incomplete:
+        return ResumeOutcome(False, incomplete)
     cwd, args, should_kill = _resume_plan(s, fork)
     if should_kill and s.pid:
-        if take_over(s.pid, s.proc_start) == "refused":
-            return False
+        takeover = take_over_result(s.pid, s.proc_start)
+        if takeover.state is TakeOverState.REFUSED:
+            return ResumeOutcome(False, takeover.detail)
         # "gone"/"failed" fall through: the kill is best-effort here, the
         # resume itself must still happen.
     if cwd and os.path.isdir(cwd):
         os.chdir(cwd)
     os.execvp("claude", args)
-    return True
+    return ResumeOutcome(True)
 
 
-def _spawn_in_tmux(s: Session, cmd: str, fork: bool = False) -> str | None:
+def do_resume(s: Session, fork: bool = False) -> bool:
+    """Compatibility bool view; public intents use :func:`do_resume_result`."""
+    return do_resume_result(s, fork).success
+
+
+def _spawn_in_tmux_result(
+    s: Session,
+    cmd: str,
+    fork: bool = False,
+) -> TmuxResumeOutcome:
     """Kill-if-takeover, then spawn `cmd` in the session's per-project tmux
     session — the shared skeleton behind `do_tmux_resume` (Enter/f/R, the
     tmux-first dispatch verbs, ADR-0001). A fork is a copy (never kills) and
     gets its own `<sid8>-fork` window so it doesn't shadow the original's.
-    Returns the exact tmux target, or None on R10 refusal ("refused" from
-    `take_over`) / tmux failure; "gone"/"failed" fall through like
-    `do_resume` (best-effort kill).
+    Returns a typed outcome containing the exact tmux target, or a detail on
+    liveness refusal or tmux failure. "gone"/"failed" takeover results fall
+    through like :func:`do_resume_result` (best-effort kill).
     """
+    incomplete = _resume_liveness_gate()
+    if incomplete:
+        return TmuxResumeOutcome(None, incomplete)
     _, _, should_kill = _resume_plan(s, fork)
-    if should_kill and s.pid and take_over(s.pid, s.proc_start) == "refused":
-        return None
+    if should_kill and s.pid:
+        takeover = take_over_result(s.pid, s.proc_start)
+        if takeover.state is TakeOverState.REFUSED:
+            return TmuxResumeOutcome(None, takeover.detail)
     window = f"{s.sid[:8]}-fork" if fork else s.sid[:8]
-    return tmux.run_in_tmux(tmux.session_name_for(s.cwd), window, cmd)
+    target = tmux.run_in_tmux(tmux.session_name_for(s.cwd), window, cmd)
+    detail = "" if target is not None else "tmux unavailable"
+    return TmuxResumeOutcome(target, detail)
 
 
 def attach_target(s: Session) -> str | None:
@@ -172,7 +272,12 @@ def do_tmux_resume(s: Session, fork: bool = False) -> str | None:
     session's per-project tmux session, and return the exact tmux target;
     None on failure. Enter/f enter the target afterwards (`TmuxResumeIntent`);
     R 转后台 spawns it and stays in csctl."""
-    return _spawn_in_tmux(s, tmux_foreground_cmd(s, fork), fork=fork)
+    return do_tmux_resume_result(s, fork).target
+
+
+def do_tmux_resume_result(s: Session, fork: bool = False) -> TmuxResumeOutcome:
+    """Typed tmux resume outcome retaining probe or spawn failure detail."""
+    return _spawn_in_tmux_result(s, tmux_foreground_cmd(s, fork), fork=fork)
 
 
 def do_tmux_new(directory: str) -> str | None:
@@ -209,24 +314,25 @@ class ExitIntent:
 @dataclass(frozen=True)
 class ResumeIntent(ExitIntent):
     """`t` 终端接回: bare-terminal resume (execvp; takeover kill inside
-    do_resume) — the fallback when tmux is unavailable or unwanted."""
+    do_resume_result) — the fallback when tmux is unavailable or unwanted."""
 
     session: Session
     fork: bool = False
 
     def run(self) -> int:
         try:
-            resumed = do_resume(self.session, fork=self.fork)
+            outcome = do_resume_result(self.session, fork=self.fork)
         except OSError as exc:
             print(
                 f"Failed to resume session {self.session.sid} in the terminal: {exc}",
                 file=sys.stderr,
             )
             return 1
-        if not resumed:
+        if not outcome.success:
+            detail = f" {outcome.detail}" if outcome.detail else ""
             print(
-                "Refused: '/proc' unavailable — cannot determine the current "
-                "session, so the old process can't be safely killed (R10).",
+                "Refused: liveness evidence incomplete; the session was not "
+                f"resumed.{detail}",
                 file=sys.stderr,
             )
             return 1
@@ -266,14 +372,15 @@ class TmuxResumeIntent(ExitIntent):
     fork: bool = False
 
     def run(self) -> int:
-        target = do_tmux_resume(self.session, fork=self.fork)
-        if target is None:
+        outcome = do_tmux_resume_result(self.session, fork=self.fork)
+        if outcome.target is None:
+            detail = f": {outcome.detail}" if outcome.detail else ""
             print(
-                "Failed to resume the session inside tmux "
-                "(R10 degraded, or tmux unavailable).",
+                f"Failed to resume the session inside tmux{detail}.",
                 file=sys.stderr,
             )
             return 1
+        target = outcome.target
         try:
             entered = enter_window(target)
         except OSError as exc:

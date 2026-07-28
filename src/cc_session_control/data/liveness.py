@@ -96,13 +96,30 @@ class LivenessSnapshot:
         return not self.issues
 
 
+def _probe_proc_liveness(
+    session_procs: Sequence[SessionProc],
+) -> tuple[list[SessionProc], list[LivenessIssue]]:
+    records: list[SessionProc] = []
+    issues: list[LivenessIssue] = []
+    for session_proc in session_procs:
+        probe = proc.probe_pid(session_proc.pid, session_proc.proc_start)
+        records.append(replace(session_proc, proc_alive=probe.alive))
+        if probe.issue is not None:
+            issues.append(
+                LivenessIssue(
+                    source=probe.issue.source,
+                    path=probe.issue.path,
+                    detail=probe.issue.detail,
+                )
+            )
+    return records, issues
+
+
 def _inject_proc_liveness(
     session_procs: Sequence[SessionProc],
 ) -> list[SessionProc]:
-    return [
-        replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
-        for sp in session_procs
-    ]
+    """Compatibility records-only view; safety decisions use the typed snapshot."""
+    return _probe_proc_liveness(session_procs)[0]
 
 
 def _registry_issues(
@@ -132,16 +149,22 @@ def liveness_inputs() -> LivenessSnapshot:
     they described a new generation.
     """
     session_scan = registry.scan_session_procs(max_age=0.0)
-    session_procs = _inject_proc_liveness(session_scan.records)
+    session_procs, proc_issues = _probe_proc_liveness(session_scan.records)
     jobs_scan = registry.scan_agent_jobs(max_age=0.0)
     agent_jobs = enrich_jobs(
         jobs_scan.records,
         session_procs,
     )
     agents_scan = scan_agents(max_age=0.0)
+    ancestors = proc.probe_current_ancestors()
     issues = [
         *_registry_issues(session_scan.issues),
         *_registry_issues(jobs_scan.issues),
+        *proc_issues,
+        *(
+            LivenessIssue(issue.source, issue.path, issue.detail)
+            for issue in ancestors.issues
+        ),
         *(
             LivenessIssue(issue.source, issue.path, issue.detail)
             for issue in agents_scan.issues
@@ -149,7 +172,7 @@ def liveness_inputs() -> LivenessSnapshot:
     ]
     return LivenessSnapshot(
         session_procs=tuple(session_procs),
-        cur=frozenset(proc.ancestor_pids()),
+        cur=ancestors.pids,
         agent_jobs=tuple(agent_jobs),
         agents_map=agents_scan.records,
         issues=tuple(issues),
@@ -170,6 +193,26 @@ def _scrub_dead_pids(
     return {sid: (pid if exists(pid) else None) for sid, pid in mapping.items()}
 
 
+def _probe_agent_pids(
+    mapping: Mapping[str, int | None],
+) -> tuple[dict[str, int | None], list[AgentsIssue]]:
+    """Scrub only confirmed-gone pids and retain unknown evidence."""
+    records: dict[str, int | None] = {}
+    issues: list[AgentsIssue] = []
+    for sid, pid in mapping.items():
+        probe = proc.probe_pid(pid, None)
+        records[sid] = None if probe.alive is False else pid
+        if probe.issue is not None:
+            issues.append(
+                AgentsIssue(
+                    probe.issue.source,
+                    probe.issue.path,
+                    probe.issue.detail,
+                )
+            )
+    return records, issues
+
+
 def _agents_failure(detail: str) -> AgentsScan:
     issue = AgentsIssue("claude agents --json", None, detail)
     return AgentsScan(
@@ -181,9 +224,9 @@ def _agents_failure(detail: str) -> AgentsScan:
 def scan_agents(max_age: float = 5.0) -> AgentsScan:
     """Scan `claude agents --json`, retaining typed availability and issues.
 
-    With `/proc` available, pids are scrubbed against process existence at
-    cache-refresh time (see `_scrub_dead_pids`). Without `/proc` (R10 degraded
-    mode) the map is the ONLY liveness source, so it is passed through as-is.
+    With `/proc` available, pids are checked against typed process evidence at
+    cache-refresh time (see `_probe_agent_pids`). Confirmed-gone pids are
+    scrubbed; unknown pids and their issues are retained.
     """
     global _cache, _cache_time
     now = time.monotonic()
@@ -260,10 +303,14 @@ def scan_agents(max_age: float = 5.0) -> AgentsScan:
                         availability=availability,
                     )
     if proc.has_proc():
+        records, proc_issues = _probe_agent_pids(result.records)
+        availability = result.availability
+        if proc_issues and availability is AgentsAvailability.AVAILABLE:
+            availability = AgentsAvailability.PARTIAL
         result = AgentsScan(
-            records=_scrub_dead_pids(dict(result.records), proc.pid_exists),
-            issues=result.issues,
-            availability=result.availability,
+            records=records,
+            issues=(*result.issues, *proc_issues),
+            availability=availability,
         )
     _cache = result
     _cache_time = now
@@ -284,10 +331,11 @@ def live_session_procs(max_age: float = 5.0) -> list[SessionProc]:
     """Registry session files with `/proc` liveness injected — THE assembly point.
 
     `registry.read_session_procs` deliberately leaves `proc_alive=None` (pure
-    parse, no `/proc`); a `SessionProc.proc_alive` is only trustworthy after
-    this injection. Every consumer must come through here rather than re-inline
-    the `replace(sp, proc_alive=pid_alive(...))` idiom. The owned registry and
-    `/proc` readers degrade expected I/O failures; programming errors propagate.
+    parse, no `/proc`). Injection supplies ``True`` or ``False`` only for
+    conclusive probes and preserves ``None`` for unknown liveness. Security
+    consumers use :func:`liveness_inputs` so the matching issues and completeness
+    bit are not lost. Expected I/O failures are typed; programming errors
+    propagate.
     """
     return _inject_proc_liveness(registry.read_session_procs(max_age=max_age))
 

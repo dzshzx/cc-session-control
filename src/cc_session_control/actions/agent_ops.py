@@ -122,9 +122,6 @@ def remove_job(job: AgentJob) -> CleanupExecution:
     except OSError as exc:
         result.refuse([job.short], f"cannot establish removal anchor: {exc}")
         return result
-    if not proc.current_determinable():
-        result.refuse([job.short], "current session cannot be determined")
-        return result
     evidence = liveness.liveness_inputs()
     if not evidence.complete:
         return refuse_incomplete_liveness(result, [job.short], evidence)
@@ -166,7 +163,7 @@ def resume_takeover(job: AgentJob) -> Session:
     replace the csctl process.
     """
     pid, alive = job_host(job)
-    current = bool(pid) and pid in proc.ancestor_pids()
+    current = bool(pid) and pid in proc.probe_current_ancestors().pids
     return Session(
         sid=job.resume_sid,
         cwd=job.cwd,
@@ -236,9 +233,9 @@ def stop_job_result(job: AgentJob) -> AgentStopResult:
     confirmed-live pid is killed. Incomplete source evidence and unavailable
     current-session determination refuse the destructive action. The same
     snapshot supplies both the host pid and its proc-start identity, avoiding
-    a second compatibility scan before ``take_over`` rechecks liveness.
+    a second compatibility scan before ``take_over_result`` rechecks liveness.
 
-    The kill itself is `session_ops.take_over` (the ONE primitive: R10 gate,
+    The kill itself is `session_ops.take_over_result` (the ONE primitive: R10 gate,
     recheck, SIGTERM, cache invalidation). Its four outcomes map one-for-one to
     this domain result.
 
@@ -250,11 +247,6 @@ def stop_job_result(job: AgentJob) -> AgentStopResult:
         return AgentStopResult(
             AgentStopState.REFUSED,
             detail=_incomplete_liveness_detail(evidence),
-        )
-    if not proc.current_determinable():
-        return AgentStopResult(
-            AgentStopState.REFUSED,
-            detail="current session cannot be determined",
         )
     pid, alive = registry.host_pid_for_sid(job.sid, evidence.session_procs)
     if not alive or not pid:
@@ -271,25 +263,25 @@ def stop_job_result(job: AgentJob) -> AgentStopResult:
         ),
         "",
     )
-    outcome = session_ops.take_over(pid, proc_start)
-    if outcome == "killed":
+    outcome = session_ops.take_over_result(pid, proc_start)
+    if outcome.state is session_ops.TakeOverState.KILLED:
         return AgentStopResult(AgentStopState.STOPPED, pid=pid)
-    if outcome == "gone":
+    if outcome.state is session_ops.TakeOverState.GONE:
         return AgentStopResult(
             AgentStopState.NOT_RUNNING,
             pid=pid,
             detail="background agent host is no longer running",
         )
-    if outcome == "refused":
+    if outcome.state is session_ops.TakeOverState.REFUSED:
         return AgentStopResult(
             AgentStopState.REFUSED,
             pid=pid,
-            detail="current session cannot be determined",
+            detail=outcome.detail or "current session cannot be determined",
         )
     return AgentStopResult(
         AgentStopState.FAILED,
         pid=pid,
-        detail="failed to signal background agent host",
+        detail=outcome.detail or "failed to signal background agent host",
     )
 
 

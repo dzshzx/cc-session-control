@@ -125,23 +125,26 @@ type CleanupExecutor = Callable[[list], CleanupExecution]
 def stop_session(request: SessionRequest) -> ActionResult:
     if request.pid is None:
         return ActionResult.failure("停止失败", needs_refresh=True)
-    outcome = session_ops.take_over(request.pid, request.proc_start)
-    if outcome in session_ops.TAKE_OVER_OK:
+    outcome = session_ops.take_over_result(request.pid, request.proc_start)
+    if outcome.success:
         return ActionResult.success("已停止", needs_refresh=True)
-    if outcome == "refused":
+    if outcome.state is session_ops.TakeOverState.REFUSED:
+        detail = f"：{outcome.detail}" if outcome.detail else ""
         return ActionResult.refused(
-            "liveness 降级：破坏性操作已禁用",
+            f"liveness 降级：破坏性操作已禁用{detail}",
             needs_refresh=True,
         )
-    return ActionResult.failure("停止失败", needs_refresh=True)
+    detail = f"：{outcome.detail}" if outcome.detail else ""
+    return ActionResult.failure(f"停止失败{detail}", needs_refresh=True)
 
 
 def background_session(request: SessionRequest) -> ActionResult:
-    target = session_ops.do_tmux_resume(request.to_session())
-    if target is None:
-        return ActionResult.failure("转入后台失败", needs_refresh=True)
+    outcome = session_ops.do_tmux_resume_result(request.to_session())
+    if outcome.target is None:
+        detail = f"：{outcome.detail}" if outcome.detail else ""
+        return ActionResult.failure(f"转入后台失败{detail}", needs_refresh=True)
     return ActionResult.success(
-        f"已转入后台（tmux {target}）",
+        f"已转入后台（tmux {outcome.target}）",
         needs_refresh=True,
     )
 

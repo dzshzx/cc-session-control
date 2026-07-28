@@ -74,7 +74,11 @@ def test_snapshot_persists_file_referenced_keeps_active_alive_gated(
         _sp(2, "sid-zombie", bridge="session_ZOMBIE"),
     ]
     _stub_sources(monkeypatch, procs)
-    monkeypatch.setattr(snapshot.liveness.proc, "pid_alive", lambda pid, ps: pid == 1)
+    monkeypatch.setattr(
+        snapshot.liveness.proc,
+        "probe_pid",
+        lambda pid, start: snapshot.liveness.proc.PidProbe(pid, pid == 1),
+    )
 
     snap = snapshot.build_world_snapshot()
 
@@ -93,7 +97,11 @@ def test_snapshot_persists_file_referenced_keeps_active_alive_gated(
 
 def test_snapshot_toggle_away_becomes_orphan(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "config_dir", tmp_path)
-    monkeypatch.setattr(snapshot.liveness.proc, "pid_alive", lambda pid, ps: True)
+    monkeypatch.setattr(
+        snapshot.liveness.proc,
+        "probe_pid",
+        lambda pid, start: snapshot.liveness.proc.PidProbe(pid, True),
+    )
 
     # Cycle 1: a session references env X.
     _stub_sources(monkeypatch, [_sp(1, "sid-x", bridge="session_X")])
@@ -111,7 +119,11 @@ def test_snapshot_toggle_away_becomes_orphan(tmp_path, monkeypatch):
 
 def test_snapshot_reobserve_keeps_single_stable_entry(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "config_dir", tmp_path)
-    monkeypatch.setattr(snapshot.liveness.proc, "pid_alive", lambda pid, ps: True)
+    monkeypatch.setattr(
+        snapshot.liveness.proc,
+        "probe_pid",
+        lambda pid, start: snapshot.liveness.proc.PidProbe(pid, True),
+    )
     _stub_sources(monkeypatch, [_sp(1, "sid-x", bridge="session_X")])
 
     snapshot.build_world_snapshot()
@@ -144,8 +156,8 @@ def test_snapshot_keeps_current_environment_and_carries_ledger_failure(
     _stub_sources(monkeypatch, [_sp(1, "sid-live", bridge="session_LIVE")])
     monkeypatch.setattr(
         snapshot.liveness.proc,
-        "pid_alive",
-        lambda pid, proc_start: True,
+        "probe_pid",
+        lambda pid, start: snapshot.liveness.proc.PidProbe(pid, True),
     )
 
     snap = snapshot.build_world_snapshot()
@@ -282,9 +294,9 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
             records=(_sp(active_pid["value"], f"sid-{active_pid['value']}"),)
         )
 
-    def pid_alive(pid, proc_start):
+    def probe_pid(pid, proc_start):
         calls["pid_alive"] += 1
-        return True
+        return snapshot.liveness.proc.PidProbe(pid, True)
 
     def read_jobs(*args, **kwargs):
         calls["jobs"] += 1
@@ -296,7 +308,7 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
 
     def read_ancestors():
         calls["ancestors"] += 1
-        return {active_pid["value"]}
+        return snapshot.liveness.proc.AncestorProbe(frozenset({active_pid["value"]}))
 
     injected = []
 
@@ -307,10 +319,14 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
     monkeypatch.setattr(
         snapshot.liveness.registry, "scan_session_procs", read_session_procs
     )
-    monkeypatch.setattr(snapshot.liveness.proc, "pid_alive", pid_alive)
+    monkeypatch.setattr(snapshot.liveness.proc, "probe_pid", probe_pid)
     monkeypatch.setattr(snapshot.liveness.registry, "scan_agent_jobs", read_jobs)
     monkeypatch.setattr(snapshot.liveness, "scan_agents", read_agents)
-    monkeypatch.setattr(snapshot.liveness.proc, "ancestor_pids", read_ancestors)
+    monkeypatch.setattr(
+        snapshot.liveness.proc,
+        "probe_current_ancestors",
+        read_ancestors,
+    )
     monkeypatch.setattr(snapshot.sessions, "scan", scan_sessions)
     monkeypatch.setattr(
         snapshot.rc,

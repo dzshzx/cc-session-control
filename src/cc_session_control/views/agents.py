@@ -264,7 +264,7 @@ class AgentsView(ListTabView):
         if job.host_alive:
             self.app.notify("运行中的后台 agent 不能删除，先停止")
             return
-        if not proc.current_determinable():
+        if not proc.probe_current_ancestors().complete:
             self.app.notify(_DEGRADED)
             return
         request = tui_actions.AgentRequest.from_job(job)

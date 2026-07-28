@@ -194,7 +194,12 @@ def test_prune_sweep_zombies_refuses_without_proc(tmp_path, monkeypatch, capsys)
     with open(os.path.join(sessions_dir, "1.json"), "w") as fh:
         json.dump({"pid": 1, "sessionId": "A", "procStart": "1"}, fh)
 
-    monkeypatch.setattr(proc_mod, "current_determinable", lambda: False)
+    issue = proc_mod.ProcIssue("process ancestors", "/proc", "unavailable")
+    monkeypatch.setattr(
+        proc_mod,
+        "probe_current_ancestors",
+        lambda: proc_mod.AncestorProbe(frozenset(), (issue,)),
+    )
 
     assert cli_commands.handle_prune(_args(sweep_zombies=True, apply=True)) == 1
     captured = capsys.readouterr()
@@ -229,7 +234,12 @@ def test_prune_sweep_orphans_refuses_without_proc(
     _stub_scan(monkeypatch)
     orphan = tmp_path / "session-env" / "ghost"
     orphan.mkdir(parents=True)
-    monkeypatch.setattr(proc_mod, "current_determinable", lambda: False)
+    issue = proc_mod.ProcIssue("process ancestors", "/proc", "unavailable")
+    monkeypatch.setattr(
+        proc_mod,
+        "probe_current_ancestors",
+        lambda: proc_mod.AncestorProbe(frozenset(), (issue,)),
+    )
 
     status = cli_commands.handle_prune(_args(sweep_orphans=True, apply=True))
     captured = capsys.readouterr()

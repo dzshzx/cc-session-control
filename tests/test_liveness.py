@@ -185,7 +185,11 @@ def test_alive_map_skips_scrub_without_proc(monkeypatch):
 def test_alive_map_scrubs_with_proc(monkeypatch):
     liveness.invalidate_cache()
     monkeypatch.setattr(liveness.proc, "has_proc", lambda: True)
-    monkeypatch.setattr(liveness.proc, "pid_exists", lambda pid: pid == 111)
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_pid",
+        lambda pid, start: liveness.proc.PidProbe(pid, pid == 111),
+    )
     completed = subprocess.CompletedProcess(
         [],
         0,
@@ -199,6 +203,42 @@ def test_alive_map_scrubs_with_proc(monkeypatch):
     )
     monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
     assert liveness.alive_map(max_age=0) == {"live": 111, "stale": None}
+    liveness.invalidate_cache()
+
+
+def test_scan_agents_keeps_pid_and_reports_unknown_proc_evidence(monkeypatch):
+    liveness.invalidate_cache()
+    monkeypatch.setattr(liveness.proc, "has_proc", lambda: True)
+    completed = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=json.dumps([{"sessionId": "uncertain", "pid": 77}]),
+        stderr="",
+    )
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    issue = liveness.proc.ProcIssue(
+        "process stat",
+        "/proc/77/stat",
+        "input/output error",
+    )
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_pid",
+        lambda pid, start: liveness.proc.PidProbe(pid, None, issue=issue),
+    )
+
+    result = liveness.scan_agents(max_age=0.0)
+
+    assert result.records == {"uncertain": 77}
+    assert result.availability is liveness.AgentsAvailability.PARTIAL
+    assert result.complete is False
+    assert result.issues == (
+        liveness.AgentsIssue(
+            "process stat",
+            "/proc/77/stat",
+            "input/output error",
+        ),
+    )
     liveness.invalidate_cache()
 
 
@@ -320,7 +360,11 @@ def test_live_session_procs_injects_proc_liveness(tmp_path, monkeypatch):
                 }
             )
         )
-    monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: pid == 100)
+    monkeypatch.setattr(
+        proc,
+        "probe_pid",
+        lambda pid, start: proc.PidProbe(pid, pid == 100),
+    )
 
     procs = {sp.pid: sp for sp in liveness.live_session_procs(max_age=0.0)}
     assert procs[100].proc_alive is True  # injected, not the parse default
@@ -356,8 +400,16 @@ def test_liveness_inputs_is_an_immutable_typed_generation_snapshot(monkeypatch):
         "scan_agents",
         lambda max_age=5.0: liveness.AgentsScan(records={"sid": 101}),
     )
-    monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: {101})
-    monkeypatch.setattr(liveness.proc, "pid_alive", lambda pid, start: True)
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_current_ancestors",
+        lambda: liveness.proc.AncestorProbe(frozenset({101})),
+    )
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_pid",
+        lambda pid, start: liveness.proc.PidProbe(pid, True),
+    )
 
     inputs = liveness.liveness_inputs()
 
@@ -372,6 +424,53 @@ def test_liveness_inputs_is_an_immutable_typed_generation_snapshot(monkeypatch):
         inputs.cur = frozenset()
     with pytest.raises(TypeError):
         inputs.agents_map["new"] = 202
+
+
+def test_liveness_inputs_preserves_unknown_proc_verdict_and_issue(monkeypatch):
+    row = _sp("sid", 101, "1", proc_alive=None)
+    issue = liveness.proc.ProcIssue(
+        "process stat",
+        "/proc/101/stat",
+        "permission denied",
+    )
+    monkeypatch.setattr(
+        liveness.registry,
+        "scan_session_procs",
+        lambda max_age=5.0: registry.RegistryScan(records=(row,)),
+    )
+    monkeypatch.setattr(
+        liveness.registry,
+        "scan_agent_jobs",
+        lambda max_age=5.0: registry.RegistryScan(),
+    )
+    monkeypatch.setattr(
+        liveness,
+        "scan_agents",
+        lambda max_age=5.0: liveness.AgentsScan(),
+    )
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_pid",
+        lambda pid, start: liveness.proc.PidProbe(pid, None, issue=issue),
+    )
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_current_ancestors",
+        lambda: liveness.proc.AncestorProbe(frozenset({999})),
+    )
+
+    inputs = liveness.liveness_inputs()
+
+    assert inputs.session_procs[0].proc_alive is None
+    assert inputs.complete is False
+    assert inputs.cur == frozenset({999})
+    assert inputs.issues == (
+        liveness.LivenessIssue(
+            "process stat",
+            "/proc/101/stat",
+            "permission denied",
+        ),
+    )
 
 
 def test_liveness_inputs_forces_fresh_sources_for_each_generation(monkeypatch):
@@ -396,8 +495,16 @@ def test_liveness_inputs_forces_fresh_sources_for_each_generation(monkeypatch):
         "scan_agents",
         lambda max_age=5.0: ages["agents"].append(max_age) or liveness.AgentsScan(),
     )
-    monkeypatch.setattr(liveness.proc, "pid_alive", lambda pid, start: True)
-    monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: set())
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_pid",
+        lambda pid, start: liveness.proc.PidProbe(pid, True),
+    )
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_current_ancestors",
+        lambda: liveness.proc.AncestorProbe(frozenset()),
+    )
 
     first = liveness.liveness_inputs()
     second = liveness.liveness_inputs()
@@ -431,8 +538,16 @@ def test_liveness_inputs_collects_multiple_low_level_source_issues(
         stderr="agent daemon failed",
     )
     monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
-    monkeypatch.setattr(liveness.proc, "pid_alive", lambda pid, start: False)
-    monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: set())
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_pid",
+        lambda pid, start: liveness.proc.PidProbe(pid, False),
+    )
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_current_ancestors",
+        lambda: liveness.proc.AncestorProbe(frozenset()),
+    )
 
     inputs = liveness.liveness_inputs()
 
@@ -454,7 +569,11 @@ def test_liveness_inputs_normal_empty_sources_are_complete(tmp_path, monkeypatch
     liveness.invalidate_cache()
     completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
     monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
-    monkeypatch.setattr(liveness.proc, "ancestor_pids", lambda: set())
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_current_ancestors",
+        lambda: liveness.proc.AncestorProbe(frozenset()),
+    )
 
     inputs = liveness.liveness_inputs()
 

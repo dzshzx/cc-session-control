@@ -405,7 +405,7 @@ class SessionsView(CleanupMixin, ListTabView):
         if s.alive:
             self.app.notify("运行中的会话不删，先停止")
             return
-        if not proc.current_determinable():
+        if not proc.probe_current_ancestors().complete:
             self.app.notify(_DEGRADED)
             return
         request = tui_actions.SessionRequest.from_session(s)

@@ -87,6 +87,23 @@ class FakeApp:
         return not self.views or self.views[self._active] is view
 
 
+def _set_proc_complete(monkeypatch, proc_module, complete):
+    if complete:
+        evidence = proc_module.AncestorProbe(frozenset({999}))
+    else:
+        issue = proc_module.ProcIssue(
+            "process ancestors",
+            "/proc",
+            "unavailable",
+        )
+        evidence = proc_module.AncestorProbe(frozenset(), (issue,))
+    monkeypatch.setattr(
+        proc_module,
+        "probe_current_ancestors",
+        lambda: evidence,
+    )
+
+
 def _make_session(**overrides):
     defaults = dict(
         sid="abc123",
@@ -520,7 +537,7 @@ def test_enter_key_live_takeover_gated_when_degraded(monkeypatch):
 
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
     app, view = _sessions_view_with(monkeypatch, s)
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    _set_proc_complete(monkeypatch, sv_mod.proc, False)
     view.handle_key("enter")
     assert app.result is None
     assert app._confirm_messages == []  # refused before any confirm
@@ -533,7 +550,7 @@ def test_enter_key_dead_session_not_gated_when_degraded(monkeypatch):
 
     s = _make_session(sid="sid1", alive=False, pid=None)
     app, view = _sessions_view_with(monkeypatch, s)
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    _set_proc_complete(monkeypatch, sv_mod.proc, False)
     view.handle_key("enter")
     assert app.result == TmuxResumeIntent(s)
 
@@ -543,7 +560,7 @@ def test_t_key_takeover_gated_when_degraded(monkeypatch):
 
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
     app, view = _sessions_view_with(monkeypatch, s)
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    _set_proc_complete(monkeypatch, sv_mod.proc, False)
     view.handle_key("t")
     assert app.result is None
     assert app._notifications[-1] == sv_mod._DEGRADED
@@ -1053,10 +1070,15 @@ def test_sessions_s_key_confirms_then_terminates(monkeypatch):
     killed = {"n": 0}
     monkeypatch.setattr(
         sv_mod.tui_actions.session_ops,
-        "take_over",
-        lambda *_: killed.__setitem__("n", killed["n"] + 1) or "killed",
+        "take_over_result",
+        lambda *_: (
+            killed.__setitem__("n", killed["n"] + 1)
+            or sv_mod.tui_actions.session_ops.TakeOverOutcome(
+                sv_mod.tui_actions.session_ops.TakeOverState.KILLED,
+            )
+        ),
     )
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    _set_proc_complete(monkeypatch, sv_mod.proc, True)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -1082,7 +1104,7 @@ def test_sessions_s_key_guards_before_confirm(monkeypatch):
         "take_over",
         lambda *_: "killed",
     )
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    _set_proc_complete(monkeypatch, sv_mod.proc, True)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -1149,8 +1171,11 @@ def test_sessions_R_live_confirms_relaunch(monkeypatch):
     relaunched = {"n": 0}
     monkeypatch.setattr(
         sv_mod.tui_actions.session_ops,
-        "do_tmux_resume",
-        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or "proj:1",
+        "do_tmux_resume_result",
+        lambda s: (
+            relaunched.__setitem__("n", relaunched["n"] + 1)
+            or sv_mod.tui_actions.session_ops.TmuxResumeOutcome("proj:1")
+        ),
     )
     app = FakeApp()
     view = SessionsView(app)
@@ -1193,12 +1218,15 @@ def test_sessions_R_degraded_still_relaunches_dead(monkeypatch):
     # B3: relaunching a DEAD session kills nothing — must NOT be blocked off /proc.
     import cc_session_control.views.sessions as sv_mod
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    _set_proc_complete(monkeypatch, sv_mod.proc, False)
     relaunched = {"n": 0}
     monkeypatch.setattr(
         sv_mod.tui_actions.session_ops,
-        "do_tmux_resume",
-        lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or "proj:1",
+        "do_tmux_resume_result",
+        lambda s: (
+            relaunched.__setitem__("n", relaunched["n"] + 1)
+            or sv_mod.tui_actions.session_ops.TmuxResumeOutcome("proj:1")
+        ),
     )
     app = FakeApp()
     view = SessionsView(app)
@@ -1214,7 +1242,7 @@ def test_sessions_R_degraded_still_relaunches_dead(monkeypatch):
 def test_sessions_R_degraded_refuses_live_takeover(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    _set_proc_complete(monkeypatch, sv_mod.proc, False)
     relaunched = {"n": 0}
     monkeypatch.setattr(
         sv_mod.tui_actions.session_ops,
@@ -1726,7 +1754,7 @@ def test_delete_refuses_when_current_undeterminable(monkeypatch):
     # Fix 2a / R10: no /proc -> the delete must refuse honestly, not "delete".
     import cc_session_control.views.sessions as sv_mod
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    _set_proc_complete(monkeypatch, sv_mod.proc, False)
     removed = {"n": 0}
     monkeypatch.setattr(
         sv_mod.tui_actions.cleanup,
@@ -1747,7 +1775,7 @@ def test_cleanup_preview_refuses_when_undeterminable_not_nothing(monkeypatch):
     # Fix 2a: a degraded refusal must NOT read as "无…需要清理".
     import cc_session_control.views.sessions as sv_mod
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    _set_proc_complete(monkeypatch, sv_mod.proc, False)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -1814,7 +1842,7 @@ def test_zombie_sweep_gated_when_undeterminable(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
     from cc_session_control.data.cleanup import CleanupPlan
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
+    _set_proc_complete(monkeypatch, sv_mod.proc, False)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]

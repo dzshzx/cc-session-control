@@ -312,7 +312,12 @@ def test_enter_key_live_takeover_gated_when_degraded(monkeypatch):
         "resume_takeover",
         lambda job: _takeover_session(current=False, alive=True),
     )
-    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: False)
+    issue = av_mod.proc.ProcIssue("process ancestors", "/proc", "unavailable")
+    monkeypatch.setattr(
+        av_mod.proc,
+        "probe_current_ancestors",
+        lambda: av_mod.proc.AncestorProbe(frozenset(), (issue,)),
+    )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("enter")
     assert app.result is None

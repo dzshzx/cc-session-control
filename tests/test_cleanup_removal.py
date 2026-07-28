@@ -245,6 +245,47 @@ def test_remove_session_rechecks_liveness_before_deleting(tmp_path, monkeypatch)
     assert transcript.exists()
 
 
+def test_remove_session_retains_proc_issue_without_deleting(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    transcript = tmp_path / "projects" / "p" / "sid-unknown.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("{}")
+    target = Session(
+        sid="sid-unknown",
+        cwd="/tmp/p",
+        label="unknown",
+        mtime=0.0,
+        prompts=0,
+        pid=None,
+        alive=False,
+        current=False,
+        file=str(transcript),
+    )
+    issue = liveness.LivenessIssue(
+        "process stat",
+        "/proc/88/stat",
+        "permission denied",
+    )
+    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: False)
+    monkeypatch.setattr(
+        cleanup_liveness.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(issues=(issue,)),
+    )
+    monkeypatch.setattr(
+        cleanup,
+        "remove_anchored",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not delete")),
+    )
+
+    result = cleanup.remove_session(target)
+
+    assert [item.source for item in result.issues] == ["process stat"]
+    assert result.issues[0].path == "/proc/88/stat"
+    assert "permission denied" in result.issues[0].error
+    assert transcript.exists()
+
+
 def test_execution_rejects_target_outside_preview_directory(
     tmp_path,
     monkeypatch,

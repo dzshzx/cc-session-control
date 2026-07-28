@@ -123,7 +123,7 @@ def _cmd_prune(args: Namespace) -> int:
     plan_status = 1 if plan.issues or not inputs.complete else 0
 
     if args.sweep_orphans:
-        if not proc.current_determinable():
+        if not proc.probe_current_ancestors().complete:
             print(
                 "Refused: '/proc' unavailable — cannot determine "
                 "the current session (R10).",
@@ -162,7 +162,7 @@ def _cmd_prune(args: Namespace) -> int:
             plan_status,
         )
 
-    if not proc.current_determinable():
+    if not proc.probe_current_ancestors().complete:
         print(
             "Refused: '/proc' unavailable — cannot determine "
             "the current session (R10).",
@@ -206,7 +206,8 @@ def _cmd_prune_zombies(
     from .data import liveness, proc
     from .data.cleanup import execute_zombie_removals, select_zombie_pids
 
-    if not proc.current_determinable():
+    ancestors = proc.probe_current_ancestors()
+    if not ancestors.complete:
         print(
             "Refused: '/proc' unavailable — cannot determine "
             "the current session (R10).",
@@ -214,9 +215,14 @@ def _cmd_prune_zombies(
         )
         return 1
     if zombies is None:
-        procs = liveness.live_session_procs(max_age=0.0)
-        cur = proc.ancestor_pids()
-        zombies = select_zombie_pids(procs, cur)
+        evidence = liveness.liveness_inputs()
+        if not evidence.complete:
+            print(
+                "Refused: liveness evidence is incomplete.",
+                file=sys.stderr,
+            )
+            return 1
+        zombies = select_zombie_pids(evidence.session_procs, evidence.cur)
     print(f"Would sweep {len(zombies)} zombie session file(s)")
     if not args.apply:
         print("Dry run. Add --apply to execute.")

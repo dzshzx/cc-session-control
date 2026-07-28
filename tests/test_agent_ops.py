@@ -120,7 +120,12 @@ def test_remove_job_deletes_settled(tmp_path, monkeypatch):
 
 
 def test_remove_job_refuses_without_proc(monkeypatch):
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: False)
+    issue = liveness.LivenessIssue("process ancestors", "/proc", "unavailable")
+    monkeypatch.setattr(
+        ao.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(issues=(issue,)),
+    )
     called = {"host": 0}
     monkeypatch.setattr(
         ao, "job_host", lambda job: called.__setitem__("host", 1) or (None, False)
@@ -245,22 +250,22 @@ def test_resume_takeover_dead_worker_no_kill(monkeypatch):
 def test_stop_job_result_refuses_when_current_session_is_undeterminable(
     monkeypatch,
 ):
+    issue = liveness.LivenessIssue("process ancestors", "/proc", "unavailable")
     monkeypatch.setattr(
         ao.liveness,
         "liveness_inputs",
-        lambda: liveness.LivenessSnapshot(),
+        lambda: liveness.LivenessSnapshot(issues=(issue,)),
     )
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: False)
     monkeypatch.setattr(
         ao.session_ops,
-        "take_over",
+        "take_over_result",
         lambda *_: (_ for _ in ()).throw(AssertionError("must not signal")),
     )
 
     result = ao.stop_job_result(_make_job())
 
     assert result.state is ao.AgentStopState.REFUSED
-    assert "current session" in result.detail
+    assert "process ancestors" in result.detail
 
 
 @pytest.mark.parametrize("source", ["session registry", "claude agents --json"])
@@ -272,10 +277,9 @@ def test_stop_job_result_refuses_incomplete_liveness_evidence(
         issues=(liveness.LivenessIssue(source, "/broken", "invalid"),),
     )
     monkeypatch.setattr(ao.liveness, "liveness_inputs", lambda: evidence)
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(
         ao.session_ops,
-        "take_over",
+        "take_over_result",
         lambda *_: (_ for _ in ()).throw(AssertionError("must not signal")),
     )
 
@@ -309,10 +313,9 @@ def test_stop_job_result_reports_missing_or_dead_host_not_running(
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(session_procs=session_procs),
     )
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(
         ao.session_ops,
-        "take_over",
+        "take_over_result",
         lambda *_: (_ for _ in ()).throw(AssertionError("must not signal")),
     )
 
@@ -359,13 +362,13 @@ def test_stop_job_result_maps_take_over_without_second_scan(
             AssertionError("compatibility scan must not run")
         ),
     )
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
+    outcome = ao.session_ops.TakeOverOutcome(
+        ao.session_ops.TakeOverState(take_over_result),
+    )
     monkeypatch.setattr(
         ao.session_ops,
-        "take_over",
-        lambda pid, proc_start: (
-            calls["take_over"].append((pid, proc_start)) or take_over_result
-        ),
+        "take_over_result",
+        lambda pid, proc_start: calls["take_over"].append((pid, proc_start)) or outcome,
     )
 
     result = ao.stop_job_result(_make_job())
@@ -409,7 +412,9 @@ def test_job_host_prefers_live_match(monkeypatch):
     ]
     monkeypatch.setattr(ao.registry, "read_session_procs", lambda *a, **k: procs)
     monkeypatch.setattr(
-        ao.proc, "pid_alive", lambda pid, start: pid == 200 and start == "222"
+        ao.proc,
+        "probe_pid",
+        lambda pid, start: ao.proc.PidProbe(pid, pid == 200 and start == "222"),
     )
     job = _make_job(sid="sid-a")
     assert ao.job_host(job) == (200, True)
@@ -417,14 +422,22 @@ def test_job_host_prefers_live_match(monkeypatch):
 
 def test_job_host_none_when_no_sessions_file(monkeypatch):
     monkeypatch.setattr(ao.registry, "read_session_procs", lambda *a, **k: [])
-    monkeypatch.setattr(ao.proc, "pid_alive", lambda pid, start: True)
+    monkeypatch.setattr(
+        ao.proc,
+        "probe_pid",
+        lambda pid, start: ao.proc.PidProbe(pid, True),
+    )
     assert ao.job_host(_make_job(sid="sid-missing")) == (None, False)
 
 
 def test_job_host_dead_when_no_live_match(monkeypatch):
     procs = [SessionProc(pid=100, sid="sid-a", proc_start="111")]
     monkeypatch.setattr(ao.registry, "read_session_procs", lambda *a, **k: procs)
-    monkeypatch.setattr(ao.proc, "pid_alive", lambda pid, start: False)
+    monkeypatch.setattr(
+        ao.proc,
+        "probe_pid",
+        lambda pid, start: ao.proc.PidProbe(pid, False),
+    )
     assert ao.job_host(_make_job(sid="sid-a")) == (100, False)
 
 

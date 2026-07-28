@@ -1,8 +1,5 @@
-"""Preview-first cleanup policy for session-keyed, pid-keyed, and aged state.
-
-Execution is bounded by the frozen plan, fresh liveness evidence, and immutable
-removal anchors. `jobs/` remains explicit-delete only; age cleanup is not R10
-gated because it is session-agnostic.
+"""Preview-first cleanup policy bounded by frozen plans, fresh liveness, and
+immutable anchors. `jobs/` is explicit-delete only; age cleanup is not R10-gated.
 """
 
 from __future__ import annotations
@@ -32,6 +29,7 @@ from .cleanup_anchors import (
 from .cleanup_liveness import (
     fill_liveness_inputs,
     fresh_liveness_inputs,
+    refuse_incomplete_ancestors,
     refuse_incomplete_liveness,
 )
 from .removal import (
@@ -182,7 +180,7 @@ def list_orphan_dirs(
     cur: AbstractSet[int] | None = None,
 ) -> list[str]:
     """Preview unprotected sid-keyed entries; return none in R10 degraded mode."""
-    if not proc.current_determinable():
+    if not proc.probe_current_ancestors().complete:
         return []
     known = _gather_known(sessions, session_procs, agent_jobs, agents_map, cur)
     orphans: list[str] = []
@@ -209,9 +207,6 @@ def execute_orphan_removals(
     base_by_label = dict(_sid_dir_paths())
     if anchors is None:
         anchors = _entry_anchors(entries, base_by_label, result)
-    if not proc.current_determinable():
-        result.refuse(list(entries), "current session cannot be determined")
-        return result
     if known is None:
         evidence = fresh_liveness_inputs()
         if not evidence.complete:
@@ -223,6 +218,10 @@ def execute_orphan_removals(
             evidence.agents_map,
             evidence.cur,
         )
+    else:
+        ancestors = proc.probe_current_ancestors()
+        if not ancestors.complete:
+            return refuse_incomplete_ancestors(result, entries, ancestors)
     for entry in entries:
         label, _, sid = entry.partition("/")
         base = base_by_label.get(label)
@@ -284,9 +283,9 @@ def execute_zombie_removals(
         except OSError as exc:
             result.refuse(pids, f"cannot establish removal anchor: {exc}")
             return result
-    if not proc.current_determinable():
-        result.refuse(list(pids), "current session cannot be determined")
-        return result
+    ancestors = proc.probe_current_ancestors()
+    if not ancestors.complete:
+        return refuse_incomplete_ancestors(result, pids, ancestors)
     if session_procs is None:
         evidence = fresh_liveness_inputs()
         if not evidence.complete:
@@ -295,7 +294,7 @@ def execute_zombie_removals(
         if cur is None:
             cur = set(evidence.cur)
     elif cur is None:
-        cur = proc.ancestor_pids()
+        cur = set(ancestors.pids)
     still_zombie = set(select_zombie_pids(session_procs, cur))
     for pid in pids:
         if pid not in still_zombie:
@@ -389,7 +388,7 @@ def prune_sessions(sessions: Sequence[Session], max_prompts: int = 0) -> list[Se
     Refuses (returns []) when current can't be determined (R10): without `/proc`
     `current` is unreliable, so we must not propose deleting anything.
     """
-    if not proc.current_determinable():
+    if not proc.probe_current_ancestors().complete:
         return []
     alive_sids = {s.sid for s in sessions if s.alive}
     now = time.time()
@@ -452,9 +451,6 @@ def remove_session(
     except OSError as exc:
         result.refuse([s.sid], f"cannot establish removal anchor: {exc}")
         return result
-    if not proc.current_determinable():
-        result.refuse([s.sid], "current session cannot be determined")
-        return result
     evidence = fresh_liveness_inputs()
     if not evidence.complete:
         return refuse_incomplete_liveness(CleanupExecution(), [s.sid], evidence)
@@ -486,9 +482,13 @@ def execute_session_removals(
                 f"cannot establish removal anchor: {exc}",
             )
             return result
-    if not proc.current_determinable():
-        result.refuse([s.sid for s in targets], "current session cannot be determined")
-        return result
+    ancestors = proc.probe_current_ancestors()
+    if not ancestors.complete:
+        return refuse_incomplete_ancestors(
+            result,
+            [s.sid for s in targets],
+            ancestors,
+        )
     if session_procs is None or agents_map is None or cur is None:
         evidence = fresh_liveness_inputs()
         if not evidence.complete:

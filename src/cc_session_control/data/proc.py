@@ -1,18 +1,81 @@
 """The only module that touches `/proc` — Linux/WSL liveness primitives.
 
-Everything here degrades safely off Linux (no `/proc`): `proc_starttime`
-returns None, `pid_alive` returns False, and `ancestor_pids` returns just this
-process. Callers use `has_proc()` to detect the degraded mode and (in later
-phases) refuse destructive ops when the "current" session can't be determined.
+Typed probes distinguish confirmed process disappearance from unavailable or
+malformed evidence. Security-sensitive callers consume those probes directly
+and refuse destructive work when liveness or ancestry is incomplete; the
+legacy bool/set helpers are compatibility views only.
 """
 
 from __future__ import annotations
 
+import errno
 import os
 import shlex
 from dataclasses import dataclass
+from enum import StrEnum
 
 _PROC = "/proc"
+
+
+class ProcReadState(StrEnum):
+    """Outcome of reading one `/proc/<pid>/stat` record."""
+
+    AVAILABLE = "available"
+    GONE = "gone"
+    UNAVAILABLE = "unavailable"
+    MALFORMED = "malformed"
+
+
+@dataclass(frozen=True)
+class ProcIssue:
+    """Actionable evidence explaining why a process probe is incomplete."""
+
+    source: str
+    path: str | None
+    detail: str
+
+
+@dataclass(frozen=True)
+class ProcStatRead:
+    """Typed `/proc/<pid>/stat` read with parsed identity and ancestry fields."""
+
+    pid: int
+    state: ProcReadState
+    path: str
+    starttime: str | None = None
+    ppid: int | None = None
+    detail: str = ""
+
+    @property
+    def issue(self) -> ProcIssue | None:
+        if self.state not in {
+            ProcReadState.UNAVAILABLE,
+            ProcReadState.MALFORMED,
+        }:
+            return None
+        return ProcIssue("process stat", self.path, self.detail)
+
+
+@dataclass(frozen=True)
+class PidProbe:
+    """Tri-state process liveness: alive, gone/reused, or unknown."""
+
+    pid: int | None
+    alive: bool | None
+    stat: ProcStatRead | None = None
+    issue: ProcIssue | None = None
+
+
+@dataclass(frozen=True)
+class AncestorProbe:
+    """Known ancestor pids plus evidence showing whether the walk completed."""
+
+    pids: frozenset[int]
+    issues: tuple[ProcIssue, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
 
 
 @dataclass
@@ -36,14 +99,12 @@ def has_proc() -> bool:
 
 
 def current_determinable() -> bool:
-    """Whether the "current" (csctl-launching) session can be determined.
+    """Compatibility bool view of typed current-ancestor evidence.
 
-    Needs `/proc` to walk the ancestor pid chain. When False (e.g. macOS), we
-    cannot tell which session launched csctl, so callers MUST refuse destructive
-    ops — terminate/delete/cleanup could otherwise hit the launching session
-    (R10). This is the single predicate the data/action layers gate on.
+    Public safety decisions consume :func:`probe_current_ancestors` directly so
+    they retain paths and failure details instead of flattening them to False.
     """
-    return has_proc()
+    return probe_current_ancestors().complete
 
 
 def pid_exists(pid: int | None) -> bool:
@@ -59,65 +120,152 @@ def pid_exists(pid: int | None) -> bool:
     return os.path.isdir(f"{_PROC}/{pid}")
 
 
-def proc_starttime(pid: int) -> str | None:
-    """Field 22 (starttime) from `/proc/<pid>/stat`, or None if unavailable.
+def _malformed_stat(pid: int, path: str, detail: str) -> ProcStatRead:
+    return ProcStatRead(
+        pid=pid,
+        state=ProcReadState.MALFORMED,
+        path=path,
+        detail=f"malformed stat: {detail}",
+    )
 
-    The comm field (field 2) is wrapped in parens and may itself contain spaces
-    or parens, so we slice AFTER the last ')' before splitting — a naive
-    `split()[21]` would break on such names. Returns the raw string so it can be
-    compared directly against the `procStart` string in `sessions/<pid>.json`.
-    """
+
+def read_proc_stat(pid: int) -> ProcStatRead:
+    """Read identity and parent fields without collapsing uncertainty into gone."""
+    path = f"{_PROC}/{pid}/stat"
     if not has_proc():
-        return None
+        return ProcStatRead(
+            pid=pid,
+            state=ProcReadState.UNAVAILABLE,
+            path=path,
+            detail=f"{_PROC} is unavailable",
+        )
     try:
-        with open(f"{_PROC}/{pid}/stat") as fh:
+        with open(path) as fh:
             data = fh.read()
-    except OSError:
-        return None
+    except FileNotFoundError:
+        return ProcStatRead(pid=pid, state=ProcReadState.GONE, path=path)
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return ProcStatRead(pid=pid, state=ProcReadState.GONE, path=path)
+        return ProcStatRead(
+            pid=pid,
+            state=ProcReadState.UNAVAILABLE,
+            path=path,
+            detail=str(exc),
+        )
+    except UnicodeError as exc:
+        return _malformed_stat(pid, path, str(exc))
+
+    open_paren = data.find("(")
+    close_paren = data.rfind(")")
+    if open_paren <= 0 or close_paren <= open_paren:
+        return _malformed_stat(pid, path, "missing comm delimiters")
+    if data[:open_paren].strip() != str(pid):
+        return _malformed_stat(pid, path, "pid field does not match path")
+    fields = data[close_paren + 1 :].split()
+    if len(fields) <= 22 - 3:
+        return _malformed_stat(pid, path, "truncated before field 22")
+    if len(fields[0]) != 1 or not fields[0].isascii() or not fields[0].isalpha():
+        return _malformed_stat(pid, path, "invalid state field")
     try:
-        # `after` begins at field 3 (state); field 22 is at index 22 - 3.
-        after = data[data.rfind(")") + 2 :]
-        return after.split()[22 - 3]
-    except (IndexError, ValueError):
-        return None
+        ppid = int(fields[1])
+        starttime = fields[22 - 3]
+        starttime_value = int(starttime)
+    except (IndexError, ValueError) as exc:
+        return _malformed_stat(pid, path, str(exc))
+    if ppid < 0 or starttime_value < 0:
+        return _malformed_stat(pid, path, "negative ppid or starttime")
+    return ProcStatRead(
+        pid=pid,
+        state=ProcReadState.AVAILABLE,
+        path=path,
+        starttime=starttime,
+        ppid=ppid,
+    )
+
+
+def probe_pid(pid: int | None, proc_start: str | None) -> PidProbe:
+    """Probe one pid while preserving unavailable or malformed evidence."""
+    if not pid:
+        return PidProbe(pid=pid, alive=False)
+    stat = read_proc_stat(pid)
+    if stat.state is ProcReadState.GONE:
+        return PidProbe(pid=pid, alive=False, stat=stat)
+    if stat.state is not ProcReadState.AVAILABLE:
+        return PidProbe(pid=pid, alive=None, stat=stat, issue=stat.issue)
+    alive = not proc_start or stat.starttime == proc_start
+    return PidProbe(pid=pid, alive=alive, stat=stat)
+
+
+def proc_starttime(pid: int) -> str | None:
+    """Compatibility value-only view of :func:`read_proc_stat`."""
+    return read_proc_stat(pid).starttime
 
 
 def pid_alive(pid: int | None, proc_start: str | None) -> bool:
-    """True iff `/proc/<pid>` exists AND its starttime matches `proc_start`.
+    """Compatibility bool view; unknown evidence is conservatively False."""
+    return probe_pid(pid, proc_start).alive is True
 
-    The starttime match defeats pid reuse (a recycled pid has a newer
-    starttime). When `proc_start` is unknown we fall back to mere existence.
-    Always False on non-Linux / missing `/proc`, so liveness degrades.
-    """
-    if not pid:
-        return False
-    st = proc_starttime(pid)
-    if st is None:
-        return False
-    if not proc_start:
-        return True
-    return st == proc_start
+
+def probe_ancestors(start_pid: int) -> AncestorProbe:
+    """Walk a pid's ancestors without discarding a partial chain on failure."""
+    pids = {start_pid}
+    pid = start_pid
+    for _ in range(40):
+        stat = read_proc_stat(pid)
+        if stat.state is ProcReadState.GONE:
+            if pid == start_pid:
+                return AncestorProbe(frozenset(pids))
+            gone_issue = ProcIssue(
+                "process ancestors",
+                stat.path,
+                "process disappeared before ancestor chain completed",
+            )
+            return AncestorProbe(frozenset(pids), (gone_issue,))
+        if stat.state is not ProcReadState.AVAILABLE:
+            stat_issue = stat.issue
+            if stat_issue is None:
+                raise AssertionError("incomplete stat read must carry an issue")
+            return AncestorProbe(
+                frozenset(pids),
+                (
+                    ProcIssue(
+                        "process ancestors",
+                        stat_issue.path,
+                        stat_issue.detail,
+                    ),
+                ),
+            )
+        ppid = stat.ppid
+        if ppid is None:
+            raise AssertionError("available stat read must carry ppid")
+        if ppid <= 1:
+            return AncestorProbe(frozenset(pids))
+        if ppid in pids:
+            issue = ProcIssue(
+                "process ancestors",
+                stat.path,
+                f"ancestor cycle at pid {ppid}",
+            )
+            return AncestorProbe(frozenset(pids), (issue,))
+        pids.add(ppid)
+        pid = ppid
+    issue = ProcIssue(
+        "process ancestors",
+        f"{_PROC}/{pid}/stat",
+        "ancestor chain exceeded 40 processes",
+    )
+    return AncestorProbe(frozenset(pids), (issue,))
+
+
+def probe_current_ancestors() -> AncestorProbe:
+    """Typed ancestor evidence for the csctl process."""
+    return probe_ancestors(os.getpid())
 
 
 def ancestors_of(start_pid: int) -> set[int]:
-    """Ancestor pid chain of `start_pid` (including itself), via `/proc` ppid
-    walk. Returns just `{start_pid}` when `/proc` is unavailable."""
-    pids = {start_pid}
-    if not has_proc():
-        return pids
-    pid = start_pid
-    for _ in range(40):
-        try:
-            with open(f"{_PROC}/{pid}/stat") as fh:
-                data = fh.read()
-            ppid = int(data[data.rfind(")") + 2 :].split()[1])
-        except (OSError, IndexError, ValueError):
-            break
-        if ppid <= 1:
-            break
-        pids.add(ppid)
-        pid = ppid
-    return pids
+    """Compatibility set-only view of :func:`probe_ancestors`."""
+    return set(probe_ancestors(start_pid).pids)
 
 
 def ancestor_pids() -> set[int]:
@@ -128,7 +276,7 @@ def ancestor_pids() -> set[int]:
     `/proc` is unavailable, in which case current can't be determined and
     callers must degrade (see R10).
     """
-    return ancestors_of(os.getpid())
+    return set(probe_current_ancestors().pids)
 
 
 # --- project RC server discovery (R5 / D5) ---------------------------------

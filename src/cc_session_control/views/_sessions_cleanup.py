@@ -230,7 +230,7 @@ class CleanupMixin:
         # (without /proc every pid looks dead, so they'd nuke the live session).
         # Refuse HONESTLY — never let the refusal read as "nothing to clean".
         action = _ACTION_BY_KEY[action_key]
-        if action.gated and not proc.current_determinable():
+        if action.gated and not proc.probe_current_ancestors().complete:
             self.app.notify(_DEGRADED)
             return
         targets = action.targets(self._plan)

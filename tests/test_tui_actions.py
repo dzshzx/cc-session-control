@@ -9,6 +9,7 @@ import pytest
 
 from cc_session_control.actions import tui_actions
 from cc_session_control.actions.runner import ActionStatus
+from cc_session_control.data import proc
 from cc_session_control.data.project_settings import (
     SettingWriteFailure,
     SettingWriteResult,
@@ -69,8 +70,10 @@ def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
     request = tui_actions.SessionRequest.from_session(_session())
     monkeypatch.setattr(
         tui_actions.session_ops,
-        "take_over",
-        lambda *_: "refused",
+        "take_over_result",
+        lambda *_: tui_actions.session_ops.TakeOverOutcome(
+            tui_actions.session_ops.TakeOverState.REFUSED,
+        ),
     )
     refused = tui_actions.stop_session(request)
     assert refused.status is ActionStatus.REFUSED
@@ -78,12 +81,44 @@ def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
 
     monkeypatch.setattr(
         tui_actions.session_ops,
-        "take_over",
-        lambda *_: "failed",
+        "take_over_result",
+        lambda *_: tui_actions.session_ops.TakeOverOutcome(
+            tui_actions.session_ops.TakeOverState.FAILED,
+        ),
     )
     failed = tui_actions.stop_session(request)
     assert failed.status is ActionStatus.FAILURE
     assert failed.message == "停止失败"
+
+
+def test_stop_session_refuses_unknown_proc_probe_without_signal(monkeypatch) -> None:
+    request = tui_actions.SessionRequest.from_session(_session())
+    issue = proc.ProcIssue(
+        "process stat",
+        "/proc/42/stat",
+        "permission denied",
+    )
+    monkeypatch.setattr(
+        proc,
+        "probe_current_ancestors",
+        lambda: proc.AncestorProbe(frozenset({999})),
+    )
+    monkeypatch.setattr(
+        proc,
+        "probe_pid",
+        lambda pid, start: proc.PidProbe(pid, None, issue=issue),
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops.os,
+        "kill",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not signal")),
+    )
+
+    result = tui_actions.stop_session(request)
+
+    assert result.status is ActionStatus.REFUSED
+    assert "/proc/42/stat" in result.message
+    assert "permission denied" in result.message
 
 
 def test_cleanup_adapter_reports_partial_and_refused() -> None:

@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 
 from ..models import AgentJob, SessionProc
-from . import liveness
+from . import liveness, proc
 from .removal import CleanupExecution, CleanupIssue
 
 
@@ -61,6 +61,23 @@ def refuse_incomplete_liveness(
             error=issue.detail,
             path=issue.path,
         )
+        for issue in evidence.issues
+    )
+    result.refuse(
+        list(targets) or ["liveness evidence"],
+        "liveness evidence incomplete; nothing deleted",
+    )
+    return result
+
+
+def refuse_incomplete_ancestors(
+    result: CleanupExecution,
+    targets: Sequence[object],
+    evidence: proc.AncestorProbe,
+) -> CleanupExecution:
+    """Fail closed while retaining typed current-ancestor read failures."""
+    result.issues.extend(
+        CleanupIssue(issue.source, issue.detail, issue.path)
         for issue in evidence.issues
     )
     result.refuse(
