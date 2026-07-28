@@ -24,14 +24,13 @@ from typing import TYPE_CHECKING
 
 import urwid
 
+from ..actions import tui_actions
 from ..actions.session_ops import TmuxNewIntent
 from ..data import rc
 from ..data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
-    SettingWriteState,
 )
-from ..data.rc import set_rc_at_startup
 from ..models import RCProject, RCServer, TrustDecision
 from ._base import ListTabView
 from ._colspec import header_columns, row_columns
@@ -296,17 +295,11 @@ class RCView(ListTabView):
         if p.status == "running":
             self.app.notify("已在运行")
             return
-        result = rc.start_one_result(p.directory)
-        if result.state is rc.StartState.STARTED:
-            message = f"已启动 {p.name}"
-        elif result.state is rc.StartState.TRUST_UNAVAILABLE:
-            message = "项目设置不可用 — 已拒绝启动"
-        elif result.state is rc.StartState.UNTRUSTED:
-            message = "未信任 — 已拒绝启动"
-        else:
-            message = "启动失败"
-        self.app.notify(message)
-        self.app.trigger_async_refresh()
+        path, name = p.directory, p.name
+        self.app.submit_action(
+            "project.start",
+            lambda: tui_actions.start_project(path, name),
+        )
 
     def _key_stop(self, p: RCProject) -> None:
         # gated=False: this stop kills a tmux window, not a pid — no R10 gate.
@@ -316,9 +309,11 @@ class RCView(ListTabView):
         )
 
     def _key_autostart(self, p: RCProject) -> None:
-        new = rc.toggle_autostart(p.directory)
-        self.app.notify(f"{p.name} 开机自启: {'开' if new else '关'}")
-        self.app.trigger_async_refresh()
+        path, name = p.directory, p.name
+        self.app.submit_action(
+            "project.toggle-autostart",
+            lambda: tui_actions.toggle_autostart(path, name),
+        )
 
     def _key_rc_toggle(self, p: RCProject) -> None:
         if not p.dir_exists:
@@ -327,22 +322,17 @@ class RCView(ListTabView):
             return
         # Full 3-cycle so explicit True is reachable again: None→True→False→None.
         new = _NEXT_TRISTATE[p.rc_at_startup]
-        result = set_rc_at_startup(p.directory, new)
-        if result.state is SettingWriteState.FAILED:
-            reason = result.failure.value if result.failure is not None else "unknown"
-            self.app.notify(f"配置写入失败（{reason}）: {result.detail}")
-            return
-        suffix = "（无变化）" if result.state is SettingWriteState.UNCHANGED else ""
-        self.app.notify(f"{p.name} 自动远控: {_RC_TRISTATE[new]}{suffix}")
-        self.app.trigger_async_refresh()
+        path, name = p.directory, p.name
+        self.app.submit_action(
+            "project.write-settings",
+            lambda: tui_actions.write_auto_rc(path, name, new),
+        )
 
     def _key_start_all(self) -> None:
-        result = rc.start_all_listed_result()
-        message = f"已启动 {result.started} 个项目"
-        if result.unavailable:
-            message += f"；项目设置不可用，拒绝 {result.unavailable} 个"
-        self.app.notify(message)
-        self.app.trigger_async_refresh()
+        self.app.submit_action(
+            "project.start-all",
+            tui_actions.start_all_projects,
+        )
 
     def _key_stop_all(self) -> None:
         if not any(p.status == "running" for p in self._projects):
@@ -352,15 +342,18 @@ class RCView(ListTabView):
 
     def _do_stop_one(self, p: RCProject) -> None:
         """Stop-one body, run only after the y/n confirm accepts."""
-        ok = rc.stop_one(p.directory)
-        self.app.notify(f"已停止 {p.name}" if ok else "未在运行")
-        self.app.trigger_async_refresh()
+        path, name = p.directory, p.name
+        self.app.submit_action(
+            "project.stop",
+            lambda: tui_actions.stop_project(path, name),
+        )
 
     def _do_stop_all(self) -> None:
         """Stop-all body, run only after the y/n confirm accepts."""
-        ok = rc.stop_all()
-        self.app.notify("已停止全部" if ok else "本来就没在跑")
-        self.app.trigger_async_refresh()
+        self.app.submit_action(
+            "project.stop-all",
+            tui_actions.stop_all_projects,
+        )
 
     def _show_help(self) -> None:
         """Help as a scrollable overlay, generated from KEY_TABLE."""

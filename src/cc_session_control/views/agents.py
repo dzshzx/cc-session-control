@@ -15,12 +15,11 @@ from typing import TYPE_CHECKING
 
 import urwid
 
-from ..actions import agent_ops
+from ..actions import agent_ops, tui_actions
 from ..actions.session_ops import ResumeIntent
 from ..data import proc
 from ..models import AgentJob
 from ._base import ListTabView
-from ._cleanup_feedback import format_delete_notice
 from ._colspec import header_columns, row_columns
 from ._confirm import DEGRADED as _DEGRADED
 from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
@@ -171,9 +170,11 @@ class AgentsView(ListTabView):
     # --- key handlers (bound by name in KEY_TABLE; dispatch lives in the base) ---
 
     def _key_respawn(self, job: AgentJob) -> None:
-        cmd = agent_ops.respawn(job)
-        self.app.notify(f"已重启：{cmd}")
-        self.app.trigger_async_refresh()
+        request = tui_actions.AgentRequest.from_job(job)
+        self.app.submit_action(
+            "agent.respawn",
+            lambda: tui_actions.respawn_agent(request),
+        )
 
     def _takeover(self, job: AgentJob) -> None:
         """Enter — tmux 接回: a tmux-resident worker is entered in place;
@@ -224,9 +225,11 @@ class AgentsView(ListTabView):
         if not proc.current_determinable():
             self.app.notify(_DEGRADED)
             return
-        result = agent_ops.remove_job(job)
-        self.app.notify(format_delete_notice(result))
-        self.app.trigger_async_refresh()
+        request = tui_actions.AgentRequest.from_job(job)
+        self.app.submit_action(
+            "agent.remove",
+            lambda: tui_actions.remove_agent(request),
+        )
 
     def _stop(self, job: AgentJob) -> None:
         confirm_stop(
@@ -241,12 +244,11 @@ class AgentsView(ListTabView):
         means no joined host pid (an unstoppable orphan) — surfaced honestly,
         separate from the degrade refusal above (R2 split).
         """
-        ok = agent_ops.stop_job(job)
-        if ok:
-            self.app.notify("已发送停止信号（可能残留孤儿进程，请手动确认）")
-        else:
-            self.app.notify("找不到该后台 agent 的进程，无法停止")
-        self.app.trigger_async_refresh()
+        request = tui_actions.AgentRequest.from_job(job)
+        self.app.submit_action(
+            "agent.stop",
+            lambda: tui_actions.stop_agent(request),
+        )
 
     def _show_help(self) -> None:
         rows = [TextRow(line) for line in help_lines(self.KEY_TABLE, self.HELP_LAYOUT)]

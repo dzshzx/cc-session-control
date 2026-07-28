@@ -308,3 +308,27 @@ def test_rc_add_reports_unavailable_trust_without_calling_it_untrusted(
     assert stopped.value.code == 1
     assert "Project settings unavailable" in output
     assert "Not trusted" not in output
+
+
+def test_tui_exit_intent_runs_only_after_main_loop_returns(monkeypatch):
+    from cc_session_control import app as app_mod
+    from cc_session_control.actions.session_ops import ExitIntent
+
+    events = []
+
+    class Intent(ExitIntent):
+        def run(self):
+            events.append("intent")
+
+    intent = Intent()
+
+    class FakeApp:
+        def run(self):
+            events.append("loop")
+            return intent
+
+    monkeypatch.setattr(app_mod, "App", FakeApp)
+
+    cli._cmd_tui(types.SimpleNamespace())
+
+    assert events == ["loop", "intent"]

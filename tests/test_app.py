@@ -3,8 +3,10 @@
 import threading
 from queue import Queue
 import urwid
+import pytest
 
 import cc_session_control.app as app_mod
+from cc_session_control.actions.runner import ActionResult, Accepted, Busy
 from cc_session_control.app import App
 from cc_session_control.data.cleanup import CleanupPlan
 from cc_session_control.data.snapshot import WorldSnapshot
@@ -326,3 +328,110 @@ def test_no_degraded_banner_when_proc_present(monkeypatch):
     app = App()
     rows = [w for (w, _opts) in app.header.contents]
     assert len(rows) == 2  # title + tab_bar only
+
+
+# --- Stay-in-TUI actions: worker publish -> main-loop apply -----------------
+
+def test_action_worker_never_updates_widgets_and_completion_refreshes_once():
+    started = threading.Event()
+    release = threading.Event()
+    ready = threading.Event()
+    worker_threads = []
+    notify_threads = []
+    notifications = []
+    refreshes = []
+    main_thread = threading.get_ident()
+
+    def action():
+        worker_threads.append(threading.get_ident())
+        started.set()
+        assert release.wait(1)
+        return ActionResult.success("已完成", needs_refresh=True)
+
+    app = App()
+    app._action_pipe_fd = 99
+    app._signal_action_ready = ready.set
+    app._actions = app_mod.ActionRunner(ready.set)
+
+    def notify(message, seconds=3):
+        notifications.append(message)
+        notify_threads.append(threading.get_ident())
+
+    app.notify = notify
+    app.trigger_async_refresh = lambda: refreshes.append("refresh")
+
+    assert isinstance(app.submit_action("test.action", action), Accepted)
+    assert notifications == ["处理中…"]
+    assert started.wait(1)
+    assert worker_threads == [worker_threads[0]]
+    assert worker_threads[0] != main_thread
+
+    release.set()
+    assert ready.wait(1)
+    assert notifications == ["处理中…"]
+    assert app._on_action_pipe(b"1") is True
+    assert notifications == ["处理中…", "已完成"]
+    assert notify_threads == [main_thread, main_thread]
+    assert refreshes == ["refresh"]
+    assert app._on_action_pipe(b"duplicate") is True
+    assert refreshes == ["refresh"]
+
+
+def test_blocking_action_keeps_navigation_refresh_and_quit_responsive():
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    refreshes = []
+    notifications = []
+
+    def action():
+        started.set()
+        assert release.wait(1)
+        finished.set()
+        return ActionResult.success("late", needs_refresh=True)
+
+    app = App()
+    app.notify = lambda message, seconds=3: notifications.append(message)
+    app.trigger_async_refresh = lambda: refreshes.append("refresh")
+    assert isinstance(app.submit_action("blocking", action), Accepted)
+    assert started.wait(1)
+
+    app._input("tab")
+    assert app._active == 1
+    app._input("r")
+    assert refreshes == ["refresh", "refresh"]
+
+    with pytest.raises(urwid.ExitMainLoop):
+        app._input("q")
+    release.set()
+    assert finished.wait(1)
+    app._on_action_pipe(b"late")
+
+    assert notifications == ["处理中…", "刷新中…"]
+    assert refreshes == ["refresh", "refresh"]
+
+
+def test_second_app_submission_reports_busy_without_running():
+    release = threading.Event()
+    started = threading.Event()
+    calls = []
+    notifications = []
+
+    def action():
+        calls.append("first")
+        started.set()
+        assert release.wait(1)
+        return ActionResult.success("done")
+
+    app = App()
+    app.notify = lambda message, seconds=3: notifications.append(message)
+    assert isinstance(app.submit_action("first", action), Accepted)
+    assert started.wait(1)
+    outcome = app.submit_action(
+        "second",
+        lambda: calls.append("second") or ActionResult.success("bad"),
+    )
+    assert isinstance(outcome, Busy)
+    assert calls == ["first"]
+    assert notifications == ["处理中…", "已有操作处理中"]
+    release.set()

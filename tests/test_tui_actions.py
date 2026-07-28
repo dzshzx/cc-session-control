@@ -1,0 +1,186 @@
+"""Typed TUI-action adapters preserve domain outcomes and request snapshots."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from cc_session_control.actions import tui_actions
+from cc_session_control.actions.runner import ActionStatus
+from cc_session_control.data.project_settings import (
+    SettingWriteFailure,
+    SettingWriteResult,
+    SettingWriteState,
+)
+from cc_session_control.data.rc import StartManyResult, StartResult, StartState
+from cc_session_control.data.removal import (
+    CleanupExecution,
+    PathRemoval,
+    RemovalStatus,
+)
+from cc_session_control.models import AgentJob, Session
+
+
+def _session() -> Session:
+    return Session(
+        sid="sid-1",
+        cwd="/tmp/project",
+        label="session",
+        mtime=1.0,
+        prompts=2,
+        pid=42,
+        alive=True,
+        current=False,
+        proc_start="100",
+        file="/tmp/session.jsonl",
+    )
+
+
+def _job() -> AgentJob:
+    return AgentJob(
+        short="short",
+        sid="sid-1",
+        resume_sid="resume-1",
+        cwd="/tmp/project",
+        name="worker",
+        respawn_flags=["--model", "opus"],
+    )
+
+
+def test_requests_snapshot_mutable_models() -> None:
+    session = _session()
+    job = _job()
+
+    session_request = tui_actions.SessionRequest.from_session(session)
+    agent_request = tui_actions.AgentRequest.from_job(job)
+    session.sid = "changed"
+    job.respawn_flags.append("--verbose")
+
+    assert session_request.to_session().sid == "sid-1"
+    assert agent_request.to_job().respawn_flags == ["--model", "opus"]
+
+
+def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
+    request = tui_actions.SessionRequest.from_session(_session())
+    monkeypatch.setattr(
+        tui_actions.session_ops, "take_over", lambda *_: "refused",
+    )
+    refused = tui_actions.stop_session(request)
+    assert refused.status is ActionStatus.REFUSED
+    assert "liveness 降级" in refused.message
+
+    monkeypatch.setattr(
+        tui_actions.session_ops, "take_over", lambda *_: "failed",
+    )
+    failed = tui_actions.stop_session(request)
+    assert failed.status is ActionStatus.FAILURE
+    assert failed.message == "停止失败"
+
+
+def test_cleanup_adapter_reports_partial_and_refused() -> None:
+    partial = CleanupExecution(
+        removals=[
+            PathRemoval(Path("/a"), RemovalStatus.REMOVED),
+            PathRemoval(Path("/b"), RemovalStatus.FAILED, "denied"),
+        ],
+        completed=["one"],
+    )
+    partial_result = tui_actions.run_cleanup(
+        lambda _targets: partial,
+        ("one",),
+        "已清理 {n} 项",
+    )
+    assert partial_result.status is ActionStatus.PARTIAL
+    assert partial_result.message.startswith("部分完成：")
+
+    refused = CleanupExecution()
+    refused.refuse(["one"], "current session cannot be determined")
+    refused_result = tui_actions.run_cleanup(
+        lambda _targets: refused,
+        ("one",),
+        "已清理 {n} 项",
+    )
+    assert refused_result.status is ActionStatus.REFUSED
+    assert refused_result.message.startswith("已拒绝清理：")
+
+
+def test_project_batch_result_distinguishes_partial_refused_and_failure(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        tui_actions.rc,
+        "start_all_listed_result",
+        lambda: StartManyResult(started=2, unavailable=1, failed=1),
+    )
+    partial = tui_actions.start_all_projects()
+    assert partial.status is ActionStatus.PARTIAL
+    assert "已启动 2 个项目" in partial.message
+    assert "启动失败 1 个" in partial.message
+
+    monkeypatch.setattr(
+        tui_actions.rc,
+        "start_all_listed_result",
+        lambda: StartManyResult(untrusted=2),
+    )
+    refused = tui_actions.start_all_projects()
+    assert refused.status is ActionStatus.REFUSED
+    assert "未信任，拒绝 2 个" in refused.message
+
+    monkeypatch.setattr(
+        tui_actions.rc,
+        "start_all_listed_result",
+        lambda: StartManyResult(failed=2),
+    )
+    assert tui_actions.start_all_projects().status is ActionStatus.FAILURE
+
+
+def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tui_actions.rc,
+        "start_one_result",
+        lambda _path: StartResult(StartState.TRUST_UNAVAILABLE, "/project"),
+    )
+    start = tui_actions.start_project("/project", "project")
+    assert start.status is ActionStatus.REFUSED
+    assert start.message == "项目设置不可用 — 已拒绝启动"
+
+    monkeypatch.setattr(
+        tui_actions.rc,
+        "set_rc_at_startup",
+        lambda *_: SettingWriteResult(
+            SettingWriteState.FAILED,
+            Path("/project/.claude/settings.local.json"),
+            SettingWriteFailure.WRITE,
+            "read only",
+        ),
+    )
+    setting = tui_actions.write_auto_rc("/project", "project", True)
+    assert setting.status is ActionStatus.FAILURE
+    assert setting.message == "配置写入失败（write）: read only"
+
+
+def test_expected_autostart_io_failure_becomes_typed_failure(monkeypatch) -> None:
+    def fail(_path: str) -> bool:
+        raise OSError("read only")
+
+    monkeypatch.setattr(tui_actions.rc, "toggle_autostart", fail)
+    result = tui_actions.toggle_autostart("/project", "project")
+    assert result.status is ActionStatus.FAILURE
+    assert result.message == "开机自启写入失败: read only"
+
+
+def test_agent_respawn_does_not_claim_success_when_tmux_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tui_actions.agent_ops,
+        "respawn_result",
+        lambda _job: tui_actions.agent_ops.RespawnResult(
+            "claude --resume resume-1 --bg",
+            None,
+        ),
+    )
+
+    result = tui_actions.respawn_agent(
+        tui_actions.AgentRequest.from_job(_job()),
+    )
+
+    assert result.status is ActionStatus.FAILURE
+    assert result.message == "重启失败：无法创建 tmux 窗口"

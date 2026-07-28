@@ -10,6 +10,13 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import urwid
 
 from . import theme
+from .actions.runner import (
+    Accepted,
+    Action,
+    ActionRunner,
+    Busy,
+    SubmitResult,
+)
 from .data import proc
 from .data.refresh import (
     RefreshBatch,
@@ -89,11 +96,14 @@ class App:
         self._alarm_handle: object | None = None
         self._notify_alarm: object | None = None
         self._pipe_fd: int | None = None
+        self._action_pipe_fd: int | None = None
+        self._action_in_progress = False
         self._last_refresh_generation = 0
         self._refresh = RefreshCoordinator(
             refresh_builder,
             self._signal_refresh_ready,
         )
+        self._actions = ActionRunner(self._signal_action_ready)
         # When set, a confirm modal is up: `_input` routes Enter/y/n/esc here and
         # swallows every other key (App-level so all tabs share it — D8 view files
         # stay small). `_confirm_base` is the widget restored on close.
@@ -216,19 +226,27 @@ class App:
 
     def _exit(self, result: ExitIntent | None = None) -> None:
         self._exiting = True
+        self._actions.close()
         self._refresh.close()
         if self._alarm_handle:
             self.loop.remove_alarm(self._alarm_handle)
-        pipe_fd = self._pipe_fd
+        refresh_pipe = self._pipe_fd
+        action_pipe = self._action_pipe_fd
         self._pipe_fd = None
-        if pipe_fd is not None:
-            self.loop.remove_watch_pipe(pipe_fd)
-            try:
-                os.close(pipe_fd)
-            except OSError:
-                pass
+        self._action_pipe_fd = None
+        self._remove_pipe_watch(refresh_pipe)
+        self._remove_pipe_watch(action_pipe)
         self.result = result
         raise urwid.ExitMainLoop()
+
+    def _remove_pipe_watch(self, pipe_fd: int | None) -> None:
+        if pipe_fd is None:
+            return
+        self.loop.remove_watch_pipe(pipe_fd)
+        try:
+            os.close(pipe_fd)
+        except OSError:
+            pass
 
     def exit_with(self, intent: ExitIntent) -> None:
         """Exit the MainLoop carrying a `session_ops.ExitIntent`.
@@ -256,6 +274,18 @@ class App:
         may ask about tab state (no peeking at `views`/`_active`)."""
         return self.views[self._active] is view
 
+    def submit_action(self, action_key: str, action: Action) -> SubmitResult:
+        """Run one stay-in-TUI mutation without blocking the urwid main loop."""
+        outcome = self._actions.submit(action_key, action)
+        if isinstance(outcome, Accepted):
+            self._action_in_progress = True
+            self.notify("处理中…", seconds=3600)
+        elif isinstance(outcome, Busy):
+            self.notify("已有操作处理中")
+        else:
+            self.notify("应用正在退出")
+        return outcome
+
     def notify(self, msg: str, seconds: float = 3) -> None:
         # The newest notification owns the footer: cancel the previous restore
         # alarm so an older timer can't clear this message early.
@@ -268,6 +298,12 @@ class App:
         self._notify_alarm = None
         self.frame.footer = self.footer
 
+    def _clear_notification(self) -> None:
+        if self._notify_alarm is not None:
+            self.loop.remove_alarm(self._notify_alarm)
+            self._notify_alarm = None
+        self.frame.footer = self.footer
+
     def refresh_with_notice(self) -> None:
         """Refresh + the standard footer notice — the single body of the
         footer-prefix promise `r 刷新` (list AND modal modes, every tab)."""
@@ -277,14 +313,36 @@ class App:
     def trigger_async_refresh(self) -> RequestResult:
         return self._refresh.request()
 
-    def _signal_refresh_ready(self) -> None:
-        pipe_fd = self._pipe_fd
+    def _signal_action_ready(self) -> None:
+        self._signal_pipe(self._action_pipe_fd)
+
+    def _signal_pipe(self, pipe_fd: int | None) -> None:
         if pipe_fd is None or self._exiting:
             return
         try:
             os.write(pipe_fd, b"1")
         except OSError:
             pass
+
+    def _on_action_pipe(self, data: bytes) -> bool:
+        if self._exiting:
+            return True
+        result = self._actions.consume_result()
+        if not self._action_in_progress:
+            return True
+        self._action_in_progress = False
+        if result is None:
+            # Unknown exceptions remain visible through threading.excepthook;
+            # only clear the stale busy marker here.
+            self._clear_notification()
+            return True
+        self.notify(result.message)
+        if result.needs_refresh:
+            self.trigger_async_refresh()
+        return True
+
+    def _signal_refresh_ready(self) -> None:
+        self._signal_pipe(self._pipe_fd)
 
     def _schedule_refresh(self, loop: object = None, data: object = None) -> None:
         if self._exiting:
@@ -308,6 +366,7 @@ class App:
 
     def run(self) -> ExitIntent | None:
         self._pipe_fd = self.loop.watch_pipe(self._on_pipe)
+        self._action_pipe_fd = self.loop.watch_pipe(self._on_action_pipe)
         self.set_hints(self.views[self._active].keyhints())
         self.trigger_async_refresh()
         self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)

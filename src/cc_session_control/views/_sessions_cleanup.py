@@ -20,6 +20,8 @@ from dataclasses import dataclass
 
 import urwid
 
+from ..actions import tui_actions
+from ..actions.runner import Accepted
 from ..data import proc
 from ..data.cleanup import (
     CleanupPlan,
@@ -31,7 +33,6 @@ from ..data.cleanup import (
 from ..data.removal import CleanupExecution
 from ..data.sessions import scan
 from ..models import Session
-from ._cleanup_feedback import format_cleanup_notice
 from ._confirm import DEGRADED as _DEGRADED
 from ._rows import TextRow, truncate_cells
 from ._session_row import _ActionRow
@@ -174,13 +175,24 @@ class CleanupMixin:
 
     def _confirm_cleanup(self) -> None:
         action = self._preview_action
-        notice: str | None = None
-        if action is not None:
-            result = action.execute(self._preview_targets)
-            notice = format_cleanup_notice(result, action.done_tpl)
+        if action is None:
+            return
+        targets = tuple(
+            tui_actions.SessionRequest.from_session(target)
+            if isinstance(target, Session)
+            else target
+            for target in self._preview_targets
+        )
+        outcome = self.app.submit_action(
+            f"session.cleanup.{action.key}",
+            lambda: tui_actions.run_cleanup(
+                action.execute,
+                targets,
+                action.done_tpl,
+            ),
+        )
+        if not isinstance(outcome, Accepted):
+            return
         self._preview_action = None
         self._preview_targets = []
         self._enter_cleanup(show_issues=False)
-        if notice is not None:
-            self.app.notify(notice)
-        self.app.trigger_async_refresh()

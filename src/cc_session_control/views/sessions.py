@@ -6,18 +6,14 @@ from typing import TYPE_CHECKING
 
 import urwid
 
+from ..actions import tui_actions
 from ..actions.session_ops import (
     ResumeIntent,
-    do_tmux_resume,
-    resume_cmd,
-    terminate_session,
-    to_clipboard,
 )
 from ..data import proc
-from ..data.cleanup import CleanupPlan, remove_session
+from ..data.cleanup import CleanupPlan
 from ..models import Session
 from ._base import ListTabView
-from ._cleanup_feedback import format_delete_notice
 from ._confirm import DEGRADED as _DEGRADED
 from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
@@ -233,19 +229,21 @@ class SessionsView(CleanupMixin, ListTabView):
 
     def _do_terminate(self, s: Session) -> None:
         """Stop body, run only after the y/n confirm accepts."""
-        ok = terminate_session(s)
-        self.app.notify("已停止" if ok else "停止失败")
-        self.app.trigger_async_refresh()
+        request = tui_actions.SessionRequest.from_session(s)
+        self.app.submit_action(
+            "session.stop",
+            lambda: tui_actions.stop_session(request),
+        )
 
     def _do_relaunch(self, s: Session) -> None:
         """转后台 body (after confirm when it takes over a live one): spawn the
         resume window in the per-project tmux session, do NOT enter it — the
         operator stays in csctl. No --remote-control (ADR-0001)."""
-        target = do_tmux_resume(s)
-        self.app.notify(
-            f"已转入后台（tmux {target}）" if target else "转入后台失败"
+        request = tui_actions.SessionRequest.from_session(s)
+        self.app.submit_action(
+            "session.background",
+            lambda: tui_actions.background_session(request),
         )
-        self.app.trigger_async_refresh()
 
     # --- Key dispatch ---
 
@@ -340,14 +338,18 @@ class SessionsView(CleanupMixin, ListTabView):
         if not proc.current_determinable():
             self.app.notify(_DEGRADED)
             return
-        # The typed result distinguishes success, missing, refusal, and failure.
-        self.app.notify(format_delete_notice(remove_session(s)))
-        self.app.trigger_async_refresh()
+        request = tui_actions.SessionRequest.from_session(s)
+        self.app.submit_action(
+            "session.delete",
+            lambda: tui_actions.delete_session(request),
+        )
 
     def _key_yank(self, s: Session) -> None:
-        cmd = resume_cmd(s)
-        ok = to_clipboard(cmd)
-        self.app.notify("已复制" if ok else f"复制失败: {cmd}")
+        request = tui_actions.SessionRequest.from_session(s)
+        self.app.submit_action(
+            "session.copy-command",
+            lambda: tui_actions.copy_resume_command(request),
+        )
 
     def _key_toggle_hidden(self) -> None:
         self._show_hidden = not self._show_hidden

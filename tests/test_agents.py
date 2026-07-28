@@ -9,6 +9,7 @@ from cc_session_control.actions.session_ops import (
     ResumeIntent,
     TmuxResumeIntent,
 )
+from cc_session_control.actions.runner import Accepted
 from cc_session_control.data.cleanup import CleanupPlan
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import AgentJob
@@ -22,6 +23,7 @@ class FakeApp:
         self._notifications = []
         self._confirm_messages = []
         self._last_confirm = None
+        self._submitted_actions = []
         self.footer_text = urwid.Text("")
         self.footer = urwid.AttrMap(self.footer_text, "footer")
         self.frame = urwid.Frame(urwid.Text("body"), footer=self.footer)
@@ -42,6 +44,14 @@ class FakeApp:
 
     def trigger_async_refresh(self):
         pass
+
+    def submit_action(self, action_key, action):
+        self._submitted_actions.append(action_key)
+        result = action()
+        self.notify(result.message)
+        if result.needs_refresh:
+            self.trigger_async_refresh()
+        return Accepted(action_key)
 
     def refresh_with_notice(self):
         self.trigger_async_refresh()
@@ -154,19 +164,32 @@ def test_keyhints_generated_from_key_table():
 def test_R_key_respawns(monkeypatch):
     # Unified verb table: respawn moved off `r` (now refresh) onto `R`.
     called = {}
-    monkeypatch.setattr(av_mod.agent_ops, "respawn",
-                        lambda job: called.setdefault("job", job) or "claude --resume x --bg")
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "respawn_result",
+        lambda job: (
+            called.setdefault("job", job)
+            and av_mod.agent_ops.RespawnResult("claude --resume x --bg", "p:1")
+        ),
+    )
     app, view = _make_view([_make_job()])
     view.handle_key("R")
     assert "job" in called
+    assert app._submitted_actions == ["agent.respawn"]
     assert any("已重启" in m for m in app._notifications)
 
 
 def test_r_key_refreshes_not_respawn(monkeypatch):
     # `r` is refresh on EVERY tab now; it must NOT respawn.
     respawned = {"n": 0}
-    monkeypatch.setattr(av_mod.agent_ops, "respawn",
-                        lambda job: respawned.__setitem__("n", respawned["n"] + 1) or "x")
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "respawn_result",
+        lambda job: (
+            respawned.__setitem__("n", respawned["n"] + 1)
+            or av_mod.agent_ops.RespawnResult("x", "p:1")
+        ),
+    )
     app, view = _make_view([_make_job()])
     view.handle_key("r")
     assert respawned["n"] == 0
@@ -299,6 +322,7 @@ def test_d_key_removes_settled_job(monkeypatch):
     )
     app, view = _make_view([_make_job(host_alive=False)])
     view.handle_key("d")
+    assert app._submitted_actions == ["agent.remove"]
     assert any("已删除" in m for m in app._notifications)
 
 
@@ -334,6 +358,7 @@ def test_s_key_stops_live_with_orphan_warning(monkeypatch):
     view.handle_key("s")
     assert app._confirm_messages  # a confirm is requested first
     app._last_confirm()           # simulate pressing y
+    assert app._submitted_actions == ["agent.stop"]
     assert any("孤儿" in m for m in app._notifications)
 
 

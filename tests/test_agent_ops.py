@@ -52,6 +52,16 @@ def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
     assert captured["session"] == "proj"
 
 
+def test_respawn_result_retains_tmux_failure(monkeypatch):
+    monkeypatch.setattr(ao.tmux, "run_in_tmux", lambda *_: None)
+
+    result = ao.respawn_result(_make_job(resume_sid="sid-xyz"))
+
+    assert result.command == "claude --resume sid-xyz --bg"
+    assert result.target is None
+    assert result.success is False
+
+
 # --- remove_job: settled only, current-determinable only ---
 
 def test_remove_job_refuses_live(monkeypatch):

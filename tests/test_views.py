@@ -22,6 +22,7 @@ from cc_session_control.actions.session_ops import (
     TmuxNewIntent,
     TmuxResumeIntent,
 )
+from cc_session_control.actions.runner import Accepted
 from cc_session_control.models import RCProject, RCServer, Session
 from cc_session_control.data.refresh import RefreshBatch
 from cc_session_control.views.sessions import SessionRow, SessionsView
@@ -35,6 +36,7 @@ class FakeApp:
         self._notifications = []
         self._confirm_messages = []
         self._last_confirm = None
+        self._submitted_actions = []
         self.footer_text = urwid.Text("")
         self.footer = urwid.AttrMap(self.footer_text, "footer")
         self.frame = urwid.Frame(urwid.Text("body"), footer=self.footer)
@@ -55,6 +57,14 @@ class FakeApp:
 
     def trigger_async_refresh(self):
         pass
+
+    def submit_action(self, action_key, action):
+        self._submitted_actions.append(action_key)
+        result = action()
+        self.notify(result.message)
+        if result.needs_refresh:
+            self.trigger_async_refresh()
+        return Accepted(action_key)
 
     def refresh_with_notice(self):
         self.trigger_async_refresh()
@@ -634,7 +644,7 @@ def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
     from cc_session_control.data import rc as rc_mod
 
     writes = []
-    monkeypatch.setattr(rc_view_mod, "set_rc_at_startup",
+    monkeypatch.setattr(rc_view_mod.tui_actions.rc, "set_rc_at_startup",
                         lambda directory, value:
                         writes.append((directory, value)) or _updated_setting(directory))
     monkeypatch.setattr(rc_mod, "toggle_autostart", lambda name: False)
@@ -735,6 +745,7 @@ def test_rc_view_enter_exits_with_tmux_new():
     view.handle_key("enter")
 
     assert app.result == TmuxNewIntent("/tmp/p1")
+    assert app._submitted_actions == []
 
 
 def test_rc_view_o_key_starts_rc_server(monkeypatch):
@@ -755,6 +766,7 @@ def test_rc_view_o_key_starts_rc_server(monkeypatch):
 
     assert started == ["/tmp/myproj"]              # start_one takes the PATH key
     assert app.result is None                      # stays in csctl
+    assert app._submitted_actions == ["project.start"]
     assert any("已启动 p1" in m for m in app._notifications)
 
 
@@ -779,7 +791,7 @@ def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
     import cc_session_control.views.rc as rc_view_mod
 
     writes = []
-    monkeypatch.setattr(rc_view_mod, "set_rc_at_startup",
+    monkeypatch.setattr(rc_view_mod.tui_actions.rc, "set_rc_at_startup",
                         lambda directory, value:
                         writes.append((directory, value)) or _updated_setting(directory))
 
@@ -791,6 +803,7 @@ def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
     view.handle_key("c")
 
     assert writes  # toggle routed through the seam, not real disk
+    assert app._submitted_actions == ["project.write-settings"]
     assert any("自动远控" in m for m in app._notifications)
 
 
@@ -844,7 +857,7 @@ def test_rc_view_reports_typed_settings_write_failure(monkeypatch):
             "read-only filesystem",
         )
 
-    monkeypatch.setattr(rc_view_mod, "set_rc_at_startup", fail_write)
+    monkeypatch.setattr(rc_view_mod.tui_actions.rc, "set_rc_at_startup", fail_write)
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
@@ -867,6 +880,7 @@ def test_rc_view_a_key_notifies_with_new_label(monkeypatch):
 
     view.handle_key("a")
 
+    assert app._submitted_actions == ["project.toggle-autostart"]
     assert any("开机自启" in m for m in app._notifications)
 
 
@@ -887,7 +901,27 @@ def test_rc_S_key_confirms_then_stops_all(monkeypatch):
 
     app._last_confirm()  # simulate pressing y
     assert stopped["n"] == 1
+    assert app._submitted_actions == ["project.stop-all"]
     assert any("已停止全部" in m for m in app._notifications)
+
+
+def test_rc_A_key_submits_start_all(monkeypatch):
+    from cc_session_control.data import rc as rc_mod
+
+    monkeypatch.setattr(
+        rc_mod,
+        "start_all_listed_result",
+        lambda: rc_mod.StartManyResult(started=2),
+    )
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+    _apply_projects(view, [_make_project(name="p1")])
+
+    view.handle_key("A")
+
+    assert app._submitted_actions == ["project.start-all"]
+    assert app._notifications[-1] == "已启动 2 个项目"
 
 
 # === Unified-keys: Sessions terminate now `s` + confirms ====================
@@ -896,13 +930,18 @@ def test_sessions_s_key_confirms_then_terminates(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
 
     killed = {"n": 0}
-    monkeypatch.setattr(sv_mod, "terminate_session",
-                        lambda s: killed.__setitem__("n", killed["n"] + 1) or True)
+    monkeypatch.setattr(
+        sv_mod.tui_actions.session_ops,
+        "take_over",
+        lambda *_: killed.__setitem__("n", killed["n"] + 1) or "killed",
+    )
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
-    view._all_sessions = [_make_session(sid="live", alive=True, current=False)]
+    view._all_sessions = [
+        _make_session(sid="live", pid=123, alive=True, current=False)
+    ]
     view._apply_filter()
     view._rebuild()
 
@@ -912,13 +951,18 @@ def test_sessions_s_key_confirms_then_terminates(monkeypatch):
 
     app._last_confirm()  # simulate pressing y
     assert killed["n"] == 1
+    assert app._submitted_actions == ["session.stop"]
     assert any("已停止" in m for m in app._notifications)
 
 
 def test_sessions_s_key_guards_before_confirm(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
 
-    monkeypatch.setattr(sv_mod, "terminate_session", lambda s: True)
+    monkeypatch.setattr(
+        sv_mod.tui_actions.session_ops,
+        "take_over",
+        lambda *_: "killed",
+    )
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
     app = FakeApp()
     view = SessionsView(app)
@@ -978,7 +1022,7 @@ def test_sessions_R_live_confirms_relaunch(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
     relaunched = {"n": 0}
-    monkeypatch.setattr(sv_mod, "do_tmux_resume",
+    monkeypatch.setattr(sv_mod.tui_actions.session_ops, "do_tmux_resume",
                         lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or "proj:1")
     app = FakeApp()
     view = SessionsView(app)
@@ -993,6 +1037,7 @@ def test_sessions_R_live_confirms_relaunch(monkeypatch):
     app._last_confirm()
     assert relaunched["n"] == 1
     assert app.result is None  # 转后台 stays in csctl (no exit intent)
+    assert app._submitted_actions == ["session.background"]
     assert any("已转入后台" in m and "proj:1" in m for m in app._notifications)
 
 
@@ -1000,7 +1045,7 @@ def test_sessions_R_refuses_resident_session(monkeypatch):
     # A tmux-resident session needs no backgrounding: notify, no confirm, no spawn.
     import cc_session_control.views.sessions as sv_mod
     spawned = {"n": 0}
-    monkeypatch.setattr(sv_mod, "do_tmux_resume",
+    monkeypatch.setattr(sv_mod.tui_actions.session_ops, "do_tmux_resume",
                         lambda s: spawned.__setitem__("n", spawned["n"] + 1) or "proj:1")
     s = _make_session(sid="res", alive=True, current=False, pid=1,
                       tmux_target="proj:9")
@@ -1017,7 +1062,7 @@ def test_sessions_R_degraded_still_relaunches_dead(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
     relaunched = {"n": 0}
-    monkeypatch.setattr(sv_mod, "do_tmux_resume",
+    monkeypatch.setattr(sv_mod.tui_actions.session_ops, "do_tmux_resume",
                         lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or "proj:1")
     app = FakeApp()
     view = SessionsView(app)
@@ -1033,7 +1078,7 @@ def test_sessions_R_degraded_refuses_live_takeover(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
     relaunched = {"n": 0}
-    monkeypatch.setattr(sv_mod, "do_tmux_resume",
+    monkeypatch.setattr(sv_mod.tui_actions.session_ops, "do_tmux_resume",
                         lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or "proj:1")
     app = FakeApp()
     view = SessionsView(app)
@@ -1045,6 +1090,28 @@ def test_sessions_R_degraded_refuses_live_takeover(monkeypatch):
     assert relaunched["n"] == 0
     assert app._confirm_messages == []
     assert any("降级" in m for m in app._notifications)
+
+
+def test_sessions_y_copies_through_action_runner(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+
+    copied = []
+    monkeypatch.setattr(
+        sv_mod.tui_actions.session_ops,
+        "to_clipboard",
+        lambda command: copied.append(command) or True,
+    )
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._all_sessions = [_make_session(sid="dead", alive=False)]
+    view._apply_filter()
+    view._rebuild()
+
+    view.handle_key("y")
+
+    assert app._submitted_actions == ["session.copy-command"]
+    assert copied and "--resume dead" in copied[0]
 
 
 def test_sessions_f_refuses_current():
@@ -1087,6 +1154,7 @@ def test_rc_s_running_confirms_stop(monkeypatch):
 
     app._last_confirm()
     assert stopped["n"] == 1
+    assert app._submitted_actions == ["project.stop"]
 
 
 def test_rc_s_not_running_no_confirm():
@@ -1324,7 +1392,7 @@ def test_rc_view_c_key_full_tristate_cycle(monkeypatch):
     import cc_session_control.views.rc as rc_view_mod
 
     writes = []
-    monkeypatch.setattr(rc_view_mod, "set_rc_at_startup",
+    monkeypatch.setattr(rc_view_mod.tui_actions.rc, "set_rc_at_startup",
                         lambda directory, value:
                         writes.append(value) or _updated_setting(directory))
     app = FakeApp()
@@ -1360,11 +1428,16 @@ def test_delete_honest_feedback_true_then_false(monkeypatch):
     from cc_session_control.data.removal import CleanupExecution
 
     removed = CleanupExecution(completed=["sid"])
-    monkeypatch.setattr(sv_mod, "remove_session", lambda s: removed)
+    monkeypatch.setattr(sv_mod.tui_actions.cleanup, "remove_session", lambda s: removed)
     view.handle_key("d")
+    assert app._submitted_actions == ["session.delete"]
     assert app._notifications[-1] == "已删除"
 
-    monkeypatch.setattr(sv_mod, "remove_session", lambda s: CleanupExecution())
+    monkeypatch.setattr(
+        sv_mod.tui_actions.cleanup,
+        "remove_session",
+        lambda s: CleanupExecution(),
+    )
     view.handle_key("d")
     assert app._notifications[-1] == "无可删除内容"
 
@@ -1383,7 +1456,7 @@ def test_delete_failure_does_not_claim_success(monkeypatch, tmp_path):
             PathRemoval(tmp_path / "locked", RemovalStatus.FAILED, "denied")
         ]
     )
-    monkeypatch.setattr(sv_mod, "remove_session", lambda s: failed)
+    monkeypatch.setattr(sv_mod.tui_actions.cleanup, "remove_session", lambda s: failed)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -1410,7 +1483,7 @@ def test_delete_partial_failure_mentions_removed_path(monkeypatch, tmp_path):
             PathRemoval(tmp_path / "locked", RemovalStatus.FAILED, "denied"),
         ]
     )
-    monkeypatch.setattr(sv_mod, "remove_session", lambda s: partial)
+    monkeypatch.setattr(sv_mod.tui_actions.cleanup, "remove_session", lambda s: partial)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -1430,7 +1503,7 @@ def test_delete_refuses_when_current_undeterminable(monkeypatch):
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
     removed = {"n": 0}
     monkeypatch.setattr(
-        sv_mod,
+        sv_mod.tui_actions.cleanup,
         "remove_session",
         lambda s: removed.__setitem__("n", removed["n"] + 1),
     )
@@ -1501,6 +1574,7 @@ def test_zombie_sweep_preview_and_confirm(monkeypatch):
     )
     view._confirm_cleanup()
     assert swept["pids"] == [111]  # exactly the previewed targets
+    assert app._submitted_actions == ["session.cleanup.zombies"]
     assert any("僵尸会话文件" in m for m in app._notifications)
 
 
