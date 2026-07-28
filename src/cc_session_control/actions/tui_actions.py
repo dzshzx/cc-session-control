@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from ..data import cleanup, rc
 from ..data.project_settings import SettingWriteState
@@ -118,8 +117,8 @@ class AgentRequest:
         )
 
 
-CleanupTarget: TypeAlias = SessionRequest | str | int
-CleanupExecutor: TypeAlias = Callable[[list], CleanupExecution]
+type CleanupTarget = SessionRequest | str | int
+type CleanupExecutor = Callable[[list], CleanupExecution]
 
 
 def stop_session(request: SessionRequest) -> ActionResult:

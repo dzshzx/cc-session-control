@@ -16,31 +16,22 @@ def _details(result: CleanupExecution) -> list[str]:
             detail += f"（{first.path}: {first.error}）"
         details.append(detail)
     if result.skipped:
-        details.append(
-            f"跳过 {len(result.skipped)}（{result.skipped[0].reason}）"
-        )
+        details.append(f"跳过 {len(result.skipped)}（{result.skipped[0].reason}）")
     if result.refused:
-        details.append(
-            f"拒绝 {len(result.refused)}（{result.refused[0].reason}）"
-        )
+        details.append(f"拒绝 {len(result.refused)}（{result.refused[0].reason}）")
     if result.missing_targets:
         details.append(f"已不存在 {len(result.missing_targets)}")
     return details
 
 
-def format_cleanup_notice(
-    result: CleanupExecution, done_template: str
-) -> str:
+def format_cleanup_notice(result: CleanupExecution, done_template: str) -> str:
     """Summarize multi-target cleanup without turning partial work into success."""
     completed = len(result.completed)
     details = _details(result)
     if completed and not details:
         return done_template.format(n=completed)
     if completed:
-        return (
-            f"部分完成：{done_template.format(n=completed)}；"
-            + "；".join(details)
-        )
+        return f"部分完成：{done_template.format(n=completed)}；" + "；".join(details)
     if result.removed:
         return "清理部分失败：" + "；".join(details)
     if result.refused:

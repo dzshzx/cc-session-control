@@ -2,15 +2,16 @@
 
 import threading
 from queue import Queue
-import urwid
+
 import pytest
+import urwid
 
 import cc_session_control.app as app_mod
-from cc_session_control.actions.runner import ActionResult, Accepted, Busy
+from cc_session_control.actions.runner import Accepted, ActionResult, Busy
 from cc_session_control.app import App
 from cc_session_control.data.cleanup import CleanupPlan
-from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.data.refresh import RefreshBatch, RefreshFailure
+from cc_session_control.data.snapshot import WorldSnapshot
 
 
 class _RecorderView:
@@ -149,10 +150,28 @@ def test_exit_drops_late_completion_without_second_apply():
 def test_complete_batch_drives_real_views():
     from cc_session_control.models import RCProject, Session
 
-    sess = [Session(sid="s1", cwd="/tmp/p", label="t", mtime=0.0, prompts=1,
-                    pid=None, alive=False, current=False)]
-    proj = [RCProject(name="p1", directory="/tmp/p1", trusted=True,
-                      in_list=True, status="stopped", auto_start=True)]
+    sess = [
+        Session(
+            sid="s1",
+            cwd="/tmp/p",
+            label="t",
+            mtime=0.0,
+            prompts=1,
+            pid=None,
+            alive=False,
+            current=False,
+        )
+    ]
+    proj = [
+        RCProject(
+            name="p1",
+            directory="/tmp/p1",
+            trusted=True,
+            in_list=True,
+            status="stopped",
+            auto_start=True,
+        )
+    ]
     snap = WorldSnapshot(sessions=sess, rc_projects=proj)
     batch = RefreshBatch(
         generation=1,
@@ -193,19 +212,23 @@ def test_tab_order_launcher_first():
 
 # --- Confirm modal: App-level y/n routing shared by all tabs ---
 
+
 def test_confirm_y_or_enter_runs_callback_and_closes():
     # Enter = 确认 alongside y (universal dialog muscle memory).
     for confirm_key in ("y", "enter"):
         app, _views = _app_with_recorders()
         ran = {"n": 0}
-        app.confirm("终止？", lambda: ran.__setitem__("n", ran["n"] + 1))
+        app.confirm(
+            "终止？",
+            lambda counter=ran: counter.__setitem__("n", counter["n"] + 1),
+        )
 
         assert app._confirm_yes is not None
         assert isinstance(app.body.original_widget, urwid.Overlay)  # modal is up
 
         app._input(confirm_key)
-        assert ran["n"] == 1                       # callback fired
-        assert app._confirm_yes is None            # modal closed
+        assert ran["n"] == 1  # callback fired
+        assert app._confirm_yes is None  # modal closed
         assert not isinstance(app.body.original_widget, urwid.Overlay)
 
 
@@ -213,19 +236,22 @@ def test_confirm_n_and_esc_cancel_without_callback():
     for cancel_key in ("n", "esc"):
         app, _views = _app_with_recorders()
         ran = {"n": 0}
-        app.confirm("停止全部？", lambda: ran.__setitem__("n", ran["n"] + 1))
+        app.confirm(
+            "停止全部？",
+            lambda counter=ran: counter.__setitem__("n", counter["n"] + 1),
+        )
         app._input(cancel_key)
-        assert ran["n"] == 0                    # callback NOT fired
-        assert app._confirm_yes is None         # modal closed
+        assert ran["n"] == 0  # callback NOT fired
+        assert app._confirm_yes is None  # modal closed
 
 
 def test_confirm_swallows_other_keys():
     app, _views = _app_with_recorders()
     app.confirm("终止？", lambda: None)
     before = app._active
-    app._input("tab")                          # tab must NOT switch while modal up
+    app._input("tab")  # tab must NOT switch while modal up
     assert app._active == before
-    assert app._confirm_yes is not None        # still modal
+    assert app._confirm_yes is not None  # still modal
 
 
 def test_confirm_modal_fits_long_message_on_narrow_terminal(monkeypatch):
@@ -237,11 +263,12 @@ def test_confirm_modal_fits_long_message_on_narrow_terminal(monkeypatch):
     app.confirm(msg, lambda: None)
     canvas = app.body.original_widget.render((40, 24), focus=False)
     blob = b"\n".join(canvas.text).decode()
-    assert "取消" in blob   # the control line is visible (was clipped at 7 rows)
+    assert "取消" in blob  # the control line is visible (was clipped at 7 rows)
     assert "确认" in blob
 
 
 # --- Notifications: the newest message owns the footer ---
+
 
 def test_second_notify_cancels_first_restore_alarm():
     # Without cancelling, the FIRST notification's timer fires and clears the
@@ -259,15 +286,16 @@ def test_second_notify_cancels_first_restore_alarm():
 
 # --- Filter mode owns its keys (captures_text): q/tab must not act globally ---
 
+
 def test_filter_mode_captures_q_into_edit():
     # `q` typed into the filter (e.g. the q in "sql") used to quit csctl:
     # _input consumed it before the view ever saw it.
     app = App()
     app.trigger_async_refresh = lambda: None  # keep the test IO-free
-    app._input("tab")               # 项目 → 会话 (项目/会话/后台 order)
+    app._input("tab")  # 项目 → 会话 (项目/会话/后台 order)
     sessions_view = app.views[1]
-    app._input("/")                 # enter filter mode
-    app._input("q")                 # must land in the Edit, not exit
+    app._input("/")  # enter filter mode
+    app._input("q")  # must land in the Edit, not exit
     assert sessions_view._mode == "filter"
     assert sessions_view._filter_edit.get_edit_text() == "q"
 
@@ -275,17 +303,17 @@ def test_filter_mode_captures_q_into_edit():
 def test_tab_is_captured_during_filter_mode():
     app = App()
     app.trigger_async_refresh = lambda: None
-    app._input("tab")               # 项目 → 会话
+    app._input("tab")  # 项目 → 会话
     sessions_view = app.views[1]
     app._input("/")
     app._input("x")
-    app._input("tab")               # captured: must NOT switch tabs mid-typing
+    app._input("tab")  # captured: must NOT switch tabs mid-typing
     assert app._active == 1
     assert sessions_view._mode == "filter"
 
-    app._input("enter")             # commit the filter
+    app._input("enter")  # commit the filter
     assert sessions_view._filter_text == "x"
-    app._input("tab")               # back in list mode: tab switches again
+    app._input("tab")  # back in list mode: tab switches again
     assert app._active == 2
 
 
@@ -296,19 +324,20 @@ def test_notify_restore_does_not_evict_filter_edit():
     # _mode stayed "filter").
     app = App()
     app.trigger_async_refresh = lambda: None
-    app._input("tab")               # 项目 → 会话
+    app._input("tab")  # 项目 → 会话
     sessions_view = app.views[1]
     app.notify("已复制")
-    app._input("/")                 # enter filter with the alarm still pending
-    app._restore_footer()           # the leftover alarm fires
+    app._input("/")  # enter filter with the alarm still pending
+    app._restore_footer()  # the leftover alarm fires
     app._input("x")
     assert sessions_view._filter_edit.get_edit_text() == "x"
     canvas = app.frame.render((100, 30), focus=False)
     blob = b"\n".join(canvas.text).decode()
-    assert "过滤" in blob           # the Edit is still on screen
+    assert "过滤" in blob  # the Edit is still on screen
 
 
 # --- Fix 2b: degraded-mode header banner (D7/R10) ---
+
 
 def test_degraded_banner_in_header_when_no_proc(monkeypatch):
     monkeypatch.setattr(app_mod.proc, "has_proc", lambda: False)
@@ -316,9 +345,7 @@ def test_degraded_banner_in_header_when_no_proc(monkeypatch):
     # title + tab_bar + banner == 3 header rows; banner carries the warning.
     rows = [w for (w, _opts) in app.header.contents]
     assert len(rows) == 3
-    blob = "\n".join(
-        b"\n".join(r.render((120,)).text).decode() for r in rows
-    )
+    blob = "\n".join(b"\n".join(r.render((120,)).text).decode() for r in rows)
     assert "liveness 降级" in blob
     assert "已受限" in blob
 
@@ -331,6 +358,7 @@ def test_no_degraded_banner_when_proc_present(monkeypatch):
 
 
 # --- Stay-in-TUI actions: worker publish -> main-loop apply -----------------
+
 
 def test_action_worker_never_updates_widgets_and_completion_refreshes_once():
     started = threading.Event()

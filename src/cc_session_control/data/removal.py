@@ -7,16 +7,15 @@ import shutil
 import stat
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import TypeAlias
 
 from ..models import Session
 
-Pathish: TypeAlias = str | os.PathLike[str]
+type Pathish = str | os.PathLike[str]
 
 
-class RemovalStatus(str, Enum):
+class RemovalStatus(StrEnum):
     """Observable outcome of one filesystem removal attempt."""
 
     REMOVED = "removed"
@@ -53,24 +52,15 @@ class CleanupExecution:
 
     @property
     def removed(self) -> list[PathRemoval]:
-        return [
-            item for item in self.removals
-            if item.status is RemovalStatus.REMOVED
-        ]
+        return [item for item in self.removals if item.status is RemovalStatus.REMOVED]
 
     @property
     def missing(self) -> list[PathRemoval]:
-        return [
-            item for item in self.removals
-            if item.status is RemovalStatus.MISSING
-        ]
+        return [item for item in self.removals if item.status is RemovalStatus.MISSING]
 
     @property
     def failed(self) -> list[PathRemoval]:
-        return [
-            item for item in self.removals
-            if item.status is RemovalStatus.FAILED
-        ]
+        return [item for item in self.removals if item.status is RemovalStatus.FAILED]
 
     @property
     def incomplete(self) -> bool:

@@ -26,14 +26,13 @@ import urwid
 
 from ..actions import tui_actions
 from ..actions.session_ops import TmuxNewIntent
-from ..data import rc
 from ..data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
 from ..models import RCProject, RCServer, TrustDecision
 from ._base import ListTabView
-from ._colspec import header_columns, row_columns
+from ._colspec import ColSpec, header_columns, row_columns
 from ._confirm import confirm_stop
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
@@ -46,14 +45,19 @@ _STATUS_MAP = {"running": "● 运行中", "dead": "✖ 已退出", "stopped": "
 # Row attr per server/project status — dead (crashed pane) is a semantic error
 # state and gets its own red entry (shape ✖ + word 已退出 + color: 3 channels).
 _STATUS_ATTR = {"running": "alive", "dead": "status_err", "stopped": "dead"}
-_RC_FOCUS = {"alive": "selected", "status_err": "selected", "dead": "selected", None: "selected"}
+_RC_FOCUS = {
+    "alive": "selected",
+    "status_err": "selected",
+    "dead": "selected",
+    None: "selected",
+}
 _RC_TRISTATE = {True: "开", False: "关", None: "未设置"}
 # `c` cycles the per-project remoteControlAtStartup tri-state in full so the user
 # can return to an explicit True (the old 2-cycle could never set True again).
 _NEXT_TRISTATE = {None: True, True: False, False: None}
 
 # One spec drives the tab header + project rows (_colspec.py).
-_PROJECT_COLS = [
+_PROJECT_COLS: list[ColSpec] = [
     (10, "left", "状态"),
     (8, "left", "开机自启"),
     (8, "left", "自动远控"),
@@ -83,11 +87,23 @@ class RCRow(urwid.WidgetWrap):
         auto = "✓ 开" if project.auto_start else "✗ 关"
         rc_at = _RC_TRISTATE.get(project.rc_at_startup, "未设置")
         spawn = project.spawn_mode or "—"
-        name = project.name if project.in_list or project.status == "running" else f"({project.name})"
+        name = (
+            project.name
+            if project.in_list or project.status == "running"
+            else f"({project.name})"
+        )
 
-        cols = row_columns(_PROJECT_COLS, [
-            status_text, auto, rc_at, spawn, name, directory,
-        ])
+        cols = row_columns(
+            _PROJECT_COLS,
+            [
+                status_text,
+                auto,
+                rc_at,
+                spawn,
+                name,
+                directory,
+            ],
+        )
         mapped = urwid.AttrMap(cols, attr, focus_map=_RC_FOCUS)
         super().__init__(mapped)
 
@@ -111,7 +127,7 @@ class _DividerRow(urwid.WidgetWrap):
 class ServerRow(urwid.WidgetWrap):
     """A project RC server (managed/external) — display only, never actionable."""
 
-    _COLS = [
+    _COLS: list[ColSpec] = [
         (10, "left", ""),
         (8, "left", ""),
         (8, "right", ""),
@@ -124,9 +140,16 @@ class ServerRow(urwid.WidgetWrap):
         status_text = _STATUS_MAP.get(server.status, server.status)
         badge = "托管" if server.managed else "外部"
         pid = str(server.pid) if server.pid else "-"
-        cols = row_columns(self._COLS, [
-            status_text, badge, pid, server.name, server.cwd or "",
-        ])
+        cols = row_columns(
+            self._COLS,
+            [
+                status_text,
+                badge,
+                pid,
+                server.name,
+                server.cwd or "",
+            ],
+        )
         attr = _STATUS_ATTR.get(server.status, "dead")
         mapped = urwid.AttrMap(cols, attr, focus_map=_RC_FOCUS)
         super().__init__(mapped)
@@ -145,39 +168,72 @@ class RCView(ListTabView):
     # help, and dispatch are generated from this table. `r 刷新` stays in the
     # App-level FOOTER_PREFIX, so its entry is hint-less.
     KEY_TABLE = (
-        Key(("enter",), "Enter 新建会话", "_key_tmux_new",
-            section="项目操作（仅对「项目」行生效）:", help_lines=(
+        Key(
+            ("enter",),
+            "Enter 新建会话",
+            "_key_tmux_new",
+            section="项目操作（仅对「项目」行生效）:",
+            help_lines=(
                 "  Enter  在项目目录新建 tmux claude 会话并直接进入（离开 csctl；",
                 "         tmux-first 主入口，会话默认获得断线保护）",
-            )),
-        Key(("o",), "o 启动远控", "_key_start",
-            section="项目操作（仅对「项目」行生效）:", help_lines=(
+            ),
+        ),
+        Key(
+            ("o",),
+            "o 启动远控",
+            "_key_start",
+            section="项目操作（仅对「项目」行生效）:",
+            help_lines=(
                 "  o      启动选中项目的远程控制服务（手机/网页控制面，次要入口）",
-            )),
-        Key(("s",), "s 停止", "_key_stop",
-            section="项目操作（仅对「项目」行生效）:", help_lines=(
-                "  s      停止选中项目的远程控制服务（需确认）",
-            )),
-        Key(("a",), "a 开机自启", "_key_autostart",
-            section="项目操作（仅对「项目」行生效）:", help_lines=(
-                "  a      切换「开机自启」：A 键一键启动时是否带上本项目",
-            )),
-        Key(("c",), "c 自动远控", "_key_rc_toggle",
-            section="项目操作（仅对「项目」行生效）:", help_lines=(
+            ),
+        ),
+        Key(
+            ("s",),
+            "s 停止",
+            "_key_stop",
+            section="项目操作（仅对「项目」行生效）:",
+            help_lines=("  s      停止选中项目的远程控制服务（需确认）",),
+        ),
+        Key(
+            ("a",),
+            "a 开机自启",
+            "_key_autostart",
+            section="项目操作（仅对「项目」行生效）:",
+            help_lines=("  a      切换「开机自启」：A 键一键启动时是否带上本项目",),
+        ),
+        Key(
+            ("c",),
+            "c 自动远控",
+            "_key_rc_toggle",
+            section="项目操作（仅对「项目」行生效）:",
+            help_lines=(
                 "  c      切换「自动远控」：claude 启动时自动开远程控制，手机即可接管",
-            )),
-        Key(("A",), "A 全部启动", "_key_start_all", needs_selection=False,
-            section="批量操作:", help_lines=(
-                "  A      启动所有「开机自启」项目",
-            )),
-        Key(("S",), "S 全部停止", "_key_stop_all", needs_selection=False,
-            section="批量操作:", help_lines=(
-                "  S      停止全部远程控制服务（需确认）",
-            )),
-        Key(("r",), None, "_key_refresh", needs_selection=False,
-            section="批量操作:", help_lines=(
-                "  r      重新扫描刷新",
-            )),
+            ),
+        ),
+        Key(
+            ("A",),
+            "A 全部启动",
+            "_key_start_all",
+            needs_selection=False,
+            section="批量操作:",
+            help_lines=("  A      启动所有「开机自启」项目",),
+        ),
+        Key(
+            ("S",),
+            "S 全部停止",
+            "_key_stop_all",
+            needs_selection=False,
+            section="批量操作:",
+            help_lines=("  S      停止全部远程控制服务（需确认）",),
+        ),
+        Key(
+            ("r",),
+            None,
+            "_key_refresh",
+            needs_selection=False,
+            section="批量操作:",
+            help_lines=("  r      重新扫描刷新",),
+        ),
         Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
     )
 
@@ -223,9 +279,7 @@ class RCView(ListTabView):
         self._projects = list(batch.ordered_projects)
         self._settings = batch.snapshot.rc_project_settings
         self._servers = batch.snapshot.rc_servers
-        self._environment_warnings = (
-            batch.snapshot.environment_reconciliation.warnings
-        )
+        self._environment_warnings = batch.snapshot.environment_reconciliation.warnings
         self._loaded = True
         if not self._help:
             self._rebuild()
@@ -235,7 +289,9 @@ class RCView(ListTabView):
         for p in self._projects:
             self.walker.append(RCRow(p))
         if self._servers:
-            self.walker.append(_DividerRow("── RC 服务（仅展示 · 托管见项目行 · 外部不可接管）──"))
+            self.walker.append(
+                _DividerRow("── RC 服务（仅展示 · 托管见项目行 · 外部不可接管）──")
+            )
             for s in self._servers:
                 self.walker.append(ServerRow(s))
         if not self.walker:
@@ -251,11 +307,13 @@ class RCView(ListTabView):
         srv_text = f" · 服务 {len(self._servers)}" if self._servers else ""
         settings_text = (
             f" · 项目设置不可用（{self._settings.state.value}）"
-            if not self._settings.available else ""
+            if not self._settings.available
+            else ""
         )
         ledger_text = (
             f" · ⚠ 环境台账异常 {len(self._environment_warnings)}"
-            if self._environment_warnings else ""
+            if self._environment_warnings
+            else ""
         )
         return (
             f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}"
@@ -304,8 +362,12 @@ class RCView(ListTabView):
     def _key_stop(self, p: RCProject) -> None:
         # gated=False: this stop kills a tmux window, not a pid — no R10 gate.
         confirm_stop(
-            self.app, "远控服务", p.name, lambda: self._do_stop_one(p),
-            alive=p.status == "running", gated=False,
+            self.app,
+            "远控服务",
+            p.name,
+            lambda: self._do_stop_one(p),
+            alive=p.status == "running",
+            gated=False,
         )
 
     def _key_autostart(self, p: RCProject) -> None:

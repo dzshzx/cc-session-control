@@ -17,6 +17,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import urwid
 
@@ -37,6 +38,9 @@ from ._confirm import DEGRADED as _DEGRADED
 from ._rows import TextRow, truncate_cells
 from ._session_row import _ActionRow
 
+if TYPE_CHECKING:
+    from ..app import App
+
 
 def _execute_orphans(entries: list[str]) -> CleanupExecution:
     """Orphan executor with the FULL fresh protection set: a fresh transcript
@@ -46,65 +50,92 @@ def _execute_orphans(entries: list[str]) -> CleanupExecution:
     return execute_orphan_removals(entries, sessions=scan())
 
 
-def _session_line(s: Session) -> str:
-    when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
-    cwd = s.cwd.rstrip("/").rsplit("/", 1)[-1] if s.cwd else ""
-    return f"{when}  p{s.prompts}  {truncate_cells(s.label, 60)}  ({cwd})"
+def _session_line(target: object) -> str:
+    if not isinstance(target, Session):
+        raise TypeError("session cleanup preview requires a Session")
+    when = time.strftime("%m-%d %H:%M", time.localtime(target.mtime))
+    cwd = target.cwd.rstrip("/").rsplit("/", 1)[-1] if target.cwd else ""
+    return f"{when}  p{target.prompts}  {truncate_cells(target.label, 60)}  ({cwd})"
 
 
 @dataclass(frozen=True)
 class _CleanupAction:
     """One submenu action: every fact about it lives in this record."""
+
     key: str
-    label: str                                   # submenu row label
-    stat: str                                    # `CleanupPlan.counts()` key
-    gated: bool                                  # R10-gated (age sweep is not)
-    targets: Callable[[CleanupPlan], list]       # frozen preview/exec list
-    format_row: Callable[[object], str]          # one preview row per target
+    label: str  # submenu row label
+    stat: str  # `CleanupPlan.counts()` key
+    gated: bool  # R10-gated (age sweep is not)
+    targets: Callable[[CleanupPlan], list]  # frozen preview/exec list
+    format_row: Callable[[object], str]  # one preview row per target
     execute: Callable[[list], CleanupExecution]  # revalidating executor
-    none_notice: str                             # "无…需要清理"
-    title_tpl: str                               # preview overlay title
-    done_tpl: str                                # post-confirm notify
+    none_notice: str  # "无…需要清理"
+    title_tpl: str  # preview overlay title
+    done_tpl: str  # post-confirm notify
 
 
 # The age sweep (Strategy B) is mtime-only/session-agnostic, so it is NOT
 # R10-gated; every other action is.
 _CLEANUP_ACTIONS: tuple[_CleanupAction, ...] = (
     _CleanupAction(
-        key="empty", label="空壳会话(0提问)", stat="empty", gated=True,
-        targets=lambda p: p.empty, format_row=_session_line,
+        key="empty",
+        label="空壳会话(0提问)",
+        stat="empty",
+        gated=True,
+        targets=lambda p: p.empty,
+        format_row=_session_line,
         execute=execute_session_removals,
         none_notice="无空壳会话需要清理",
-        title_tpl="将清理 {n} 条空壳会话", done_tpl="已清理 {n} 条会话",
+        title_tpl="将清理 {n} 条空壳会话",
+        done_tpl="已清理 {n} 条会话",
     ),
     _CleanupAction(
-        key="short", label="短会话(≤2提问)", stat="short", gated=True,
-        targets=lambda p: p.short, format_row=_session_line,
+        key="short",
+        label="短会话(≤2提问)",
+        stat="short",
+        gated=True,
+        targets=lambda p: p.short,
+        format_row=_session_line,
         execute=execute_session_removals,
         none_notice="无短会话(≤2提问)需要清理",
-        title_tpl="将清理 {n} 条短会话(≤2提问)", done_tpl="已清理 {n} 条会话",
+        title_tpl="将清理 {n} 条短会话(≤2提问)",
+        done_tpl="已清理 {n} 条会话",
     ),
     _CleanupAction(
-        key="orphans", label="孤儿目录(sid 键)", stat="orphan_dirs", gated=True,
-        targets=lambda p: p.orphan_entries, format_row=str,
+        key="orphans",
+        label="孤儿目录(sid 键)",
+        stat="orphan_dirs",
+        gated=True,
+        targets=lambda p: p.orphan_entries,
+        format_row=str,
         execute=_execute_orphans,
         none_notice="无孤儿目录需要清理",
-        title_tpl="将清理 {n} 个孤儿目录", done_tpl="已清理 {n} 个孤儿目录",
+        title_tpl="将清理 {n} 个孤儿目录",
+        done_tpl="已清理 {n} 个孤儿目录",
     ),
     _CleanupAction(
-        key="zombies", label="僵尸会话文件(pid 键)", stat="zombie_procs", gated=True,
+        key="zombies",
+        label="僵尸会话文件(pid 键)",
+        stat="zombie_procs",
+        gated=True,
         targets=lambda p: p.zombie_pids,
         format_row=lambda pid: f"sessions/{pid}.json",
         execute=execute_zombie_removals,
         none_notice="无僵尸会话文件需要清理",
-        title_tpl="将清理 {n} 个僵尸会话文件", done_tpl="已清理 {n} 个僵尸会话文件",
+        title_tpl="将清理 {n} 个僵尸会话文件",
+        done_tpl="已清理 {n} 个僵尸会话文件",
     ),
     _CleanupAction(
-        key="aged", label="过期全局文件(按天)", stat="aged_entries", gated=False,
-        targets=lambda p: p.aged_entries, format_row=str,
+        key="aged",
+        label="过期全局文件(按天)",
+        stat="aged_entries",
+        gated=False,
+        targets=lambda p: p.aged_entries,
+        format_row=str,
         execute=execute_aged_removals,
         none_notice="无过期文件需要清理",
-        title_tpl="将清理 {n} 个过期项", done_tpl="已清理 {n} 个过期项",
+        title_tpl="将清理 {n} 个过期项",
+        done_tpl="已清理 {n} 个过期项",
     ),
 )
 _ACTION_BY_KEY = {a.key: a for a in _CLEANUP_ACTIONS}
@@ -113,6 +144,27 @@ _ACTION_BY_KEY = {a.key: a for a in _CLEANUP_ACTIONS}
 class CleanupMixin:
     """Cleanup submenu + preview overlay for `SessionsView` (modes
     "cleanup"/"preview"). Key routing stays in the view's `handle_key`."""
+
+    app: App
+    _body: urwid.WidgetPlaceholder
+    _classified: dict[str, int]
+    _cleanup_walker: urwid.SimpleFocusListWalker
+    _list_body: urwid.Widget
+    _mode: str
+    _plan: CleanupPlan
+    _preview_action: _CleanupAction | None
+    _preview_targets: list[Session | str | int]
+
+    if TYPE_CHECKING:
+
+        def _show_overlay(
+            self,
+            title: str,
+            rows: list[urwid.Widget],
+            height: int | None = None,
+        ) -> None: ...
+
+        def _update_footer(self) -> None: ...
 
     def _rebuild_cleanup(self) -> None:
         c = self._classified
@@ -134,9 +186,12 @@ class CleanupMixin:
         box_content = urwid.Frame(cleanup_list, header=title)
         box = urwid.LineBox(box_content)
         overlay = urwid.Overlay(
-            box, self._list_body,
-            align="center", width=("relative", 50),
-            valign="middle", height=min(len(self._cleanup_walker) + 4, 20),
+            box,
+            self._list_body,
+            align="center",
+            width=("relative", 50),
+            valign="middle",
+            height=min(len(self._cleanup_walker) + 4, 20),
         )
         self._body.original_widget = overlay
         self._update_footer()

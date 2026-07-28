@@ -14,7 +14,7 @@ import time
 import urwid
 
 from ..models import Session
-from ._colspec import header_columns, row_columns
+from ._colspec import ColSpec, header_columns, row_columns
 from ._rows import truncate_cells
 
 # Transcript-derived hidden tags -> compact Chinese row marker.
@@ -34,7 +34,7 @@ _SOURCE_BADGES = {
 # One spec drives both the header and every row (see _colspec.py). Text columns
 # left; the numeric 提问 and the ragged relative 时间 right-align so their line-
 # to-line anchor is stable.
-SESSION_COLS = [
+SESSION_COLS: list[ColSpec] = [
     (8, "left", "状态"),
     (4, "left", "来源"),
     (4, "left", "远控"),
@@ -119,18 +119,27 @@ class SessionRow(urwid.WidgetWrap):
         label = truncate_cells(label, 80)
         cwd = session.cwd.rstrip("/").rsplit("/", 1)[-1] if session.cwd else ""
 
-        cols = row_columns(SESSION_COLS, [
-            status_cell,
-            _source_badge(session),
-            _flags(session),
-            when,
-            f"p{session.prompts}",
-            label,
-            cwd,
-        ])
+        cols = row_columns(
+            SESSION_COLS,
+            [
+                status_cell,
+                _source_badge(session),
+                _flags(session),
+                when,
+                f"p{session.prompts}",
+                label,
+                cwd,
+            ],
+        )
         mapped = urwid.AttrMap(
-            cols, attr,
-            focus_map={"status_busy": "selected", "alive": "selected", "dead": "selected", None: "selected"},
+            cols,
+            attr,
+            focus_map={
+                "status_busy": "selected",
+                "alive": "selected",
+                "dead": "selected",
+                None: "selected",
+            },
         )
         super().__init__(mapped)
 
@@ -144,11 +153,16 @@ class SessionRow(urwid.WidgetWrap):
 class _ActionRow(urwid.WidgetWrap):
     def __init__(self, action_key: str, label: str, count: int) -> None:
         self.action_key = action_key
-        cols = urwid.Columns([
-            ("weight", 1, urwid.Text(label)),
-            (8, urwid.Text(str(count), align="right")),
-        ], dividechars=2)
-        mapped = urwid.AttrMap(cols, "dead", focus_map={"dead": "selected", None: "selected"})
+        cols = urwid.Columns(
+            [
+                ("weight", 1, urwid.Text(label)),
+                (8, urwid.Text(str(count), align="right")),
+            ],
+            dividechars=2,
+        )
+        mapped = urwid.AttrMap(
+            cols, "dead", focus_map={"dead": "selected", None: "selected"}
+        )
         super().__init__(mapped)
 
     def selectable(self) -> bool:

@@ -97,7 +97,8 @@ def test_empty_inputs():
 def test_effective_trust_decision_keeps_unavailable_distinct_and_fail_closed():
     assert (
         effective_trust_decision(
-            WS + "/proj", {WS: {"hasTrustDialogAccepted": True}},
+            WS + "/proj",
+            {WS: {"hasTrustDialogAccepted": True}},
         )
         is TrustDecision.TRUSTED
     )
@@ -107,6 +108,7 @@ def test_effective_trust_decision_keeps_unavailable_distinct_and_fail_closed():
 
 
 # --- scan-level membership (path-keyed, inheritance-aware) ------------------
+
 
 def _wire_scan(tmp_path, monkeypatch, projects, enabled=(), temp_roots=()):
     import json
@@ -121,8 +123,9 @@ def _wire_scan(tmp_path, monkeypatch, projects, enabled=(), temp_roots=()):
     monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
     # pytest tmp_path lives under the REAL platform temp root, so the temp-dir
     # membership filter is neutralized unless a test injects roots explicitly.
-    monkeypatch.setattr(rc, "_TEMP_ROOTS",
-                        frozenset(os.path.normpath(p) for p in temp_roots))
+    monkeypatch.setattr(
+        rc, "_TEMP_ROOTS", frozenset(os.path.normpath(p) for p in temp_roots)
+    )
     return rc
 
 
@@ -132,10 +135,14 @@ def test_scan_includes_inherited_subdir(tmp_path, monkeypatch):
     parent = tmp_path / "parent"
     sub = parent / "new-proj"
     sub.mkdir(parents=True)
-    rc = _wire_scan(tmp_path, monkeypatch, {
-        str(parent): {"hasTrustDialogAccepted": True},
-        str(sub): {"hasTrustDialogAccepted": False},
-    })
+    rc = _wire_scan(
+        tmp_path,
+        monkeypatch,
+        {
+            str(parent): {"hasTrustDialogAccepted": True},
+            str(sub): {"hasTrustDialogAccepted": False},
+        },
+    )
 
     rows = {p.directory: p for p in rc.scan()}
     assert str(sub) in rows and str(parent) in rows
@@ -147,15 +154,20 @@ def test_scan_excludes_untrusted_entry(tmp_path, monkeypatch):
     # Explicit False with NO trusted ancestor (the hapi shape) stays out.
     lone = tmp_path / "lone"
     lone.mkdir()
-    rc = _wire_scan(tmp_path, monkeypatch, {
-        str(lone): {"hasTrustDialogAccepted": False},
-    })
+    rc = _wire_scan(
+        tmp_path,
+        monkeypatch,
+        {
+            str(lone): {"hasTrustDialogAccepted": False},
+        },
+    )
 
     assert rc.scan() == []
 
 
 def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from cc_session_control.data import rc
 
@@ -169,7 +181,8 @@ def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
     launches = []
     monkeypatch.setattr(
-        rc.tmux, "run_in_tmux",
+        rc.tmux,
+        "run_in_tmux",
         lambda *args, **kwargs: launches.append(args) or "rc:1",
     )
 
@@ -184,6 +197,7 @@ def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
 
 
 # --- temp-dir membership filter (trust untouched, discovery only) -----------
+
 
 def test_is_temp_path_segment_boundary(monkeypatch):
     from cc_session_control.data import rc
@@ -201,10 +215,15 @@ def test_scan_drops_temp_root_and_subtree(tmp_path, monkeypatch):
     troot = tmp_path / "t"
     sub = troot / "scratch"
     sub.mkdir(parents=True)
-    rc = _wire_scan(tmp_path, monkeypatch, {
-        str(troot): {"hasTrustDialogAccepted": True},
-        str(sub): {"hasTrustDialogAccepted": False},
-    }, temp_roots={str(troot)})
+    rc = _wire_scan(
+        tmp_path,
+        monkeypatch,
+        {
+            str(troot): {"hasTrustDialogAccepted": True},
+            str(sub): {"hasTrustDialogAccepted": False},
+        },
+        temp_roots={str(troot)},
+    )
 
     assert rc.scan() == []
     # Trust itself is NOT touched — the start gate still passes.
@@ -215,9 +234,15 @@ def test_scan_keeps_enabled_temp_project(tmp_path, monkeypatch):
     troot = tmp_path / "t"
     sub = troot / "demo"
     sub.mkdir(parents=True)
-    rc = _wire_scan(tmp_path, monkeypatch, {
-        str(troot): {"hasTrustDialogAccepted": True},
-    }, enabled=(str(sub),), temp_roots={str(troot)})
+    rc = _wire_scan(
+        tmp_path,
+        monkeypatch,
+        {
+            str(troot): {"hasTrustDialogAccepted": True},
+        },
+        enabled=(str(sub),),
+        temp_roots={str(troot)},
+    )
 
     rows = {p.directory for p in rc.scan()}
     assert rows == {str(sub)}
@@ -231,14 +256,22 @@ def test_scan_keeps_temp_project_with_rc_window(tmp_path, monkeypatch):
     sub.mkdir(parents=True)
     # A server's claude leaves the suppressed-False footprint, so the path
     # IS enumerated (windows join rows, they don't create membership).
-    rc = _wire_scan(tmp_path, monkeypatch, {
-        str(troot): {"hasTrustDialogAccepted": True},
-        str(sub): {"hasTrustDialogAccepted": False},
-    }, temp_roots={str(troot)})
-    monkeypatch.setattr(rc, "_tmux_windows", lambda: [
-        tmux.TmuxWindow(wid="@1", name="served", dead=False, pid=42,
-                        path=str(sub)),
-    ])
+    rc = _wire_scan(
+        tmp_path,
+        monkeypatch,
+        {
+            str(troot): {"hasTrustDialogAccepted": True},
+            str(sub): {"hasTrustDialogAccepted": False},
+        },
+        temp_roots={str(troot)},
+    )
+    monkeypatch.setattr(
+        rc,
+        "_tmux_windows",
+        lambda: [
+            tmux.TmuxWindow(wid="@1", name="served", dead=False, pid=42, path=str(sub)),
+        ],
+    )
 
     rows = {p.directory: p for p in rc.scan()}
     assert set(rows) == {str(sub)}
@@ -250,14 +283,20 @@ def test_scan_temp_root_does_not_cover_sibling(tmp_path, monkeypatch):
     troot = tmp_path / "t"
     sibling = tmp_path / "t-ext"
     sibling.mkdir(parents=True)
-    rc = _wire_scan(tmp_path, monkeypatch, {
-        str(sibling): {"hasTrustDialogAccepted": True},
-    }, temp_roots={str(troot)})
+    rc = _wire_scan(
+        tmp_path,
+        monkeypatch,
+        {
+            str(sibling): {"hasTrustDialogAccepted": True},
+        },
+        temp_roots={str(troot)},
+    )
 
     assert {p.directory for p in rc.scan()} == {str(sibling)}
 
 
 # --- rc-enabled migration (legacy short names → absolute paths) -------------
+
 
 def test_migrate_lines_resolves_against_legacy_root(monkeypatch):
     from cc_session_control.data import rc
@@ -265,8 +304,13 @@ def test_migrate_lines_resolves_against_legacy_root(monkeypatch):
     monkeypatch.setenv("CSCTL_WORKSPACE", "/srv/projects")
     out, changed = rc._migrate_lines(["# comment", "", "foo", "/abs/path", "a/b"])
     assert changed is True
-    assert out == ["# comment", "", "/srv/projects/foo", "/abs/path",
-                   "/srv/projects/a/b"]
+    assert out == [
+        "# comment",
+        "",
+        "/srv/projects/foo",
+        "/abs/path",
+        "/srv/projects/a/b",
+    ]
 
 
 def test_migrate_lines_idempotent():
@@ -278,8 +322,7 @@ def test_migrate_lines_idempotent():
     assert out == lines
 
 
-def test_list_enabled_migrates_rewrites_once_and_keeps_comments(
-        tmp_path, monkeypatch):
+def test_list_enabled_migrates_rewrites_once_and_keeps_comments(tmp_path, monkeypatch):
     from cc_session_control.data import rc
 
     monkeypatch.setattr(rc.cfg, "config_dir", tmp_path)
@@ -291,7 +334,7 @@ def test_list_enabled_migrates_rewrites_once_and_keeps_comments(
     assert rc.list_enabled() == [migrated_foo, "/abs/bar"]
     content = (tmp_path / "rc-enabled").read_text()
     assert content == f"# keep me\n{migrated_foo}\n/abs/bar\n"
-    assert rc.list_enabled() == [migrated_foo, "/abs/bar"]   # stable re-read
+    assert rc.list_enabled() == [migrated_foo, "/abs/bar"]  # stable re-read
 
 
 def test_list_rm_keeps_comments(tmp_path, monkeypatch):

@@ -2,8 +2,8 @@
 
 from cc_session_control.data import proc
 
-
 # --- proc_starttime: comm-with-parens-and-spaces parsing ---
+
 
 def test_proc_starttime_parses_field_22_with_spaced_parens_comm(tmp_path, monkeypatch):
     # comm field "(weird (cmd) name)" contains spaces AND nested parens — a naive
@@ -33,6 +33,7 @@ def test_proc_starttime_missing_pid_returns_none(tmp_path, monkeypatch):
 
 
 # --- pid_alive: zombie vs alive vs reuse ---
+
 
 def test_pid_alive_zombie_no_proc(monkeypatch):
     # No /proc entry -> proc_starttime None -> not alive.
@@ -64,17 +65,20 @@ def test_pid_alive_none_pid_is_false():
 
 # --- non-Linux degradation ---
 
+
 def test_non_linux_degrades(monkeypatch):
     monkeypatch.setattr(proc, "has_proc", lambda: False)
     assert proc.proc_starttime(4242) is None
     assert proc.pid_alive(4242, "123") is False
     # ancestor_pids returns only self, so "current" can't be determined.
     import os
+
     assert proc.ancestor_pids() == {os.getpid()}
 
 
 def test_ancestor_pids_includes_self_on_linux():
     import os
+
     pids = proc.ancestor_pids()
     assert os.getpid() in pids
     assert all(isinstance(p, int) for p in pids)

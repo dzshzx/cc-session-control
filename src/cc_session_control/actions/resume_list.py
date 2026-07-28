@@ -30,7 +30,7 @@ def keyword_matches(s: Session, keyword: str) -> bool:
     if not s.file:
         return False
     try:
-        with open(s.file, "r", errors="ignore") as fh:
+        with open(s.file, errors="ignore") as fh:
             return any(kw in line.lower() for line in fh)
     except OSError:
         return False
@@ -97,5 +97,7 @@ def render(
         if page < pages:
             hints.append(f"next: csctl resume {kw_part}--page {page + 1}")
         hints.append(f"all: csctl resume {kw_part}--all")
-        out.append(f"-- page {page}/{pages}, {total} session(s) --    " + " | ".join(hints))
+        out.append(
+            f"-- page {page}/{pages}, {total} session(s) --    " + " | ".join(hints)
+        )
     return "\n".join(out)

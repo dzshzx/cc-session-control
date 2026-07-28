@@ -11,21 +11,21 @@ import time
 import types
 from pathlib import Path
 
-import pytest
-
 from cc_session_control import cli, cli_commands, cli_rc
 from cc_session_control.config import cfg
-from cc_session_control.data import liveness
+from cc_session_control.data import liveness, registry, sessions
 from cc_session_control.data import proc as proc_mod
-from cc_session_control.data import registry, sessions
 from cc_session_control.data.liveness import LivenessSnapshot
 from cc_session_control.models import SessionProc
 
 
 def _args(**kw):
     base = dict(
-        max_prompts=0, apply=False, sweep_orphans=False,
-        sweep_zombies=False, sweep_aged=False,
+        max_prompts=0,
+        apply=False,
+        sweep_orphans=False,
+        sweep_zombies=False,
+        sweep_aged=False,
     )
     base.update(kw)
     return types.SimpleNamespace(**base)
@@ -145,7 +145,9 @@ def test_prune_sweep_aged_dry_run_then_apply(tmp_path, monkeypatch, capsys):
     assert not os.path.exists(old)
 
 
-def test_prune_sweep_zombies_apply_keeps_alive_and_current(tmp_path, monkeypatch, capsys):
+def test_prune_sweep_zombies_apply_keeps_alive_and_current(
+    tmp_path, monkeypatch, capsys
+):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     _stub_scan(monkeypatch)
     sessions_dir = _mkdir(tmp_path, "sessions")
@@ -181,7 +183,7 @@ def test_prune_sweep_zombies_apply_keeps_alive_and_current(tmp_path, monkeypatch
     out = capsys.readouterr().out
     assert "Swept 1 zombie" in out
     assert not os.path.exists(os.path.join(sessions_dir, "700772.json"))  # dead
-    assert os.path.exists(os.path.join(sessions_dir, "710575.json"))      # alive kept
+    assert os.path.exists(os.path.join(sessions_dir, "710575.json"))  # alive kept
 
 
 def test_prune_sweep_zombies_refuses_without_proc(tmp_path, monkeypatch, capsys):
@@ -200,7 +202,9 @@ def test_prune_sweep_zombies_refuses_without_proc(tmp_path, monkeypatch, capsys)
 
 
 def test_prune_sweep_orphans_reports_real_success(
-    tmp_path, monkeypatch, capsys,
+    tmp_path,
+    monkeypatch,
+    capsys,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     _stub_scan(monkeypatch)
@@ -216,7 +220,9 @@ def test_prune_sweep_orphans_reports_real_success(
 
 
 def test_prune_sweep_orphans_refuses_without_proc(
-    tmp_path, monkeypatch, capsys,
+    tmp_path,
+    monkeypatch,
+    capsys,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     _stub_scan(monkeypatch)
@@ -233,7 +239,9 @@ def test_prune_sweep_orphans_refuses_without_proc(
 
 
 def test_prune_aged_partial_failure_is_visible_and_nonzero(
-    tmp_path, monkeypatch, capsys,
+    tmp_path,
+    monkeypatch,
+    capsys,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     monkeypatch.setattr(cfg, "cleanup_age_days", 14)
@@ -269,7 +277,9 @@ def test_prune_aged_partial_failure_is_visible_and_nonzero(
 
 
 def test_prune_aged_missing_target_is_not_counted_as_swept(
-    tmp_path, monkeypatch, capsys,
+    tmp_path,
+    monkeypatch,
+    capsys,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     monkeypatch.setattr(cfg, "cleanup_age_days", 14)
@@ -367,7 +377,9 @@ def test_theme_flag_absent_keeps_cfg(monkeypatch):
 
 
 def test_rc_add_reports_unavailable_trust_without_calling_it_untrusted(
-    tmp_path, monkeypatch, capsys,
+    tmp_path,
+    monkeypatch,
+    capsys,
 ):
     from cc_session_control.data import rc
 

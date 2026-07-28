@@ -14,7 +14,8 @@ programming and invariant errors are not converted into empty view data.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence, Set as AbstractSet
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 
 from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
@@ -43,12 +44,14 @@ class WorldSnapshot:
     here so the Sessions cleanup submenu can feed `cleanup.build_plan` /
     `select_zombie_pids` WITHOUT a second scan (R11/D8).
     """
+
     sessions: list[Session] = field(default_factory=list)
     agent_jobs: Sequence[AgentJob] = field(default_factory=tuple)
     rc_projects: list[RCProject] = field(default_factory=list)
     rc_project_settings: ProjectSettingsResult = field(
         default_factory=lambda: ProjectSettingsResult(
-            ProjectSettingsState.MISSING, {},
+            ProjectSettingsState.MISSING,
+            {},
         ),
     )
     rc_servers: list[RCServer] = field(default_factory=list)

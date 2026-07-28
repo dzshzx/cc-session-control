@@ -16,11 +16,11 @@ from dataclasses import dataclass
 class Key:
     """One verb: its bindings, footer hint, help lines, and handler."""
 
-    keys: tuple[str, ...]        # urwid key names, e.g. ("enter", "o")
-    hint: str | None             # footer label; None = shown only in help
-    handler: str                 # view method name (resolved via getattr)
+    keys: tuple[str, ...]  # urwid key names, e.g. ("enter", "o")
+    hint: str | None  # footer label; None = shown only in help
+    handler: str  # view method name (resolved via getattr)
     help_lines: tuple[str, ...] = ()  # pre-indented help-overlay display lines
-    section: str | None = None   # help section this entry lists under
+    section: str | None = None  # help section this entry lists under
     needs_selection: bool = True  # call handler(_selected()) vs handler()
 
 
@@ -29,7 +29,7 @@ class HelpLayout:
     """The prose around the generated per-key help lines."""
 
     prefix: tuple[str, ...] = ()
-    sections: tuple[str, ...] = ()   # section titles, in display order
+    sections: tuple[str, ...] = ()  # section titles, in display order
     suffix: tuple[str, ...] = ()
 
 

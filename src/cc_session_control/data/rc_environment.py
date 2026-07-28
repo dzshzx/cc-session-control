@@ -68,14 +68,10 @@ class EnvironmentIdCache:
         """Resolve ids for current windows and prune every stale cache key."""
         current = tuple(windows)
         active = {
-            (window.wid, window.pid)
-            for window in current
-            if window.pid is not None
+            (window.wid, window.pid) for window in current if window.pid is not None
         }
         self._entries = {
-            key: entry
-            for key, entry in self._entries.items()
-            if key in active
+            key: entry for key, entry in self._entries.items() if key in active
         }
 
         now = self._clock()
@@ -97,11 +93,7 @@ class EnvironmentIdCache:
                 resolved[window.wid] = env_id
                 continue
 
-            delay = (
-                entry.next_backoff
-                if entry is not None
-                else self._initial_backoff
-            )
+            delay = entry.next_backoff if entry is not None else self._initial_backoff
             self._entries[key] = _Entry(
                 retry_at=now + delay,
                 next_backoff=min(delay * 2, self._maximum_backoff),
@@ -111,9 +103,7 @@ class EnvironmentIdCache:
     def invalidate_window(self, window_id: str) -> None:
         """Forget every pane generation associated with one tmux window."""
         self._entries = {
-            key: entry
-            for key, entry in self._entries.items()
-            if key[0] != window_id
+            key: entry for key, entry in self._entries.items() if key[0] != window_id
         }
 
     def invalidate_all(self) -> None:

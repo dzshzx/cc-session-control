@@ -18,14 +18,31 @@ uv run csctl --version
 ## Development
 
 - Run TUI: `csctl`
-- Run tests: `uv run --extra dev pytest tests/` (or `python -m pytest tests/` inside the venv)
-- Check for hardcoded paths: `grep -rn --include='*.py' '/home/' src/`
+- Run the complete local quality gate:
+
+```bash
+uv run --extra dev ruff check src tests scripts
+uv run --extra dev ruff format --check src tests scripts
+uv run --extra dev mypy src/
+uv run --extra dev python scripts/check_file_sizes.py
+uv run --extra dev pytest tests/ \
+  --cov=cc_session_control --cov-branch \
+  --cov-report=term-missing --cov-report=json
+uv run --extra dev python scripts/check_coverage.py coverage.json
+if grep -rn --include='*.py' '/home/' src/; then
+  exit 1
+fi
+```
+
+The coverage ratchet independently requires at least 85% statement coverage
+and 75% branch coverage. Remove `.coverage` and `coverage.json` after local
+inspection; both are ignored by Git.
 
 ## Pull Requests
 
 1. Fork the repo and create a branch
 2. Make your changes
-3. Run tests
+3. Run the complete local quality gate above
 4. Submit a PR with a clear description
 
 ## Code Style

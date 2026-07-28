@@ -8,6 +8,10 @@ build/
 *.egg
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+coverage.json
+htmlcov/
 
 # Per-platform agent integration (local tooling)
 .claude/

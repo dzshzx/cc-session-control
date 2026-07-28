@@ -10,11 +10,10 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
-from typing import TypeAlias
+from enum import Enum, StrEnum
 
 
-class ActionStatus(str, Enum):
+class ActionStatus(StrEnum):
     """Operator-visible outcome of one TUI mutation."""
 
     SUCCESS = "success"
@@ -32,27 +31,19 @@ class ActionResult:
     needs_refresh: bool = False
 
     @classmethod
-    def success(
-        cls, message: str, *, needs_refresh: bool = False
-    ) -> ActionResult:
+    def success(cls, message: str, *, needs_refresh: bool = False) -> ActionResult:
         return cls(ActionStatus.SUCCESS, message, needs_refresh)
 
     @classmethod
-    def partial(
-        cls, message: str, *, needs_refresh: bool = False
-    ) -> ActionResult:
+    def partial(cls, message: str, *, needs_refresh: bool = False) -> ActionResult:
         return cls(ActionStatus.PARTIAL, message, needs_refresh)
 
     @classmethod
-    def refused(
-        cls, message: str, *, needs_refresh: bool = False
-    ) -> ActionResult:
+    def refused(cls, message: str, *, needs_refresh: bool = False) -> ActionResult:
         return cls(ActionStatus.REFUSED, message, needs_refresh)
 
     @classmethod
-    def failure(
-        cls, message: str, *, needs_refresh: bool = False
-    ) -> ActionResult:
+    def failure(cls, message: str, *, needs_refresh: bool = False) -> ActionResult:
         return cls(ActionStatus.FAILURE, message, needs_refresh)
 
 
@@ -71,8 +62,8 @@ class Closed:
     pass
 
 
-SubmitResult: TypeAlias = Accepted | Busy | Closed
-Action: TypeAlias = Callable[[], ActionResult]
+type SubmitResult = Accepted | Busy | Closed
+type Action = Callable[[], ActionResult]
 
 
 class _State(Enum):

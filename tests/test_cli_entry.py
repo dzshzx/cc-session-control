@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from cc_session_control import cli, cli_rc
-from cc_session_control.config import cfg
 from cc_session_control.actions import session_ops, skill_ops
+from cc_session_control.config import cfg
 from cc_session_control.data import (
     environments,
     liveness,
@@ -462,8 +462,7 @@ def test_rc_stop_all_success_is_scoped_to_configured_session(
     monkeypatch.setattr(
         tmux,
         "_tmux_run",
-        lambda args: calls.append(args)
-        or subprocess.CompletedProcess(args, 0, "", ""),
+        lambda args: calls.append(args) or subprocess.CompletedProcess(args, 0, "", ""),
     )
 
     assert cli.main(["rc", "stop", "all"]) == 0
@@ -487,9 +486,12 @@ def test_resume_keyword_page_limit_and_all_reach_public_renderer(
         ],
     )
 
-    assert cli.main(
-        ["resume", "apple", "--page", "2", "--limit", "1"],
-    ) == 0
+    assert (
+        cli.main(
+            ["resume", "apple", "--page", "2", "--limit", "1"],
+        )
+        == 0
+    )
     output = capsys.readouterr().out
     assert "sid-two" in output
     assert "sid-one" not in output

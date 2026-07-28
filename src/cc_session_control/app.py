@@ -56,7 +56,10 @@ class TabView(Protocol):
     def apply_refresh(self, batch: RefreshBatch) -> None: ...
     def keyhints(self) -> str: ...
     def handle_key(self, key: str) -> None: ...
-    def captures_text(self) -> bool: ...  # True while a text mode owns EVERY key (incl. tab/q)
+    def captures_text(
+        self,
+    ) -> bool: ...  # True while a text mode owns EVERY key (incl. tab/q)
+
 
 # Launcher-first order (ADR-0001): startup lands on 项目 (the tmux-first
 # dispatch entry), then 会话 / 后台. In lockstep with `self.views` below.
@@ -79,7 +82,7 @@ def _make_screen() -> urwid.raw_display.Screen:
         term_colors = curses.tigetnum("colors")
         if term_colors >= 256:
             screen.set_terminal_properties(colors=256)
-    except Exception:
+    except (curses.error, OSError):
         pass
     screen.register_palette(theme.palette(mode))
     return screen
@@ -118,12 +121,16 @@ class App:
         self.body = urwid.WidgetPlaceholder(self.views[0].widget)
         self._tab_texts: list[urwid.Text] = []
         tab_bar = self._build_tab_bar()
-        title = urwid.AttrMap(urwid.Text("Claude Code 会话管理器", align="center"), "header")
+        title = urwid.AttrMap(
+            urwid.Text("Claude Code 会话管理器", align="center"), "header"
+        )
         # Title at 0 and tab_bar at 1 are positional (see `_update_tab_bar`); the
         # degraded banner, if any, is appended LAST so those indices are stable.
         header_rows: list[urwid.Widget] = [title, tab_bar]
         if not proc.has_proc():
-            header_rows.append(urwid.AttrMap(urwid.Text(f" {_DEGRADED_BANNER}"), "notify"))
+            header_rows.append(
+                urwid.AttrMap(urwid.Text(f" {_DEGRADED_BANNER}"), "notify")
+            )
         self.header = urwid.Pile(header_rows)
 
         self.footer_text = urwid.Text(FOOTER_PREFIX)
@@ -206,14 +213,17 @@ class App:
         # the screen); height = wrapped text rows + the LineBox border.
         try:
             cols, rows = self._screen.get_cols_rows()
-        except Exception:
+        except (OSError, RuntimeError):
             cols, rows = 80, 24
         width = min(max(cols // 2, 46), cols)
         height = min(text.rows((max(width - 2, 1),)) + 2, max(rows - 2, 3))
         self.body.original_widget = urwid.Overlay(
-            box, self._confirm_base,
-            align="center", width=width,
-            valign="middle", height=height,
+            box,
+            self._confirm_base,
+            align="center",
+            width=width,
+            valign="middle",
+            height=height,
         )
         self.footer_text.set_text(" Enter/y 确认 · n/Esc 取消")
 
@@ -292,7 +302,9 @@ class App:
         if self._notify_alarm is not None:
             self.loop.remove_alarm(self._notify_alarm)
         self.frame.footer = urwid.AttrMap(urwid.Text(f" {msg}"), "notify")
-        self._notify_alarm = self.loop.set_alarm_in(seconds, lambda *_: self._restore_footer())
+        self._notify_alarm = self.loop.set_alarm_in(
+            seconds, lambda *_: self._restore_footer()
+        )
 
     def _restore_footer(self) -> None:
         self._notify_alarm = None

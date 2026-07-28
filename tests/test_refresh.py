@@ -8,8 +8,6 @@ from threading import Event, ExceptHookArgs, Thread
 import pytest
 
 from cc_session_control.data.cleanup import CleanupPlan
-from cc_session_control.data.snapshot import WorldSnapshot
-from cc_session_control.models import RCProject, Session
 from cc_session_control.data.refresh import (
     RefreshBatch,
     RefreshCoordinator,
@@ -17,6 +15,8 @@ from cc_session_control.data.refresh import (
     RequestResult,
     build_refresh_result,
 )
+from cc_session_control.data.snapshot import WorldSnapshot
+from cc_session_control.models import RCProject, Session
 
 
 def _batch(generation: int) -> RefreshBatch:
@@ -74,7 +74,9 @@ def test_complete_generation_is_published_once_and_is_frozen() -> None:
         result.cleanup_counts["empty"] = 1
 
 
-def test_ready_generation_is_not_overwritten_and_old_signal_cannot_consume_next() -> None:
+def test_ready_generation_is_not_overwritten_and_old_signal_cannot_consume_next() -> (
+    None
+):
     signals: Queue[None] = Queue()
     second_started = Event()
     release_second = Event()
@@ -126,17 +128,14 @@ def test_twenty_requests_coalesce_to_one_follow_up_generation() -> None:
 
     results: Queue[RequestResult] = Queue()
     requests = [
-        Thread(target=lambda: results.put(coordinator.request()))
-        for _ in range(20)
+        Thread(target=lambda: results.put(coordinator.request())) for _ in range(20)
     ]
     for thread in requests:
         thread.start()
     for thread in requests:
         thread.join()
 
-    assert [results.get_nowait() for _ in requests] == [
-        RequestResult.COALESCED
-    ] * 20
+    assert [results.get_nowait() for _ in requests] == [RequestResult.COALESCED] * 20
     release_first.set()
     signals.get(timeout=1)
     first = coordinator.consume_latest()

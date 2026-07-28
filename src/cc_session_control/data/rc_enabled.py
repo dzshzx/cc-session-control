@@ -9,7 +9,7 @@ from __future__ import annotations
 import fcntl
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TypeVar
 
@@ -22,10 +22,7 @@ def _canonical(path: str) -> str:
 
 
 def _path_lines(lines: list[str]) -> list[str]:
-    return [
-        line for line in lines
-        if line.strip() and not line.strip().startswith("#")
-    ]
+    return [line for line in lines if line.strip() and not line.strip().startswith("#")]
 
 
 def migrate_lines(
@@ -75,9 +72,7 @@ class EnabledListStore:
 
     def contains(self, path: str) -> bool:
         canonical = _canonical(path)
-        return self._update(
-            lambda lines: (lines, canonical in _path_lines(lines))
-        )
+        return self._update(lambda lines: (lines, canonical in _path_lines(lines)))
 
     def add(self, path: str) -> bool:
         canonical = _canonical(path)
@@ -132,7 +127,7 @@ class EnabledListStore:
         except FileExistsError:
             pass
 
-    def _replace(self, lines: list[str]) -> None:
+    def _replace(self, lines: Sequence[str]) -> None:
         content = "".join(f"{line}\n" for line in lines)
         descriptor, name = tempfile.mkstemp(
             dir=self._path.parent,

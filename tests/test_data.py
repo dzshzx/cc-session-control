@@ -1,9 +1,8 @@
 """Data-layer unit tests — pure functions, transcript parsing, rc toggles."""
 
-import time
-
 import json
 import subprocess
+import time
 
 from cc_session_control.actions.session_ops import resume_cmd
 from cc_session_control.data.cleanup import prune_sessions
@@ -13,15 +12,23 @@ from cc_session_control.models import LiveInfo, Session
 
 def _make_session(**overrides):
     defaults = dict(
-        sid="abc123", cwd="/tmp/proj", label="test", mtime=0.0,
-        prompts=0, pid=None, alive=False, current=False,
-        hidden=set(), file="/tmp/abc123.jsonl",
+        sid="abc123",
+        cwd="/tmp/proj",
+        label="test",
+        mtime=0.0,
+        prompts=0,
+        pid=None,
+        alive=False,
+        current=False,
+        hidden=set(),
+        file="/tmp/abc123.jsonl",
     )
     defaults.update(overrides)
     return Session(**defaults)
 
 
 # --- D1: prune_sessions ---
+
 
 def test_prune_sessions_excludes_alive():
     now = time.time()
@@ -74,6 +81,7 @@ def test_prune_sessions_threshold():
 
 # --- D1: resume_cmd ---
 
+
 def test_resume_cmd_dead():
     s = _make_session(sid="sid1", cwd="/tmp/proj", alive=False)
     cmd = resume_cmd(s)
@@ -121,14 +129,21 @@ def test_resume_cmd_quotes_cwd_with_spaces():
 
 # --- D2: terminate_session owns liveness-cache invalidation ---
 
+
 def test_terminate_session_invalidates_cache(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
     calls = {"kill": 0, "invalidate": 0}
     monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
-    monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
+    monkeypatch.setattr(
+        so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1)
+    )
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(so, "invalidate_cache", lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1))
+    monkeypatch.setattr(
+        so,
+        "invalidate_cache",
+        lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1),
+    )
 
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
     assert so.terminate_session(s) is True
@@ -138,10 +153,14 @@ def test_terminate_session_invalidates_cache(monkeypatch):
 
 # --- take_over: the ONE kill primitive (gate → recheck → SIGTERM → settle) ---
 
+
 def test_take_over_refused_without_proc(monkeypatch):
     import cc_session_control.actions.session_ops as so
+
     monkeypatch.setattr(so.proc, "current_determinable", lambda: False)
-    monkeypatch.setattr(so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill")))
+    monkeypatch.setattr(
+        so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill"))
+    )
     assert so.take_over(4242) == "refused"
 
 
@@ -149,17 +168,23 @@ def test_take_over_skips_kill_when_pid_gone_or_recycled(monkeypatch):
     # Kill-time recheck: a pid that died (or was recycled — proc_start mismatch)
     # while the confirm modal sat open must NOT be SIGTERMed.
     import cc_session_control.actions.session_ops as so
+
     monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: False)
-    monkeypatch.setattr(so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill")))
+    monkeypatch.setattr(
+        so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill"))
+    )
     inv = {"n": 0}
-    monkeypatch.setattr(so, "invalidate_cache", lambda: inv.__setitem__("n", inv["n"] + 1))
+    monkeypatch.setattr(
+        so, "invalidate_cache", lambda: inv.__setitem__("n", inv["n"] + 1)
+    )
     assert so.take_over(4242, "12345") == "gone"
     assert inv["n"] == 1
 
 
 def test_take_over_failed_on_signal_error(monkeypatch):
     import cc_session_control.actions.session_ops as so
+
     monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
 
@@ -172,12 +197,21 @@ def test_take_over_failed_on_signal_error(monkeypatch):
 
 def test_take_over_kills_settles_and_invalidates(monkeypatch):
     import cc_session_control.actions.session_ops as so
+
     calls = {"kill": None, "sleep": 0, "invalidate": 0}
     monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
-    monkeypatch.setattr(so.os, "kill", lambda pid, sig: calls.__setitem__("kill", (pid, sig)))
-    monkeypatch.setattr(so.time, "sleep", lambda *_: calls.__setitem__("sleep", calls["sleep"] + 1))
-    monkeypatch.setattr(so, "invalidate_cache", lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1))
+    monkeypatch.setattr(
+        so.os, "kill", lambda pid, sig: calls.__setitem__("kill", (pid, sig))
+    )
+    monkeypatch.setattr(
+        so.time, "sleep", lambda *_: calls.__setitem__("sleep", calls["sleep"] + 1)
+    )
+    monkeypatch.setattr(
+        so,
+        "invalidate_cache",
+        lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1),
+    )
     assert so.take_over(4242, "999") == "killed"
     assert calls["kill"] == (4242, so.signal.SIGTERM)
     assert calls["sleep"] == 1
@@ -186,14 +220,17 @@ def test_take_over_kills_settles_and_invalidates(monkeypatch):
 
 # --- tmux-first dispatch: tmux resume / attach (ADR-0001) ---
 
+
 def test_tmux_foreground_cmd_no_remote_control():
     from cc_session_control.actions.session_ops import tmux_foreground_cmd
+
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
     assert tmux_foreground_cmd(s) == "cd /tmp/proj && claude --resume abcdef0123456789"
 
 
 def test_tmux_foreground_cmd_fork_includes_fork_flag():
     from cc_session_control.actions.session_ops import tmux_foreground_cmd
+
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
     assert tmux_foreground_cmd(s, fork=True) == (
         "cd /tmp/proj && claude --resume abcdef0123456789 --fork-session"
@@ -202,12 +239,16 @@ def test_tmux_foreground_cmd_fork_includes_fork_flag():
 
 def test_tmux_foreground_cmd_quotes_cwd():
     from cc_session_control.actions.session_ops import tmux_foreground_cmd
+
     s = _make_session(sid="sid1", cwd="/tmp/project with space", alive=False)
-    assert tmux_foreground_cmd(s) == "cd '/tmp/project with space' && claude --resume sid1"
+    assert (
+        tmux_foreground_cmd(s) == "cd '/tmp/project with space' && claude --resume sid1"
+    )
 
 
 def test_attach_target_dead_session_is_none():
     from cc_session_control.actions.session_ops import attach_target
+
     # Even a stale tmux_target must not answer for a dead session.
     s = _make_session(sid="sid1", alive=False, pid=None, tmux_target="cc:3")
     assert attach_target(s) is None
@@ -217,8 +258,10 @@ def test_attach_target_reads_snapshot_field():
     # attach_target is a pure read of the snapshot-computed Session.tmux_target
     # (same source as the ⧉ badge) — no per-action tmux re-detection.
     from cc_session_control.actions.session_ops import attach_target
-    hosted = _make_session(sid="sid1", alive=True, current=False, pid=4242,
-                           tmux_target="cc:3")
+
+    hosted = _make_session(
+        sid="sid1", alive=True, current=False, pid=4242, tmux_target="cc:3"
+    )
     bare = _make_session(sid="sid1", alive=True, current=False, pid=4242)
     assert attach_target(hosted) == "cc:3"
     assert attach_target(bare) is None
@@ -226,6 +269,7 @@ def test_attach_target_reads_snapshot_field():
 
 def test_window_containing_matches_ancestor():
     from cc_session_control.data.tmux import window_containing
+
     panes = [("cc:1", 100), ("rc:0", 200)]
     assert window_containing(panes, {4242, 200}) == "rc:0"
     assert window_containing(panes, {4242}) is None
@@ -235,28 +279,39 @@ def test_window_containing_matches_ancestor():
 def test_residency_targets_batch_join(monkeypatch):
     # ONE list-panes call for the whole pid set; per-pid ancestor-chain match.
     from cc_session_control.data import tmux
+
     calls = {"panes": 0}
     panes = [("proj:1", 100), ("other:2", 200)]
-    monkeypatch.setattr(tmux, "_tmux_list_all_panes",
-                        lambda: calls.__setitem__("panes", calls["panes"] + 1) or panes)
+    monkeypatch.setattr(
+        tmux,
+        "_tmux_list_all_panes",
+        lambda: calls.__setitem__("panes", calls["panes"] + 1) or panes,
+    )
     ancestors = {4242: {100, 1}, 4343: {200, 1}, 5555: {999}}
-    monkeypatch.setattr(tmux.proc, "ancestors_of", lambda pid: ancestors.get(pid, set()))
+    monkeypatch.setattr(
+        tmux.proc, "ancestors_of", lambda pid: ancestors.get(pid, set())
+    )
 
     out = tmux.residency_targets([4242, 4343, 5555])
 
     assert out == {4242: "proj:1", 4343: "other:2"}  # 5555: no hit -> absent
-    assert calls["panes"] == 1                        # one tmux subprocess total
+    assert calls["panes"] == 1  # one tmux subprocess total
 
 
 def test_residency_targets_empty_pids_skips_tmux(monkeypatch):
     from cc_session_control.data import tmux
-    monkeypatch.setattr(tmux, "_tmux_list_all_panes",
-                        lambda: (_ for _ in ()).throw(AssertionError("no tmux call")))
+
+    monkeypatch.setattr(
+        tmux,
+        "_tmux_list_all_panes",
+        lambda: (_ for _ in ()).throw(AssertionError("no tmux call")),
+    )
     assert tmux.residency_targets([]) == {}
 
 
 def test_residency_targets_tmux_failure_returns_empty(monkeypatch):
     from cc_session_control.data import tmux
+
     monkeypatch.setattr(tmux, "_tmux_list_all_panes", lambda: [])
     assert tmux.residency_targets([4242]) == {}
 
@@ -265,8 +320,10 @@ def test_find_session_window_first_hit_over_residency(monkeypatch):
     # find_session_window is now the single-target convenience over
     # residency_targets — first hit in pids order, None on no hit.
     from cc_session_control.data import tmux
-    monkeypatch.setattr(tmux, "residency_targets",
-                        lambda pids: {4343: "other:2", 4242: "proj:1"})
+
+    monkeypatch.setattr(
+        tmux, "residency_targets", lambda pids: {4343: "other:2", 4242: "proj:1"}
+    )
     assert tmux.find_session_window([4242, 4343]) == "proj:1"
     monkeypatch.setattr(tmux, "residency_targets", lambda pids: {})
     assert tmux.find_session_window([4242]) is None
@@ -282,10 +339,15 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
     monkeypatch.setattr(so.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(so.proc, "pid_alive", lambda pid, start: True)
     monkeypatch.setattr(
-        so.tmux, "run_in_tmux",
-        lambda session, window, cmd: calls["spawn"].append((session, window, cmd)) or f"{session}:1",
+        so.tmux,
+        "run_in_tmux",
+        lambda session, window, cmd: (
+            calls["spawn"].append((session, window, cmd)) or f"{session}:1"
+        ),
     )
-    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242)
+    s = _make_session(
+        sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242
+    )
     target = so.do_tmux_resume(s)
     assert calls["kill"] == [4242]
     assert target == "proj:1"  # per-project session, exact spawned target
@@ -297,16 +359,24 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
 
 def test_do_tmux_resume_dead_session_no_kill(monkeypatch):
     import cc_session_control.actions.session_ops as so
-    monkeypatch.setattr(so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill")))
-    monkeypatch.setattr(so.tmux, "run_in_tmux", lambda session, window, cmd: f"{session}:0")
+
+    monkeypatch.setattr(
+        so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill"))
+    )
+    monkeypatch.setattr(
+        so.tmux, "run_in_tmux", lambda session, window, cmd: f"{session}:0"
+    )
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
     assert so.do_tmux_resume(s) == "proj:0"
 
 
 def test_do_tmux_resume_refuses_takeover_when_degraded(monkeypatch):
     import cc_session_control.actions.session_ops as so
+
     monkeypatch.setattr(so.proc, "current_determinable", lambda: False)
-    monkeypatch.setattr(so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill")))
+    monkeypatch.setattr(
+        so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill"))
+    )
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
     assert so.do_tmux_resume(s) is None
 
@@ -315,10 +385,15 @@ def test_do_tmux_new_spawns_and_returns_target(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
     spawns = []
-    monkeypatch.setattr(so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill")))
     monkeypatch.setattr(
-        so.tmux, "run_in_tmux",
-        lambda session, window, cmd: spawns.append((session, window, cmd)) or f"{session}:0",
+        so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill"))
+    )
+    monkeypatch.setattr(
+        so.tmux,
+        "run_in_tmux",
+        lambda session, window, cmd: (
+            spawns.append((session, window, cmd)) or f"{session}:0"
+        ),
     )
     target = so.do_tmux_new("/tmp/proj with space")
     assert target == "proj with space:0"
@@ -331,6 +406,7 @@ def test_do_tmux_new_spawns_and_returns_target(monkeypatch):
 
 def test_do_tmux_new_spawn_failure_returns_none(monkeypatch):
     import cc_session_control.actions.session_ops as so
+
     monkeypatch.setattr(so.tmux, "run_in_tmux", lambda *a: None)
     assert so.do_tmux_new("/tmp/proj") is None
 
@@ -341,15 +417,24 @@ def test_do_tmux_resume_fork_spawns_fork_window_no_kill(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
     calls = {"kill": 0, "tmux": None}
-    monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
+    monkeypatch.setattr(
+        so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1)
+    )
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
     monkeypatch.setattr(so, "invalidate_cache", lambda: None)
-    monkeypatch.setattr(so.tmux, "run_in_tmux",
-                        lambda session, window, cmd: calls.__setitem__("tmux", (session, window, cmd)) or f"{session}:2")
+    monkeypatch.setattr(
+        so.tmux,
+        "run_in_tmux",
+        lambda session, window, cmd: (
+            calls.__setitem__("tmux", (session, window, cmd)) or f"{session}:2"
+        ),
+    )
 
-    s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242)
+    s = _make_session(
+        sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242
+    )
     assert so.do_tmux_resume(s, fork=True) == "proj:2"
-    assert calls["kill"] == 0             # fork leaves the original running
+    assert calls["kill"] == 0  # fork leaves the original running
     session, window, cmd = calls["tmux"]
     assert session == "proj"
     assert window == "abcdef01-fork"
@@ -364,9 +449,15 @@ def test_do_resume_refuses_kill_without_proc(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
     calls = {"kill": 0, "exec": 0, "chdir": 0}
-    monkeypatch.setattr(so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1))
-    monkeypatch.setattr(so.os, "execvp", lambda *_: calls.__setitem__("exec", calls["exec"] + 1))
-    monkeypatch.setattr(so.os, "chdir", lambda *_: calls.__setitem__("chdir", calls["chdir"] + 1))
+    monkeypatch.setattr(
+        so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1)
+    )
+    monkeypatch.setattr(
+        so.os, "execvp", lambda *_: calls.__setitem__("exec", calls["exec"] + 1)
+    )
+    monkeypatch.setattr(
+        so.os, "chdir", lambda *_: calls.__setitem__("chdir", calls["chdir"] + 1)
+    )
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
     monkeypatch.setattr(so.proc, "has_proc", lambda: False)
 
@@ -424,6 +515,7 @@ def test_run_in_tmux_returns_printed_target(monkeypatch):
 
 def test_session_name_for_sanitizes_tmux_separators():
     from cc_session_control.data.tmux import session_name_for
+
     assert session_name_for("/tmp/myproj") == "myproj"
     assert session_name_for("/tmp/myproj/") == "myproj"
     assert session_name_for("/tmp/my.proj") == "my-proj"
@@ -443,14 +535,16 @@ def test_list_windows_meta_parses_and_prefers_declared_path(monkeypatch):
         "bogus-line\n"
     )
     monkeypatch.setattr(
-        tmux, "_tmux_run", lambda args: SimpleNamespace(returncode=0, stdout=out),
+        tmux,
+        "_tmux_run",
+        lambda args: SimpleNamespace(returncode=0, stdout=out),
     )
 
     wins = tmux.list_windows_meta("rc")
     assert wins[0] == tmux.TmuxWindow("@1", "foo", False, 111, "/declared")
     assert wins[1] == tmux.TmuxWindow("@2", "bar", True, 222, "/fallback")
     assert wins[2].pid is None and wins[2].path == ""
-    assert len(wins) == 3                 # malformed line skipped
+    assert len(wins) == 3  # malformed line skipped
 
 
 def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
@@ -459,9 +553,13 @@ def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
     proj = tmp_path / "project with space"
     proj.mkdir()
     claude_json = tmp_path / ".claude.json"
-    claude_json.write_text(json.dumps({
-        "projects": {str(proj): {"hasTrustDialogAccepted": True}},
-    }))
+    claude_json.write_text(
+        json.dumps(
+            {
+                "projects": {str(proj): {"hasTrustDialogAccepted": True}},
+            }
+        )
+    )
     calls = {}
     opts = {}
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
@@ -494,13 +592,18 @@ def test_start_one_refuses_running_window(tmp_path, monkeypatch):
     proj = tmp_path / "proj"
     proj.mkdir()
     claude_json = tmp_path / ".claude.json"
-    claude_json.write_text(json.dumps({
-        "projects": {str(proj): {"hasTrustDialogAccepted": True}},
-    }))
+    claude_json.write_text(
+        json.dumps(
+            {
+                "projects": {str(proj): {"hasTrustDialogAccepted": True}},
+            }
+        )
+    )
     calls = {"kill": 0, "new": 0}
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
     monkeypatch.setattr(
-        rc, "_tmux_windows",
+        rc,
+        "_tmux_windows",
         lambda: [tmux.TmuxWindow("@1", "proj", False, 1, str(proj))],
     )
     monkeypatch.setattr(
@@ -524,13 +627,18 @@ def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
     proj = tmp_path / "proj"
     proj.mkdir()
     claude_json = tmp_path / ".claude.json"
-    claude_json.write_text(json.dumps({
-        "projects": {str(proj): {"hasTrustDialogAccepted": True}},
-    }))
+    claude_json.write_text(
+        json.dumps(
+            {
+                "projects": {str(proj): {"hasTrustDialogAccepted": True}},
+            }
+        )
+    )
     calls = {"kill": 0, "cmd": None}
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
     monkeypatch.setattr(
-        rc, "_tmux_windows",
+        rc,
+        "_tmux_windows",
         lambda: [tmux.TmuxWindow("@1", "proj", True, 1, str(proj))],
     )
     monkeypatch.setattr(
@@ -553,6 +661,7 @@ def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
 
 # --- D4: _parse_transcript ---
 
+
 def _write_jsonl(tmp_path, sid, lines):
     # Compact separators so the '"type":"user"' substring pre-check in
     # _parse_transcript matches, mirroring Claude's actual transcript format.
@@ -564,11 +673,15 @@ def _write_jsonl(tmp_path, sid, lines):
 
 
 def test_parse_transcript_basic_fields(tmp_path):
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"cwd": "/tmp/proj"},
-        {"type": "user", "message": {"content": "hello world"}},
-        {"type": "user", "message": {"content": "second prompt"}},
-    ])
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"type": "user", "message": {"content": "hello world"}},
+            {"type": "user", "message": {"content": "second prompt"}},
+        ],
+    )
     s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s is not None
     assert s.sid == "sid1"
@@ -581,57 +694,84 @@ def test_parse_transcript_basic_fields(tmp_path):
 
 
 def test_parse_transcript_none_when_no_cwd(tmp_path):
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"type": "user", "message": {"content": "hello"}},
-    ])
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"type": "user", "message": {"content": "hello"}},
+        ],
+    )
     assert _parse_transcript(path, idx={}, cur=set(), job_shorts=set()) is None
 
 
 def test_parse_transcript_label_priority_aititle(tmp_path):
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"cwd": "/tmp/proj"},
-        {"aiTitle": "The Title"},
-        {"lastPrompt": "the last prompt"},
-        {"type": "user", "message": {"content": "first prompt"}},
-    ])
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"aiTitle": "The Title"},
+            {"lastPrompt": "the last prompt"},
+            {"type": "user", "message": {"content": "first prompt"}},
+        ],
+    )
     s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s.label == "The Title"
 
 
 def test_parse_transcript_label_priority_first_prompt(tmp_path):
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"cwd": "/tmp/proj"},
-        {"lastPrompt": "the last prompt"},
-        {"type": "user", "message": {"content": "first real prompt"}},
-    ])
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"lastPrompt": "the last prompt"},
+            {"type": "user", "message": {"content": "first real prompt"}},
+        ],
+    )
     s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s.label == "first real prompt"
 
 
 def test_parse_transcript_label_priority_last_prompt(tmp_path):
     # No aiTitle, and the only user prompt is noise -> falls back to lastPrompt.
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"cwd": "/tmp/proj"},
-        {"lastPrompt": "the last prompt"},
-        {"type": "user", "message": {"content": "<system-reminder>noise</system-reminder>"}},
-    ])
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"lastPrompt": "the last prompt"},
+            {
+                "type": "user",
+                "message": {"content": "<system-reminder>noise</system-reminder>"},
+            },
+        ],
+    )
     s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s.label == "the last prompt"
 
 
 def test_parse_transcript_label_untitled(tmp_path):
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"cwd": "/tmp/proj"},
-    ])
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+        ],
+    )
     s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s.label == "(untitled)"
 
 
 def test_parse_transcript_alive_and_current(tmp_path):
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"cwd": "/tmp/proj"},
-        {"type": "user", "message": {"content": "hi"}},
-    ])
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"type": "user", "message": {"content": "hi"}},
+        ],
+    )
     idx = {"sid1": LiveInfo(sid="sid1", pid=4242, alive=True)}
     s = _parse_transcript(path, idx=idx, cur={4242}, job_shorts=set())
     assert s.pid == 4242
@@ -644,25 +784,29 @@ def test_parse_transcript_current_via_older_alive_pid(tmp_path):
     # the NEWEST (710575) is chosen for display, but csctl was launched by the
     # OLDER one (700772). `current` must still be True so the session stays
     # protected — the old `pid in cur` check (pid==710575) would miss it.
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"cwd": "/tmp/proj"},
-        {"type": "user", "message": {"content": "hi"}},
-    ])
-    idx = {
-        "sid1": LiveInfo(
-            sid="sid1", pid=710575, pids=[700772, 710575], alive=True
-        )
-    }
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"type": "user", "message": {"content": "hi"}},
+        ],
+    )
+    idx = {"sid1": LiveInfo(sid="sid1", pid=710575, pids=[700772, 710575], alive=True)}
     s = _parse_transcript(path, idx=idx, cur={700772}, job_shorts=set())
-    assert s.pid == 710575          # newest chosen for display
-    assert s.current is True        # older ancestor pid still protects it
+    assert s.pid == 710575  # newest chosen for display
+    assert s.current is True  # older ancestor pid still protects it
 
 
 def test_parse_transcript_rc_exposed_requires_proc_alive(tmp_path):
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"cwd": "/tmp/proj"},
-        {"type": "user", "message": {"content": "hi"}},
-    ])
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"type": "user", "message": {"content": "hi"}},
+        ],
+    )
     idx = {
         "sid1": LiveInfo(
             sid="sid1",
@@ -679,10 +823,14 @@ def test_parse_transcript_rc_exposed_requires_proc_alive(tmp_path):
 
 
 def test_parse_transcript_sets_rc_exposed_when_proc_alive(tmp_path):
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"cwd": "/tmp/proj"},
-        {"type": "user", "message": {"content": "hi"}},
-    ])
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"type": "user", "message": {"content": "hi"}},
+        ],
+    )
     idx = {
         "sid1": LiveInfo(
             sid="sid1",
@@ -698,10 +846,14 @@ def test_parse_transcript_sets_rc_exposed_when_proc_alive(tmp_path):
 
 
 def test_parse_transcript_hidden_tags(tmp_path):
-    path = _write_jsonl(tmp_path, "sid1", [
-        {"cwd": "/tmp/proj", "kind": "sdk-ts"},
-        {"note": "bridge-session"},
-        {"type": "user", "message": {"content": "hi"}},
-    ])
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj", "kind": "sdk-ts"},
+            {"note": "bridge-session"},
+            {"type": "user", "message": {"content": "hi"}},
+        ],
+    )
     s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
     assert s.hidden == {"sdk", "bridge"}

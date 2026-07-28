@@ -7,8 +7,7 @@ import shutil
 import time
 
 from cc_session_control.config import cfg
-from cc_session_control.data import cleanup
-from cc_session_control.data import cleanup_liveness
+from cc_session_control.data import cleanup, cleanup_liveness
 from cc_session_control.data.removal import RemovalStatus, remove_path
 from cc_session_control.models import Session, SessionProc
 
@@ -46,7 +45,8 @@ def test_remove_directory_symlink_does_not_follow_target(tmp_path):
 
 
 def test_remove_path_reports_missing_when_it_disappears_during_delete(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     target = tmp_path / "racing.txt"
     target.write_text("data")
@@ -115,7 +115,8 @@ def test_duplicate_execution_target_is_removed_once_then_missing(tmp_path, monke
 
 
 def test_build_plan_keeps_partial_results_and_reports_source_issue(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     monkeypatch.setattr(cfg, "cleanup_age_days", 14)
@@ -228,13 +229,9 @@ def test_remove_session_rechecks_liveness_before_deleting(tmp_path, monkeypatch)
     monkeypatch.setattr(
         cleanup.liveness,
         "live_session_procs",
-        lambda max_age=5.0: [
-            SessionProc(pid=88, sid="sid-live", proc_alive=True)
-        ],
+        lambda max_age=5.0: [SessionProc(pid=88, sid="sid-live", proc_alive=True)],
     )
-    monkeypatch.setattr(
-        cleanup.liveness, "alive_map", lambda max_age=5.0: {}
-    )
+    monkeypatch.setattr(cleanup.liveness, "alive_map", lambda max_age=5.0: {})
 
     result = cleanup.remove_session(target)
 
@@ -244,7 +241,8 @@ def test_remove_session_rechecks_liveness_before_deleting(tmp_path, monkeypatch)
 
 
 def test_execution_rejects_target_outside_preview_directory(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     monkeypatch.setattr(cfg, "cleanup_age_days", 14)
@@ -263,7 +261,8 @@ def test_execution_rejects_target_outside_preview_directory(
 
 
 def test_session_execution_refuses_visible_liveness_io_failure(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     transcript = tmp_path / "sid.jsonl"
     transcript.write_text("{}")
@@ -294,7 +293,8 @@ def test_session_execution_refuses_visible_liveness_io_failure(
 
 
 def test_session_execution_does_not_swallow_liveness_programming_error(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     target = Session(
         sid="sid",

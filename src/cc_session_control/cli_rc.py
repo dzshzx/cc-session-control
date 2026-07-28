@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from argparse import Namespace
 import os
 import sys
+from argparse import Namespace
 from typing import TextIO
 
 from .cli_streams import run_with_streams
@@ -44,14 +44,9 @@ def _run_rc(args: Namespace) -> int:
                 "stopped": "[stopped]",
             }.get(project.status, project.status)
             auto = "auto" if project.auto_start else "    "
-            missing = (
-                ""
-                if project.dir_exists
-                else "  (directory missing)"
-            )
+            missing = "" if project.dir_exists else "  (directory missing)"
             print(
-                f"  {icon} {auto}  {project.name}  "
-                f"{project.directory}{missing}",
+                f"  {icon} {auto}  {project.name}  {project.directory}{missing}",
             )
         return 0 if scan_result.settings.available else 1
 
@@ -86,23 +81,23 @@ def _run_rc(args: Namespace) -> int:
             )
             return 1
         print(f"Added to list: {path}")
-        result = rc.start_one_result(path)
-        if result.state is rc.StartState.STARTED:
+        start_result = rc.start_one_result(path)
+        if start_result.state is rc.StartState.STARTED:
             print(f"Started RC server for {path}")
             return 0
-        if result.state is rc.StartState.TRUST_UNAVAILABLE:
+        if start_result.state is rc.StartState.TRUST_UNAVAILABLE:
             print(
                 "Project settings became unavailable — refusing to start",
                 file=sys.stderr,
             )
-        elif result.state is rc.StartState.UNTRUSTED:
+        elif start_result.state is rc.StartState.UNTRUSTED:
             print(
                 "Project is no longer trusted — refusing to start",
                 file=sys.stderr,
             )
         else:
             print(
-                f"RC server was not started: {result.state.value}",
+                f"RC server was not started: {start_result.state.value}",
                 file=sys.stderr,
             )
         return 1
@@ -110,14 +105,14 @@ def _run_rc(args: Namespace) -> int:
     if sub == "rm":
         path = os.path.abspath(args.project)
         try:
-            result = rc.remove_one_result(path)
+            remove_result = rc.remove_one_result(path)
         except (OSError, UnicodeError) as exc:
             print(f"Failed to remove {path}: {exc}", file=sys.stderr)
             return 1
-        if result.stop.state is rc.StopState.TMUX_FAILED:
+        if remove_result.stop.state is rc.StopState.TMUX_FAILED:
             prefix = (
                 "Removed from the enabled list, but "
-                if result.list_removed
+                if remove_result.list_removed
                 else ""
             )
             print(
@@ -125,10 +120,10 @@ def _run_rc(args: Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        if result.stop.state is rc.StopState.STOPPED:
+        if remove_result.stop.state is rc.StopState.STOPPED:
             print(f"Removed and stopped: {path}")
             return 0
-        if result.list_removed:
+        if remove_result.list_removed:
             print(f"Removed from the enabled list (not running): {path}")
             return 0
         print(f"Not enabled or running: {path}", file=sys.stderr)
@@ -143,27 +138,31 @@ def _run_rc(args: Namespace) -> int:
         if not enabled:
             print("List is empty")
             return 0
-        result = rc.start_many_result(enabled)
-        print(f"Started {result.started} project(s)")
-        if result.unavailable:
+        batch_result = rc.start_many_result(enabled)
+        print(f"Started {batch_result.started} project(s)")
+        if batch_result.unavailable:
             print(
                 "Project settings unavailable; refused "
-                f"{result.unavailable} project(s)",
+                f"{batch_result.unavailable} project(s)",
                 file=sys.stderr,
             )
-        if result.untrusted:
+        if batch_result.untrusted:
             print(
-                f"Not trusted; refused {result.untrusted} project(s)",
+                f"Not trusted; refused {batch_result.untrusted} project(s)",
                 file=sys.stderr,
             )
-        if result.failed:
+        if batch_result.failed:
             print(
-                f"Failed to start {result.failed} project(s)",
+                f"Failed to start {batch_result.failed} project(s)",
                 file=sys.stderr,
             )
-        return int(bool(
-            result.unavailable or result.untrusted or result.failed
-        ))
+        return int(
+            bool(
+                batch_result.unavailable
+                or batch_result.untrusted
+                or batch_result.failed
+            )
+        )
 
     if sub == "stop":
         if args.target == "all":
@@ -177,16 +176,15 @@ def _run_rc(args: Namespace) -> int:
             )
             return 1
         path = os.path.abspath(args.target)
-        result = rc.stop_one_result(path)
-        if result.state is rc.StopState.STOPPED:
+        stop_result = rc.stop_one_result(path)
+        if stop_result.state is rc.StopState.STOPPED:
             print(f"Stopped {path}")
             return 0
-        if result.state is rc.StopState.NOT_RUNNING:
+        if stop_result.state is rc.StopState.NOT_RUNNING:
             print(f"Not running: {path}", file=sys.stderr)
             return 1
         print(
-            f"Failed to stop {path} "
-            "(tmux unavailable or returned nonzero)",
+            f"Failed to stop {path} (tmux unavailable or returned nonzero)",
             file=sys.stderr,
         )
         return 1

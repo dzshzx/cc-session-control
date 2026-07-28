@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence, Set as AbstractSet
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 
 from ..models import AgentJob, SessionProc
 from . import liveness, proc, registry
@@ -22,12 +23,13 @@ def fill_liveness_inputs(
     AbstractSet[int],
 ]:
     """Fill omitted inputs, bypassing caches for confirmed execution."""
-    if (
-        session_procs is None
-        or agent_jobs is None
-        or agents_map is None
-        or cur is None
-    ):
+    if session_procs is None or agent_jobs is None or agents_map is None or cur is None:
+        defaults: tuple[
+            Sequence[SessionProc],
+            Sequence[AgentJob],
+            Mapping[str, int | None],
+            AbstractSet[int],
+        ]
         if fresh:
             defaults = fresh_liveness_inputs()
         else:
@@ -51,9 +53,7 @@ def fresh_liveness_inputs() -> tuple[
 ]:
     """Read every cleanup protection source with its cache disabled."""
     session_procs = liveness.live_session_procs(max_age=0.0)
-    jobs = liveness.enrich_jobs(
-        registry.read_agent_jobs(max_age=0.0), session_procs
-    )
+    jobs = liveness.enrich_jobs(registry.read_agent_jobs(max_age=0.0), session_procs)
     return (
         session_procs,
         jobs,
@@ -62,9 +62,7 @@ def fresh_liveness_inputs() -> tuple[
     )
 
 
-def fresh_session_guards() -> tuple[
-    list[SessionProc], dict[str, int | None], set[int]
-]:
+def fresh_session_guards() -> tuple[list[SessionProc], dict[str, int | None], set[int]]:
     """Read only the protection sources needed for session deletion."""
     return (
         liveness.live_session_procs(max_age=0.0),

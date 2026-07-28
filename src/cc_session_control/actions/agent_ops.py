@@ -33,9 +33,8 @@ from . import session_ops
 
 # --- host-pid join (shared by stop_job, remove_job, and the view) -------------
 
-def job_host(
-    job: AgentJob, *, max_age: float = 5.0
-) -> tuple[int | None, bool]:
+
+def job_host(job: AgentJob, *, max_age: float = 5.0) -> tuple[int | None, bool]:
     """Resolve a background job's host pid + liveness — `(pid, alive)`.
 
     `state.json` has no pid, so the worker's pid is JOINed from
@@ -108,6 +107,7 @@ def respawn(job: AgentJob) -> str:
 
 # --- remove (settled agents only) ---------------------------------------------
 
+
 def remove_job(job: AgentJob) -> CleanupExecution:
     """Remove a SETTLED background agent: `jobs/<short>/` + its sid artifacts.
 
@@ -131,6 +131,7 @@ def remove_job(job: AgentJob) -> CleanupExecution:
 
 # --- watch (read-only) --------------------------------------------------------
 
+
 def watch(job: AgentJob) -> str | None:
     """Path to the job's read-only `jobs/<short>/timeline.jsonl`, or None.
 
@@ -142,6 +143,7 @@ def watch(job: AgentJob) -> str | None:
 
 
 # --- resume takeover (reuses the existing foreground resume path) -------------
+
 
 def resume_takeover(job: AgentJob) -> Session:
     """Adapt a background job into a `Session` for the EXISTING resume path.
@@ -191,6 +193,7 @@ def _host_start(pid: int | None) -> str:
 
 
 # --- stop (live workers only) -------------------------------------------------
+
 
 def stop_job(job: AgentJob) -> bool:
     """Stop a LIVE background worker via its joined host pid. True iff signalled.

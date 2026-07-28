@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import multiprocessing
-import os
 from collections.abc import Callable
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event
@@ -138,9 +137,7 @@ def test_migration_is_once_and_preserves_comments_and_blank_lines(
     assert store.list() == [str(legacy_root / "old-name"), "/absolute"]
     migrated = path.read_bytes()
     inode = path.stat().st_ino
-    assert migrated == (
-        f"# keep\n\n{legacy_root / 'old-name'}\n/absolute\n".encode()
-    )
+    assert migrated == (f"# keep\n\n{legacy_root / 'old-name'}\n/absolute\n".encode())
 
     assert store.list() == [str(legacy_root / "old-name"), "/absolute"]
     assert path.stat().st_ino == inode
@@ -212,7 +209,8 @@ def _assert_failed_update_preserves_original(
 
 
 def test_lock_failure_does_not_fall_back_to_unlocked_write(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import cc_session_control.data.rc_enabled as enabled_module
 
@@ -230,7 +228,8 @@ def test_lock_failure_does_not_fall_back_to_unlocked_write(
 
 
 def test_read_failure_preserves_original(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "rc-enabled"
     path.write_bytes(b"# original\n")
@@ -253,7 +252,8 @@ def test_read_failure_preserves_original(
 
 
 def test_temp_write_failure_preserves_original(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import cc_session_control.data.rc_enabled as enabled_module
 

@@ -24,6 +24,7 @@ from ..models import (
     RCProject,
     RCServer,
     Session,
+    Status,
     TrustDecision,
     effective_trust_decision,
     split_env_id,
@@ -127,10 +128,7 @@ def _legacy_workspace_root() -> str:
     if os.path.isdir(default):
         return default
     try:
-        dirs = [
-            key for key in _load_projects()
-            if isinstance(key, str) and "/" in key
-        ]
+        dirs = [key for key in _load_projects() if isinstance(key, str) and "/" in key]
         if dirs:
             common = os.path.commonpath(dirs)
             if os.path.isdir(common) and common != os.path.expanduser("~"):
@@ -148,6 +146,7 @@ def _migrate_lines(lines: list[str]) -> tuple[list[str], bool]:
 
 def _enabled_store() -> EnabledListStore:
     return EnabledListStore(cfg.rc_list, _legacy_workspace_root)
+
 
 def list_enabled() -> list[str]:
     return _enabled_store().list()
@@ -188,8 +187,10 @@ def _read_projects() -> ProjectSettingsResult:
 def _trusted_in(projects: dict) -> set[str]:
     """Effectively-trusted absolute-path keys of a claude.json projects map."""
     return {
-        key for key in projects
-        if isinstance(key, str) and key.startswith("/")
+        key
+        for key in projects
+        if isinstance(key, str)
+        and key.startswith("/")
         and effective_trust_decision(key, projects) is TrustDecision.TRUSTED
     }
 
@@ -305,9 +306,7 @@ def scan_result() -> RCScanResult:
     projects_map = settings.projects
     trusted = _trusted_in(projects_map)
     enabled = set(list_enabled())
-    by_path = {
-        os.path.normpath(w.path): w for w in _tmux_windows() if w.path
-    }
+    by_path = {os.path.normpath(w.path): w for w in _tmux_windows() if w.path}
 
     result: list[RCProject] = []
     for path in sorted(trusted | enabled):
@@ -327,25 +326,29 @@ def scan_result() -> RCScanResult:
             # (autostart list, existing rc window) stay listed.
             continue
         if win is not None:
-            status = "dead" if win.dead else "running"
+            status: Status = "dead" if win.dead else "running"
         else:
             status = "stopped"
         entry = projects_map.get(path)
         spawn = entry.get("remoteControlSpawnMode") if isinstance(entry, dict) else None
         decision = effective_trust_decision(
-            path, projects_map if settings.available else None,
+            path,
+            projects_map if settings.available else None,
         )
-        result.append(RCProject(
-            name=_basename(path), directory=path,
-            trusted=decision is TrustDecision.TRUSTED,
-            in_list=path in enabled,
-            status=status,
-            auto_start=path in enabled,
-            rc_at_startup=_read_rc_at_startup(path),
-            spawn_mode=str(spawn) if spawn else None,
-            dir_exists=dir_exists,
-            trust_decision=decision,
-        ))
+        result.append(
+            RCProject(
+                name=_basename(path),
+                directory=path,
+                trusted=decision is TrustDecision.TRUSTED,
+                in_list=path in enabled,
+                status=status,
+                auto_start=path in enabled,
+                rc_at_startup=_read_rc_at_startup(path),
+                spawn_mode=str(spawn) if spawn else None,
+                dir_exists=dir_exists,
+                trust_decision=decision,
+            )
+        )
     return RCScanResult(result, settings)
 
 
@@ -376,8 +379,7 @@ def order_by_activity(
             latest[key] = s.mtime
     return sorted(
         projects,
-        key=lambda p: (-latest.get(os.path.normpath(p.directory), 0.0),
-                       p.directory),
+        key=lambda p: (-latest.get(os.path.normpath(p.directory), 0.0), p.directory),
     )
 
 
@@ -421,30 +423,38 @@ def scan_servers(
     # Managed windows first — tmux is the authority for "managed". Addressed
     # by the server-unique window id, never by the (collision-prone) name.
     for w in windows:
-        status = "dead" if w.dead else "running"
+        status: Status = "dead" if w.dead else "running"
         found = by_pid.get(w.pid) if w.pid else None
         env_id = captured_env_ids.get(w.wid, "")
         if env_id:
             prefix, key = split_env_id(env_id)
             if prefix and key:
                 env_records.append(EnvRecord(prefix=prefix, key=key, bound_sid=None))
-        servers.append(RCServer(
-            name=found.name if found else w.name,
-            cwd=found.cwd if found else w.path,
-            managed=True,
-            pid=w.pid or None,
-            env_id=env_id or None,
-            status=status,
-        ))
+        servers.append(
+            RCServer(
+                name=found.name if found else w.name,
+                cwd=found.cwd if found else w.path,
+                managed=True,
+                pid=w.pid or None,
+                env_id=env_id or None,
+                status=status,
+            )
+        )
 
     # External — discovered procs not owned by any managed pane.
     for p in discovered:
         if p.pid in managed_pid_set:
             continue
-        servers.append(RCServer(
-            name=p.name, cwd=p.cwd, managed=False,
-            pid=p.pid or None, env_id=None, status="running",
-        ))
+        servers.append(
+            RCServer(
+                name=p.name,
+                cwd=p.cwd,
+                managed=False,
+                pid=p.pid or None,
+                env_id=None,
+                status="running",
+            )
+        )
 
     if env_records:
         environments.upsert(env_records)

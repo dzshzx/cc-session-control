@@ -20,7 +20,7 @@ from ..actions.session_ops import ResumeIntent
 from ..data import proc
 from ..models import AgentJob
 from ._base import ListTabView
-from ._colspec import header_columns, row_columns
+from ._colspec import ColSpec, header_columns, row_columns
 from ._confirm import DEGRADED as _DEGRADED
 from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # One spec drives header + rows (_colspec.py). The 状态 text column already
 # carries the state in words, so the mark column only needs the ●/○ shape —
 # state never rides on color alone here either.
-_AGENT_COLS = [
+_AGENT_COLS: list[ColSpec] = [
     (2, "left", ""),
     (("weight", 2), "left", "名称"),
     (8, "left", "状态"),
@@ -51,16 +51,23 @@ class AgentRow(urwid.WidgetWrap):
         self.job = job
         mark = "●" if job.host_alive else "○"
         cwd = job.cwd.rstrip("/").rsplit("/", 1)[-1] if job.cwd else ""
-        cols = row_columns(_AGENT_COLS, [
-            mark,
-            job.name or job.short,
-            job.state or "-",
-            job.tempo or "-",
-            cwd,
-            job.env_suffix or "-",
-        ])
+        cols = row_columns(
+            _AGENT_COLS,
+            [
+                mark,
+                job.name or job.short,
+                job.state or "-",
+                job.tempo or "-",
+                cwd,
+                job.env_suffix or "-",
+            ],
+        )
         attr = "alive" if job.host_alive else "dead"
-        mapped = urwid.AttrMap(cols, attr, focus_map={"alive": "selected", "dead": "selected", None: "selected"})
+        mapped = urwid.AttrMap(
+            cols,
+            attr,
+            focus_map={"alive": "selected", "dead": "selected", None: "selected"},
+        )
         super().__init__(mapped)
 
     def selectable(self) -> bool:
@@ -77,32 +84,62 @@ class AgentsView(ListTabView):
     # help, and dispatch are generated from this table. `r 刷新` stays in the
     # App-level FOOTER_PREFIX, so its entry is hint-less.
     KEY_TABLE = (
-        Key(("enter",), "Enter 接回", "_takeover",
-            section="后台 agent 生命周期:", help_lines=(
+        Key(
+            ("enter",),
+            "Enter 接回",
+            "_takeover",
+            section="后台 agent 生命周期:",
+            help_lines=(
                 "  Enter   tmux 接回（恢复进 tmux 窗口并接入前台，断线不死；",
                 "          已驻留 tmux 的 agent 就地进入；接运行中的会先确认接管）",
-            )),
-        Key(("t",), "t 终端接回", "_terminal",
-            section="后台 agent 生命周期:", help_lines=(
+            ),
+        ),
+        Key(
+            ("t",),
+            "t 终端接回",
+            "_terminal",
+            section="后台 agent 生命周期:",
+            help_lines=(
                 "  t       终端接回（在当前终端恢复，随终端关闭而结束——兜底；",
                 "          接运行中的会先确认接管）",
-            )),
-        Key(("s",), "s 停止", "_stop", section="后台 agent 生命周期:", help_lines=(
-            "  s       停止（仅运行中，需确认）",
-        )),
-        Key(("d",), "d 删除", "_remove", section="后台 agent 生命周期:", help_lines=(
-            "  d       删除（仅已结束）",
-        )),
-        Key(("w",), "w 查看", "_watch", section="后台 agent 生命周期:", help_lines=(
-            "  w       查看 timeline（只读）",
-        )),
-        Key(("R",), "R 重启", "_key_respawn", section="后台 agent 生命周期:", help_lines=(
-            "  R       重启（respawn）",
-        )),
-        Key(("r",), None, "_key_refresh", needs_selection=False,
-            section="后台 agent 生命周期:", help_lines=(
-                "  r       刷新",
-            )),
+            ),
+        ),
+        Key(
+            ("s",),
+            "s 停止",
+            "_stop",
+            section="后台 agent 生命周期:",
+            help_lines=("  s       停止（仅运行中，需确认）",),
+        ),
+        Key(
+            ("d",),
+            "d 删除",
+            "_remove",
+            section="后台 agent 生命周期:",
+            help_lines=("  d       删除（仅已结束）",),
+        ),
+        Key(
+            ("w",),
+            "w 查看",
+            "_watch",
+            section="后台 agent 生命周期:",
+            help_lines=("  w       查看 timeline（只读）",),
+        ),
+        Key(
+            ("R",),
+            "R 重启",
+            "_key_respawn",
+            section="后台 agent 生命周期:",
+            help_lines=("  R       重启（respawn）",),
+        ),
+        Key(
+            ("r",),
+            None,
+            "_key_refresh",
+            needs_selection=False,
+            section="后台 agent 生命周期:",
+            help_lines=("  r       刷新",),
+        ),
         Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
     )
 
@@ -186,7 +223,10 @@ class AgentsView(ListTabView):
         # B1: takeover of a RUNNING worker kills its host pid (should_kill) — same
         # as Sessions Enter-live. A dead worker resumes directly, unconfirmed.
         confirm_tmux_takeover(
-            self.app, s, "接回后台 agent", name=job.name or job.short,
+            self.app,
+            s,
+            "接回后台 agent",
+            name=job.name or job.short,
         )
 
     def _terminal(self, job: AgentJob) -> None:
@@ -196,7 +236,9 @@ class AgentsView(ListTabView):
             self.app.notify("不能接回当前会话")
             return
         confirm_takeover(
-            self.app, s, "终端接回后台 agent",
+            self.app,
+            s,
+            "终端接回后台 agent",
             lambda: self.app.exit_with(ResumeIntent(s)),
             name=job.name or job.short,
         )
@@ -210,7 +252,7 @@ class AgentsView(ListTabView):
         try:
             with open(path, errors="ignore") as fh:
                 lines = fh.read().splitlines()[-200:]
-        except Exception:
+        except OSError:
             self.app.notify("读取 timeline 失败")
             return
         rows = [TextRow(line) for line in lines] or [TextRow("(空)")]
@@ -233,8 +275,11 @@ class AgentsView(ListTabView):
 
     def _stop(self, job: AgentJob) -> None:
         confirm_stop(
-            self.app, "后台 agent", job.name or job.short,
-            lambda: self._do_stop(job), alive=job.host_alive,
+            self.app,
+            "后台 agent",
+            job.name or job.short,
+            lambda: self._do_stop(job),
+            alive=job.host_alive,
         )
 
     def _do_stop(self, job: AgentJob) -> None:

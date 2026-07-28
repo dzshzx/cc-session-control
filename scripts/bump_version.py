@@ -19,7 +19,12 @@ import argparse
 import re
 from pathlib import Path
 
-INIT = Path(__file__).resolve().parent.parent / "src" / "cc_session_control" / "__init__.py"
+INIT = (
+    Path(__file__).resolve().parent.parent
+    / "src"
+    / "cc_session_control"
+    / "__init__.py"
+)
 _PATTERN = re.compile(r"""^__version__\s*=\s*["']([^"']+)["']""", re.MULTILINE)
 
 
@@ -43,14 +48,24 @@ def bump(version: str, part: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("part", nargs="?", choices=["major", "minor", "patch"],
-                        help="which component to increment")
-    parser.add_argument("--set", dest="explicit", metavar="X.Y.Z",
-                        help="set an explicit version instead of bumping")
-    parser.add_argument("--show", action="store_true",
-                        help="print the current version and exit")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "part",
+        nargs="?",
+        choices=["major", "minor", "patch"],
+        help="which component to increment",
+    )
+    parser.add_argument(
+        "--set",
+        dest="explicit",
+        metavar="X.Y.Z",
+        help="set an explicit version instead of bumping",
+    )
+    parser.add_argument(
+        "--show", action="store_true", help="print the current version and exit"
+    )
     args = parser.parse_args(argv)
 
     text = INIT.read_text(encoding="utf-8")
@@ -67,7 +82,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         parser.error("specify a part (major/minor/patch) or --set X.Y.Z")
 
-    INIT.write_text(_PATTERN.sub(f'__version__ = "{new}"', text, count=1), encoding="utf-8")
+    INIT.write_text(
+        _PATTERN.sub(f'__version__ = "{new}"', text, count=1), encoding="utf-8"
+    )
     print(f"{current} -> {new}")
     print(f"next: git commit -am 'chore: bump version to {new}' && git tag v{new}")
     return 0

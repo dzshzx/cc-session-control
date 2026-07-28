@@ -62,14 +62,18 @@ def test_requests_snapshot_mutable_models() -> None:
 def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
     request = tui_actions.SessionRequest.from_session(_session())
     monkeypatch.setattr(
-        tui_actions.session_ops, "take_over", lambda *_: "refused",
+        tui_actions.session_ops,
+        "take_over",
+        lambda *_: "refused",
     )
     refused = tui_actions.stop_session(request)
     assert refused.status is ActionStatus.REFUSED
     assert "liveness 降级" in refused.message
 
     monkeypatch.setattr(
-        tui_actions.session_ops, "take_over", lambda *_: "failed",
+        tui_actions.session_ops,
+        "take_over",
+        lambda *_: "failed",
     )
     failed = tui_actions.stop_session(request)
     assert failed.status is ActionStatus.FAILURE

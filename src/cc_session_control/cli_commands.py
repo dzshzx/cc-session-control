@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from argparse import Namespace
 import sys
+from argparse import Namespace
 from typing import TextIO
 
 from .cli_streams import run_with_streams
@@ -30,13 +30,9 @@ def _print_cleanup_execution(
             + (f" ({first.path}: {first.error})" if first.error else "")
         )
     if result.skipped:
-        details.append(
-            f"skipped {len(result.skipped)} ({result.skipped[0].reason})"
-        )
+        details.append(f"skipped {len(result.skipped)} ({result.skipped[0].reason})")
     if result.refused:
-        details.append(
-            f"refused {len(result.refused)} ({result.refused[0].reason})"
-        )
+        details.append(f"refused {len(result.refused)} ({result.refused[0].reason})")
     if result.missing_targets:
         details.append(f"already missing {len(result.missing_targets)}")
 
@@ -44,8 +40,7 @@ def _print_cleanup_execution(
         print(success.format(n=completed), file=stream)
     elif completed:
         print(
-            f"Partial sweep: removed {completed} {subject}; "
-            f"{'; '.join(details)}.",
+            f"Partial sweep: removed {completed} {subject}; {'; '.join(details)}.",
             file=stream,
         )
     elif result.removed:
@@ -164,9 +159,7 @@ def _cmd_prune(args: Namespace) -> int:
     return max(status, plan_status)
 
 
-def _cmd_prune_zombies(
-    args: Namespace, zombies: list[int] | None = None
-) -> int:
+def _cmd_prune_zombies(args: Namespace, zombies: list[int] | None = None) -> int:
     """Strategy A pid-keyed sweep of `sessions/<pid>.json` (R7.1) via the CLI.
 
     Reuses the already-gated `data/cleanup` helpers: `select_zombie_pids` keeps
@@ -201,9 +194,7 @@ def _cmd_prune_zombies(
     )
 
 
-def _cmd_prune_aged(
-    args: Namespace, aged: list[str] | None = None
-) -> int:
+def _cmd_prune_aged(args: Namespace, aged: list[str] | None = None) -> int:
     """Strategy B age sweep of time/global-keyed dirs (R7.2) via the CLI.
 
     The age sweep is mtime-only and session-agnostic, so (unlike the zombie
@@ -214,7 +205,9 @@ def _cmd_prune_aged(
 
     if aged is None:
         aged = list_aged_entries()
-    print(f"Would sweep {len(aged)} aged entr(y/ies) older than {cfg.cleanup_age_days}d")
+    print(
+        f"Would sweep {len(aged)} aged entr(y/ies) older than {cfg.cleanup_age_days}d"
+    )
     if not args.apply:
         print("Dry run. Add --apply to execute.")
         return 0
@@ -230,8 +223,15 @@ def _cmd_resume(args: Namespace) -> int:
     from .actions.resume_list import render
     from .data.sessions import scan
 
-    print(render(scan(), keyword=args.keyword, page=args.page,
-                 limit=args.limit, all_pages=args.all_pages))
+    print(
+        render(
+            scan(),
+            keyword=args.keyword,
+            page=args.page,
+            limit=args.limit,
+            all_pages=args.all_pages,
+        )
+    )
     return 0
 
 
@@ -282,8 +282,7 @@ def _cmd_env(args: Namespace) -> int:
         print(f"  {e.env_id}  sid={e.bound_sid or '-'}")
 
     history_note = (
-        " (ledger history incomplete)"
-        if not recon.ledger_history_complete else ""
+        " (ledger history incomplete)" if not recon.ledger_history_complete else ""
     )
     print(
         "Orphan environments (delete manually on claude.ai/code): "
@@ -323,7 +322,10 @@ def handle_prune(
     stderr: TextIO | None = None,
 ) -> int:
     return run_with_streams(
-        _cmd_prune, args, stdout=stdout, stderr=stderr,
+        _cmd_prune,
+        args,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
@@ -334,7 +336,10 @@ def handle_resume(
     stderr: TextIO | None = None,
 ) -> int:
     return run_with_streams(
-        _cmd_resume, args, stdout=stdout, stderr=stderr,
+        _cmd_resume,
+        args,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
@@ -345,7 +350,10 @@ def handle_skill_install(
     stderr: TextIO | None = None,
 ) -> int:
     return run_with_streams(
-        _cmd_skill, args, stdout=stdout, stderr=stderr,
+        _cmd_skill,
+        args,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
@@ -359,7 +367,10 @@ def handle_agents(
     stderr: TextIO | None = None,
 ) -> int:
     return run_with_streams(
-        _cmd_agents, args, stdout=stdout, stderr=stderr,
+        _cmd_agents,
+        args,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
@@ -370,7 +381,10 @@ def handle_env(
     stderr: TextIO | None = None,
 ) -> int:
     return run_with_streams(
-        _cmd_env, args, stdout=stdout, stderr=stderr,
+        _cmd_env,
+        args,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
@@ -381,5 +395,8 @@ def handle_tui(
     stderr: TextIO | None = None,
 ) -> int:
     return run_with_streams(
-        _cmd_tui, args, stdout=stdout, stderr=stderr,
+        _cmd_tui,
+        args,
+        stdout=stdout,
+        stderr=stderr,
     )

@@ -84,34 +84,43 @@ def read_project_settings(path: Path) -> ProjectSettingsResult:
         return ProjectSettingsResult(ProjectSettingsState.MISSING, {})
     except OSError as exc:
         return ProjectSettingsResult(
-            ProjectSettingsState.UNREADABLE, {}, str(exc),
+            ProjectSettingsState.UNREADABLE,
+            {},
+            str(exc),
         )
     except (json.JSONDecodeError, UnicodeError) as exc:
         return ProjectSettingsResult(
-            ProjectSettingsState.MALFORMED, {}, str(exc),
+            ProjectSettingsState.MALFORMED,
+            {},
+            str(exc),
         )
 
     if not isinstance(document, dict):
         return ProjectSettingsResult(
-            ProjectSettingsState.INVALID, {}, "top-level JSON value is not an object",
+            ProjectSettingsState.INVALID,
+            {},
+            "top-level JSON value is not an object",
         )
     projects = document.get("projects", {})
     if not isinstance(projects, dict):
         return ProjectSettingsResult(
-            ProjectSettingsState.INVALID, {}, "'projects' is not an object",
+            ProjectSettingsState.INVALID,
+            {},
+            "'projects' is not an object",
         )
     for project_path, project in projects.items():
         if not isinstance(project, dict):
             return ProjectSettingsResult(
-                ProjectSettingsState.INVALID, {},
+                ProjectSettingsState.INVALID,
+                {},
                 f"project {project_path!r} is not an object",
             )
-        if (
-            "hasTrustDialogAccepted" in project
-            and not isinstance(project["hasTrustDialogAccepted"], bool)
+        if "hasTrustDialogAccepted" in project and not isinstance(
+            project["hasTrustDialogAccepted"], bool
         ):
             return ProjectSettingsResult(
-                ProjectSettingsState.INVALID, {},
+                ProjectSettingsState.INVALID,
+                {},
                 f"project {project_path!r} has a non-boolean trust flag",
             )
     return ProjectSettingsResult(ProjectSettingsState.AVAILABLE, projects)
@@ -139,7 +148,8 @@ def _load_settings_for_write(path: Path) -> dict[str, Any] | SettingWriteResult:
         return _write_failure(path, SettingWriteFailure.MALFORMED, str(exc))
     if not isinstance(document, dict):
         return _write_failure(
-            path, SettingWriteFailure.INVALID,
+            path,
+            SettingWriteFailure.INVALID,
             "top-level JSON value is not an object",
         )
     return document
@@ -168,7 +178,9 @@ def _replace_settings(
         temporary.flush()
     except OSError as exc:
         return _cleanup_temporary(
-            path, temporary_path, temporary,
+            path,
+            temporary_path,
+            temporary,
             _write_failure(path, SettingWriteFailure.WRITE, str(exc)),
         )
 
@@ -176,7 +188,9 @@ def _replace_settings(
         os.fsync(temporary.fileno())
     except OSError as exc:
         return _cleanup_temporary(
-            path, temporary_path, temporary,
+            path,
+            temporary_path,
+            temporary,
             _write_failure(path, SettingWriteFailure.FSYNC, str(exc)),
         )
 
@@ -184,7 +198,9 @@ def _replace_settings(
         temporary.close()
     except OSError as exc:
         return _cleanup_temporary(
-            path, temporary_path, temporary,
+            path,
+            temporary_path,
+            temporary,
             _write_failure(path, SettingWriteFailure.WRITE, str(exc)),
         )
 
@@ -192,7 +208,9 @@ def _replace_settings(
         os.replace(temporary_path, path)
     except OSError as exc:
         return _cleanup_temporary(
-            path, temporary_path, temporary,
+            path,
+            temporary_path,
+            temporary,
             _write_failure(path, SettingWriteFailure.REPLACE, str(exc)),
         )
     return SettingWriteResult(SettingWriteState.UPDATED, path)
@@ -227,8 +245,7 @@ def _cleanup_temporary(
         return _write_failure(
             path,
             SettingWriteFailure.CLEANUP,
-            f"{original_failure}: {outcome.detail}; "
-            + "; ".join(cleanup_errors),
+            f"{original_failure}: {outcome.detail}; " + "; ".join(cleanup_errors),
         )
     return outcome
 
@@ -245,7 +262,9 @@ def write_rc_at_startup(
         settings_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return _write_failure(
-            path, SettingWriteFailure.CREATE_DIRECTORY, str(exc),
+            path,
+            SettingWriteFailure.CREATE_DIRECTORY,
+            str(exc),
         )
 
     lock_path = settings_dir / ".settings.local.json.lock"

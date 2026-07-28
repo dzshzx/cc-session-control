@@ -16,6 +16,7 @@ def _sp(sid, pid, proc_start, proc_alive=False, **kw):
 
 # --- live_index: pure merge, AC2 matrix ---
 
+
 def test_live_index_zombie_file_not_alive():
     # A sessions/*.json whose pid is dead (no /proc) and not in agents_map.
     idx = liveness.live_index([_sp("dead", 4242, "123")], {})
@@ -62,7 +63,7 @@ def test_live_index_records_all_alive_pids():
     procs = [
         _sp("sid", 700772, "100", proc_alive=True),  # older
         _sp("sid", 710575, "200", proc_alive=True),  # newer -> chosen pid
-        _sp("sid", 700001, "150"),                   # dead -> excluded from pids
+        _sp("sid", 700001, "150"),  # dead -> excluded from pids
     ]
     info = liveness.live_index(procs, {})["sid"]
     assert info.pid == 710575
@@ -118,7 +119,9 @@ def test_live_index_pidless_agent_only_sid_not_alive():
 def test_live_index_source_buckets():
     procs = [
         _sp("a", 1, "1", proc_alive=True, kind="bg", entrypoint="cli"),
-        _sp("b", 2, "1", proc_alive=True, kind="interactive", entrypoint="claude-vscode"),
+        _sp(
+            "b", 2, "1", proc_alive=True, kind="interactive", entrypoint="claude-vscode"
+        ),
         _sp("c", 3, "1", proc_alive=True, kind="interactive", entrypoint="sdk-ts"),
         _sp("d", 4, "1", proc_alive=True, kind="interactive", entrypoint="cli"),
     ]
@@ -130,6 +133,7 @@ def test_live_index_source_buckets():
 
 
 # --- _scrub_dead_pids: dead agents_map pids must not count as alive ---
+
 
 def test_scrub_blanks_dead_pids_keeps_entries():
     mapping = {"deadsid": 4242, "livesid": 111, "settled": None}
@@ -163,6 +167,7 @@ def test_scrub_keeps_live_pid_alive_path_intact():
 def test_alive_map_skips_scrub_without_proc(monkeypatch):
     # R10 degraded mode: agents_map is the only liveness source — no scrubbing.
     import json as _json
+
     liveness.invalidate_cache()
     monkeypatch.setattr(liveness.proc, "has_proc", lambda: False)
 
@@ -176,15 +181,18 @@ def test_alive_map_skips_scrub_without_proc(monkeypatch):
 
 def test_alive_map_scrubs_with_proc(monkeypatch):
     import json as _json
+
     liveness.invalidate_cache()
     monkeypatch.setattr(liveness.proc, "has_proc", lambda: True)
     monkeypatch.setattr(liveness.proc, "pid_exists", lambda pid: pid == 111)
 
     class _CP:
-        stdout = _json.dumps([
-            {"sessionId": "live", "pid": 111},
-            {"sessionId": "stale", "pid": 424242},
-        ])
+        stdout = _json.dumps(
+            [
+                {"sessionId": "live", "pid": 111},
+                {"sessionId": "stale", "pid": 424242},
+            ]
+        )
 
     monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: _CP())
     assert liveness.alive_map(max_age=0) == {"live": 111, "stale": None}
@@ -192,6 +200,7 @@ def test_alive_map_scrubs_with_proc(monkeypatch):
 
 
 # --- is_rc_exposed: AC3 six-case matrix (bridge x pid_alive) ---
+
 
 def test_is_rc_exposed_matrix():
     f = liveness.is_rc_exposed
@@ -209,6 +218,7 @@ def test_is_rc_exposed_matrix():
 
 # --- live_session_procs: the ONE registry->proc_alive assembly point ---
 
+
 def test_live_session_procs_injects_proc_liveness(tmp_path, monkeypatch):
     import json
 
@@ -220,24 +230,31 @@ def test_live_session_procs_injects_proc_liveness(tmp_path, monkeypatch):
     sessions = tmp_path / "sessions"
     sessions.mkdir(parents=True)
     for pid, start in ((100, "10"), (200, "20")):
-        (sessions / f"{pid}.json").write_text(json.dumps({
-            "pid": pid, "sessionId": f"sid{pid}", "procStart": start,
-        }))
+        (sessions / f"{pid}.json").write_text(
+            json.dumps(
+                {
+                    "pid": pid,
+                    "sessionId": f"sid{pid}",
+                    "procStart": start,
+                }
+            )
+        )
     monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: pid == 100)
 
     procs = {sp.pid: sp for sp in liveness.live_session_procs(max_age=0.0)}
-    assert procs[100].proc_alive is True   # injected, not the parse default
+    assert procs[100].proc_alive is True  # injected, not the parse default
     assert procs[200].proc_alive is False
 
 
-def test_live_session_procs_swallows_errors(monkeypatch):
+def test_live_session_procs_propagates_programming_errors(monkeypatch):
     from cc_session_control.data import registry
 
     def boom(max_age=5.0):
         raise RuntimeError("registry exploded")
 
     monkeypatch.setattr(registry, "read_session_procs", boom)
-    assert liveness.live_session_procs() == []
+    with pytest.raises(RuntimeError, match="registry exploded"):
+        liveness.live_session_procs()
 
 
 def test_liveness_inputs_is_an_immutable_typed_generation_snapshot(monkeypatch):

@@ -46,7 +46,9 @@ def truncate_cells(
 
 class TextRow(urwid.WidgetWrap):
     def __init__(self, text: str) -> None:
-        mapped = urwid.AttrMap(urwid.Text(text), "dead", focus_map={"dead": "selected", None: "selected"})
+        mapped = urwid.AttrMap(
+            urwid.Text(text), "dead", focus_map={"dead": "selected", None: "selected"}
+        )
         super().__init__(mapped)
 
     def selectable(self) -> bool:

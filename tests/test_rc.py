@@ -24,6 +24,7 @@ def _nul(*argv: str) -> str:
 
 # --- AC5: pure cmdline matcher --------------------------------------------
 
+
 def test_match_rc_server_nul_separated():
     cmd = _nul("claude", "remote-control", "--name", "ws/foo", "--spawn", "same-dir")
     m = proc._match_rc_cmdline("claude", cmd)
@@ -55,7 +56,10 @@ def test_match_excludes_codex_remote_control_flag():
     # codex uses --remote-control as a FLAG, argv0 `codex`, no subcommand token.
     cmd = _nul(
         "/home/x/.codex/packages/standalone/current/codex",
-        "app-server", "--remote-control", "--listen", "unix://",
+        "app-server",
+        "--remote-control",
+        "--listen",
+        "unix://",
     )
     assert proc._match_rc_cmdline("codex", cmd) is None
 
@@ -83,6 +87,7 @@ def test_match_empty_cmdline():
 
 # --- scan_rc_servers degrades off Linux ------------------------------------
 
+
 def test_scan_rc_servers_degrades_without_proc(monkeypatch):
     monkeypatch.setattr(proc, "has_proc", lambda: False)
     assert proc.scan_rc_servers() == []
@@ -90,15 +95,19 @@ def test_scan_rc_servers_degrades_without_proc(monkeypatch):
 
 # --- managed vs external classification (AC5) ------------------------------
 
+
 def test_scan_servers_classifies_managed_and_external(monkeypatch):
     # tmux owns window @1 whose pane pid is 111 -> managed; pid 222 is only
     # in /proc -> external.
     monkeypatch.setattr(
-        rc, "_tmux_windows", lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+        rc,
+        "_tmux_windows",
+        lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
     )
     monkeypatch.setattr(rc, "_capture_env_id", lambda target: "")
     monkeypatch.setattr(
-        rc.proc, "scan_rc_servers",
+        rc.proc,
+        "scan_rc_servers",
         lambda: [ProcRC(111, "ws/foo", "/a"), ProcRC(222, "ws/bar", "/b")],
     )
 
@@ -120,7 +129,9 @@ def test_scan_servers_managed_window_without_proc_match(monkeypatch):
     # tmux window present but the pid isn't in /proc (dead pane) -> still listed
     # managed, falling back to window name + path, status from pane_dead.
     monkeypatch.setattr(
-        rc, "_tmux_windows", lambda: [TmuxWindow("@1", "foo", True, 111, "/a")],
+        rc,
+        "_tmux_windows",
+        lambda: [TmuxWindow("@1", "foo", True, 111, "/a")],
     )
     monkeypatch.setattr(rc, "_capture_env_id", lambda target: "")
     monkeypatch.setattr(rc.proc, "scan_rc_servers", lambda: [])
@@ -137,18 +148,25 @@ def test_scan_servers_managed_window_without_proc_match(monkeypatch):
 
 # --- env_* capture pushed one-way into the ledger --------------------------
 
+
 def test_scan_servers_captures_env_id_into_ledger(monkeypatch):
     captured: list[list[EnvRecord]] = []
     targets: list[str] = []
     monkeypatch.setattr(
-        rc, "_tmux_windows", lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+        rc,
+        "_tmux_windows",
+        lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
     )
     monkeypatch.setattr(
-        rc, "_tmux_capture_pane",
-        lambda target: targets.append(target)
-        or "starting...\nenvironment=env_abc123XYZ\nready",
+        rc,
+        "_tmux_capture_pane",
+        lambda target: (
+            targets.append(target) or "starting...\nenvironment=env_abc123XYZ\nready"
+        ),
     )
-    monkeypatch.setattr(rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")])
+    monkeypatch.setattr(
+        rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")]
+    )
     monkeypatch.setattr(rc.environments, "upsert", lambda recs: captured.append(recs))
 
     cache = rc_environment.EnvironmentIdCache()
@@ -157,21 +175,25 @@ def test_scan_servers_captures_env_id_into_ledger(monkeypatch):
 
     assert servers[0].env_id == "env_abc123XYZ"
     assert next_servers[0].env_id == "env_abc123XYZ"
-    assert targets == ["@1"]             # addressed by unique window id, not name
-    assert len(captured) == 2             # cached id still refreshes ledger evidence
+    assert targets == ["@1"]  # addressed by unique window id, not name
+    assert len(captured) == 2  # cached id still refreshes ledger evidence
     rec = captured[0][0]
     assert rec.prefix == "env"
-    assert rec.key == "abc123XYZ"        # suffix only — env_id property reconstructs
+    assert rec.key == "abc123XYZ"  # suffix only — env_id property reconstructs
     assert rec.bound_sid is None
 
 
 def test_scan_servers_no_env_id_no_upsert(monkeypatch):
     calls: list[object] = []
     monkeypatch.setattr(
-        rc, "_tmux_windows", lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
+        rc,
+        "_tmux_windows",
+        lambda: [TmuxWindow("@1", "foo", False, 111, "/a")],
     )
     monkeypatch.setattr(rc, "_tmux_capture_pane", lambda target: "no env here")
-    monkeypatch.setattr(rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")])
+    monkeypatch.setattr(
+        rc.proc, "scan_rc_servers", lambda: [ProcRC(111, "ws/foo", "/a")]
+    )
     monkeypatch.setattr(rc.environments, "upsert", lambda recs: calls.append(recs))
 
     servers = rc.scan_servers(
@@ -232,6 +254,7 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
 
 # --- remoteControlSpawnMode read (AC8 read half) ---------------------------
 
+
 def _write_claude_json(tmp_path, projects):
     p = tmp_path / ".claude.json"
     p.write_text(json.dumps({"projects": projects}))
@@ -243,11 +266,16 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
     proj.mkdir()
     other = tmp_path / "other"
     other.mkdir()
-    cj = _write_claude_json(tmp_path, {
-        str(proj): {"hasTrustDialogAccepted": True,
-                    "remoteControlSpawnMode": "new-window"},
-        str(other): {"hasTrustDialogAccepted": True},
-    })
+    cj = _write_claude_json(
+        tmp_path,
+        {
+            str(proj): {
+                "hasTrustDialogAccepted": True,
+                "remoteControlSpawnMode": "new-window",
+            },
+            str(other): {"hasTrustDialogAccepted": True},
+        },
+    )
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
     monkeypatch.setattr(rc, "list_enabled", lambda: [])
     monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
@@ -256,26 +284,41 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
 
     rows = {p.name: p for p in rc.scan()}
     assert rows["proj"].spawn_mode == "new-window"
-    assert rows["other"].spawn_mode is None          # key present, mode unset
+    assert rows["other"].spawn_mode is None  # key present, mode unset
 
 
 def test_order_by_activity_recent_first_never_active_sink():
     from cc_session_control.models import RCProject, Session
 
     def proj(d):
-        return RCProject(name=d.rsplit("/", 1)[-1], directory=d, trusted=True,
-                         in_list=False, status="stopped", auto_start=False)
+        return RCProject(
+            name=d.rsplit("/", 1)[-1],
+            directory=d,
+            trusted=True,
+            in_list=False,
+            status="stopped",
+            auto_start=False,
+        )
 
     def sess(cwd, mtime):
-        return Session(sid="s", cwd=cwd, label="", mtime=mtime, prompts=0,
-                       pid=None, alive=False, current=False)
+        return Session(
+            sid="s",
+            cwd=cwd,
+            label="",
+            mtime=mtime,
+            prompts=0,
+            pid=None,
+            alive=False,
+            current=False,
+        )
 
     projects = [proj("/a"), proj("/b"), proj("/c"), proj("/z-never")]
     sessions = [
-        sess("/b", 100.0), sess("/b", 30.0),      # max wins
+        sess("/b", 100.0),
+        sess("/b", 30.0),  # max wins
         sess("/c", 50.0),
-        sess("/c/sub", 999.0),                    # subdir does NOT roll up
-        sess("", 999.0),                          # empty cwd ignored
+        sess("/c/sub", 999.0),  # subdir does NOT roll up
+        sess("", 999.0),  # empty cwd ignored
     ]
 
     ordered = rc.order_by_activity(projects, sessions)
@@ -292,15 +335,19 @@ def test_scan_marks_missing_directory(tmp_path, monkeypatch):
     deleted = str(tmp_path / "deleted")
     gone_running = str(tmp_path / "gone-running")
     gone_enabled = str(tmp_path / "gone-enabled")
-    cj = _write_claude_json(tmp_path, {
-        str(alive): {"hasTrustDialogAccepted": True},
-        deleted: {"hasTrustDialogAccepted": True},
-        gone_running: {"hasTrustDialogAccepted": True},
-    })
+    cj = _write_claude_json(
+        tmp_path,
+        {
+            str(alive): {"hasTrustDialogAccepted": True},
+            deleted: {"hasTrustDialogAccepted": True},
+            gone_running: {"hasTrustDialogAccepted": True},
+        },
+    )
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
     monkeypatch.setattr(rc, "list_enabled", lambda: [gone_enabled])
     monkeypatch.setattr(
-        rc, "_tmux_windows",
+        rc,
+        "_tmux_windows",
         lambda: [TmuxWindow("@1", "gone-running", False, 5, gone_running)],
     )
     # tmp_path is under the real temp root — neutralize the membership filter.
@@ -308,9 +355,9 @@ def test_scan_marks_missing_directory(tmp_path, monkeypatch):
 
     rows = {p.directory: p for p in rc.scan()}
     assert set(rows) == {str(alive), gone_enabled, gone_running}
-    assert deleted not in rows                        # trust-only residue hidden
+    assert deleted not in rows  # trust-only residue hidden
     assert rows[str(alive)].dir_exists is True
-    assert rows[str(alive)].name == "alive"           # derived display name
-    assert rows[gone_enabled].dir_exists is False     # stale rc-enabled entry
-    assert rows[gone_running].dir_exists is False     # window survives dir removal
+    assert rows[str(alive)].name == "alive"  # derived display name
+    assert rows[gone_enabled].dir_exists is False  # stale rc-enabled entry
+    assert rows[gone_running].dir_exists is False  # window survives dir removal
     assert rows[gone_running].status == "running"

@@ -31,7 +31,10 @@ def _sized(sizing: int | tuple[str, int], widget: urwid.Widget):
 def header_columns(spec: list[ColSpec]) -> urwid.Columns:
     """The column-header row for a spec (headers inherit the column align)."""
     return urwid.Columns(
-        [_sized(sizing, urwid.Text(header, align=align)) for sizing, align, header in spec],
+        [
+            _sized(sizing, urwid.Text(header, align=align))
+            for sizing, align, header in spec
+        ],
         dividechars=GUTTER,
         min_width=4,
     )
@@ -42,7 +45,7 @@ def row_columns(spec: list[ColSpec], cells: list[str]) -> urwid.Columns:
     return urwid.Columns(
         [
             _sized(sizing, urwid.Text(cell, align=align, wrap="clip"))
-            for (sizing, align, _), cell in zip(spec, cells)
+            for (sizing, align, _), cell in zip(spec, cells, strict=True)
         ],
         dividechars=GUTTER,
         min_width=4,

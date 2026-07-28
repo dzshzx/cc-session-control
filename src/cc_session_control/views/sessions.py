@@ -40,47 +40,99 @@ class SessionsView(CleanupMixin, ListTabView):
     # table in the footer is a user preference (2026-07-05); `r 刷新` stays in
     # the App-level FOOTER_PREFIX, so its entry is hint-less here.
     KEY_TABLE = (
-        Key(("enter",), "Enter 接回", "_key_resume", section="会话操作:", help_lines=(
-            "  Enter  tmux 接回（主操作：会话恢复进所属项目的 tmux 窗口并接入前台，",
-            "         终端断线会话不死；已驻留 tmux 的会话就地进入不重启；",
-            "         接运行中的裸终端会话会先确认接管）",
-        )),
-        Key(("t",), "t 终端接回", "_key_terminal", section="会话操作:", help_lines=(
-            "  t      终端接回（在当前终端恢复，会话随终端关闭而结束——tmux 不可用",
-            "         时的兜底；对已驻留会话 = 拉出 tmux，先确认接管）",
-        )),
-        Key(("f",), "f 分叉", "_key_fork", section="会话操作:", help_lines=(
-            "  f      分叉会话（创建副本进 tmux 窗口并进入，不影响原会话）",
-        )),
-        Key(("s",), "s 停止", "_key_stop", section="会话操作:", help_lines=(
-            "  s      停止运行中的会话（发送 SIGTERM，需二次确认）",
-        )),
-        Key(("R",), "R 转后台", "_key_relaunch", section="会话操作:", help_lines=(
-            "  R      转入 tmux 后台（不开远控、不进入，留在 csctl；已驻留会话",
-            "         无需转移；接运行中的会话会先确认接管）",
-        )),
-        Key(("d",), "d 删除", "_key_delete", section="会话操作:", help_lines=(
-            "  d      删除已结束的会话记录",
-        )),
-        Key(("y",), "y 复制命令", "_key_yank", section="会话操作:", help_lines=(
-            "  y      复制接回命令到剪贴板",
-        )),
-        Key(("h",), "h 桥接显隐", "_key_toggle_hidden", needs_selection=False,
-            section="会话操作:", help_lines=(
-                "  h      显示/隐藏桥接、SDK 会话",
-            )),
-        Key(("c",), "c 清理", "_enter_cleanup", needs_selection=False,
-            section="清理与过滤:", help_lines=(
-                "  c      打开清理子菜单",
-            )),
-        Key(("/",), "/ 过滤", "_enter_filter", needs_selection=False,
-            section="清理与过滤:", help_lines=(
-                "  /      按关键词过滤会话列表",
-            )),
-        Key(("r",), None, "_key_refresh", needs_selection=False,
-            section="清理与过滤:", help_lines=(
-                "  r      刷新",
-            )),
+        Key(
+            ("enter",),
+            "Enter 接回",
+            "_key_resume",
+            section="会话操作:",
+            help_lines=(
+                "  Enter  tmux 接回（主操作：会话恢复进所属项目的 tmux 窗口并接入前台，",
+                "         终端断线会话不死；已驻留 tmux 的会话就地进入不重启；",
+                "         接运行中的裸终端会话会先确认接管）",
+            ),
+        ),
+        Key(
+            ("t",),
+            "t 终端接回",
+            "_key_terminal",
+            section="会话操作:",
+            help_lines=(
+                "  t      终端接回（在当前终端恢复，会话随终端关闭而结束——tmux 不可用",
+                "         时的兜底；对已驻留会话 = 拉出 tmux，先确认接管）",
+            ),
+        ),
+        Key(
+            ("f",),
+            "f 分叉",
+            "_key_fork",
+            section="会话操作:",
+            help_lines=(
+                "  f      分叉会话（创建副本进 tmux 窗口并进入，不影响原会话）",
+            ),
+        ),
+        Key(
+            ("s",),
+            "s 停止",
+            "_key_stop",
+            section="会话操作:",
+            help_lines=("  s      停止运行中的会话（发送 SIGTERM，需二次确认）",),
+        ),
+        Key(
+            ("R",),
+            "R 转后台",
+            "_key_relaunch",
+            section="会话操作:",
+            help_lines=(
+                "  R      转入 tmux 后台（不开远控、不进入，留在 csctl；已驻留会话",
+                "         无需转移；接运行中的会话会先确认接管）",
+            ),
+        ),
+        Key(
+            ("d",),
+            "d 删除",
+            "_key_delete",
+            section="会话操作:",
+            help_lines=("  d      删除已结束的会话记录",),
+        ),
+        Key(
+            ("y",),
+            "y 复制命令",
+            "_key_yank",
+            section="会话操作:",
+            help_lines=("  y      复制接回命令到剪贴板",),
+        ),
+        Key(
+            ("h",),
+            "h 桥接显隐",
+            "_key_toggle_hidden",
+            needs_selection=False,
+            section="会话操作:",
+            help_lines=("  h      显示/隐藏桥接、SDK 会话",),
+        ),
+        Key(
+            ("c",),
+            "c 清理",
+            "_enter_cleanup",
+            needs_selection=False,
+            section="清理与过滤:",
+            help_lines=("  c      打开清理子菜单",),
+        ),
+        Key(
+            ("/",),
+            "/ 过滤",
+            "_enter_filter",
+            needs_selection=False,
+            section="清理与过滤:",
+            help_lines=("  /      按关键词过滤会话列表",),
+        ),
+        Key(
+            ("r",),
+            None,
+            "_key_refresh",
+            needs_selection=False,
+            section="清理与过滤:",
+            help_lines=("  r      刷新",),
+        ),
         Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
     )
 
@@ -147,7 +199,9 @@ class SessionsView(CleanupMixin, ListTabView):
         for s in self._sessions:
             self.walker.append(SessionRow(s))
         if not self._sessions:
-            empty = "无匹配 · 按 / 改过滤 · Esc 清空" if self._filter_text else "暂无会话"
+            empty = (
+                "无匹配 · 按 / 改过滤 · Esc 清空" if self._filter_text else "暂无会话"
+            )
             self.walker.append(urwid.AttrMap(urwid.Text(f" {empty}"), "dead"))
 
     def _status_text(self) -> str:
@@ -160,7 +214,11 @@ class SessionsView(CleanupMixin, ListTabView):
         hidden_n = sum(1 for s in self._all_sessions if s.bridge_or_sdk)
         hidden_text = ""
         if hidden_n:
-            hidden_text = f" · 桥接/SDK {hidden_n}" if self._show_hidden else f" · 桥接/SDK已隐藏 {hidden_n}"
+            hidden_text = (
+                f" · 桥接/SDK {hidden_n}"
+                if self._show_hidden
+                else f" · 桥接/SDK已隐藏 {hidden_n}"
+            )
         if empty or short or orphans:
             parts = []
             if empty:
@@ -170,9 +228,7 @@ class SessionsView(CleanupMixin, ListTabView):
             if orphans:
                 parts.append(f"孤儿 {orphans}")
             cleanup_text = f" · {' · '.join(parts)}"
-        return (
-            f" 共 {len(self._all_sessions)} 条会话 · 运行 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{cleanup_text}"
-        )
+        return f" 共 {len(self._all_sessions)} 条会话 · 运行 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{cleanup_text}"
 
     def _close_overlay_mode(self) -> None:
         self._mode = "list"
@@ -188,18 +244,26 @@ class SessionsView(CleanupMixin, ListTabView):
         # registry `source == "sdk"` signal (Session.bridge_or_sdk), so the
         # badge and the `h` toggle never disagree.
         visible = [
-            s for s in self._all_sessions
-            if self._show_hidden or not s.bridge_or_sdk
+            s for s in self._all_sessions if self._show_hidden or not s.bridge_or_sdk
         ]
         if not self._filter_text:
             self._sessions = visible
         else:
             k = self._filter_text.lower()
             self._sessions = [
-                s for s in visible
-                if k in (
-                    s.label + " " + s.cwd + " " + s.sid + " "
-                    + _hidden_marker(s) + " " + " ".join(sorted(s.hidden))
+                s
+                for s in visible
+                if k
+                in (
+                    s.label
+                    + " "
+                    + s.cwd
+                    + " "
+                    + s.sid
+                    + " "
+                    + _hidden_marker(s)
+                    + " "
+                    + " ".join(sorted(s.hidden))
                 ).lower()
             ]
 
@@ -304,7 +368,9 @@ class SessionsView(CleanupMixin, ListTabView):
             self.app.notify("不能接回当前会话")
             return
         confirm_takeover(
-            self.app, s, "终端接回会话",
+            self.app,
+            s,
+            "终端接回会话",
             lambda: self.app.exit_with(ResumeIntent(s, fork=False)),
         )
 
@@ -317,8 +383,12 @@ class SessionsView(CleanupMixin, ListTabView):
 
     def _key_stop(self, s: Session) -> None:
         confirm_stop(
-            self.app, "会话", s.label, lambda: self._do_terminate(s),
-            alive=s.alive, current=s.current,
+            self.app,
+            "会话",
+            s.label,
+            lambda: self._do_terminate(s),
+            alive=s.alive,
+            current=s.current,
         )
 
     def _key_relaunch(self, s: Session) -> None:

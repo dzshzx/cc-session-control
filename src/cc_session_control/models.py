@@ -38,13 +38,13 @@ class Session:
     hidden: set[str] = field(default_factory=set)
     file: str = ""
     # Unified-workbench fields (all default so existing construction stays valid).
-    kind: str = ""              # registry `kind` (e.g. interactive / bg)
-    entrypoint: str = ""        # registry `entrypoint` (cli / claude-vscode / sdk-ts)
-    source: str = ""            # coarse bucket: cli / vscode / sdk / bg
-    rc_exposed: bool = False    # session remote control currently exposed
-    env_id: str | None = None   # bound bridge environment id, if any
+    kind: str = ""  # registry `kind` (e.g. interactive / bg)
+    entrypoint: str = ""  # registry `entrypoint` (cli / claude-vscode / sdk-ts)
+    source: str = ""  # coarse bucket: cli / vscode / sdk / bg
+    rc_exposed: bool = False  # session remote control currently exposed
+    env_id: str | None = None  # bound bridge environment id, if any
     agent_short: str | None = None  # linked background-agent short id, if any
-    status: str = ""            # registry `status` (busy / idle)
+    status: str = ""  # registry `status` (busy / idle)
     # tmux residency (CONTEXT.md / ADR-0001): non-None means a live pid of this
     # session runs inside a tmux pane; the value is the enterable
     # "session:window_index" target. Batch-computed in sessions.scan() via
@@ -70,20 +70,21 @@ class SessionProc:
     A single sessionId may have several of these — resume keeps the sid but
     mints a new pid. `proc_start` defeats pid reuse (compared to /proc stat).
     """
+
     pid: int
     sid: str
     cwd: str = ""
     kind: str = ""
     entrypoint: str = ""
     status: str = ""
-    proc_start: str = ""        # registry `procStart` (kernel starttime, as str)
+    proc_start: str = ""  # registry `procStart` (kernel starttime, as str)
     # Injected /proc liveness, never parsed from JSON. Tri-state sentinel:
     # None = NOT YET INJECTED (only `liveness.live_session_procs` sets it) —
     # destructive consumers (`select_zombie_pids`) refuse None rather than
     # treating an uninjected row as dead, so misuse fails safe (不删) instead
     # of mass-deleting live sessions' files.
     proc_alive: bool | None = None
-    bridge: str | None = None   # `bridgeSessionId` (session_* namespace)
+    bridge: str | None = None  # `bridgeSessionId` (session_* namespace)
 
 
 @dataclass
@@ -93,6 +94,7 @@ class AgentJob:
     state.json carries NO pid; `host_pid`/`host_alive` are filled later by
     joining `sid -> sessions/<pid>.json` (see Phase 6).
     """
+
     short: str
     sid: str
     resume_sid: str
@@ -100,7 +102,7 @@ class AgentJob:
     tempo: str = ""
     cwd: str = ""
     name: str = ""
-    env_suffix: str = ""        # suffix of the cse_* bridge id
+    env_suffix: str = ""  # suffix of the cse_* bridge id
     respawn_flags: list[str] = field(default_factory=list)
     host_pid: int | None = None
     host_alive: bool = False
@@ -109,6 +111,7 @@ class AgentJob:
 @dataclass
 class LiveInfo:
     """Merged liveness/identity for one sessionId (output of live_index)."""
+
     sid: str
     pid: int | None = None
     proc_start: str = ""
@@ -137,7 +140,7 @@ class RCProject:
     status: Status
     auto_start: bool
     rc_at_startup: bool | None = None  # per-project remoteControlAtStartup override
-    spawn_mode: str | None = None      # per-project remoteControlSpawnMode (None=unset)
+    spawn_mode: str | None = None  # per-project remoteControlSpawnMode (None=unset)
     # False when the workspace directory is gone but claude.json / rc-enabled
     # still reference the project — shown as 缺失, start-ops refused.
     dir_exists: bool = True
@@ -146,8 +149,7 @@ class RCProject:
     def __post_init__(self) -> None:
         if self.trust_decision is None:
             self.trust_decision = (
-                TrustDecision.TRUSTED if self.trusted
-                else TrustDecision.UNTRUSTED
+                TrustDecision.TRUSTED if self.trusted else TrustDecision.UNTRUSTED
             )
         self.trusted = self.trust_decision is TrustDecision.TRUSTED
 
@@ -162,6 +164,7 @@ class RCServer:
     `env_id` is the full cloud bridge id (`env_*`) captured from a managed
     server's pane output, or None when unknown / external.
     """
+
     name: str
     cwd: str = ""
     managed: bool = False
@@ -244,6 +247,7 @@ class EnvRecord:
     Built by `environments.observe()` (registry) and, in Phase 5, pushed in by
     `rc` for the `env_*` namespace — environments never imports rc.
     """
+
     prefix: str
     key: str
     bound_sid: str | None = None
@@ -258,6 +262,7 @@ class BridgeEnv:
     claude.ai/code; there is no local deregister). `first_seen`/`last_seen` are
     epoch seconds. The full namespaced id is `prefix_key`.
     """
+
     prefix: str
     key: str
     bound_sid: str | None = None

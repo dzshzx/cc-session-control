@@ -27,9 +27,11 @@ def _tmux_run(args: list[str]) -> subprocess.CompletedProcess | None:
     try:
         return subprocess.run(
             ["tmux", *args],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
 
 
@@ -44,6 +46,7 @@ class TmuxWindow(NamedTuple):
     (adopts pre-0.7.3 windows and hand-made ones). `pid` is the pane root pid
     (the hosted process itself — spawns use `exec`, replacing the shell).
     """
+
     wid: str
     name: str
     dead: bool
@@ -74,10 +77,15 @@ def list_windows_meta(session: str) -> list[TmuxWindow]:
             pid: int | None = int(parts[3])
         except ValueError:
             pid = None
-        out.append(TmuxWindow(
-            wid=parts[0], name=parts[1], dead=parts[2] == "1",
-            pid=pid, path=parts[4] or parts[5],
-        ))
+        out.append(
+            TmuxWindow(
+                wid=parts[0],
+                name=parts[1],
+                dead=parts[2] == "1",
+                pid=pid,
+                path=parts[4] or parts[5],
+            )
+        )
     return out
 
 
@@ -117,13 +125,17 @@ def _spawned_target(cp: subprocess.CompletedProcess | None) -> str | None:
 
 def _tmux_new_window(session: str, name: str, cmd: str) -> str | None:
     """Create a window; return its exact "session:index" target, or None."""
-    cp = _tmux_run(["new-window", "-P", "-F", _TARGET_FMT, "-t", session, "-n", name, cmd])
+    cp = _tmux_run(
+        ["new-window", "-P", "-F", _TARGET_FMT, "-t", session, "-n", name, cmd]
+    )
     return _spawned_target(cp)
 
 
 def _tmux_new_session(session: str, name: str, cmd: str) -> str | None:
     """Create a detached session; return its window's target, or None."""
-    cp = _tmux_run(["new-session", "-d", "-P", "-F", _TARGET_FMT, "-s", session, "-n", name, cmd])
+    cp = _tmux_run(
+        ["new-session", "-d", "-P", "-F", _TARGET_FMT, "-s", session, "-n", name, cmd]
+    )
     return _spawned_target(cp)
 
 
@@ -176,9 +188,7 @@ def _tmux_list_all_panes() -> list[tuple[str, int]]:
     return out
 
 
-def window_containing(
-    panes: list[tuple[str, int]], ancestors: set[int]
-) -> str | None:
+def window_containing(panes: list[tuple[str, int]], ancestors: set[int]) -> str | None:
     """PURE: the pane target whose pane_pid appears in `ancestors`, or None.
 
     A session process hosted by a tmux pane has that pane's pid in its

@@ -24,13 +24,19 @@ def _sp(pid, sid, bridge=None, proc_start="1"):
 
 
 def _stub_sources(monkeypatch, procs):
-    monkeypatch.setattr(snapshot.liveness.registry, "read_session_procs", lambda *a, **k: procs)
-    monkeypatch.setattr(snapshot.liveness.registry, "read_agent_jobs", lambda *a, **k: [])
+    monkeypatch.setattr(
+        snapshot.liveness.registry, "read_session_procs", lambda *a, **k: procs
+    )
+    monkeypatch.setattr(
+        snapshot.liveness.registry, "read_agent_jobs", lambda *a, **k: []
+    )
     monkeypatch.setattr(snapshot.sessions, "scan", lambda inputs=None: [])
     monkeypatch.setattr(
-        snapshot.rc, "scan_result",
+        snapshot.rc,
+        "scan_result",
         lambda: snapshot.rc.RCScanResult(
-            [], ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
+            [],
+            ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
         ),
     )
     monkeypatch.setattr(snapshot.rc, "scan_servers", lambda: [])
@@ -45,7 +51,9 @@ def _ledger_keys(tmp_path):
     }
 
 
-def test_snapshot_persists_file_referenced_keeps_active_alive_gated(tmp_path, monkeypatch):
+def test_snapshot_persists_file_referenced_keeps_active_alive_gated(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(cfg, "config_dir", tmp_path)  # tmp ledger
     procs = [
         _sp(1, "sid-alive", bridge="session_ALIVE"),
@@ -185,7 +193,9 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
         injected.append(inputs)
         return []
 
-    monkeypatch.setattr(snapshot.liveness.registry, "read_session_procs", read_session_procs)
+    monkeypatch.setattr(
+        snapshot.liveness.registry, "read_session_procs", read_session_procs
+    )
     monkeypatch.setattr(snapshot.liveness.proc, "pid_alive", pid_alive)
     monkeypatch.setattr(snapshot.liveness.registry, "read_agent_jobs", read_jobs)
     monkeypatch.setattr(snapshot.liveness, "alive_map", read_agents)
@@ -195,7 +205,8 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
         snapshot.rc,
         "scan_result",
         lambda: snapshot.rc.RCScanResult(
-            [], ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
+            [],
+            ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
         ),
     )
     monkeypatch.setattr(snapshot.rc, "_tmux_windows", lambda: [])

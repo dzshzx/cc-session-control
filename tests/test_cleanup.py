@@ -33,8 +33,14 @@ def _hermetic_liveness(monkeypatch):
 
 def _make_session(**overrides) -> Session:
     defaults = dict(
-        sid="abc123", cwd="/tmp/proj", label="t", mtime=0.0,
-        prompts=0, pid=None, alive=False, current=False,
+        sid="abc123",
+        cwd="/tmp/proj",
+        label="t",
+        mtime=0.0,
+        prompts=0,
+        pid=None,
+        alive=False,
+        current=False,
         file="/tmp/abc123.jsonl",
     )
     defaults.update(overrides)
@@ -48,6 +54,7 @@ def _mkdir(base, *parts):
 
 
 # --- Strategy A: sid-keyed orphan dirs (per-dir semantics) -----------------
+
 
 def test_list_orphan_dirs_sid_keyed_per_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
@@ -125,6 +132,7 @@ def test_execute_orphan_removals_fresh_transcript_protects(tmp_path, monkeypatch
 
 # --- H1: orphan sweep protects registry-known / live / current sids ---------
 
+
 def _job(sid, **kw):
     base = dict(short=sid[:8], sid=sid, resume_sid=sid)
     base.update(kw)
@@ -142,14 +150,14 @@ def test_orphan_sweep_keeps_live_bg_agent_artifacts(tmp_path, monkeypatch):
     inject = dict(session_procs=[], agent_jobs=[job], agents_map={}, cur=set())
     assert cleanup.list_orphan_dirs([], **inject) == []
     known = cleanup.known_sids([], [], [job], {}, set())
-    result = cleanup.execute_orphan_removals(
-        [f"file-history/{live_sid}"], known=known
-    )
+    result = cleanup.execute_orphan_removals([f"file-history/{live_sid}"], known=known)
     assert len(result.skipped) == 1
     assert os.path.isdir(os.path.join(tmp_path, "file-history", live_sid))
 
 
-def test_orphan_sweep_keeps_registry_known_sid_without_transcript(tmp_path, monkeypatch):
+def test_orphan_sweep_keeps_registry_known_sid_without_transcript(
+    tmp_path, monkeypatch
+):
     # (b) A sid known ONLY via sessions/<pid>.json (transcript dropped) must not
     # be swept — even when its proc is dead (registry membership protects it).
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
@@ -160,9 +168,7 @@ def test_orphan_sweep_keeps_registry_known_sid_without_transcript(tmp_path, monk
     inject = dict(session_procs=[sp], agent_jobs=[], agents_map={}, cur=set())
     assert cleanup.list_orphan_dirs([], **inject) == []
     known = cleanup.known_sids([], [sp], [], {}, set())
-    result = cleanup.execute_orphan_removals(
-        [f"uploads/{reg_sid}"], known=known
-    )
+    result = cleanup.execute_orphan_removals([f"uploads/{reg_sid}"], known=known)
     assert len(result.skipped) == 1
     assert os.path.isdir(os.path.join(tmp_path, "uploads", reg_sid))
 
@@ -174,9 +180,7 @@ def test_orphan_sweep_removes_genuinely_unknown_dead_sid(tmp_path, monkeypatch):
 
     inject = dict(session_procs=[], agent_jobs=[], agents_map={}, cur=set())
     assert cleanup.list_orphan_dirs([], **inject) == ["session-env/ghost-sid"]
-    result = cleanup.execute_orphan_removals(
-        ["session-env/ghost-sid"], known=set()
-    )
+    result = cleanup.execute_orphan_removals(["session-env/ghost-sid"], known=set())
     assert result.completed == ["session-env/ghost-sid"]
     assert not os.path.exists(os.path.join(tmp_path, "session-env", "ghost-sid"))
 
@@ -187,12 +191,15 @@ def test_orphan_sweep_keeps_alive_map_sid(tmp_path, monkeypatch):
     live_sid = "agents-json-sid"
     _mkdir(tmp_path, "tasks", live_sid)
 
-    inject = dict(session_procs=[], agent_jobs=[], agents_map={live_sid: 999}, cur=set())
+    inject = dict(
+        session_procs=[], agent_jobs=[], agents_map={live_sid: 999}, cur=set()
+    )
     assert cleanup.list_orphan_dirs([], **inject) == []
     assert os.path.isdir(os.path.join(tmp_path, "tasks", live_sid))
 
 
 # --- Strategy A: pid-keyed zombie session files (multi-pid) -----------------
+
 
 def _sp(pid, sid, proc_alive):
     return SessionProc(pid=pid, sid=sid, proc_start=str(pid), proc_alive=proc_alive)
@@ -203,8 +210,8 @@ def test_select_zombie_pids_multi_pid_and_current():
     # pid 1001 is csctl's current session -> protected even though dead.
     procs = [
         _sp(700772, "A", proc_alive=False),  # zombie -> removable
-        _sp(710575, "A", proc_alive=True),   # alive, SAME sid -> keep
-        _sp(1001, "B", proc_alive=False),    # dead but current -> keep
+        _sp(710575, "A", proc_alive=True),  # alive, SAME sid -> keep
+        _sp(1001, "B", proc_alive=False),  # dead but current -> keep
     ]
     assert cleanup.select_zombie_pids(procs, cur={1001}) == [700772]
 
@@ -222,13 +229,11 @@ def test_remove_zombie_session_files_multi_pid(tmp_path, monkeypatch):
     ]
 
     pids = cleanup.select_zombie_pids(procs, cur={1001})
-    result = cleanup.execute_zombie_removals(
-        pids, session_procs=procs, cur={1001}
-    )
+    result = cleanup.execute_zombie_removals(pids, session_procs=procs, cur={1001})
     assert result.completed == ["700772"]
     assert not os.path.exists(os.path.join(sessions_dir, "700772.json"))
     assert os.path.exists(os.path.join(sessions_dir, "710575.json"))  # alive kept
-    assert os.path.exists(os.path.join(sessions_dir, "1001.json"))    # current kept
+    assert os.path.exists(os.path.join(sessions_dir, "1001.json"))  # current kept
 
 
 def test_select_zombie_pids_refuses_uninjected_rows():
@@ -247,20 +252,19 @@ def test_execute_zombie_removals_skips_pid_that_came_back(tmp_path, monkeypatch)
     f = os.path.join(sessions_dir, "700772.json")
     open(f, "w").close()
     fresh = [_sp(700772, "A", proc_alive=True)]  # came back alive
-    result = cleanup.execute_zombie_removals(
-        [700772], session_procs=fresh, cur=set()
-    )
+    result = cleanup.execute_zombie_removals([700772], session_procs=fresh, cur=set())
     assert len(result.skipped) == 1
     assert os.path.exists(f)
 
 
 # --- Strategy B: age sweep (controllable mtime) ----------------------------
 
+
 def test_list_aged_entries_uses_cleanup_age_days(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     monkeypatch.setattr(cfg, "cleanup_age_days", 14)
     now = 1_000_000_000.0
-    old = now - 20 * 86400   # older than 14d -> swept
+    old = now - 20 * 86400  # older than 14d -> swept
     recent = now - 1 * 86400  # within 14d -> kept
 
     snap = _mkdir(tmp_path, "shell-snapshots")
@@ -302,6 +306,7 @@ def test_remove_aged_entries(tmp_path, monkeypatch):
 
 # --- Classified counts (injected deps) -------------------------------------
 
+
 def test_plan_counts_break_down_categories(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     monkeypatch.setattr(cfg, "cleanup_age_days", 14)
@@ -323,12 +328,14 @@ def test_plan_counts_break_down_categories(tmp_path, monkeypatch):
 
 # --- AC10: degraded (no /proc) refuses destructive ops ---------------------
 
+
 def _degrade(monkeypatch):
     monkeypatch.setattr(proc_mod, "has_proc", lambda: False)
 
 
 def test_prune_refuses_without_proc(tmp_path, monkeypatch):
     import time
+
     _degrade(monkeypatch)
     old = time.time() - 700
     sessions = [_make_session(sid="dead", prompts=0, mtime=old, alive=False)]
@@ -341,9 +348,7 @@ def test_list_and_remove_orphans_refuse_without_proc(tmp_path, monkeypatch):
     _degrade(monkeypatch)
     sessions = [_make_session(sid="keep")]
     assert cleanup.list_orphan_dirs(sessions) == []
-    result = cleanup.execute_orphan_removals(
-        ["session-env/orphan-a"], known=set()
-    )
+    result = cleanup.execute_orphan_removals(["session-env/orphan-a"], known=set())
     assert len(result.refused) == 1
     # nothing deleted while degraded
     assert os.path.isdir(os.path.join(tmp_path, "session-env", "orphan-a"))
@@ -356,9 +361,7 @@ def test_remove_zombie_refuses_without_proc(tmp_path, monkeypatch):
     open(f, "w").close()
     _degrade(monkeypatch)
     procs = [_sp(700772, "A", proc_alive=False)]
-    result = cleanup.execute_zombie_removals(
-        [700772], session_procs=procs, cur=set()
-    )
+    result = cleanup.execute_zombie_removals([700772], session_procs=procs, cur=set())
     assert len(result.refused) == 1
     assert os.path.exists(f)  # zombie survives — can't tell current apart
 
@@ -369,14 +372,13 @@ def test_remove_session_refuses_without_proc(tmp_path, monkeypatch):
     transcript = os.path.join(projects, "sid1.jsonl")
     open(transcript, "w").close()
     _degrade(monkeypatch)
-    result = cleanup.remove_session(
-        _make_session(sid="sid1", file=transcript)
-    )
+    result = cleanup.remove_session(_make_session(sid="sid1", file=transcript))
     assert len(result.refused) == 1
     assert os.path.exists(transcript)  # not deleted while degraded
 
 
 # --- M3: remove_session must not delete a LIVE agent's jobs dir -------------
+
 
 def test_execute_session_removals_skips_now_alive_target(tmp_path, monkeypatch):
     # 删除 ⊆ 预览 revalidation: a previewed session that came ALIVE between
@@ -387,7 +389,8 @@ def test_execute_session_removals_skips_now_alive_target(tmp_path, monkeypatch):
     target = _make_session(sid="revived", file=transcript)
     fresh = [_sp(9999, "revived", proc_alive=True)]
     result = cleanup.execute_session_removals(
-        [target], session_procs=fresh, agents_map={}, cur=set())
+        [target], session_procs=fresh, agents_map={}, cur=set()
+    )
     assert len(result.skipped) == 1
     assert os.path.exists(transcript)
 
@@ -436,7 +439,9 @@ def test_terminate_refuses_without_proc(monkeypatch):
     import cc_session_control.actions.session_ops as so
 
     killed = {"n": 0}
-    monkeypatch.setattr(so.os, "kill", lambda *_: killed.__setitem__("n", killed["n"] + 1))
+    monkeypatch.setattr(
+        so.os, "kill", lambda *_: killed.__setitem__("n", killed["n"] + 1)
+    )
     monkeypatch.setattr(so.proc, "has_proc", lambda: False)
 
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)

@@ -78,6 +78,7 @@ class Reconciliation:
 
 # --- observation builder (reads registry + liveness, never rc) -------------
 
+
 def _collect(
     session_procs: Sequence[SessionProc],
     agent_jobs: Sequence[AgentJob],
@@ -98,7 +99,10 @@ def _collect(
     for sp in session_procs:
         if not sp.bridge:
             continue
-        if alive_gated and not liveness.is_rc_exposed(sp.bridge, sp.proc_alive):
+        if alive_gated and not liveness.is_rc_exposed(
+            sp.bridge,
+            sp.proc_alive is True,
+        ):
             continue
         prefix, key = split_env_id(sp.bridge)
         if prefix and key:
@@ -108,9 +112,7 @@ def _collect(
             continue
         if alive_gated and not (job.host_alive or job.sid in alive_sids):
             continue
-        records.append(
-            EnvRecord(prefix="cse", key=job.env_suffix, bound_sid=job.sid)
-        )
+        records.append(EnvRecord(prefix="cse", key=job.env_suffix, bound_sid=job.sid))
     for srv in rc_servers or []:
         if not srv.env_id:
             continue
@@ -180,6 +182,7 @@ def observe_live(
 
 # --- public API ------------------------------------------------------------
 
+
 def reconcile(
     session_procs: Sequence[SessionProc] | None = None,
     agent_jobs: Sequence[AgentJob] | None = None,
@@ -204,9 +207,7 @@ def reconcile(
     observed = observe_live(session_procs, agent_jobs, rc_servers, max_age=max_age)
     entries = update.entries if update.history_available else {}
     ledger_history_complete = (
-        update.success
-        and update.history_available
-        and not update.warnings
+        update.success and update.history_available and not update.warnings
     )
     return Reconciliation(
         current=_current_envs(observed, entries),
@@ -274,8 +275,14 @@ def _current_envs(
             seen.add(k)
     for k, rec in obs.items():
         if k not in seen:
-            out.append(BridgeEnv(prefix=rec.prefix, key=rec.key,
-                                 bound_sid=rec.bound_sid, status="current"))
+            out.append(
+                BridgeEnv(
+                    prefix=rec.prefix,
+                    key=rec.key,
+                    bound_sid=rec.bound_sid,
+                    status="current",
+                )
+            )
     return sorted(out, key=lambda e: e.last_seen, reverse=True)
 
 

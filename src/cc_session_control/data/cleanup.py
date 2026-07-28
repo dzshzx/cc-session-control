@@ -37,9 +37,9 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
+from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from pathlib import Path
-from typing import TypeVar
 
 from ..config import cfg
 from ..models import AgentJob, Session, SessionProc
@@ -54,6 +54,8 @@ from .removal import (
     CleanupPlan,
     PathRemoval,
     RemovalStatus,
+)
+from .removal import (
     remove_path as _remove_path,
 )
 
@@ -71,14 +73,16 @@ def _is_child_name(name: str) -> bool:
 
 def _sid_dir_paths() -> list[tuple[str, str]]:
     """(label, path) for each sid-keyed directory, via cfg props only."""
-    return [(name.replace("_", "-"), str(getattr(cfg, f"{name}_dir")))
-            for name in _SID_DIRS]
+    return [
+        (name.replace("_", "-"), str(getattr(cfg, f"{name}_dir"))) for name in _SID_DIRS
+    ]
 
 
 def _age_dir_paths() -> list[tuple[str, str]]:
     """(label, path) for each age-swept directory, via cfg props only."""
-    return [(name.replace("_", "-"), str(getattr(cfg, f"{name}_dir")))
-            for name in _AGE_DIRS]
+    return [
+        (name.replace("_", "-"), str(getattr(cfg, f"{name}_dir"))) for name in _AGE_DIRS
+    ]
 
 
 def _sid_keyed_paths(sid: str) -> list[str]:
@@ -127,6 +131,7 @@ def remove_agent_artifacts(short: str, sid: str) -> CleanupExecution:
 
 
 # --- Strategy A: sid-keyed orphan dirs (H1 protected-sid set) --------------
+
 
 def known_sids(
     sessions: Sequence[Session],
@@ -177,7 +182,8 @@ def _gather_known(
 ) -> set[str]:
     """Resolve protected sids, self-fetching omitted liveness inputs."""
     session_procs, agent_jobs, agents_map, cur = fill_liveness_inputs(
-        session_procs, agent_jobs, agents_map, cur, fresh=fresh)
+        session_procs, agent_jobs, agents_map, cur, fresh=fresh
+    )
     return known_sids(sessions, session_procs, agent_jobs, agents_map, cur)
 
 
@@ -256,6 +262,7 @@ def execute_orphan_removals(
 
 # --- Strategy A: pid-keyed zombie session files ----------------------------
 
+
 def select_zombie_pids(
     session_procs: Sequence[SessionProc],
     cur: AbstractSet[int],
@@ -273,7 +280,7 @@ def select_zombie_pids(
     """
     out: list[int] = []
     for sp in session_procs:
-        if sp.pid in cur:               # current session's pid file — protected
+        if sp.pid in cur:  # current session's pid file — protected
             continue
         if sp.proc_alive is not False:  # alive, or uninjected (None) — keep
             continue
@@ -310,9 +317,7 @@ def execute_zombie_removals(
         if pid not in still_zombie:
             result.skip(pid, "session process is now live or current")
             continue
-        removal = _remove_path(
-            os.path.join(str(cfg.sessions_dir), f"{pid}.json")
-        )
+        removal = _remove_path(os.path.join(str(cfg.sessions_dir), f"{pid}.json"))
         result.add_removal(removal)
         if removal.status is RemovalStatus.REMOVED:
             result.complete(pid)
@@ -322,6 +327,7 @@ def execute_zombie_removals(
 
 
 # --- Strategy B: age sweep -------------------------------------------------
+
 
 def _age_cutoff(now: float) -> float:
     return now - cfg.cleanup_age_days * _SECONDS_PER_DAY
@@ -374,9 +380,7 @@ def execute_aged_removals(
             result.mark_missing(entry)
             continue
         except OSError as exc:
-            result.add_removal(
-                PathRemoval(Path(full), RemovalStatus.FAILED, str(exc))
-            )
+            result.add_removal(PathRemoval(Path(full), RemovalStatus.FAILED, str(exc)))
             continue
         result.add_removal(_remove_path(full))
         if result.removals[-1].status is RemovalStatus.REMOVED:
@@ -387,6 +391,7 @@ def execute_aged_removals(
 
 
 # --- Session prune + full delete -------------------------------------------
+
 
 def prune_sessions(sessions: list[Session], max_prompts: int = 0) -> list[Session]:
     """Prunable sessions: not alive, not current, <= max_prompts, not recent.
@@ -399,7 +404,8 @@ def prune_sessions(sessions: list[Session], max_prompts: int = 0) -> list[Sessio
     alive_sids = {s.sid for s in sessions if s.alive}
     now = time.time()
     return [
-        s for s in sessions
+        s
+        for s in sessions
         if s.prompts <= max_prompts
         and s.sid not in alive_sids
         and not s.current
@@ -492,9 +498,7 @@ def execute_session_removals(
     """
     result = CleanupExecution()
     if not proc.current_determinable():
-        result.refuse(
-            [s.sid for s in targets], "current session cannot be determined"
-        )
+        result.refuse([s.sid for s in targets], "current session cannot be determined")
         return result
     if session_procs is None or agents_map is None or cur is None:
         try:
@@ -521,15 +525,13 @@ def execute_session_removals(
 
 # --- The cleanup plan (ONE source for counts, preview, and execution) -------
 
-_PlanItems = TypeVar("_PlanItems")
 
-
-def _plan_source(
+def _plan_source[PlanItems](
     source: str,
-    load: Callable[[], _PlanItems],
+    load: Callable[[], PlanItems],
     issues: list[CleanupIssue],
-    empty: _PlanItems,
-) -> _PlanItems:
+    empty: PlanItems,
+) -> PlanItems:
     try:
         return load()
     except OSError as exc:

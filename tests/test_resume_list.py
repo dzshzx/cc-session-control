@@ -12,21 +12,39 @@ from cc_session_control.actions import resume_list
 from cc_session_control.models import Session
 
 
-def _session(tmp_path, sid="aaaa1111", *, alive=False, current=False,
-             pid=None, label="fix the login bug", body="", mtime=1_700_000_000.0):
+def _session(
+    tmp_path,
+    sid="aaaa1111",
+    *,
+    alive=False,
+    current=False,
+    pid=None,
+    label="fix the login bug",
+    body="",
+    mtime=1_700_000_000.0,
+):
     f = tmp_path / f"{sid}.jsonl"
     f.write_text(body or '{"cwd": "/w"}\n')
     return Session(
-        sid=sid, cwd="/w/proj", label=label, mtime=mtime, prompts=3,
-        pid=pid, alive=alive, current=current, file=str(f),
+        sid=sid,
+        cwd="/w/proj",
+        label=label,
+        mtime=mtime,
+        prompts=3,
+        pid=pid,
+        alive=alive,
+        current=current,
+        file=str(f),
     )
 
 
 def test_keyword_matches_metadata_then_body(tmp_path):
-    s = _session(tmp_path, label="fix the login bug", body='{"text": "the SECRET-token issue"}\n')
-    assert resume_list.keyword_matches(s, "")           # empty matches all
-    assert resume_list.keyword_matches(s, "login")      # label hit
-    assert resume_list.keyword_matches(s, "proj")       # cwd hit
+    s = _session(
+        tmp_path, label="fix the login bug", body='{"text": "the SECRET-token issue"}\n'
+    )
+    assert resume_list.keyword_matches(s, "")  # empty matches all
+    assert resume_list.keyword_matches(s, "login")  # label hit
+    assert resume_list.keyword_matches(s, "proj")  # cwd hit
     assert resume_list.keyword_matches(s, "secret-token")  # body fallback hit
     assert not resume_list.keyword_matches(s, "no-such-word")
 
@@ -39,14 +57,20 @@ def test_keyword_body_fallback_survives_missing_file(tmp_path):
 
 def test_paginate_clamps_and_slices(tmp_path):
     rows = [_session(tmp_path, sid=f"s{i:03d}") for i in range(5)]
-    page_rows, page, pages = resume_list.paginate(rows, page=2, limit=2, all_pages=False)
+    page_rows, page, pages = resume_list.paginate(
+        rows, page=2, limit=2, all_pages=False
+    )
     assert (page, pages) == (2, 3)
     assert [s.sid for s in page_rows] == ["s002", "s003"]
     # out-of-range page clamps to the last page
-    page_rows, page, pages = resume_list.paginate(rows, page=99, limit=2, all_pages=False)
+    page_rows, page, pages = resume_list.paginate(
+        rows, page=99, limit=2, all_pages=False
+    )
     assert page == 3 and [s.sid for s in page_rows] == ["s004"]
     # --all ignores paging
-    page_rows, page, pages = resume_list.paginate(rows, page=99, limit=2, all_pages=True)
+    page_rows, page, pages = resume_list.paginate(
+        rows, page=99, limit=2, all_pages=True
+    )
     assert pages == 1 and len(page_rows) == 5
 
 

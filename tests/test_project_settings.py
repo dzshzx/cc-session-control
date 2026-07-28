@@ -79,7 +79,8 @@ def test_non_object_project_schema_is_unavailable(tmp_path, document):
 
 
 def test_unreadable_claude_json_is_observable_without_chmod_assumptions(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     path = tmp_path / ".claude.json"
     path.write_text("{}")
@@ -133,10 +134,14 @@ def test_rc_setting_write_can_remove_override_without_losing_other_keys(
     project = tmp_path / "app"
     settings = project / ".claude" / "settings.local.json"
     settings.parent.mkdir(parents=True)
-    settings.write_text(json.dumps({
-        "remoteControlAtStartup": False,
-        "keep": {"nested": 1},
-    }))
+    settings.write_text(
+        json.dumps(
+            {
+                "remoteControlAtStartup": False,
+                "keep": {"nested": 1},
+            }
+        )
+    )
 
     result = write_rc_at_startup(project, None)
 
@@ -146,7 +151,8 @@ def test_rc_setting_write_can_remove_override_without_losing_other_keys(
 
 @pytest.mark.parametrize("raw", [b"{broken", b"[]"])
 def test_rc_setting_write_refuses_invalid_existing_json_without_overwrite(
-    tmp_path, raw,
+    tmp_path,
+    raw,
 ):
     project = tmp_path / "app"
     settings = project / ".claude" / "settings.local.json"
@@ -164,7 +170,8 @@ def test_rc_setting_write_refuses_invalid_existing_json_without_overwrite(
 
 
 def test_rc_setting_lock_failure_is_typed_and_preserves_original(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     project = tmp_path / "app"
     settings = project / ".claude" / "settings.local.json"
@@ -183,7 +190,8 @@ def test_rc_setting_lock_failure_is_typed_and_preserves_original(
 
 
 def test_rc_setting_read_failure_is_typed_and_preserves_original(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     project = tmp_path / "app"
     settings = project / ".claude" / "settings.local.json"
@@ -205,7 +213,8 @@ def test_rc_setting_read_failure_is_typed_and_preserves_original(
 
 
 def test_rc_setting_temp_write_failure_preserves_original_and_cleans_tmp(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     project = tmp_path / "app"
     settings = project / ".claude" / "settings.local.json"
@@ -217,7 +226,9 @@ def test_rc_setting_temp_write_failure_preserves_original_and_cleans_tmp(
         raise OSError("temporary write denied")
 
     monkeypatch.setattr(
-        project_settings.tempfile, "NamedTemporaryFile", fail_temp,
+        project_settings.tempfile,
+        "NamedTemporaryFile",
+        fail_temp,
     )
     result = write_rc_at_startup(project, True)
 
@@ -234,7 +245,10 @@ def test_rc_setting_temp_write_failure_preserves_original_and_cleans_tmp(
     ],
 )
 def test_rc_setting_atomic_boundary_failure_preserves_bytes_and_cleans_tmp(
-    tmp_path, monkeypatch, boundary, failure,
+    tmp_path,
+    monkeypatch,
+    boundary,
+    failure,
 ):
     project = tmp_path / "app"
     settings = project / ".claude" / "settings.local.json"

@@ -97,14 +97,30 @@ def alive_map(max_age: float = 5.0) -> dict[str, int | None]:
     try:
         out = subprocess.run(
             ["claude", "agents", "--json"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         ).stdout
-        result = {
-            a.get("sessionId"): a.get("pid")
-            for a in json.loads(out or "[]")
-            if a.get("sessionId")
-        }
-    except Exception:
+        document = json.loads(out or "[]")
+        result: dict[str, int | None] = {}
+        if isinstance(document, list):
+            for entry in document:
+                if not isinstance(entry, dict):
+                    continue
+                sid = entry.get("sessionId")
+                pid = entry.get("pid")
+                if (
+                    isinstance(sid, str)
+                    and sid
+                    and (pid is None or isinstance(pid, int))
+                ):
+                    result[sid] = pid
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        json.JSONDecodeError,
+        UnicodeError,
+    ):
         result = {}
     if proc.has_proc():
         result = _scrub_dead_pids(result, proc.pid_exists)
@@ -124,15 +140,13 @@ def live_session_procs(max_age: float = 5.0) -> list[SessionProc]:
     `registry.read_session_procs` deliberately leaves `proc_alive=None` (pure
     parse, no `/proc`); a `SessionProc.proc_alive` is only trustworthy after
     this injection. Every consumer must come through here rather than re-inline
-    the `replace(sp, proc_alive=pid_alive(...))` idiom. Swallows errors → [].
+    the `replace(sp, proc_alive=pid_alive(...))` idiom. The owned registry and
+    `/proc` readers degrade expected I/O failures; programming errors propagate.
     """
-    try:
-        return [
-            replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
-            for sp in registry.read_session_procs(max_age=max_age)
-        ]
-    except Exception:
-        return []
+    return [
+        replace(sp, proc_alive=proc.pid_alive(sp.pid, sp.proc_start))
+        for sp in registry.read_session_procs(max_age=max_age)
+    ]
 
 
 def enrich_jobs(

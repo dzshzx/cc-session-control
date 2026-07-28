@@ -5,10 +5,11 @@ from __future__ import annotations
 import glob
 import json
 import os
+from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 
 from ..config import cfg
-from ..models import LiveInfo, Session
+from ..models import LiveInfo, Session, SessionProc
 from . import registry, tmux
 from .liveness import (
     LivenessSnapshot,
@@ -20,9 +21,14 @@ from .liveness import (
 from .proc import ancestor_pids as _ancestor_pids  # /proc walk moved to proc.py
 
 _NOISE = (
-    "<command-message>", "<command-name>", "<command-args>",
-    "<local-command-caveat>", "<local-command-stdout>", "<local-command-stderr>",
-    "<system-reminder>", "caveat:",
+    "<command-message>",
+    "<command-name>",
+    "<command-args>",
+    "<local-command-caveat>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<system-reminder>",
+    "caveat:",
 )
 
 
@@ -33,12 +39,25 @@ def _is_noise(t: str) -> bool:
 
 def _clean_text(t: str) -> str:
     t = " ".join(t.split())
-    for marker in ("<system-reminder", "<command-message", "<command-name",
-                   "<command-args", "<local-command-"):
+    for marker in (
+        "<system-reminder",
+        "<command-message",
+        "<command-name",
+        "<command-args",
+        "<local-command-",
+    ):
         i = t.find(marker)
         if i != -1:
             t = t[:i]
     return t.strip()
+
+
+def _json_object(line: str) -> dict[str, object] | None:
+    try:
+        document = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return document if isinstance(document, dict) else None
 
 
 def _parse_transcript(
@@ -65,40 +84,49 @@ def _parse_transcript(
     prompts = 0
 
     try:
-        with open(path, "r", errors="ignore") as fh:
+        with open(path, errors="ignore") as fh:
             for line in fh:
                 if '"sdk-ts"' in line:
                     hidden.add("sdk")
                 if '"bridge-session"' in line:
                     hidden.add("bridge")
                 if not cwd and '"cwd"' in line:
-                    try:
-                        cwd = json.loads(line).get("cwd", "") or cwd
-                    except Exception:
-                        pass
+                    document = _json_object(line)
+                    candidate = document.get("cwd") if document is not None else None
+                    if isinstance(candidate, str) and candidate:
+                        cwd = candidate
                 if '"aiTitle"' in line:
-                    try:
-                        title = json.loads(line).get("aiTitle", title) or title
-                    except Exception:
-                        pass
+                    document = _json_object(line)
+                    candidate = (
+                        document.get("aiTitle") if document is not None else None
+                    )
+                    if isinstance(candidate, str) and candidate:
+                        title = candidate
                 if '"lastPrompt"' in line:
-                    try:
-                        last_prompt = json.loads(line).get("lastPrompt", last_prompt) or last_prompt
-                    except Exception:
-                        pass
+                    document = _json_object(line)
+                    candidate = (
+                        document.get("lastPrompt") if document is not None else None
+                    )
+                    if isinstance(candidate, str) and candidate:
+                        last_prompt = candidate
                 if '"type":"user"' in line:
-                    try:
-                        o = json.loads(line)
-                    except Exception:
+                    document = _json_object(line)
+                    if document is None:
                         continue
-                    if o.get("type") != "user":
+                    if document.get("type") != "user":
                         continue
-                    c = (o.get("message") or {}).get("content")
+                    message = document.get("message")
+                    c = message.get("content") if isinstance(message, dict) else None
                     if isinstance(c, str):
                         texts = [c]
                     elif isinstance(c, list):
-                        texts = [b.get("text", "") for b in c
-                                 if isinstance(b, dict) and b.get("type") == "text"]
+                        texts = []
+                        for block in c:
+                            if not isinstance(block, dict):
+                                continue
+                            text = block.get("text")
+                            if block.get("type") == "text" and isinstance(text, str):
+                                texts.append(text)
                     else:
                         texts = []
                     texts = [t for t in texts if t.strip()]
@@ -112,8 +140,8 @@ def _parse_transcript(
                                 if ct:
                                     first_prompt = ct
                                     break
-    except Exception:
-        pass
+    except (OSError, UnicodeError):
+        return None
 
     if not cwd:
         return None
@@ -153,13 +181,20 @@ def _parse_transcript(
     rc_exposed = is_rc_exposed(bridge, proc_alive)
 
     return Session(
-        sid=sid, cwd=cwd, label=label, mtime=st.st_mtime,
-        prompts=prompts, pid=pid,
+        sid=sid,
+        cwd=cwd,
+        label=label,
+        mtime=st.st_mtime,
+        prompts=prompts,
+        pid=pid,
         alive=alive,
         current=current,
         proc_start=proc_start,
-        hidden=hidden, file=path,
-        kind=kind, entrypoint=entrypoint, source=source,
+        hidden=hidden,
+        file=path,
+        kind=kind,
+        entrypoint=entrypoint,
+        source=source,
         rc_exposed=rc_exposed,
         env_id=bridge if rc_exposed else None,
         agent_short=sid[:8] if sid[:8] in job_shorts else None,
@@ -216,6 +251,9 @@ def scan(inputs: LivenessSnapshot | None = None) -> list[Session]:
     no injection, the standalone CLI-compatible path self-fetches as before.
     """
     root = str(cfg.projects_root)
+    session_procs: Sequence[SessionProc]
+    agents: Mapping[str, int | None]
+    cur: AbstractSet[int]
     if inputs is None:
         session_procs = live_session_procs()
         agents = alive_map()

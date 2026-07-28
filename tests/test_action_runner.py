@@ -45,12 +45,14 @@ def test_single_flight_rejects_same_and_cross_action_until_consumed() -> None:
         Busy,
     )
     assert runner.consume_result() == ActionResult.success(
-        "done", needs_refresh=True,
+        "done",
+        needs_refresh=True,
     )
     assert calls == ["first"]
 
     accepted_again = runner.submit(
-        "agent.remove", lambda: ActionResult.refused("not allowed"),
+        "agent.remove",
+        lambda: ActionResult.refused("not allowed"),
     )
     assert isinstance(accepted_again, Accepted)
 

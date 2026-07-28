@@ -33,46 +33,87 @@ Mode = str  # "light" | anything else = dark
 # ≥ 4.5:1 (WCAG-AA-ish, relative luminance) against the assumed backdrop —
 # dark: near-black (#6d6/#d66 ≈ 5.5+, #aaa ≈ 8.1); light: near-white
 # (#070 ≈ 5.7, #a00 ≈ 7.7, #666 ≈ 5.7, #850/#ddd ≈ 4.7).
-_SPEC: list[tuple[str, str | None, tuple[str, str, str, str], tuple[str, str, str, str]]] = [
-    ("header", "bold",
-     ("white,bold", "black", "#fff,bold", "#111"),
-     ("black,bold", "light gray", "#000,bold", "#ddd")),
-    ("footer", None,
-     ("light gray", "black", "#aaa", "#111"),
-     ("dark gray", "light gray", "#555", "#ddd")),
-    ("tab_on", "bold,standout",
-     ("white,bold", "dark cyan", "#fff,bold", "#068"),
-     ("white,bold", "dark cyan", "#fff,bold", "#068")),
-    ("tab_off", None,
-     ("light cyan", "black", "#7ab", "#111"),
-     ("dark cyan", "light gray", "#067", "#ddd")),
-    ("alive", None,
-     ("light green", "default", "#6d6", "default"),
-     ("dark green", "default", "#070", "default")),
-    ("status_busy", "bold",
-     ("light green,bold", "default", "#6d6,bold", "default"),
-     ("dark green,bold", "default", "#070,bold", "default")),
-    ("status_err", None,
-     ("light red", "default", "#d66", "default"),
-     ("dark red", "default", "#a00", "default")),
-    ("dead", None,
-     ("light gray", "default", "#ccc", "default"),
-     ("dark gray", "default", "#666", "default")),
-    ("selected", "standout",
-     ("white,bold", "dark cyan", "#fff,bold", "#068"),
-     ("white,bold", "dark cyan", "#fff,bold", "#068")),
-    ("notify", "bold",
-     ("yellow,bold", "black", "#ff0,bold", "#111"),
-     ("brown,bold", "light gray", "#850,bold", "#ddd")),
-    ("status", None,
-     ("light gray", "black", "#bbb", "#111"),
-     ("dark gray", "light gray", "#444", "#ddd")),
-    ("body", None,
-     ("light gray", "default", "#ccc", "default"),
-     ("black", "default", "#222", "default")),
-    ("col_header", None,
-     ("dark cyan", "default", "#9cc", "default"),
-     ("dark cyan", "default", "#067", "default")),
+_SPEC: list[
+    tuple[str, str | None, tuple[str, str, str, str], tuple[str, str, str, str]]
+] = [
+    (
+        "header",
+        "bold",
+        ("white,bold", "black", "#fff,bold", "#111"),
+        ("black,bold", "light gray", "#000,bold", "#ddd"),
+    ),
+    (
+        "footer",
+        None,
+        ("light gray", "black", "#aaa", "#111"),
+        ("dark gray", "light gray", "#555", "#ddd"),
+    ),
+    (
+        "tab_on",
+        "bold,standout",
+        ("white,bold", "dark cyan", "#fff,bold", "#068"),
+        ("white,bold", "dark cyan", "#fff,bold", "#068"),
+    ),
+    (
+        "tab_off",
+        None,
+        ("light cyan", "black", "#7ab", "#111"),
+        ("dark cyan", "light gray", "#067", "#ddd"),
+    ),
+    (
+        "alive",
+        None,
+        ("light green", "default", "#6d6", "default"),
+        ("dark green", "default", "#070", "default"),
+    ),
+    (
+        "status_busy",
+        "bold",
+        ("light green,bold", "default", "#6d6,bold", "default"),
+        ("dark green,bold", "default", "#070,bold", "default"),
+    ),
+    (
+        "status_err",
+        None,
+        ("light red", "default", "#d66", "default"),
+        ("dark red", "default", "#a00", "default"),
+    ),
+    (
+        "dead",
+        None,
+        ("light gray", "default", "#ccc", "default"),
+        ("dark gray", "default", "#666", "default"),
+    ),
+    (
+        "selected",
+        "standout",
+        ("white,bold", "dark cyan", "#fff,bold", "#068"),
+        ("white,bold", "dark cyan", "#fff,bold", "#068"),
+    ),
+    (
+        "notify",
+        "bold",
+        ("yellow,bold", "black", "#ff0,bold", "#111"),
+        ("brown,bold", "light gray", "#850,bold", "#ddd"),
+    ),
+    (
+        "status",
+        None,
+        ("light gray", "black", "#bbb", "#111"),
+        ("dark gray", "light gray", "#444", "#ddd"),
+    ),
+    (
+        "body",
+        None,
+        ("light gray", "default", "#ccc", "default"),
+        ("black", "default", "#222", "default"),
+    ),
+    (
+        "col_header",
+        None,
+        ("dark cyan", "default", "#9cc", "default"),
+        ("dark cyan", "default", "#067", "default"),
+    ),
 ]
 
 
@@ -98,7 +139,9 @@ def detect_mode() -> Mode:
 
 # Reply looks like `ESC]11;rgb:1111/1111/1111 BEL` (xterm also emits `rgba:`
 # and 1-4 hex digits per channel; terminator is BEL or ST `ESC \`).
-_OSC11_RGB = re.compile(r"rgba?:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})")
+_OSC11_RGB = re.compile(
+    r"rgba?:([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})"
+)
 # OSC 11 query + DA1 (Primary Device Attributes) as a SENTINEL: terminals
 # answer queries in order and virtually every terminal answers DA1, so its
 # reply (`ESC[?...c`) means "the OSC 11 answer, if any, has already arrived".
@@ -150,7 +193,7 @@ def _query_bg_rgb(timeout: float = _REPLY_TIMEOUT) -> tuple[float, float, float]
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             return None
         return _query_bg_rgb_on(sys.stdin.fileno(), sys.stdout.fileno(), timeout)
-    except Exception:
+    except (OSError, ValueError, termios.error):
         return None
 
 
@@ -185,5 +228,5 @@ def _query_bg_rgb_on(
     finally:
         try:
             termios.tcsetattr(in_fd, termios.TCSADRAIN, old)
-        except Exception:
+        except (OSError, termios.error):
             pass

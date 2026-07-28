@@ -120,7 +120,10 @@ def confirm_tmux_takeover(
             app.exit_with(AttachIntent(target))
             return
     confirm_takeover(
-        app, s, verb,
+        app,
+        s,
+        verb,
         lambda: app.exit_with(TmuxResumeIntent(s, fork=fork)),
-        name=name, fork=fork,
+        name=name,
+        fork=fork,
     )

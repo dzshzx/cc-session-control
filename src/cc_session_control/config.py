@@ -32,11 +32,15 @@ class Config:
         self.rc_list: Path = self.config_dir / "rc-enabled"
         self.rc_session: str = os.environ.get("CSCTL_RC_SESSION", "rc")
         self.rc_stagger: int = _integer_environment(
-            "CSCTL_RC_STAGGER", 2, minimum=0,
+            "CSCTL_RC_STAGGER",
+            2,
+            minimum=0,
         )
         # Age threshold (days) for the time/global-keyed cleanup strategy.
         self.cleanup_age_days: int = _integer_environment(
-            "CSCTL_CLEANUP_AGE_DAYS", 14, minimum=1,
+            "CSCTL_CLEANUP_AGE_DAYS",
+            14,
+            minimum=1,
         )
         # TUI palette: "auto" (detect the terminal background) | "dark" | "light".
         self.theme: str = os.environ.get("CSCTL_THEME", "auto")

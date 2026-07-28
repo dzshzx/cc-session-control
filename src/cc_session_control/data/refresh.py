@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
+from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import TypeAlias
 
 from ..models import AgentJob, RCProject, Session, SessionProc
 from . import rc
@@ -54,10 +54,10 @@ class RefreshFailure:
     detail: str
 
 
-RefreshResult: TypeAlias = RefreshBatch | RefreshFailure
-RefreshBuilder: TypeAlias = Callable[[int], RefreshResult]
-SnapshotBuilder: TypeAlias = Callable[[], WorldSnapshot]
-CleanupBuilder: TypeAlias = Callable[
+type RefreshResult = RefreshBatch | RefreshFailure
+type RefreshBuilder = Callable[[int], RefreshResult]
+type SnapshotBuilder = Callable[[], WorldSnapshot]
+type CleanupBuilder = Callable[
     [
         list[Session],
         Sequence[SessionProc],
@@ -154,11 +154,7 @@ class RefreshCoordinator:
         with self._lock:
             result = self._ready
             self._ready = None
-            if (
-                result is not None
-                and self._refresh_again
-                and not self._closed
-            ):
+            if result is not None and self._refresh_again and not self._closed:
                 self._refresh_again = False
                 generation = self._claim_generation()
         if generation is not None:

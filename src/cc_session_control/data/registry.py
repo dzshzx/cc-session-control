@@ -38,7 +38,9 @@ def _parse_session_proc(path: str) -> SessionProc | None:
     try:
         with open(path, errors="ignore") as fh:
             d = json.load(fh)
-    except Exception:
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    if not isinstance(d, dict):
         return None
     sid = d.get("sessionId")
     pid = d.get("pid")
@@ -67,13 +69,10 @@ def read_session_procs(max_age: float = 5.0) -> list[SessionProc]:
     if _sessions_cache is not None and (now - _sessions_time) < max_age:
         return _sessions_cache
     rows: list[SessionProc] = []
-    try:
-        for path in glob.glob(os.path.join(str(cfg.sessions_dir), "*.json")):
-            row = _parse_session_proc(path)
-            if row is not None:
-                rows.append(row)
-    except Exception:
-        rows = []
+    for path in glob.glob(os.path.join(str(cfg.sessions_dir), "*.json")):
+        row = _parse_session_proc(path)
+        if row is not None:
+            rows.append(row)
     _sessions_cache = rows
     _sessions_time = now
     return rows
@@ -86,7 +85,9 @@ def _parse_agent_job(state_path: str) -> AgentJob | None:
     try:
         with open(state_path, errors="ignore") as fh:
             d = json.load(fh)
-    except Exception:
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    if not isinstance(d, dict):
         return None
     sid = str(d.get("sessionId") or "")
     flags = d.get("respawnFlags")
@@ -112,14 +113,11 @@ def read_agent_jobs(max_age: float = 5.0) -> list[AgentJob]:
     if _jobs_cache is not None and (now - _jobs_time) < max_age:
         return _jobs_cache
     rows: list[AgentJob] = []
-    try:
-        pattern = os.path.join(str(cfg.jobs_dir), "*", "state.json")
-        for state_path in glob.glob(pattern):
-            row = _parse_agent_job(state_path)
-            if row is not None:
-                rows.append(row)
-    except Exception:
-        rows = []
+    pattern = os.path.join(str(cfg.jobs_dir), "*", "state.json")
+    for state_path in glob.glob(pattern):
+        row = _parse_agent_job(state_path)
+        if row is not None:
+            rows.append(row)
     _jobs_cache = rows
     _jobs_time = now
     return rows

@@ -24,6 +24,7 @@ class ProcRC:
     0 when produced by the pure matcher (the scanner fills it); `cwd` comes from
     `readlink(/proc/<pid>/cwd)`.
     """
+
     pid: int
     name: str = ""
     cwd: str = ""
@@ -71,13 +72,13 @@ def proc_starttime(pid: int) -> str | None:
     try:
         with open(f"{_PROC}/{pid}/stat") as fh:
             data = fh.read()
-    except Exception:
+    except OSError:
         return None
     try:
         # `after` begins at field 3 (state); field 22 is at index 22 - 3.
-        after = data[data.rfind(")") + 2:]
+        after = data[data.rfind(")") + 2 :]
         return after.split()[22 - 3]
-    except Exception:
+    except (IndexError, ValueError):
         return None
 
 
@@ -109,8 +110,8 @@ def ancestors_of(start_pid: int) -> set[int]:
         try:
             with open(f"{_PROC}/{pid}/stat") as fh:
                 data = fh.read()
-            ppid = int(data[data.rfind(")") + 2:].split()[1])
-        except Exception:
+            ppid = int(data[data.rfind(")") + 2 :].split()[1])
+        except (OSError, IndexError, ValueError):
             break
         if ppid <= 1:
             break
@@ -162,7 +163,7 @@ def _flag_value(argv: list[str], flag: str) -> str | None:
         if tok == flag:
             return argv[i + 1] if i + 1 < len(argv) else None
         if tok.startswith(prefix):
-            return tok[len(prefix):] or None
+            return tok[len(prefix) :] or None
     return None
 
 
@@ -191,14 +192,14 @@ def _read_text(path: str) -> str:
     try:
         with open(path, errors="ignore") as fh:
             return fh.read()
-    except Exception:
+    except OSError:
         return ""
 
 
 def _read_link(path: str) -> str:
     try:
         return os.readlink(path)
-    except Exception:
+    except OSError:
         return ""
 
 
@@ -207,27 +208,24 @@ def scan_rc_servers() -> list[ProcRC]:
 
     Reads each pid's `comm` + `cmdline`, runs the pure `_match_rc_cmdline`, and
     fills `pid` + `cwd` (`readlink /proc/<pid>/cwd`) for matches. Degrades to
-    `[]` off Linux (no `/proc`) and swallows all per-pid errors.
+    `[]` off Linux (no `/proc`) and ignores expected per-pid I/O races.
     """
     if not has_proc():
         return []
     servers: list[ProcRC] = []
     try:
         entries = os.listdir(_PROC)
-    except Exception:
+    except OSError:
         return []
     for entry in entries:
         if not entry.isdigit():
             continue
-        try:
-            pid = int(entry)
-            comm = _read_text(f"{_PROC}/{pid}/comm").strip()
-            cmdline = _read_text(f"{_PROC}/{pid}/cmdline")
-            match = _match_rc_cmdline(comm, cmdline)
-            if match is None:
-                continue
-            cwd = _read_link(f"{_PROC}/{pid}/cwd")
-            servers.append(ProcRC(pid=pid, name=match.name, cwd=cwd or match.cwd))
-        except Exception:
+        pid = int(entry)
+        comm = _read_text(f"{_PROC}/{pid}/comm").strip()
+        cmdline = _read_text(f"{_PROC}/{pid}/cmdline")
+        match = _match_rc_cmdline(comm, cmdline)
+        if match is None:
             continue
+        cwd = _read_link(f"{_PROC}/{pid}/cwd")
+        servers.append(ProcRC(pid=pid, name=match.name, cwd=cwd or match.cwd))
     return servers

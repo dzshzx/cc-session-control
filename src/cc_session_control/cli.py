@@ -7,6 +7,7 @@ from typing import Protocol, TextIO
 
 from . import cli_commands, cli_rc
 
+
 class CommandHandler(Protocol):
     """Uniform interface bound to every leaf command parser."""
 
@@ -109,18 +110,13 @@ def build_parser() -> argparse.ArgumentParser:
     prune.add_argument(
         "--sweep-aged",
         action="store_true",
-        help=(
-            "Remove age-keyed global entries older than cleanup_age_days"
-        ),
+        help=("Remove age-keyed global entries older than cleanup_age_days"),
     )
     prune.set_defaults(handler=cli_commands.handle_prune)
 
     resume = commands.add_parser(
         "resume",
-        help=(
-            "List resumable sessions across directories and print "
-            "resume commands"
-        ),
+        help=("List resumable sessions across directories and print resume commands"),
     )
     resume.add_argument(
         "keyword",

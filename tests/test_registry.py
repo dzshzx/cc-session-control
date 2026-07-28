@@ -16,17 +16,33 @@ def test_read_session_procs(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     registry.invalidate_cache()
     sessions = tmp_path / "sessions"
-    _write_json(sessions / "151818.json", {
-        "pid": 151818, "sessionId": "sid-aaa", "cwd": "/work/a",
-        "kind": "bg", "entrypoint": "cli", "status": "idle",
-        "procStart": "7601319", "version": "2.1.183",
-    })
-    _write_json(sessions / "2347.json", {
-        "pid": 2347, "sessionId": "sid-bbb", "cwd": "/work/b",
-        "kind": "bg", "entrypoint": "cli", "status": "idle",
-        "procStart": "9419", "version": "2.1.178",
-        "bridgeSessionId": "session_016spR3Nkq2tJL2edM1exfuo",
-    })
+    _write_json(
+        sessions / "151818.json",
+        {
+            "pid": 151818,
+            "sessionId": "sid-aaa",
+            "cwd": "/work/a",
+            "kind": "bg",
+            "entrypoint": "cli",
+            "status": "idle",
+            "procStart": "7601319",
+            "version": "2.1.183",
+        },
+    )
+    _write_json(
+        sessions / "2347.json",
+        {
+            "pid": 2347,
+            "sessionId": "sid-bbb",
+            "cwd": "/work/b",
+            "kind": "bg",
+            "entrypoint": "cli",
+            "status": "idle",
+            "procStart": "9419",
+            "version": "2.1.178",
+            "bridgeSessionId": "session_016spR3Nkq2tJL2edM1exfuo",
+        },
+    )
     # malformed file -> skipped, never raises
     (sessions / "broken.json").write_text("{not json")
     # missing pid/sid -> skipped
@@ -52,19 +68,28 @@ def test_read_agent_jobs(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     registry.invalidate_cache()
     jobs = tmp_path / "jobs"
-    _write_json(jobs / "0877f45e" / "state.json", {
-        "state": "stopped", "tempo": "idle", "cwd": "/work/local",
-        "name": "关闭沙箱环境",
-        "respawnFlags": ["--reply-on-resume", "--effort", "xhigh"],
-        "sessionId": "0877f45e-04ac-4413-b9a7-54adf8af1ca5",
-        "resumeSessionId": "0877f45e-04ac-4413-b9a7-54adf8af1ca5",
-        "bridgeSessionId": "cse_01DgeqMqXMrSFpW59uSZwK99",
-        "backend": "daemon",
-    })
+    _write_json(
+        jobs / "0877f45e" / "state.json",
+        {
+            "state": "stopped",
+            "tempo": "idle",
+            "cwd": "/work/local",
+            "name": "关闭沙箱环境",
+            "respawnFlags": ["--reply-on-resume", "--effort", "xhigh"],
+            "sessionId": "0877f45e-04ac-4413-b9a7-54adf8af1ca5",
+            "resumeSessionId": "0877f45e-04ac-4413-b9a7-54adf8af1ca5",
+            "bridgeSessionId": "cse_01DgeqMqXMrSFpW59uSZwK99",
+            "backend": "daemon",
+        },
+    )
     # second job: missing optional fields, no bridge
-    _write_json(jobs / "abcd1234" / "state.json", {
-        "state": "running", "sessionId": "abcd1234-xxxx",
-    })
+    _write_json(
+        jobs / "abcd1234" / "state.json",
+        {
+            "state": "running",
+            "sessionId": "abcd1234-xxxx",
+        },
+    )
     # non-state files in jobs dir are ignored by the glob
     (jobs / "stray.txt").write_text("ignore me")
 
@@ -97,6 +122,7 @@ def test_read_agent_jobs_missing_dir(tmp_path, monkeypatch):
 
 # --- host_pid_for_sid: the single pure host-pid join (item 6) ---
 
+
 def _sp(pid, sid, proc_alive):
     return SessionProc(pid=pid, sid=sid, proc_start=str(pid), proc_alive=proc_alive)
 
@@ -120,7 +146,10 @@ def test_host_pid_for_sid_never_alive_from_uninjected_rows():
 
 
 def test_host_pid_for_sid_none_when_unknown():
-    assert registry.host_pid_for_sid("sid-missing", [_sp(100, "sid-a", True)]) == (None, False)
+    assert registry.host_pid_for_sid("sid-missing", [_sp(100, "sid-a", True)]) == (
+        None,
+        False,
+    )
 
 
 def test_registry_cache_reuses_until_invalidated(tmp_path, monkeypatch):
@@ -145,8 +174,10 @@ def test_registry_cache_reuses_until_invalidated(tmp_path, monkeypatch):
 
 # --- split_env_id: THE one namespaced-id parser (models.py) ---
 
+
 def test_split_env_id_edge_rules():
     from cc_session_control.models import split_env_id
+
     assert split_env_id("cse_abc") == ("cse", "abc")
     assert split_env_id("session_a_b") == ("session", "a_b")  # first _ splits
     # Degenerate ids are rejected as a whole, never half-parsed.

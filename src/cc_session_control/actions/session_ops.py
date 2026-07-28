@@ -47,7 +47,7 @@ def take_over(pid: int, proc_start: str = "") -> TakeOverResult:
     except ProcessLookupError:
         invalidate_cache()
         return "gone"
-    except Exception:
+    except OSError:
         return "failed"
     time.sleep(1)
     invalidate_cache()
@@ -197,6 +197,7 @@ def do_tmux_new(directory: str) -> str | None:
 # intent owns its own finalizer + failure messages, so adding a variant means
 # adding one class here + one view call — app.py and cli.py stay untouched.
 
+
 class ExitIntent:
     """What a view asks csctl to do AFTER the MainLoop exits."""
 
@@ -239,7 +240,9 @@ class TmuxResumeIntent(ExitIntent):
     def run(self) -> None:
         target = do_tmux_resume(self.session, fork=self.fork)
         if target is None:
-            print("Failed to resume the session inside tmux (R10 degraded, or tmux unavailable).")
+            print(
+                "Failed to resume the session inside tmux (R10 degraded, or tmux unavailable)."
+            )
         elif not enter_window(target):
             print(f"Session resumed in tmux window {target}, but attaching failed.")
 

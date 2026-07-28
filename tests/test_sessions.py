@@ -41,37 +41,76 @@ def _setup_world(tmp_path, monkeypatch):
 
     projects = tmp_path / "projects"
     for sid in (CLI_SID, VSC_SID, SDK_SID, BG_SID):
-        _write_transcript(projects, sid, [
-            {"cwd": "/work/proj1"},
-            {"type": "user", "message": {"content": f"prompt for {sid[:3]}"}},
-        ])
+        _write_transcript(
+            projects,
+            sid,
+            [
+                {"cwd": "/work/proj1"},
+                {"type": "user", "message": {"content": f"prompt for {sid[:3]}"}},
+            ],
+        )
 
     sessions = tmp_path / "sessions"
-    _write_json(sessions / "1001.json", {
-        "pid": 1001, "sessionId": CLI_SID, "cwd": "/work/proj1",
-        "kind": "interactive", "entrypoint": "cli", "status": "busy",
-        "procStart": "100", "bridgeSessionId": "session_aaa",
-    })
-    _write_json(sessions / "1002.json", {
-        "pid": 1002, "sessionId": VSC_SID, "cwd": "/work/proj1",
-        "kind": "interactive", "entrypoint": "claude-vscode", "status": "idle",
-        "procStart": "200",
-    })
-    _write_json(sessions / "1003.json", {
-        "pid": 1003, "sessionId": SDK_SID, "cwd": "/work/proj1",
-        "kind": "interactive", "entrypoint": "sdk-ts", "status": "idle",
-        "procStart": "300", "bridgeSessionId": "session_bbb",
-    })
-    _write_json(sessions / "1004.json", {
-        "pid": 1004, "sessionId": BG_SID, "cwd": "/work/proj1",
-        "kind": "bg", "entrypoint": "cli", "status": "busy",
-        "procStart": "400",
-    })
+    _write_json(
+        sessions / "1001.json",
+        {
+            "pid": 1001,
+            "sessionId": CLI_SID,
+            "cwd": "/work/proj1",
+            "kind": "interactive",
+            "entrypoint": "cli",
+            "status": "busy",
+            "procStart": "100",
+            "bridgeSessionId": "session_aaa",
+        },
+    )
+    _write_json(
+        sessions / "1002.json",
+        {
+            "pid": 1002,
+            "sessionId": VSC_SID,
+            "cwd": "/work/proj1",
+            "kind": "interactive",
+            "entrypoint": "claude-vscode",
+            "status": "idle",
+            "procStart": "200",
+        },
+    )
+    _write_json(
+        sessions / "1003.json",
+        {
+            "pid": 1003,
+            "sessionId": SDK_SID,
+            "cwd": "/work/proj1",
+            "kind": "interactive",
+            "entrypoint": "sdk-ts",
+            "status": "idle",
+            "procStart": "300",
+            "bridgeSessionId": "session_bbb",
+        },
+    )
+    _write_json(
+        sessions / "1004.json",
+        {
+            "pid": 1004,
+            "sessionId": BG_SID,
+            "cwd": "/work/proj1",
+            "kind": "bg",
+            "entrypoint": "cli",
+            "status": "busy",
+            "procStart": "400",
+        },
+    )
 
-    _write_json(tmp_path / "jobs" / BG_SID[:8] / "state.json", {
-        "state": "running", "sessionId": BG_SID, "resumeSessionId": BG_SID,
-        "backend": "daemon",
-    })
+    _write_json(
+        tmp_path / "jobs" / BG_SID[:8] / "state.json",
+        {
+            "state": "running",
+            "sessionId": BG_SID,
+            "resumeSessionId": BG_SID,
+            "backend": "daemon",
+        },
+    )
 
     # pid 1003 (sdk) is a zombie file: registry entry exists but proc is dead.
     alive_pids = {1001, 1002, 1004}
@@ -97,8 +136,8 @@ def test_scan_unifies_sources(tmp_path, monkeypatch):
     cli = rows[CLI_SID]
     assert cli.source == "cli"
     assert cli.alive is True
-    assert cli.current is True            # pid 1001 in ancestor set
-    assert cli.rc_exposed is True         # bridge string AND alive
+    assert cli.current is True  # pid 1001 in ancestor set
+    assert cli.rc_exposed is True  # bridge string AND alive
     assert cli.env_id == "session_aaa"
     assert cli.agent_short is None
     assert cli.status == "busy"
@@ -108,22 +147,22 @@ def test_scan_unifies_sources(tmp_path, monkeypatch):
     assert vsc.source == "vscode"
     assert vsc.alive is True
     assert vsc.current is False
-    assert vsc.rc_exposed is False        # no bridge
+    assert vsc.rc_exposed is False  # no bridge
     assert vsc.env_id is None
 
     sdk = rows[SDK_SID]
     assert sdk.source == "sdk"
-    assert sdk.alive is False             # pid 1003 is a zombie file
+    assert sdk.alive is False  # pid 1003 is a zombie file
     assert sdk.current is False
-    assert sdk.rc_exposed is False        # bridge present but proc dead
+    assert sdk.rc_exposed is False  # bridge present but proc dead
     assert sdk.env_id is None
-    assert sdk.bridge_or_sdk is True      # D9: source==sdk surfaces it
+    assert sdk.bridge_or_sdk is True  # D9: source==sdk surfaces it
 
     bg = rows[BG_SID]
-    assert bg.source == "bg"              # registry kind == bg
+    assert bg.source == "bg"  # registry kind == bg
     assert bg.alive is True
     assert bg.current is False
-    assert bg.agent_short == BG_SID[:8]   # linked job short
+    assert bg.agent_short == BG_SID[:8]  # linked job short
     assert bg.status == "busy"
 
 
@@ -142,10 +181,10 @@ def test_scan_injects_tmux_residency_for_alive_sessions(tmp_path, monkeypatch):
 
     rows = {s.sid: s for s in sessions_mod.scan()}
 
-    assert rows[CLI_SID].tmux_target == "proj1:2"   # alive + pane hit
-    assert rows[VSC_SID].tmux_target is None        # alive, bare terminal
-    assert rows[SDK_SID].tmux_target is None        # dead: never resident
-    assert 1003 not in seen["pids"]                 # dead pid not queried
+    assert rows[CLI_SID].tmux_target == "proj1:2"  # alive + pane hit
+    assert rows[VSC_SID].tmux_target is None  # alive, bare terminal
+    assert rows[SDK_SID].tmux_target is None  # dead: never resident
+    assert 1003 not in seen["pids"]  # dead pid not queried
     assert {1001, 1002, 1004} <= seen["pids"]
 
 
@@ -153,17 +192,27 @@ def test_scan_residency_covers_all_alive_pids_of_a_sid(tmp_path, monkeypatch):
     # Multi-pid (resume) session: ANY alive pid inside a pane makes it resident.
     _setup_world(tmp_path, monkeypatch)
     # Second registry file for CLI_SID (resume kept the sid, minted a new pid).
-    _write_json(tmp_path / "sessions" / "1005.json", {
-        "pid": 1005, "sessionId": CLI_SID, "cwd": "/work/proj1",
-        "kind": "interactive", "entrypoint": "cli", "status": "idle",
-        "procStart": "500",
-    })
+    _write_json(
+        tmp_path / "sessions" / "1005.json",
+        {
+            "pid": 1005,
+            "sessionId": CLI_SID,
+            "cwd": "/work/proj1",
+            "kind": "interactive",
+            "entrypoint": "cli",
+            "status": "idle",
+            "procStart": "500",
+        },
+    )
     registry.invalidate_cache()
     alive_pids = {1001, 1002, 1004, 1005}
     monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: pid in alive_pids)
     # Only the OLDER pid 1001 lives in a tmux pane.
-    monkeypatch.setattr(sessions_mod.tmux, "residency_targets",
-                        lambda pids: {1001: "proj1:3"} if 1001 in set(pids) else {})
+    monkeypatch.setattr(
+        sessions_mod.tmux,
+        "residency_targets",
+        lambda pids: {1001: "proj1:3"} if 1001 in set(pids) else {},
+    )
 
     rows = {s.sid: s for s in sessions_mod.scan()}
     assert rows[CLI_SID].tmux_target == "proj1:3"
@@ -174,10 +223,14 @@ def test_scan_transcript_only_session_is_dead(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     registry.invalidate_cache()
     projects = tmp_path / "projects"
-    _write_transcript(projects, "orphan-sid", [
-        {"cwd": "/work/x"},
-        {"type": "user", "message": {"content": "hello"}},
-    ])
+    _write_transcript(
+        projects,
+        "orphan-sid",
+        [
+            {"cwd": "/work/x"},
+            {"type": "user", "message": {"content": "hello"}},
+        ],
+    )
     monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: False)
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: set())
@@ -196,9 +249,13 @@ def test_scan_excludes_transcript_without_cwd(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     registry.invalidate_cache()
     projects = tmp_path / "projects"
-    _write_transcript(projects, "nocwd-sid", [
-        {"type": "user", "message": {"content": "no cwd here"}},
-    ])
+    _write_transcript(
+        projects,
+        "nocwd-sid",
+        [
+            {"type": "user", "message": {"content": "no cwd here"}},
+        ],
+    )
     monkeypatch.setattr(proc, "pid_alive", lambda pid, ps: False)
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: set())
@@ -212,10 +269,14 @@ def test_scan_uses_injected_generation_liveness_without_reading_sources(
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     sid = "injected-sid"
-    _write_transcript(tmp_path / "projects", sid, [
-        {"cwd": "/work/injected"},
-        {"type": "user", "message": {"content": "hello"}},
-    ])
+    _write_transcript(
+        tmp_path / "projects",
+        sid,
+        [
+            {"cwd": "/work/injected"},
+            {"type": "user", "message": {"content": "hello"}},
+        ],
+    )
     inputs = liveness.LivenessSnapshot(
         session_procs=(
             SessionProc(

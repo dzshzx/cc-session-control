@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from argparse import Namespace
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
-import sys
 from typing import TextIO
 
 Command = Callable[[Namespace], int]

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from types import TracebackType
-from typing import IO
+from typing import IO, Literal
 
 from ..config import cfg
 from ..models import BridgeEnv, EnvRecord
@@ -134,7 +134,7 @@ class _LedgerLock:
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         if self.file is None:
             return False
         failures: list[str] = []
@@ -352,11 +352,7 @@ def _compact(
     now: float,
 ) -> dict[tuple[str, str], BridgeEnv]:
     cutoff = now - _RETENTION_SECONDS
-    kept = {
-        key: value
-        for key, value in entries.items()
-        if value.last_seen >= cutoff
-    }
+    kept = {key: value for key, value in entries.items() if value.last_seen >= cutoff}
     if len(kept) <= _MAX_ENTRIES:
         return kept
     newest = sorted(
@@ -364,10 +360,7 @@ def _compact(
         key=lambda entry: entry.last_seen,
         reverse=True,
     )
-    return {
-        (entry.prefix, entry.key): entry
-        for entry in newest[:_MAX_ENTRIES]
-    }
+    return {(entry.prefix, entry.key): entry for entry in newest[:_MAX_ENTRIES]}
 
 
 def _membership(
