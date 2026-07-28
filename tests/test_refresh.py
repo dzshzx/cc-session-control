@@ -7,6 +7,8 @@ from threading import Event, ExceptHookArgs, Thread
 
 import pytest
 
+from cc_session_control.config import cfg
+from cc_session_control.data import cleanup
 from cc_session_control.data.cleanup import CleanupPlan
 from cc_session_control.data.environment_ledger import (
     LedgerRead,
@@ -409,7 +411,12 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
         status="stopped",
         auto_start=False,
     )
-    snapshot = WorldSnapshot(sessions=[session], rc_projects=[older, active])
+    evidence = LivenessSnapshot()
+    snapshot = WorldSnapshot(
+        sessions=[session],
+        rc_projects=[older, active],
+        liveness_snapshot=evidence,
+    )
     plan = CleanupPlan(short=[session], orphan_entries=["gone"])
     snapshot_calls = 0
     plan_calls = 0
@@ -419,20 +426,11 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
         snapshot_calls += 1
         return snapshot
 
-    def make_plan(
-        sessions,
-        session_procs,
-        cur,
-        agent_jobs,
-        agents_map,
-    ) -> CleanupPlan:
+    def make_plan(sessions, generation_evidence) -> CleanupPlan:
         nonlocal plan_calls
         plan_calls += 1
         assert sessions is snapshot.sessions
-        assert session_procs is snapshot.session_procs
-        assert cur is snapshot.cur
-        assert agent_jobs is snapshot.agent_jobs
-        assert agents_map is snapshot.agents_map
+        assert generation_evidence is evidence
         return plan
 
     result = build_refresh_result(
@@ -463,6 +461,42 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
         "older",
     ]
     assert snapshot_calls == plan_calls == 1
+
+
+def test_refresh_plan_uses_generation_evidence_without_second_probe(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    session = Session(
+        sid="generation-session",
+        cwd="/tmp/project",
+        label="generation session",
+        mtime=0.0,
+        prompts=0,
+        pid=None,
+        alive=False,
+        current=False,
+        file=str(tmp_path / "projects" / "generation-session.jsonl"),
+    )
+    evidence = LivenessSnapshot()
+    snapshot = WorldSnapshot(
+        sessions=(session,),
+        liveness_snapshot=evidence,
+    )
+
+    def unexpected_acquisition(*_args, **_kwargs):
+        raise AssertionError("refresh planning must not reacquire liveness")
+
+    monkeypatch.setattr(cleanup.proc, "probe_current_ancestors", unexpected_acquisition)
+    monkeypatch.setattr(cleanup, "fill_liveness_inputs", unexpected_acquisition)
+
+    result = build_refresh_result(8, snapshot_builder=lambda: snapshot)
+
+    assert isinstance(result, RefreshBatch)
+    assert [candidate.sid for candidate in result.cleanup_plan.empty] == [
+        "generation-session"
+    ]
 
 
 def test_expected_source_error_is_an_explicit_failure() -> None:
@@ -518,6 +552,28 @@ def test_incomplete_liveness_is_failed_before_cleanup_plan_build() -> None:
     assert cleanup_calls == 0
 
 
+def test_missing_liveness_evidence_is_failed_before_cleanup_plan_build() -> None:
+    cleanup_calls = 0
+
+    def make_plan(*_args) -> CleanupPlan:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        return CleanupPlan()
+
+    result = build_refresh_result(
+        9,
+        snapshot_builder=WorldSnapshot,
+        cleanup_builder=make_plan,
+    )
+
+    assert result == RefreshFailure(
+        9,
+        "liveness snapshot",
+        "missing generation liveness evidence",
+    )
+    assert cleanup_calls == 0
+
+
 def test_programming_error_is_not_converted_to_refresh_failure() -> None:
     def fail() -> WorldSnapshot:
         raise ValueError("broken invariant")
@@ -534,7 +590,7 @@ def test_each_generation_invokes_each_normal_source_once() -> None:
     def read_snapshot() -> WorldSnapshot:
         nonlocal snapshot_calls
         snapshot_calls += 1
-        return WorldSnapshot()
+        return WorldSnapshot(liveness_snapshot=LivenessSnapshot())
 
     def make_plan(*args) -> CleanupPlan:
         nonlocal cleanup_calls

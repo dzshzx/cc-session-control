@@ -5,14 +5,14 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 
-from ..models import AgentJob, RCProject, Session, SessionProc
+from ..models import RCProject, Session
 from . import rc
 from .cleanup import CleanupPlan, build_plan
+from .liveness import LivenessSnapshot
 from .snapshot import WorldSnapshot, build_world_snapshot
 
 
@@ -60,10 +60,7 @@ type SnapshotBuilder = Callable[[], WorldSnapshot]
 type CleanupBuilder = Callable[
     [
         Sequence[Session],
-        Sequence[SessionProc],
-        AbstractSet[int],
-        Sequence[AgentJob],
-        Mapping[str, int | None],
+        LivenessSnapshot,
     ],
     CleanupPlan,
 ]
@@ -83,7 +80,13 @@ def build_refresh_result(
     try:
         snapshot = snapshot_builder()
         evidence = snapshot.liveness_snapshot
-        if evidence is not None and not evidence.complete:
+        if evidence is None:
+            return RefreshFailure(
+                generation,
+                "liveness snapshot",
+                "missing generation liveness evidence",
+            )
+        if not evidence.complete:
             first = evidence.issues[0]
             source = first.source
             if first.path:
@@ -106,10 +109,7 @@ def build_refresh_result(
             return RefreshFailure(generation, source, detail)
         plan = cleanup_builder(
             snapshot.sessions,
-            snapshot.session_procs,
-            snapshot.cur,
-            snapshot.agent_jobs,
-            snapshot.agents_map,
+            evidence,
         )
     except OSError as exc:
         source = os.fspath(exc.filename) if exc.filename else "refresh sources"

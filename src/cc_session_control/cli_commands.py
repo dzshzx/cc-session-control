@@ -77,7 +77,7 @@ def _print_cleanup_execution(
 
 
 def _cmd_prune(args: Namespace) -> int:
-    from .data import liveness, proc
+    from .data import liveness
     from .data.cleanup import (
         build_plan,
         execute_orphan_removals,
@@ -92,30 +92,27 @@ def _cmd_prune(args: Namespace) -> int:
     # header and any future TUI parity stay derived from one source (删除 ⊆ 预览
     # still holds: execute_* revalidate against fresh data at apply time).
     inputs = liveness.liveness_inputs()
+    if not inputs.complete:
+        for liveness_issue in inputs.issues:
+            where = f" ({liveness_issue.path})" if liveness_issue.path else ""
+            print(
+                "Refused: liveness evidence is incomplete: "
+                f"{liveness_issue.source}{where}: {liveness_issue.detail}",
+                file=sys.stderr,
+            )
+        return 1
     transcript_scan = scan_result(inputs)
     if not transcript_scan.complete:
-        for issue in transcript_scan.issues:
+        for transcript_issue in transcript_scan.issues:
             print(
                 "Refused: transcript evidence is incomplete: "
-                f"{issue.source} ({issue.path}): {issue.detail}",
+                f"{transcript_issue.source} ({transcript_issue.path}): "
+                f"{transcript_issue.detail}",
                 file=sys.stderr,
             )
         return 1
     sessions = list(transcript_scan.sessions)
-    plan = build_plan(
-        sessions,
-        inputs.session_procs,
-        inputs.cur,
-        inputs.agent_jobs,
-        inputs.agents_map,
-    )
-    for liveness_issue in inputs.issues:
-        where = f" ({liveness_issue.path})" if liveness_issue.path else ""
-        print(
-            "Warning: liveness evidence is partial: "
-            f"{liveness_issue.source}{where}: {liveness_issue.detail}",
-            file=sys.stderr,
-        )
+    plan = build_plan(sessions, inputs)
     counts = plan.counts()
     print(
         f"Total: {len(sessions)}  Prunable empty: {counts['empty']}  "
@@ -129,16 +126,9 @@ def _cmd_prune(args: Namespace) -> int:
             f"{plan_issue.error}",
             file=sys.stderr,
         )
-    plan_status = 1 if plan.issues or not inputs.complete else 0
+    plan_status = int(bool(plan.issues))
 
     if args.sweep_orphans:
-        if not proc.probe_current_ancestors().complete:
-            print(
-                "Refused: '/proc' unavailable — cannot determine "
-                "the current session (R10).",
-                file=sys.stderr,
-            )
-            return 1
         orphans = plan.orphan_entries
         print(f"Would sweep {len(orphans)} orphan artifact dir(s)")
         if not args.apply:
@@ -170,14 +160,11 @@ def _cmd_prune(args: Namespace) -> int:
             plan_status,
         )
 
-    if not proc.probe_current_ancestors().complete:
-        print(
-            "Refused: '/proc' unavailable — cannot determine "
-            "the current session (R10).",
-            file=sys.stderr,
-        )
-        return 1
-    targets = prune_sessions(sessions, max_prompts=args.max_prompts)
+    targets = prune_sessions(
+        sessions,
+        max_prompts=args.max_prompts,
+        evidence=inputs,
+    )
     try:
         anchors = session_removal_anchors(targets)
     except OSError as exc:
@@ -203,32 +190,20 @@ def _cmd_prune_zombies(
     zombies: list[int] | None = None,
     anchors: Mapping[int, RemovalAnchor] | None = None,
 ) -> int:
-    """Strategy A pid-keyed sweep of `sessions/<pid>.json` (R7.1) via the CLI.
-
-    Reuses the already-gated `data/cleanup` helpers: `select_zombie_pids` keeps
-    the current session's pid and any alive pid of a resumed multi-pid sid, and
-    `execute_zombie_removals` refuses without `/proc`. The dry-run preview is
-    gated here too — off `/proc` every pid looks dead, so `current` can't be
-    determined and we must not even claim the files are sweepable (R10).
-    """
-    from .data import liveness, proc
+    """Preview one typed generation; revalidate again only before mutation."""
+    from .data import liveness
     from .data.cleanup import execute_zombie_removals, select_zombie_pids
 
-    ancestors = proc.probe_current_ancestors()
-    if not ancestors.complete:
-        print(
-            "Refused: '/proc' unavailable — cannot determine "
-            "the current session (R10).",
-            file=sys.stderr,
-        )
-        return 1
     if zombies is None:
         evidence = liveness.liveness_inputs()
         if not evidence.complete:
-            print(
-                "Refused: liveness evidence is incomplete.",
-                file=sys.stderr,
-            )
+            for issue in evidence.issues:
+                where = f" ({issue.path})" if issue.path else ""
+                print(
+                    "Refused: liveness evidence is incomplete: "
+                    f"{issue.source}{where}: {issue.detail}",
+                    file=sys.stderr,
+                )
             return 1
         zombies = select_zombie_pids(evidence.session_procs, evidence.cur)
     print(f"Would sweep {len(zombies)} zombie session file(s)")

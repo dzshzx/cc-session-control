@@ -348,12 +348,46 @@ def test_plan_counts_break_down_categories(tmp_path, monkeypatch):
     ]
     procs = [_sp(700772, "A", proc_alive=False)]  # one zombie
 
-    counts = cleanup.build_plan(sessions, procs, cur=set(), now=0.0).counts()
+    evidence = liveness.LivenessSnapshot(session_procs=procs)
+    counts = cleanup.build_plan(sessions, evidence, now=1_000.0).counts()
     assert counts["empty"] == 1
     assert counts["short"] == 1
     assert counts["orphan_dirs"] == 1
     assert counts["zombie_procs"] == 1
     assert counts["aged_entries"] == 0
+
+
+def test_build_plan_uses_only_injected_generation_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    _mkdir(tmp_path, "session-env", "ghost")
+    session = _make_session(sid="empty", prompts=0, mtime=0.0)
+    evidence = liveness.LivenessSnapshot()
+
+    def unexpected_acquisition(*_args, **_kwargs):
+        raise AssertionError("plan construction must not reacquire liveness")
+
+    monkeypatch.setattr(cleanup.proc, "probe_current_ancestors", unexpected_acquisition)
+    monkeypatch.setattr(cleanup, "fill_liveness_inputs", unexpected_acquisition)
+
+    plan = cleanup.build_plan([session], evidence=evidence, now=1_000_000_000.0)
+
+    assert [candidate.sid for candidate in plan.empty] == ["empty"]
+    assert plan.orphan_entries == ("session-env/ghost",)
+
+
+def test_build_plan_rejects_incomplete_generation_evidence():
+    evidence = liveness.LivenessSnapshot(
+        issues=(
+            liveness.LivenessIssue(
+                "process ancestors",
+                "/proc",
+                "unavailable",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires complete liveness evidence"):
+        cleanup.build_plan([], evidence)
 
 
 # --- AC10: degraded (no /proc) refuses destructive ops ---------------------

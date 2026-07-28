@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ..config import cfg
 from ..models import AgentJob, Session, SessionProc
-from . import proc, registry
+from . import liveness, proc, registry
 from . import sessions as session_data
 from .cleanup_anchors import (
     PlanAnchors,
@@ -32,6 +32,8 @@ from .cleanup_liveness import (
     fresh_liveness_inputs,
     refuse_incomplete_liveness,
 )
+from .cleanup_selection import known_sids
+from .cleanup_selection import select_prunable_sessions as _select_prunable_sessions
 from .removal import (
     CleanupExecution,
     CleanupIssue,
@@ -165,28 +167,17 @@ def remove_agent_artifacts(
 # --- Strategy A: sid-keyed orphan dirs (H1 protected-sid set) --------------
 
 
-def known_sids(
-    sessions: Sequence[Session],
-    session_procs: Sequence[SessionProc],
-    agent_jobs: Sequence[AgentJob],
-    agents_map: Mapping[str, int | None],
-    cur: AbstractSet[int],
-) -> set[str]:
-    """Return the union of transcript, registry, live, and current sids."""
-    known: set[str] = {s.sid for s in sessions}
-    known |= {s.sid for s in sessions if s.current}
-    known |= {sp.sid for sp in session_procs}
-    known |= {sp.sid for sp in session_procs if sp.proc_alive}
-    known |= {sp.sid for sp in session_procs if sp.pid in cur}
-    for j in agent_jobs:
-        if j.sid:
-            known.add(j.sid)
-        if j.resume_sid:
-            known.add(j.resume_sid)
-        if j.host_alive and j.sid:
-            known.add(j.sid)
-    known |= {sid for sid in agents_map if sid}
-    return known
+def _list_orphan_dirs_for_known(known: AbstractSet[str]) -> list[str]:
+    orphans: list[str] = []
+    for label, path in _sid_dir_paths():
+        try:
+            names = os.listdir(path)
+        except FileNotFoundError:
+            continue
+        for name in names:
+            if name not in known:
+                orphans.append(os.path.join(label, name))
+    return sorted(set(orphans))
 
 
 def _gather_known(
@@ -215,16 +206,7 @@ def list_orphan_dirs(
     if not proc.probe_current_ancestors().complete:
         return []
     known = _gather_known(sessions, session_procs, agent_jobs, agents_map, cur)
-    orphans: list[str] = []
-    for label, path in _sid_dir_paths():
-        try:
-            names = os.listdir(path)
-        except FileNotFoundError:
-            continue
-        for name in names:
-            if name not in known:
-                orphans.append(os.path.join(label, name))
-    return sorted(set(orphans))
+    return _list_orphan_dirs_for_known(known)
 
 
 def execute_orphan_removals(
@@ -402,24 +384,24 @@ def execute_aged_removals(
 # --- Session prune + full delete -------------------------------------------
 
 
-def prune_sessions(sessions: Sequence[Session], max_prompts: int = 0) -> list[Session]:
+def prune_sessions(
+    sessions: Sequence[Session],
+    max_prompts: int = 0,
+    *,
+    evidence: liveness.LivenessSnapshot | None = None,
+) -> list[Session]:
     """Prunable sessions: not alive, not current, <= max_prompts, not recent.
 
-    Refuses (returns []) when current can't be determined (R10): without `/proc`
-    `current` is unreliable, so we must not propose deleting anything.
+    Uses an injected complete generation without acquiring sources. Compatibility
+    callers self-probe and refuse when current cannot be determined (R10).
     """
-    if not proc.probe_current_ancestors().complete:
+    if evidence is None:
+        protection_complete = proc.probe_current_ancestors().complete
+    else:
+        protection_complete = evidence.complete
+    if not protection_complete:
         return []
-    alive_sids = {s.sid for s in sessions if s.alive}
-    now = time.time()
-    return [
-        s
-        for s in sessions
-        if s.prompts <= max_prompts
-        and s.sid not in alive_sids
-        and not s.current
-        and (now - s.mtime) > 600
-    ]
+    return _select_prunable_sessions(sessions, max_prompts, time.time())
 
 
 def _session_is_protected(
@@ -541,32 +523,41 @@ def _plan_source[PlanItems](
 
 def build_plan(
     sessions: Sequence[Session],
-    session_procs: Sequence[SessionProc],
-    cur: AbstractSet[int],
-    agent_jobs: Sequence[AgentJob] | None = None,
-    agents_map: Mapping[str, int | None] | None = None,
+    evidence: liveness.LivenessSnapshot,
     now: float | None = None,
 ) -> CleanupPlan:
-    """Build the cleanup plan from the shared world data (deps injected)."""
+    """Build one cleanup plan solely from verified generation evidence."""
+    if not evidence.complete:
+        raise ValueError("cleanup plan requires complete liveness evidence")
+
+    plan_now = time.time() if now is None else now
     issues: list[CleanupIssue] = []
-    empty = prune_sessions(sessions, max_prompts=0)
-    short = [s for s in prune_sessions(sessions, max_prompts=2) if s.prompts > 0]
+    empty = _select_prunable_sessions(sessions, max_prompts=0, now=plan_now)
+    short = [
+        s
+        for s in _select_prunable_sessions(sessions, max_prompts=2, now=plan_now)
+        if s.prompts > 0
+    ]
     candidates = list({s.sid: s for s in [*empty, *short]}.values())
+    protected_sids = known_sids(
+        sessions,
+        evidence.session_procs,
+        evidence.agent_jobs,
+        evidence.agents_map,
+        evidence.cur,
+    )
     orphan_entries: list[str] = _plan_source(
         "orphan_dirs",
-        lambda: list_orphan_dirs(
-            sessions,
-            session_procs=session_procs,
-            agent_jobs=agent_jobs,
-            agents_map=agents_map,
-            cur=cur,
-        ),
+        lambda: _list_orphan_dirs_for_known(protected_sids),
         issues,
         [],
     )
-    zombie_pids: list[int] = select_zombie_pids(session_procs, cur)
+    zombie_pids: list[int] = select_zombie_pids(
+        evidence.session_procs,
+        evidence.cur,
+    )
     aged_entries: list[str] = _plan_source(
-        "aged_entries", lambda: list_aged_entries(now), issues, []
+        "aged_entries", lambda: list_aged_entries(plan_now), issues, []
     )
     pinned: PlanAnchors = _plan_source(
         "removal_anchors",

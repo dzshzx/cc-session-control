@@ -17,7 +17,7 @@ from cc_session_control.config import cfg
 from cc_session_control.data import liveness, registry, sessions
 from cc_session_control.data import proc as proc_mod
 from cc_session_control.data.liveness import LivenessSnapshot
-from cc_session_control.models import SessionProc
+from cc_session_control.models import Session, SessionProc
 
 
 def _args(**kw):
@@ -81,6 +81,32 @@ def test_prune_refuses_incomplete_transcript_preview(monkeypatch, capsys):
     assert "permission denied" in captured.err
 
 
+def test_prune_refuses_incomplete_liveness_before_preview(monkeypatch, capsys):
+    issue = liveness.LivenessIssue(
+        "process ancestors",
+        "/proc",
+        "permission denied",
+    )
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: LivenessSnapshot(issues=(issue,)),
+    )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda _inputs: (_ for _ in ()).throw(
+            AssertionError("incomplete liveness must stop before transcript planning")
+        ),
+    )
+
+    assert cli_commands.handle_prune(_args()) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Refused: liveness evidence is incomplete" in captured.err
+    assert "process ancestors (/proc): permission denied" in captured.err
+
+
 def test_prune_orphan_apply_reports_fresh_incomplete_transcript_and_preserves_target(
     tmp_path,
     monkeypatch,
@@ -128,7 +154,13 @@ def test_prune_default_dry_run_then_apply(
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     _stub_scan(monkeypatch)
-    monkeypatch.setattr(proc_mod, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        proc_mod,
+        "probe_current_ancestors",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("default preview must use the typed generation")
+        ),
+    )
 
     assert cli.main(["prune"]) == 0
     output = capsys.readouterr().out
@@ -141,6 +173,56 @@ def test_prune_default_dry_run_then_apply(
     assert "No session(s) removed." in output
 
 
+def test_prune_preview_uses_one_typed_generation_without_ancestor_reprobe(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    session = Session(
+        sid="generation-candidate",
+        cwd="/project",
+        label="candidate",
+        mtime=0.0,
+        prompts=0,
+        pid=None,
+        alive=False,
+        current=False,
+        file=os.fspath(tmp_path / "projects" / "candidate.jsonl"),
+    )
+    evidence = LivenessSnapshot()
+    liveness_calls = 0
+
+    def read_liveness():
+        nonlocal liveness_calls
+        liveness_calls += 1
+        return evidence
+
+    monkeypatch.setattr(liveness, "liveness_inputs", read_liveness)
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda inputs: (
+            sessions.SessionScanResult((session,))
+            if inputs is evidence
+            else (_ for _ in ()).throw(AssertionError("wrong generation evidence"))
+        ),
+    )
+    monkeypatch.setattr(
+        proc_mod,
+        "probe_current_ancestors",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("preview must not reprobe ancestors")
+        ),
+    )
+
+    assert cli_commands.handle_prune(_args()) == 0
+    captured = capsys.readouterr()
+    assert liveness_calls == 1
+    assert "Would prune 1 session(s)" in captured.out
+    assert captured.err == ""
+
+
 def test_prune_sweep_orphans_dry_run_preserves_target(
     tmp_path,
     monkeypatch,
@@ -150,7 +232,13 @@ def test_prune_sweep_orphans_dry_run_preserves_target(
     _stub_scan(monkeypatch)
     orphan = tmp_path / "session-env" / "ghost"
     orphan.mkdir(parents=True)
-    monkeypatch.setattr(proc_mod, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        proc_mod,
+        "probe_current_ancestors",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("orphan preview must use the typed generation")
+        ),
+    )
 
     assert cli.main(["prune", "--sweep-orphans"]) == 0
     output = capsys.readouterr().out
@@ -183,7 +271,13 @@ def test_prune_sweep_zombies_dry_run_preserves_target(
             ),
         ),
     )
-    monkeypatch.setattr(proc_mod, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        proc_mod,
+        "probe_current_ancestors",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("zombie preview must use the typed generation")
+        ),
+    )
 
     assert cli.main(["prune", "--sweep-zombies"]) == 0
     output = capsys.readouterr().out
@@ -261,11 +355,11 @@ def test_prune_sweep_zombies_refuses_without_proc(tmp_path, monkeypatch, capsys)
     with open(os.path.join(sessions_dir, "1.json"), "w") as fh:
         json.dump({"pid": 1, "sessionId": "A", "procStart": "1"}, fh)
 
-    issue = proc_mod.ProcIssue("process ancestors", "/proc", "unavailable")
+    issue = liveness.LivenessIssue("process ancestors", "/proc", "unavailable")
     monkeypatch.setattr(
-        proc_mod,
-        "probe_current_ancestors",
-        lambda: proc_mod.AncestorProbe(frozenset(), (issue,)),
+        liveness,
+        "liveness_inputs",
+        lambda: LivenessSnapshot(issues=(issue,)),
     )
 
     assert cli_commands.handle_prune(_args(sweep_zombies=True, apply=True)) == 1
@@ -301,11 +395,11 @@ def test_prune_sweep_orphans_refuses_without_proc(
     _stub_scan(monkeypatch)
     orphan = tmp_path / "session-env" / "ghost"
     orphan.mkdir(parents=True)
-    issue = proc_mod.ProcIssue("process ancestors", "/proc", "unavailable")
+    issue = liveness.LivenessIssue("process ancestors", "/proc", "unavailable")
     monkeypatch.setattr(
-        proc_mod,
-        "probe_current_ancestors",
-        lambda: proc_mod.AncestorProbe(frozenset(), (issue,)),
+        liveness,
+        "liveness_inputs",
+        lambda: LivenessSnapshot(issues=(issue,)),
     )
 
     status = cli_commands.handle_prune(_args(sweep_orphans=True, apply=True))
@@ -339,7 +433,7 @@ def test_prune_apply_reports_incomplete_liveness_and_preserves_target(
     captured = capsys.readouterr()
 
     assert status == 1
-    assert "Protection evidence incomplete; nothing deleted" in captured.err
+    assert "Refused: liveness evidence is incomplete" in captured.err
     assert "session registry" in captured.err
     assert os.fspath(malformed) in captured.err
     assert orphan.exists()

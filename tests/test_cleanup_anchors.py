@@ -21,10 +21,7 @@ def _old_enough(path, now: float) -> None:
 def _aged_plan(now: float):
     return cleanup.build_plan(
         [],
-        [],
-        cur=set(),
-        agent_jobs=[],
-        agents_map={},
+        liveness.LivenessSnapshot(),
         now=now,
     )
 
@@ -353,10 +350,9 @@ def test_cleanup_plan_pins_every_cleanup_category(tmp_path, monkeypatch):
 
     plan = cleanup.build_plan(
         [_session(transcript)],
-        [SessionProc(pid=77, sid="dead", proc_alive=False)],
-        cur=set(),
-        agent_jobs=[],
-        agents_map={},
+        liveness.LivenessSnapshot(
+            session_procs=(SessionProc(pid=77, sid="dead", proc_alive=False),),
+        ),
         now=now,
     )
 
@@ -376,10 +372,7 @@ def test_orphan_execution_refuses_replaced_base_and_preserves_external(
     (base / "orphan").mkdir(parents=True)
     plan = cleanup.build_plan(
         [],
-        [],
-        cur=set(),
-        agent_jobs=[],
-        agents_map={},
+        liveness.LivenessSnapshot(),
     )
 
     saved = tmp_path / "saved-orphans"
@@ -422,10 +415,7 @@ def test_zombie_execution_refuses_root_inode_replacement(
     target.write_text("{}")
     plan = cleanup.build_plan(
         [],
-        [proc],
-        cur=set(),
-        agent_jobs=[],
-        agents_map={},
+        liveness.LivenessSnapshot(session_procs=(proc,)),
     )
 
     saved = tmp_path / "saved-sessions"

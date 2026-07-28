@@ -140,10 +140,9 @@ def test_build_plan_keeps_partial_results_and_reports_source_issue(
 
     plan = cleanup.build_plan(
         [],
-        [SessionProc(pid=7, sid="dead", proc_alive=False)],
-        cur=set(),
-        agent_jobs=[],
-        agents_map={},
+        liveness.LivenessSnapshot(
+            session_procs=(SessionProc(pid=7, sid="dead", proc_alive=False),),
+        ),
     )
 
     assert plan.aged_entries == ("shell-snapshots/old.txt",)
@@ -166,7 +165,7 @@ def test_build_plan_does_not_swallow_programming_error(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "listdir", broken_invariant)
 
     try:
-        cleanup.build_plan([], [], cur=set(), agent_jobs=[], agents_map={})
+        cleanup.build_plan([], liveness.LivenessSnapshot())
     except RuntimeError as exc:
         assert str(exc) == "broken invariant"
     else:
