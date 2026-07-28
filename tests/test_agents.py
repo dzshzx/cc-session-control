@@ -295,10 +295,39 @@ def test_d_key_refuses_live_job(monkeypatch):
 
 
 def test_d_key_removes_settled_job(monkeypatch):
-    monkeypatch.setattr(av_mod.agent_ops, "remove_job", lambda job: True)
+    from cc_session_control.data.removal import CleanupExecution
+
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "remove_job",
+        lambda job: CleanupExecution(completed=[job.short]),
+    )
     app, view = _make_view([_make_job(host_alive=False)])
     view.handle_key("d")
     assert any("已删除" in m for m in app._notifications)
+
+
+def test_d_key_does_not_claim_success_when_artifact_removal_fails(
+    monkeypatch, tmp_path,
+):
+    from cc_session_control.data.removal import (
+        CleanupExecution,
+        PathRemoval,
+        RemovalStatus,
+    )
+
+    failed = CleanupExecution(
+        removals=[
+            PathRemoval(tmp_path / "job", RemovalStatus.FAILED, "denied")
+        ]
+    )
+    monkeypatch.setattr(av_mod.agent_ops, "remove_job", lambda job: failed)
+    app, view = _make_view([_make_job(host_alive=False)])
+
+    view.handle_key("d")
+
+    assert "删除失败" in app._notifications[-1]
+    assert "已删除" not in app._notifications[-1]
 
 
 def test_s_key_stops_live_with_orphan_warning(monkeypatch):

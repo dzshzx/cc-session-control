@@ -19,6 +19,7 @@ from ..data.liveness import liveness_inputs
 from ..data.sessions import scan
 from ..models import AgentJob, Session, SessionProc
 from ._base import ListTabView
+from ._cleanup_feedback import format_delete_notice
 from ._confirm import DEGRADED as _DEGRADED
 from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
@@ -158,10 +159,7 @@ class SessionsView(CleanupMixin, ListTabView):
         jobs: list[AgentJob],
         agents: dict[str, int | None],
     ) -> CleanupPlan:
-        try:
-            return build_plan(sessions, procs, cur, jobs, agents)
-        except Exception:
-            return CleanupPlan()
+        return build_plan(sessions, procs, cur, jobs, agents)
 
     def _derive_stats(self, sessions: list[Session], classified: dict[str, int]) -> dict[str, int]:
         """The legacy 4-key status-bar shape, derived from the classified counts."""
@@ -409,12 +407,8 @@ class SessionsView(CleanupMixin, ListTabView):
         if not proc.current_determinable():
             self.app.notify(_DEGRADED)
             return
-        # L4: honour remove_session's bool — only claim success when it truly
-        # removed something; a False here means there was nothing to delete.
-        if remove_session(s):
-            self.app.notify("已删除")
-        else:
-            self.app.notify("无可删除内容")
+        # The typed result distinguishes success, missing, refusal, and failure.
+        self.app.notify(format_delete_notice(remove_session(s)))
         self.app.trigger_async_refresh()
 
     def _key_yank(self, s: Session) -> None:

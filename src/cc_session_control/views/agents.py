@@ -19,6 +19,7 @@ from ..actions.session_ops import ResumeIntent
 from ..data import liveness, proc, registry
 from ..models import AgentJob
 from ._base import ListTabView
+from ._cleanup_feedback import format_delete_notice
 from ._colspec import header_columns, row_columns
 from ._confirm import DEGRADED as _DEGRADED
 from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
@@ -241,8 +242,8 @@ class AgentsView(ListTabView):
         if not proc.current_determinable():
             self.app.notify(_DEGRADED)
             return
-        ok = agent_ops.remove_job(job)
-        self.app.notify("已删除" if ok else "删除失败")
+        result = agent_ops.remove_job(job)
+        self.app.notify(format_delete_notice(result))
         self.app.trigger_async_refresh()
 
     def _stop(self, job: AgentJob) -> None:

@@ -56,18 +56,19 @@ def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
 
 def test_remove_job_refuses_live(monkeypatch):
     monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(ao, "job_host", lambda job: (1234, True))
+    monkeypatch.setattr(ao, "job_host", lambda job, **kwargs: (1234, True))
     removed_paths = []
     monkeypatch.setattr(ao.cleanup, "_remove_path",
                         lambda p: removed_paths.append(p) or True)
-    assert ao.remove_job(_make_job()) is False
+    result = ao.remove_job(_make_job())
+    assert len(result.skipped) == 1
     assert removed_paths == []
 
 
 def test_remove_job_deletes_settled(tmp_path, monkeypatch):
     monkeypatch.setattr(ao.cfg, "claude_home", tmp_path)
     monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(ao, "job_host", lambda job: (None, False))
+    monkeypatch.setattr(ao, "job_host", lambda job, **kwargs: (None, False))
 
     job = _make_job(short="abcdef01", sid="abcdef0123456789")
 
@@ -82,7 +83,8 @@ def test_remove_job_deletes_settled(tmp_path, monkeypatch):
         d.mkdir(parents=True)
         (d / "x").write_text("data")
 
-    assert ao.remove_job(job) is True
+    result = ao.remove_job(job)
+    assert result.completed == [job.short]
     assert not job_dir.exists()
     for sub in ("session-env", "file-history", "tasks", "uploads"):
         assert not (tmp_path / sub / job.sid).exists()
@@ -93,7 +95,8 @@ def test_remove_job_refuses_without_proc(monkeypatch):
     called = {"host": 0}
     monkeypatch.setattr(ao, "job_host",
                         lambda job: called.__setitem__("host", 1) or (None, False))
-    assert ao.remove_job(_make_job()) is False
+    result = ao.remove_job(_make_job())
+    assert len(result.refused) == 1
     # Refused before even resolving the host pid.
     assert called["host"] == 0
 

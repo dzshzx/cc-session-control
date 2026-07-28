@@ -28,14 +28,16 @@ from ..data.cleanup import (
     execute_session_removals,
     execute_zombie_removals,
 )
+from ..data.removal import CleanupExecution
 from ..data.sessions import scan
 from ..models import Session
+from ._cleanup_feedback import format_cleanup_notice
 from ._confirm import DEGRADED as _DEGRADED
 from ._rows import TextRow
 from ._session_row import _ActionRow
 
 
-def _execute_orphans(entries: list[str]) -> int:
+def _execute_orphans(entries: list[str]) -> CleanupExecution:
     """Orphan executor with the FULL fresh protection set: a fresh transcript
     scan feeds `known_sids`' transcript tier (the executor can't scan itself —
     data-DAG), closing the window where a sid's transcript appeared between
@@ -58,7 +60,7 @@ class _CleanupAction:
     gated: bool                                  # R10-gated (age sweep is not)
     targets: Callable[[CleanupPlan], list]       # frozen preview/exec list
     format_row: Callable[[object], str]          # one preview row per target
-    execute: Callable[[list], int]               # revalidating executor
+    execute: Callable[[list], CleanupExecution]  # revalidating executor
     none_notice: str                             # "无…需要清理"
     title_tpl: str                               # preview overlay title
     done_tpl: str                                # post-confirm notify
@@ -117,9 +119,15 @@ class CleanupMixin:
         for a in _CLEANUP_ACTIONS:
             self._cleanup_walker.append(_ActionRow(a.key, a.label, c.get(a.stat, 0)))
 
-    def _enter_cleanup(self) -> None:
+    def _enter_cleanup(self, *, show_issues: bool = True) -> None:
         self._mode = "cleanup"
         self._rebuild_cleanup()
+        if show_issues and self._plan.issues:
+            issue = self._plan.issues[0]
+            self.app.notify(
+                f"清理预览不完整（{len(self._plan.issues)} 个来源）："
+                f"{issue.source}: {issue.error}"
+            )
         cleanup_list = urwid.ListBox(self._cleanup_walker)
         title = urwid.AttrMap(urwid.Text(" 清理会话", align="center"), "col_header")
         box_content = urwid.Frame(cleanup_list, header=title)
@@ -166,10 +174,13 @@ class CleanupMixin:
 
     def _confirm_cleanup(self) -> None:
         action = self._preview_action
+        notice: str | None = None
         if action is not None:
-            removed = action.execute(self._preview_targets)
-            self.app.notify(action.done_tpl.format(n=removed))
+            result = action.execute(self._preview_targets)
+            notice = format_cleanup_notice(result, action.done_tpl)
         self._preview_action = None
         self._preview_targets = []
-        self._enter_cleanup()
+        self._enter_cleanup(show_issues=False)
+        if notice is not None:
+            self.app.notify(notice)
         self.app.trigger_async_refresh()

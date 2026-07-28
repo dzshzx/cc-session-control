@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import urwid
+import pytest
 
 from cc_session_control.data.project_settings import (
     SettingWriteFailure,
@@ -1253,13 +1254,70 @@ def test_delete_honest_feedback_true_then_false(monkeypatch):
     app.views = [view]
     _focus_dead_session(view)
 
-    monkeypatch.setattr(sv_mod, "remove_session", lambda s: True)
+    from cc_session_control.data.removal import CleanupExecution
+
+    removed = CleanupExecution(completed=["sid"])
+    monkeypatch.setattr(sv_mod, "remove_session", lambda s: removed)
     view.handle_key("d")
     assert app._notifications[-1] == "已删除"
 
-    monkeypatch.setattr(sv_mod, "remove_session", lambda s: False)
+    monkeypatch.setattr(sv_mod, "remove_session", lambda s: CleanupExecution())
     view.handle_key("d")
     assert app._notifications[-1] == "无可删除内容"
+
+
+def test_delete_failure_does_not_claim_success(monkeypatch, tmp_path):
+    import cc_session_control.views.sessions as sv_mod
+    from cc_session_control.data.removal import (
+        CleanupExecution,
+        PathRemoval,
+        RemovalStatus,
+    )
+
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    failed = CleanupExecution(
+        removals=[
+            PathRemoval(tmp_path / "locked", RemovalStatus.FAILED, "denied")
+        ]
+    )
+    monkeypatch.setattr(sv_mod, "remove_session", lambda s: failed)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    _focus_dead_session(view)
+
+    view.handle_key("d")
+
+    assert "失败" in app._notifications[-1]
+    assert "已删除" not in app._notifications[-1]
+
+
+def test_delete_partial_failure_mentions_removed_path(monkeypatch, tmp_path):
+    import cc_session_control.views.sessions as sv_mod
+    from cc_session_control.data.removal import (
+        CleanupExecution,
+        PathRemoval,
+        RemovalStatus,
+    )
+
+    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    partial = CleanupExecution(
+        removals=[
+            PathRemoval(tmp_path / "gone", RemovalStatus.REMOVED),
+            PathRemoval(tmp_path / "locked", RemovalStatus.FAILED, "denied"),
+        ]
+    )
+    monkeypatch.setattr(sv_mod, "remove_session", lambda s: partial)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    _focus_dead_session(view)
+
+    view.handle_key("d")
+
+    notice = app._notifications[-1]
+    assert "部分失败" in notice
+    assert "已删除路径 1" in notice
 
 
 def test_delete_refuses_when_current_undeterminable(monkeypatch):
@@ -1268,8 +1326,11 @@ def test_delete_refuses_when_current_undeterminable(monkeypatch):
 
     monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: False)
     removed = {"n": 0}
-    monkeypatch.setattr(sv_mod, "remove_session",
-                        lambda s: removed.__setitem__("n", removed["n"] + 1) or True)
+    monkeypatch.setattr(
+        sv_mod,
+        "remove_session",
+        lambda s: removed.__setitem__("n", removed["n"] + 1),
+    )
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -1328,8 +1389,13 @@ def test_zombie_sweep_preview_and_confirm(monkeypatch):
 
     import dataclasses
     swept = {}
+    from cc_session_control.data.removal import CleanupExecution
     view._preview_action = dataclasses.replace(
-        view._preview_action, execute=lambda pids, **k: swept.update(pids=pids) or 1)
+        view._preview_action,
+        execute=lambda pids, **k: (
+            swept.update(pids=pids) or CleanupExecution(completed=["111"])
+        ),
+    )
     view._confirm_cleanup()
     assert swept["pids"] == [111]  # exactly the previewed targets
     assert any("僵尸会话文件" in m for m in app._notifications)
@@ -1366,8 +1432,81 @@ def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
 
     import dataclasses
     swept = {}
+    from cc_session_control.data.removal import CleanupExecution
     view._preview_action = dataclasses.replace(
-        view._preview_action, execute=lambda entries, **k: swept.update(entries=entries) or 1)
+        view._preview_action,
+        execute=lambda entries, **k: (
+            swept.update(entries=entries)
+            or CleanupExecution(completed=["shell-snapshots/old.sh"])
+        ),
+    )
     view._confirm_cleanup()
     assert swept["entries"] == ["shell-snapshots/old.sh"]
     assert any("过期项" in m for m in app._notifications)
+
+
+def test_cleanup_confirmation_reports_partial_failure(monkeypatch, tmp_path):
+    import dataclasses
+    import cc_session_control.views._sessions_cleanup as cl_mod
+    from cc_session_control.data.cleanup import CleanupPlan
+    from cc_session_control.data.removal import (
+        CleanupExecution,
+        PathRemoval,
+        RemovalStatus,
+    )
+
+    monkeypatch.setattr(cl_mod.proc, "current_determinable", lambda: True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._plan = CleanupPlan(zombie_pids=[111, 222])
+    view._enter_preview("zombies")
+    partial = CleanupExecution(
+        completed=["111"],
+        removals=[
+            PathRemoval(tmp_path / "111.json", RemovalStatus.REMOVED),
+            PathRemoval(
+                tmp_path / "222.json", RemovalStatus.FAILED, "permission denied"
+            ),
+        ],
+    )
+    view._preview_action = dataclasses.replace(
+        view._preview_action, execute=lambda targets: partial
+    )
+
+    view._confirm_cleanup()
+
+    notice = app._notifications[-1]
+    assert "部分完成" in notice
+    assert "失败 1" in notice
+    assert "已清理 2" not in notice
+
+
+def test_cleanup_menu_surfaces_partial_plan_warning():
+    from cc_session_control.data.cleanup import CleanupIssue, CleanupPlan
+
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._plan = CleanupPlan(
+        issues=[CleanupIssue("orphan_dirs", "permission denied")]
+    )
+
+    view._enter_cleanup()
+
+    assert "预览不完整" in app._notifications[-1]
+    assert "permission denied" in app._notifications[-1]
+
+
+def test_sessions_build_plan_does_not_swallow_programming_error(monkeypatch):
+    import cc_session_control.views.sessions as sv_mod
+
+    monkeypatch.setattr(
+        sv_mod,
+        "build_plan",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("broken invariant")),
+    )
+    view = SessionsView(FakeApp())
+
+    with pytest.raises(RuntimeError, match="broken invariant"):
+        view._build_plan([], [], set(), [], {})

@@ -29,22 +29,33 @@ protection data at execution time (删除 ⊆ 预览 — 宁可少删):
 remove touches it). All paths come from `cfg.*` props — no inline path joins.
 
 R10 safety: when the "current" session can't be determined (no `/proc`),
-destructive ops here refuse (return empty/no-op) rather than fail open — without
-`/proc` every pid looks dead, so a zombie sweep would delete the live/current
-session's files. Strategy B is mtime-only and session-agnostic, so it is not
-gated on `/proc`.
+destructive execution returns a typed refusal rather than failing open. Strategy
+B is mtime-only and session-agnostic, so it is not gated on `/proc`.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 import time
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from pathlib import Path
+from typing import TypeVar
 
 from ..config import cfg
 from ..models import AgentJob, Session, SessionProc
 from . import liveness, proc, registry
+from .cleanup_liveness import (
+    fill_liveness_inputs,
+    fresh_session_guards,
+)
+from .removal import (
+    CleanupExecution,
+    CleanupIssue,
+    CleanupPlan,
+    PathRemoval,
+    RemovalStatus,
+    remove_path as _remove_path,
+)
 
 # Dirs keyed by full sessionId — orphan = name not in the known sid set.
 _SID_DIRS = ("session_env", "file_history", "tasks", "uploads")
@@ -52,6 +63,10 @@ _SID_DIRS = ("session_env", "file_history", "tasks", "uploads")
 _AGE_DIRS = ("shell_snapshots", "telemetry", "plans", "backups", "paste_cache")
 
 _SECONDS_PER_DAY = 86400
+
+
+def _is_child_name(name: str) -> bool:
+    return name not in ("", ".", "..") and os.sep not in name
 
 
 def _sid_dir_paths() -> list[tuple[str, str]]:
@@ -88,27 +103,11 @@ def _session_artifact_paths(sid: str) -> list[str]:
     return _sid_keyed_paths(sid) + [_jobs_path(sid)]
 
 
-def _remove_path(path: str) -> bool:
-    """Remove a file or directory; True iff something was removed."""
-    if os.path.isdir(path):
-        shutil.rmtree(path, ignore_errors=True)
-        return True
-    if os.path.isfile(path):
-        try:
-            os.remove(path)
-            return True
-        except OSError:
-            return False
-    return False
-
-
-def remove_agent_artifacts(short: str, sid: str) -> bool:
+def remove_agent_artifacts(short: str, sid: str) -> CleanupExecution:
     """Delete a settled background agent's `jobs/<short>` dir + sid artifacts.
 
-    Removes `jobs/<short>` first (the return value is True iff THAT removal
-    happened), then every path in `_session_artifact_paths(sid)` (the sid-keyed
-    dirs plus `jobs/<sid[:8]>` — a second remove of the same job dir when
-    `short == sid[:8]` is a harmless no-op).
+    Removes `jobs/<short>` plus every sid-keyed artifact path. The typed result
+    retains every filesystem outcome; duplicate job paths are attempted once.
 
     The CALLER owns the gates: this function assumes the job has already been
     alive-gated (a LIVE worker must never reach here) and that
@@ -116,10 +115,15 @@ def remove_agent_artifacts(short: str, sid: str) -> bool:
     deletes.
     """
     job_dir = os.path.join(str(cfg.jobs_dir), short)
-    removed = _remove_path(job_dir)
-    for path in _session_artifact_paths(sid):
-        _remove_path(path)
-    return removed
+    result = CleanupExecution()
+    paths = dict.fromkeys([job_dir, *_session_artifact_paths(sid)])
+    for path in paths:
+        result.add_removal(_remove_path(path))
+    if result.removed and not result.failed:
+        result.complete(short)
+    elif not result.removed and not result.failed:
+        result.mark_missing(short)
+    return result
 
 
 # --- Strategy A: sid-keyed orphan dirs (H1 protected-sid set) --------------
@@ -162,44 +166,18 @@ def known_sids(
     return known
 
 
-def _fill_liveness_inputs(
-    session_procs: list[SessionProc] | None,
-    agent_jobs: list[AgentJob] | None,
-    agents_map: dict[str, int | None] | None,
-    cur: set[int] | None,
-) -> tuple[list[SessionProc], list[AgentJob], dict[str, int | None], set[int]]:
-    """Fill any None input from `liveness.liveness_inputs()` (the ONE assembly).
-
-    Snapshot/view callers inject the shared world data (R11) and pay no IO
-    here; CLI / no-snapshot callers pass None and get the same assembly
-    `build_world_snapshot` uses (which swallows each source's errors → safe
-    empties). A caller that doesn't consume a source passes `[]`/`{}` — not
-    None — so an unused gap never triggers the fetch on its own.
-    """
-    if session_procs is None or agent_jobs is None or agents_map is None or cur is None:
-        d_procs, d_cur, d_jobs, d_agents = liveness.liveness_inputs()
-        if session_procs is None:
-            session_procs = d_procs
-        if agent_jobs is None:
-            agent_jobs = d_jobs
-        if agents_map is None:
-            agents_map = d_agents
-        if cur is None:
-            cur = d_cur
-    return session_procs, agent_jobs, agents_map, cur
-
-
 def _gather_known(
     sessions: list[Session],
     session_procs: list[SessionProc] | None = None,
     agent_jobs: list[AgentJob] | None = None,
     agents_map: dict[str, int | None] | None = None,
     cur: set[int] | None = None,
+    *,
+    fresh: bool = False,
 ) -> set[str]:
-    """Resolve the protected-sid set, self-fetching any omitted source
-    (`_fill_liveness_inputs`)."""
-    session_procs, agent_jobs, agents_map, cur = _fill_liveness_inputs(
-        session_procs, agent_jobs, agents_map, cur)
+    """Resolve protected sids, self-fetching omitted liveness inputs."""
+    session_procs, agent_jobs, agents_map, cur = fill_liveness_inputs(
+        session_procs, agent_jobs, agents_map, cur, fresh=fresh)
     return known_sids(sessions, session_procs, agent_jobs, agents_map, cur)
 
 
@@ -221,9 +199,11 @@ def list_orphan_dirs(
     known = _gather_known(sessions, session_procs, agent_jobs, agents_map, cur)
     orphans: list[str] = []
     for label, path in _sid_dir_paths():
-        if not os.path.isdir(path):
+        try:
+            names = os.listdir(path)
+        except FileNotFoundError:
             continue
-        for name in os.listdir(path):
+        for name in names:
             if name not in known:
                 orphans.append(os.path.join(label, name))
     return sorted(set(orphans))
@@ -234,7 +214,7 @@ def execute_orphan_removals(
     *,
     sessions: list[Session] | None = None,
     known: set[str] | None = None,
-) -> int:
+) -> CleanupExecution:
     """Delete AT MOST the previewed orphan entries (`<label>/<sid>`).
 
     删除 ⊆ 预览 + revalidation: only entries from the frozen preview list are
@@ -245,20 +225,33 @@ def execute_orphan_removals(
     and confirm is skipped, never the other way around. `known` overrides the
     assembly entirely (tests). Refuses without `/proc` (R10).
     """
+    result = CleanupExecution()
     if not proc.current_determinable():
-        return 0
+        result.refuse(list(entries), "current session cannot be determined")
+        return result
     if known is None:
-        known = _gather_known(sessions or [])
+        try:
+            known = _gather_known(sessions or [], fresh=True)
+        except OSError as exc:
+            result.refuse(list(entries), f"liveness revalidation failed: {exc}")
+            return result
     base_by_label = dict(_sid_dir_paths())
-    count = 0
     for entry in entries:
         label, _, sid = entry.partition("/")
         base = base_by_label.get(label)
-        if not base or not sid or sid in known:
+        if not base or not _is_child_name(sid):
+            result.skip(entry, "not a previewable orphan path")
             continue
-        if _remove_path(os.path.join(base, sid)):
-            count += 1
-    return count
+        if sid in known:
+            result.skip(entry, "session is now protected")
+            continue
+        removal = _remove_path(os.path.join(base, sid))
+        result.add_removal(removal)
+        if removal.status is RemovalStatus.REMOVED:
+            result.complete(entry)
+        elif removal.status is RemovalStatus.MISSING:
+            result.mark_missing(entry)
+    return result
 
 
 # --- Strategy A: pid-keyed zombie session files ----------------------------
@@ -290,27 +283,39 @@ def execute_zombie_removals(
     *,
     session_procs: list[SessionProc] | None = None,
     cur: set[int] | None = None,
-) -> int:
+) -> CleanupExecution:
     """Delete AT MOST the previewed zombie `sessions/<pid>.json` files.
 
     Each pid is re-selected against FRESH liveness (`session_procs`/`cur`
     self-fetched when None) — a pid that came back alive (or became current)
     between preview and confirm is skipped. Refuses without `/proc` (R10).
     """
+    result = CleanupExecution()
     if not proc.current_determinable():
-        return 0
+        result.refuse(list(pids), "current session cannot be determined")
+        return result
     if session_procs is None:
-        session_procs = liveness.live_session_procs()
+        try:
+            session_procs = liveness.live_session_procs(max_age=0.0)
+        except OSError as exc:
+            result.refuse(list(pids), f"liveness revalidation failed: {exc}")
+            return result
     if cur is None:
         cur = proc.ancestor_pids()
     still_zombie = set(select_zombie_pids(session_procs, cur))
-    count = 0
     for pid in pids:
         if pid not in still_zombie:
+            result.skip(pid, "session process is now live or current")
             continue
-        if _remove_path(os.path.join(str(cfg.sessions_dir), f"{pid}.json")):
-            count += 1
-    return count
+        removal = _remove_path(
+            os.path.join(str(cfg.sessions_dir), f"{pid}.json")
+        )
+        result.add_removal(removal)
+        if removal.status is RemovalStatus.REMOVED:
+            result.complete(pid)
+        elif removal.status is RemovalStatus.MISSING:
+            result.mark_missing(pid)
+    return result
 
 
 # --- Strategy B: age sweep -------------------------------------------------
@@ -324,18 +329,23 @@ def list_aged_entries(now: float | None = None) -> list[str]:
     cutoff = _age_cutoff(time.time() if now is None else now)
     out: list[str] = []
     for label, path in _age_dir_paths():
-        if not os.path.isdir(path):
+        try:
+            names = os.listdir(path)
+        except FileNotFoundError:
             continue
-        for name in os.listdir(path):
+        for name in names:
+            full = os.path.join(path, name)
             try:
-                if os.stat(os.path.join(path, name)).st_mtime < cutoff:
+                if os.lstat(full).st_mtime < cutoff:
                     out.append(os.path.join(label, name))
-            except OSError:
-                pass
+            except FileNotFoundError:
+                continue
     return sorted(out)
 
 
-def execute_aged_removals(entries: list[str], now: float | None = None) -> int:
+def execute_aged_removals(
+    entries: list[str], now: float | None = None
+) -> CleanupExecution:
     """Delete AT MOST the previewed aged entries (`<label>/<name>`).
 
     Each entry's mtime is re-checked against the cutoff at execution time — an
@@ -344,21 +354,33 @@ def execute_aged_removals(entries: list[str], now: float | None = None) -> int:
     """
     cutoff = _age_cutoff(time.time() if now is None else now)
     base_by_label = dict(_age_dir_paths())
-    count = 0
+    result = CleanupExecution()
     for entry in entries:
         label, _, name = entry.partition("/")
         base = base_by_label.get(label)
-        if not base or not name:
+        if not base or not _is_child_name(name):
+            result.skip(entry, "not a previewable aged-entry path")
             continue
         full = os.path.join(base, name)
         try:
-            if os.stat(full).st_mtime >= cutoff:
+            if os.lstat(full).st_mtime >= cutoff:
+                result.skip(entry, "entry is no longer old enough")
                 continue
-        except OSError:
+        except FileNotFoundError:
+            result.add_removal(PathRemoval(Path(full), RemovalStatus.MISSING))
+            result.mark_missing(entry)
             continue
-        if _remove_path(full):
-            count += 1
-    return count
+        except OSError as exc:
+            result.add_removal(
+                PathRemoval(Path(full), RemovalStatus.FAILED, str(exc))
+            )
+            continue
+        result.add_removal(_remove_path(full))
+        if result.removals[-1].status is RemovalStatus.REMOVED:
+            result.complete(entry)
+        elif result.removals[-1].status is RemovalStatus.MISSING:
+            result.mark_missing(entry)
+    return result
 
 
 # --- Session prune + full delete -------------------------------------------
@@ -382,13 +404,52 @@ def prune_sessions(sessions: list[Session], max_prompts: int = 0) -> list[Sessio
     ]
 
 
-def remove_session(s: Session) -> bool:
+def _session_is_protected(
+    session: Session,
+    session_procs: list[SessionProc],
+    agents_map: dict[str, int | None],
+    cur: set[int],
+) -> bool:
+    live_sids = {sp.sid for sp in session_procs if sp.proc_alive}
+    live_sids |= {sid for sid, pid in agents_map.items() if pid}
+    current_sids = {sp.sid for sp in session_procs if sp.pid in cur}
+    return (
+        session.sid in live_sids
+        or session.sid in current_sids
+        or session.current
+        or bool(session.pid and session.pid in cur)
+    )
+
+
+def _remove_session_paths(
+    session: Session, session_procs: list[SessionProc]
+) -> CleanupExecution:
+    result = CleanupExecution()
+    paths: list[str] = []
+    if session.file:
+        paths.append(session.file)
+        if session.file.endswith(".jsonl"):
+            paths.append(session.file[:-6])
+    paths.extend(_sid_keyed_paths(session.sid))
+    for path in dict.fromkeys(paths):
+        result.add_removal(_remove_path(path))
+
+    _, host_alive = registry.host_pid_for_sid(session.sid, session_procs)
+    if host_alive:
+        result.skip(_jobs_path(session.sid), "background agent is live")
+    else:
+        result.add_removal(_remove_path(_jobs_path(session.sid)))
+    if result.removed and not result.failed:
+        result.complete(session.sid)
+    elif not result.removed and not result.failed:
+        result.mark_missing(session.sid)
+    return result
+
+
+def remove_session(s: Session) -> CleanupExecution:
     """Delete one session: its `.jsonl`, companion dir, and sid artifacts.
 
-    Returns True iff something was removed; False when it refused (R10) or there
-    was nothing to remove (L4 — the view reports honestly).
-
-    Refuses (no-op, False) when current can't be determined (R10) — without
+    Refuses when current can't be determined (R10) — without
     `/proc` we cannot prove `s` is not the launching session.
 
     M3: the `jobs/<short>` dir is removed ONLY when the sid has no LIVE host pid,
@@ -396,23 +457,20 @@ def remove_session(s: Session) -> bool:
     `agent_ops.remove_job` protects it (do not bypass the jobs/ guard).
     """
     if not proc.current_determinable():
-        return False
-    removed = False
+        result = CleanupExecution()
+        result.refuse([s.sid], "current session cannot be determined")
+        return result
     try:
-        os.remove(s.file)
-        removed = True
-    except OSError:
-        pass
-    if _remove_path(s.file[:-6]):  # companion dir (drop the .jsonl suffix)
-        removed = True
-    for p in _sid_keyed_paths(s.sid):
-        if _remove_path(p):
-            removed = True
-    # M3: never delete a LIVE agent worker's jobs/<short> dir.
-    _, host_alive = registry.host_pid_for_sid(s.sid, liveness.live_session_procs())
-    if not host_alive and _remove_path(_jobs_path(s.sid)):
-        removed = True
-    return removed
+        session_procs, agents_map, cur = fresh_session_guards()
+    except OSError as exc:
+        result = CleanupExecution()
+        result.refuse([s.sid], f"liveness revalidation failed: {exc}")
+        return result
+    if _session_is_protected(s, session_procs, agents_map, cur):
+        result = CleanupExecution()
+        result.skip(s.sid, "session is now live or current")
+        return result
+    return _remove_session_paths(s, session_procs)
 
 
 def execute_session_removals(
@@ -421,59 +479,65 @@ def execute_session_removals(
     session_procs: list[SessionProc] | None = None,
     agents_map: dict[str, int | None] | None = None,
     cur: set[int] | None = None,
-) -> int:
-    """Delete AT MOST the previewed prunable sessions, via `remove_session`.
+) -> CleanupExecution:
+    """Delete AT MOST the previewed prunable sessions.
 
     Each target is revalidated against FRESH liveness (self-fetched when the
     kwargs are None): a session that came alive or became current between
     preview and confirm is skipped (删除 ⊆ 预览, 宁可少删). Refuses without
     `/proc` (R10).
     """
+    result = CleanupExecution()
     if not proc.current_determinable():
-        return 0
-    # agent_jobs is unused here: pass [] (not None) so an omitted-but-unused
-    # source never triggers the fetch on its own (see _fill_liveness_inputs).
-    session_procs, _, agents_map, cur = _fill_liveness_inputs(
-        session_procs, [], agents_map, cur)
-    fresh_alive = {sp.sid for sp in session_procs if sp.proc_alive}
-    fresh_alive |= {sid for sid, pid in agents_map.items() if pid}
-    count = 0
+        result.refuse(
+            [s.sid for s in targets], "current session cannot be determined"
+        )
+        return result
+    if session_procs is None or agents_map is None or cur is None:
+        try:
+            fresh_procs, fresh_agents, fresh_cur = fresh_session_guards()
+        except OSError as exc:
+            result.refuse(
+                [s.sid for s in targets],
+                f"liveness revalidation failed: {exc}",
+            )
+            return result
+        if session_procs is None:
+            session_procs = fresh_procs
+        if agents_map is None:
+            agents_map = fresh_agents
+        if cur is None:
+            cur = fresh_cur
     for s in targets:
-        if s.sid in fresh_alive or s.current or (s.pid and s.pid in cur):
+        if _session_is_protected(s, session_procs, agents_map, cur):
+            result.skip(s.sid, "session is now live or current")
             continue
-        if remove_session(s):
-            count += 1
-    return count
+        result.extend(_remove_session_paths(s, session_procs))
+    return result
 
 
 # --- The cleanup plan (ONE source for counts, preview, and execution) -------
 
-@dataclass
-class CleanupPlan:
-    """Frozen cleanup candidates, built ONCE per snapshot cycle.
+_PlanItems = TypeVar("_PlanItems")
 
-    The status-bar/submenu counts, the preview overlay, and the confirmed
-    execution all read the SAME plan, so what the user sees is what (at most)
-    gets deleted — the old flow re-scanned between count, preview, and
-    confirm, and the three could silently disagree. Execution goes through the
-    `execute_*` functions, which revalidate every item against fresh
-    protection data (删除 ⊆ 预览).
-    """
-    empty: list[Session] = field(default_factory=list)
-    short: list[Session] = field(default_factory=list)
-    orphan_entries: list[str] = field(default_factory=list)
-    zombie_pids: list[int] = field(default_factory=list)
-    aged_entries: list[str] = field(default_factory=list)
 
-    def counts(self) -> dict[str, int]:
-        """The classified counts, derived from the plan itself."""
-        return {
-            "empty": len(self.empty),
-            "short": len(self.short),
-            "orphan_dirs": len(self.orphan_entries),
-            "zombie_procs": len(self.zombie_pids),
-            "aged_entries": len(self.aged_entries),
-        }
+def _plan_source(
+    source: str,
+    load: Callable[[], _PlanItems],
+    issues: list[CleanupIssue],
+    empty: _PlanItems,
+) -> _PlanItems:
+    try:
+        return load()
+    except OSError as exc:
+        issues.append(
+            CleanupIssue(
+                source=source,
+                error=str(exc),
+                path=os.fspath(exc.filename) if exc.filename else None,
+            )
+        )
+        return empty
 
 
 def build_plan(
@@ -485,12 +549,25 @@ def build_plan(
     now: float | None = None,
 ) -> CleanupPlan:
     """Build the cleanup plan from the shared world data (deps injected)."""
+    issues: list[CleanupIssue] = []
     return CleanupPlan(
         empty=prune_sessions(sessions, max_prompts=0),
         short=[s for s in prune_sessions(sessions, max_prompts=2) if s.prompts > 0],
-        orphan_entries=list_orphan_dirs(
-            sessions, session_procs=session_procs, agent_jobs=agent_jobs,
-            agents_map=agents_map, cur=cur),
+        orphan_entries=_plan_source(
+            "orphan_dirs",
+            lambda: list_orphan_dirs(
+                sessions,
+                session_procs=session_procs,
+                agent_jobs=agent_jobs,
+                agents_map=agents_map,
+                cur=cur,
+            ),
+            issues,
+            [],
+        ),
         zombie_pids=select_zombie_pids(session_procs, cur),
-        aged_entries=list_aged_entries(now),
+        aged_entries=_plan_source(
+            "aged_entries", lambda: list_aged_entries(now), issues, []
+        ),
+        issues=issues,
     )

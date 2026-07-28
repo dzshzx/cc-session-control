@@ -6,6 +6,8 @@ import argparse
 import os
 import sys
 
+from .data.removal import CleanupExecution
+
 
 def _build_parser() -> argparse.ArgumentParser:
     from . import __version__
@@ -168,8 +170,53 @@ def _cmd_rc(args: argparse.Namespace) -> None:
             print(name)
 
 
-def _cmd_prune(args: argparse.Namespace) -> None:
-    from .data import liveness
+def _print_cleanup_execution(
+    result: CleanupExecution,
+    *,
+    success: str,
+    subject: str,
+) -> int:
+    """Print one honest apply outcome and return its process status."""
+    completed = len(result.completed)
+    details: list[str] = []
+    if result.failed and result.removed:
+        details.append(f"removed paths {len(result.removed)}")
+    if result.failed:
+        first = result.failed[0]
+        details.append(
+            f"failed {len(result.failed)}"
+            + (f" ({first.path}: {first.error})" if first.error else "")
+        )
+    if result.skipped:
+        details.append(
+            f"skipped {len(result.skipped)} ({result.skipped[0].reason})"
+        )
+    if result.refused:
+        details.append(
+            f"refused {len(result.refused)} ({result.refused[0].reason})"
+        )
+    if result.missing_targets:
+        details.append(f"already missing {len(result.missing_targets)}")
+
+    if completed and not details:
+        print(success.format(n=completed))
+    elif completed:
+        print(f"Partial sweep: removed {completed} {subject}; {'; '.join(details)}.")
+    elif result.removed:
+        print(f"Partial sweep: completed 0 {subject}; {'; '.join(details)}.")
+    elif result.refused:
+        print(f"Refused: no {subject} removed; {'; '.join(details)}.")
+    elif result.failed:
+        print(f"Sweep failed: removed 0 {subject}; {'; '.join(details)}.")
+    elif details:
+        print(f"No {subject} removed; {'; '.join(details)}.")
+    else:
+        print(f"No {subject} removed.")
+    return 1 if result.failed or result.skipped or result.refused else 0
+
+
+def _cmd_prune(args: argparse.Namespace) -> int:
+    from .data import liveness, proc
     from .data.cleanup import (
         build_plan,
         execute_orphan_removals,
@@ -191,40 +238,68 @@ def _cmd_prune(args: argparse.Namespace) -> None:
         f"short(<=2): {counts['short']}  Orphan dirs: {counts['orphan_dirs']}  "
         f"Zombie files: {counts['zombie_procs']}  Aged: {counts['aged_entries']}"
     )
+    for issue in plan.issues:
+        where = f" ({issue.path})" if issue.path else ""
+        print(
+            f"Warning: cleanup preview is partial: {issue.source}{where}: "
+            f"{issue.error}"
+        )
+    plan_status = 1 if plan.issues else 0
 
     if args.sweep_orphans:
+        if not proc.current_determinable():
+            print(
+                "Refused: '/proc' unavailable — cannot determine "
+                "the current session (R10)."
+            )
+            return 1
         orphans = plan.orphan_entries
         print(f"Would sweep {len(orphans)} orphan artifact dir(s)")
         if not args.apply:
             print("Dry run. Add --apply to execute.")
-            return
+            return plan_status
         # Deletes AT MOST the listed entries, revalidated against fresh
         # protection data (删除 ⊆ 预览 — same executor as the TUI; `sessions`
         # feeds the transcript tier of the protection set).
-        count = execute_orphan_removals(orphans, sessions=sessions)
-        print(f"Swept {count} orphan dir(s).")
-        return
+        result = execute_orphan_removals(orphans, sessions=scan())
+        status = _print_cleanup_execution(
+            result,
+            success="Swept {n} orphan dir(s).",
+            subject="orphan dir(s)",
+        )
+        return max(status, plan_status)
 
     if args.sweep_zombies:
-        _cmd_prune_zombies(args)
-        return
+        return max(_cmd_prune_zombies(args, plan.zombie_pids), plan_status)
 
     if args.sweep_aged:
-        _cmd_prune_aged(args)
-        return
+        return max(_cmd_prune_aged(args, plan.aged_entries), plan_status)
 
+    if not proc.current_determinable():
+        print(
+            "Refused: '/proc' unavailable — cannot determine "
+            "the current session (R10)."
+        )
+        return 1
     targets = prune_sessions(sessions, max_prompts=args.max_prompts)
     print(f"Would prune {len(targets)} session(s) (<={args.max_prompts} prompts)")
 
     if not args.apply:
         print("Dry run. Add --apply to execute.")
-        return
+        return plan_status
 
-    count = execute_session_removals(targets)
-    print(f"Pruned {count} session(s).")
+    result = execute_session_removals(targets)
+    status = _print_cleanup_execution(
+        result,
+        success="Pruned {n} session(s).",
+        subject="session(s)",
+    )
+    return max(status, plan_status)
 
 
-def _cmd_prune_zombies(args: argparse.Namespace) -> None:
+def _cmd_prune_zombies(
+    args: argparse.Namespace, zombies: list[int] | None = None
+) -> int:
     """Strategy A pid-keyed sweep of `sessions/<pid>.json` (R7.1) via the CLI.
 
     Reuses the already-gated `data/cleanup` helpers: `select_zombie_pids` keeps
@@ -238,19 +313,26 @@ def _cmd_prune_zombies(args: argparse.Namespace) -> None:
 
     if not proc.current_determinable():
         print("Refused: '/proc' unavailable — cannot determine the current session (R10).")
-        return
-    procs = liveness.live_session_procs(max_age=0.0)
-    cur = proc.ancestor_pids()
-    zombies = select_zombie_pids(procs, cur)
+        return 1
+    if zombies is None:
+        procs = liveness.live_session_procs(max_age=0.0)
+        cur = proc.ancestor_pids()
+        zombies = select_zombie_pids(procs, cur)
     print(f"Would sweep {len(zombies)} zombie session file(s)")
     if not args.apply:
         print("Dry run. Add --apply to execute.")
-        return
-    count = execute_zombie_removals(zombies, session_procs=procs, cur=cur)
-    print(f"Swept {count} zombie session file(s).")
+        return 0
+    result = execute_zombie_removals(zombies)
+    return _print_cleanup_execution(
+        result,
+        success="Swept {n} zombie session file(s).",
+        subject="zombie session file(s)",
+    )
 
 
-def _cmd_prune_aged(args: argparse.Namespace) -> None:
+def _cmd_prune_aged(
+    args: argparse.Namespace, aged: list[str] | None = None
+) -> int:
     """Strategy B age sweep of time/global-keyed dirs (R7.2) via the CLI.
 
     The age sweep is mtime-only and session-agnostic, so (unlike the zombie
@@ -259,13 +341,18 @@ def _cmd_prune_aged(args: argparse.Namespace) -> None:
     from .config import cfg
     from .data.cleanup import execute_aged_removals, list_aged_entries
 
-    aged = list_aged_entries()
+    if aged is None:
+        aged = list_aged_entries()
     print(f"Would sweep {len(aged)} aged entr(y/ies) older than {cfg.cleanup_age_days}d")
     if not args.apply:
         print("Dry run. Add --apply to execute.")
-        return
-    count = execute_aged_removals(aged)
-    print(f"Swept {count} aged entr(y/ies).")
+        return 0
+    result = execute_aged_removals(aged)
+    return _print_cleanup_execution(
+        result,
+        success="Swept {n} aged entr(y/ies).",
+        subject="aged entr(y/ies)",
+    )
 
 
 def _cmd_resume(args: argparse.Namespace) -> None:
@@ -352,7 +439,9 @@ def main() -> None:
     if args.command == "rc":
         _cmd_rc(args)
     elif args.command == "prune":
-        _cmd_prune(args)
+        status = _cmd_prune(args)
+        if status:
+            raise SystemExit(status)
     elif args.command == "resume":
         _cmd_resume(args)
     elif args.command == "skill":

@@ -55,12 +55,12 @@ def test_prune_sweep_aged_dry_run_then_apply(tmp_path, monkeypatch, capsys):
     stamp = time.time() - 40 * 86400
     os.utime(old, (stamp, stamp))
 
-    cli._cmd_prune(_args(sweep_aged=True, apply=False))
+    assert cli._cmd_prune(_args(sweep_aged=True, apply=False)) == 0
     out = capsys.readouterr().out
     assert "Would sweep 1 aged" in out
     assert os.path.exists(old)  # dry run keeps it
 
-    cli._cmd_prune(_args(sweep_aged=True, apply=True))
+    assert cli._cmd_prune(_args(sweep_aged=True, apply=True)) == 0
     out = capsys.readouterr().out
     assert "Swept 1 aged" in out
     assert not os.path.exists(old)
@@ -78,7 +78,7 @@ def test_prune_sweep_zombies_apply_keeps_alive_and_current(tmp_path, monkeypatch
     monkeypatch.setattr(proc_mod, "ancestor_pids", lambda: set())
     monkeypatch.setattr(proc_mod, "pid_alive", lambda pid, ps: pid == 710575)
 
-    cli._cmd_prune(_args(sweep_zombies=True, apply=True))
+    assert cli._cmd_prune(_args(sweep_zombies=True, apply=True)) == 0
     out = capsys.readouterr().out
     assert "Swept 1 zombie" in out
     assert not os.path.exists(os.path.join(sessions_dir, "700772.json"))  # dead
@@ -94,10 +94,128 @@ def test_prune_sweep_zombies_refuses_without_proc(tmp_path, monkeypatch, capsys)
 
     monkeypatch.setattr(proc_mod, "current_determinable", lambda: False)
 
-    cli._cmd_prune(_args(sweep_zombies=True, apply=True))
+    assert cli._cmd_prune(_args(sweep_zombies=True, apply=True)) == 1
     out = capsys.readouterr().out
     assert "Refused" in out
     assert os.path.exists(os.path.join(sessions_dir, "1.json"))  # nothing removed
+
+
+def test_prune_sweep_orphans_reports_real_success(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    _stub_scan(monkeypatch)
+    orphan = tmp_path / "session-env" / "ghost"
+    orphan.mkdir(parents=True)
+
+    status = cli._cmd_prune(_args(sweep_orphans=True, apply=True))
+    output = capsys.readouterr().out
+
+    assert status == 0
+    assert "Swept 1 orphan dir(s)." in output
+    assert not orphan.exists()
+
+
+def test_prune_sweep_orphans_refuses_without_proc(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    _stub_scan(monkeypatch)
+    orphan = tmp_path / "session-env" / "ghost"
+    orphan.mkdir(parents=True)
+    monkeypatch.setattr(proc_mod, "current_determinable", lambda: False)
+
+    status = cli._cmd_prune(_args(sweep_orphans=True, apply=True))
+    output = capsys.readouterr().out
+
+    assert status == 1
+    assert "Refused" in output
+    assert orphan.exists()
+
+
+def test_prune_aged_partial_failure_is_visible_and_nonzero(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
+    _stub_scan(monkeypatch)
+    root = tmp_path / "shell-snapshots"
+    root.mkdir()
+    good = root / "good.txt"
+    bad = root / "bad.txt"
+    good.write_text("good")
+    bad.write_text("bad")
+    stamp = time.time() - 40 * 86400
+    os.utime(good, (stamp, stamp))
+    os.utime(bad, (stamp, stamp))
+    original_unlink = os.unlink
+
+    def fail_one(path: str) -> None:
+        if os.fspath(path) == os.fspath(bad):
+            raise PermissionError("permission denied")
+        original_unlink(path)
+
+    monkeypatch.setattr(os, "unlink", fail_one)
+
+    status = cli._cmd_prune(_args(sweep_aged=True, apply=True))
+    output = capsys.readouterr().out
+
+    assert status == 1
+    assert "Partial sweep" in output
+    assert "removed 1" in output
+    assert "failed 1" in output
+    assert "permission denied" in output
+    assert not good.exists()
+    assert bad.exists()
+
+
+def test_prune_aged_missing_target_is_not_counted_as_swept(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
+    _stub_scan(monkeypatch)
+    root = tmp_path / "shell-snapshots"
+    root.mkdir()
+    old = root / "old.txt"
+    old.write_text("data")
+    stamp = time.time() - 40 * 86400
+    os.utime(old, (stamp, stamp))
+
+    original_unlink = os.unlink
+
+    def disappear(path: str) -> None:
+        if os.fspath(path) == os.fspath(old):
+            original_unlink(path)
+            raise FileNotFoundError(path)
+        original_unlink(path)
+
+    monkeypatch.setattr(os, "unlink", disappear)
+
+    status = cli._cmd_prune(_args(sweep_aged=True, apply=True))
+    output = capsys.readouterr().out
+
+    assert status == 0
+    assert "already missing 1" in output
+    assert "Swept 1 aged" not in output
+
+
+def test_prune_main_propagates_cleanup_failure_exit_status(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "_build_parser",
+        lambda: types.SimpleNamespace(
+            parse_args=lambda: _args(command="prune"),
+            error=lambda message: None,
+        ),
+    )
+    monkeypatch.setattr(cli, "_apply_global_flags", lambda args: None)
+    monkeypatch.setattr(cli, "_cmd_prune", lambda args: 1)
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+
+    assert stopped.value.code == 1
 
 
 def test_theme_flag_sets_cfg(monkeypatch):

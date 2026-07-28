@@ -26,12 +26,15 @@ import shlex
 
 from ..config import cfg
 from ..data import cleanup, liveness, proc, registry, tmux
+from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session
 from . import session_ops
 
 # --- host-pid join (shared by stop_job, remove_job, and the view) -------------
 
-def job_host(job: AgentJob) -> tuple[int | None, bool]:
+def job_host(
+    job: AgentJob, *, max_age: float = 5.0
+) -> tuple[int | None, bool]:
     """Resolve a background job's host pid + liveness — `(pid, alive)`.
 
     `state.json` has no pid, so the worker's pid is JOINed from
@@ -44,7 +47,7 @@ def job_host(job: AgentJob) -> tuple[int | None, bool]:
     Injects `/proc` liveness onto the registry rows, then defers to the single
     pure join `registry.host_pid_for_sid` (shared with `snapshot._enrich_jobs`).
     """
-    procs = liveness.live_session_procs()
+    procs = liveness.live_session_procs(max_age=max_age)
     return registry.host_pid_for_sid(job.sid, procs)
 
 
@@ -82,18 +85,24 @@ def respawn(job: AgentJob) -> str:
 
 # --- remove (settled agents only) ---------------------------------------------
 
-def remove_job(job: AgentJob) -> bool:
+def remove_job(job: AgentJob) -> CleanupExecution:
     """Remove a SETTLED background agent: `jobs/<short>/` + its sid artifacts.
 
-    Returns True iff the job dir was removed. Refuses (False) for a LIVE worker
-    (`job_host` reports alive) and when "current" can't be determined (no
-    `/proc`, R10) — destructive, must not run blind.
+    Refuses for a LIVE worker (`job_host` reports alive) and when "current"
+    can't be determined (no `/proc`, R10) — destructive, must not run blind.
     """
+    result = CleanupExecution()
     if not proc.current_determinable():
-        return False
-    _, alive = job_host(job)
+        result.refuse([job.short], "current session cannot be determined")
+        return result
+    try:
+        _, alive = job_host(job, max_age=0.0)
+    except OSError as exc:
+        result.refuse([job.short], f"liveness revalidation failed: {exc}")
+        return result
     if alive:
-        return False
+        result.skip(job.short, "background agent is now live")
+        return result
     return cleanup.remove_agent_artifacts(job.short, job.sid)
 
 
