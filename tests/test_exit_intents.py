@@ -165,12 +165,14 @@ def test_tui_terminal_resume_r10_refusal_exits_nonzero_on_stderr(
     assert liveness_calls == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "Refused: liveness evidence incomplete" in captured.err
-    assert "process ancestors at /proc: unavailable" in captured.err
+    assert captured.err == (
+        "Terminal resume did not occur for session resume: "
+        "process ancestors at /proc: unavailable.\n"
+    )
 
 
 @pytest.mark.parametrize(
-    ("takeover", "expected_status", "expected_side_effects"),
+    ("takeover", "expected_status", "expected_side_effects", "expected_error"),
     [
         (
             session_ops.TakeOverOutcome(
@@ -179,6 +181,10 @@ def test_tui_terminal_resume_r10_refusal_exits_nonzero_on_stderr(
             ),
             1,
             [],
+            (
+                "Terminal resume did not occur for session resume: "
+                "ancestor chain indeterminate.\n"
+            ),
         ),
         (
             session_ops.TakeOverOutcome(
@@ -187,23 +193,28 @@ def test_tui_terminal_resume_r10_refusal_exits_nonzero_on_stderr(
             ),
             1,
             [],
+            ("Terminal resume did not occur for session resume: permission denied.\n"),
         ),
         (
             session_ops.TakeOverOutcome(session_ops.TakeOverState.KILLED),
             0,
             ["chdir:/project", "exec:claude"],
+            "",
         ),
         (
             session_ops.TakeOverOutcome(session_ops.TakeOverState.GONE),
             0,
             ["chdir:/project", "exec:claude"],
+            "",
         ),
     ],
+    ids=["refused", "sigterm-permission-error", "killed", "gone"],
 )
 def test_tui_live_terminal_resume_requires_successful_takeover_before_exec(
     takeover: session_ops.TakeOverOutcome,
     expected_status: int,
     expected_side_effects: list[str],
+    expected_error: str,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -233,10 +244,7 @@ def test_tui_live_terminal_resume_requires_successful_takeover_before_exec(
     assert side_effects == expected_side_effects
     captured = capsys.readouterr()
     assert captured.out == ""
-    if takeover.success:
-        assert captured.err == ""
-    else:
-        assert takeover.detail in captured.err
+    assert captured.err == expected_error
 
 
 def test_tui_live_terminal_resume_without_pid_fails_closed_before_exec(

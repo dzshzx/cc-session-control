@@ -342,10 +342,10 @@ class ResumeIntent(ExitIntent):
             )
             return 1
         if not outcome.success:
-            detail = f" {outcome.detail}" if outcome.detail else ""
+            detail = f": {outcome.detail}" if outcome.detail else ""
             print(
-                "Refused: liveness evidence incomplete; the session was not "
-                f"resumed.{detail}",
+                f"Terminal resume did not occur for session {self.session.sid}"
+                f"{detail}.",
                 file=sys.stderr,
             )
             return 1
