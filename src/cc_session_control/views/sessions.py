@@ -14,10 +14,8 @@ from ..actions.session_ops import (
     to_clipboard,
 )
 from ..data import proc
-from ..data.cleanup import CleanupPlan, build_plan, remove_session
-from ..data.liveness import liveness_inputs
-from ..data.sessions import scan
-from ..models import AgentJob, Session, SessionProc
+from ..data.cleanup import CleanupPlan, remove_session
+from ..models import Session
 from ._base import ListTabView
 from ._cleanup_feedback import format_delete_notice
 from ._confirm import DEGRADED as _DEGRADED
@@ -32,9 +30,8 @@ from ._session_row import (
 from ._sessions_cleanup import CleanupMixin
 
 if TYPE_CHECKING:
-    from ..data.snapshot import WorldSnapshot
-
     from ..app import App
+    from ..data.refresh import RefreshBatch
 
 
 class SessionsView(CleanupMixin, ListTabView):
@@ -110,7 +107,6 @@ class SessionsView(CleanupMixin, ListTabView):
         super().__init__(app, _SESSION_HEADER)
         self._sessions: list[Session] = []
         self._all_sessions: list[Session] = []
-        self._pending: list[Session] | None = None
         self._mode = "list"
         self._filter_text = ""
         self._cleanup_stats: dict[str, int] = {}
@@ -121,8 +117,6 @@ class SessionsView(CleanupMixin, ListTabView):
         # The frozen cleanup plan (R11/D8 — built from the shared snapshot,
         # never re-scanned per view): counts, preview, and confirm all read it.
         self._plan = CleanupPlan()
-        self._pending_plan: CleanupPlan | None = None
-        self._pending_classified: dict[str, int] | None = None
         self._cleanup_walker = urwid.SimpleFocusListWalker([])
 
     def keyhints(self) -> str:
@@ -140,79 +134,18 @@ class SessionsView(CleanupMixin, ListTabView):
         # footer Text wraps (urwid wrap='space'), trading rows for width.
         return footer_hints(self.KEY_TABLE)
 
-    def load(self) -> None:
-        sessions = scan()
-        procs, cur, jobs, agents = liveness_inputs()
-        self._all_sessions = sessions
-        self._plan = self._build_plan(sessions, procs, cur, jobs, agents)
-        self._classified = self._plan.counts()
-        self._cleanup_stats = self._derive_stats(sessions, self._classified)
+    def apply_refresh(self, batch: RefreshBatch) -> None:
+        """Apply one complete generation on the urwid main loop."""
+        self._all_sessions = batch.snapshot.sessions
+        self._plan = batch.cleanup_plan
+        self._classified = dict(batch.cleanup_counts)
+        self._cleanup_stats = dict(batch.session_stats)
         self._loaded = True
-        self._apply_filter()
-        self._rebuild()
-
-    def _build_plan(
-        self,
-        sessions: list[Session],
-        procs: list[SessionProc],
-        cur: set[int],
-        jobs: list[AgentJob],
-        agents: dict[str, int | None],
-    ) -> CleanupPlan:
-        return build_plan(sessions, procs, cur, jobs, agents)
-
-    def _derive_stats(self, sessions: list[Session], classified: dict[str, int]) -> dict[str, int]:
-        """The legacy 4-key status-bar shape, derived from the classified counts."""
-        return {
-            "total": len(sessions),
-            "empty": classified.get("empty", 0),
-            "short": classified.get("short", 0),
-            "orphans": classified.get("orphan_dirs", 0),
-        }
-
-    def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
-        """Worker-thread data fetch. Only sets pending fields — no widgets.
-
-        Projects the shared `snapshot` when given (R11/D8 — no per-view re-scan);
-        falls back to a self-contained scan when called with no snapshot
-        (back-compat / tests). The liveness inputs feed ONE frozen `CleanupPlan`
-        — counts, preview, and confirm all read it, never a re-scan.
-        """
-        if snapshot is not None:
-            sessions = snapshot.sessions
-            procs, cur = snapshot.session_procs, snapshot.cur
-            jobs, agents = snapshot.agent_jobs, snapshot.agents_map
-        else:
-            sessions = scan()
-            procs, cur, jobs, agents = liveness_inputs()
-        plan = self._build_plan(sessions, procs, cur, jobs, agents)
-        self.set_pending(sessions)
-        self._pending_plan = plan
-        self._pending_classified = plan.counts()
-        self.set_pending_stats(self._derive_stats(sessions, plan.counts()))
-
-    def set_pending(self, sessions: list[Session]) -> None:
-        self._pending = sessions
-
-    def set_pending_stats(self, stats: dict[str, int]) -> None:
-        self._cleanup_stats = stats
-
-    def apply_data(self) -> None:
-        if self._pending is not None:
-            self._all_sessions = self._pending
-            self._pending = None
-            if self._pending_plan is not None:
-                self._plan = self._pending_plan
-                self._pending_plan = None
-            if self._pending_classified is not None:
-                self._classified = self._pending_classified
-                self._pending_classified = None
-            self._loaded = True
-            if self._mode == "list" or self._mode == "filter":
-                self._apply_filter()
-                self._rebuild()
-            elif self._mode == "cleanup":
-                self._rebuild_cleanup()
+        if self._mode == "list" or self._mode == "filter":
+            self._apply_filter()
+            self._rebuild()
+        elif self._mode == "cleanup":
+            self._rebuild_cleanup()
 
     def _build_rows(self) -> None:
         for s in self._sessions:

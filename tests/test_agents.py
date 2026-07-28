@@ -9,8 +9,10 @@ from cc_session_control.actions.session_ops import (
     ResumeIntent,
     TmuxResumeIntent,
 )
+from cc_session_control.data.cleanup import CleanupPlan
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import AgentJob
+from cc_session_control.data.refresh import RefreshBatch
 from cc_session_control.views.agents import AgentRow, AgentsView
 
 
@@ -75,6 +77,18 @@ def _make_view(jobs):
     return app, view
 
 
+def _refresh_batch(jobs):
+    snapshot = WorldSnapshot(agent_jobs=jobs)
+    return RefreshBatch(
+        generation=1,
+        snapshot=snapshot,
+        cleanup_plan=CleanupPlan(),
+        cleanup_counts={},
+        session_stats={},
+        ordered_projects=(),
+    )
+
+
 # --- TabView protocol + basic widgets ---
 
 def test_agents_view_satisfies_tabview_protocol():
@@ -96,50 +110,31 @@ def test_agent_row_alive_marker():
     assert "worker" in text
 
 
-# --- fetch_pending: snapshot projection vs self-fetch ---
+# --- atomic refresh application ---
 
-def test_fetch_pending_uses_snapshot_agent_jobs():
+def test_apply_refresh_uses_snapshot_agent_jobs():
     app = FakeApp()
     view = AgentsView(app)
     app.views = [view]
     jobs = [_make_job(short="s1")]
-    snap = WorldSnapshot(agent_jobs=jobs)
-    view.fetch_pending(snap)
-    assert view._pending == jobs
+    view.apply_refresh(_refresh_batch(jobs))
+    assert view._jobs == jobs
 
 
-def test_fetch_pending_self_fetch_enriches(monkeypatch):
-    jobs = [_make_job(short="s2", host_alive=False)]
-    monkeypatch.setattr(av_mod.registry, "read_agent_jobs", lambda *a, **k: jobs)
-    # The self-fetch path goes through the ONE liveness.enrich_jobs loop.
-    monkeypatch.setattr(av_mod.liveness, "live_session_procs", lambda *a, **k: [])
-    monkeypatch.setattr(av_mod.liveness.registry, "host_pid_for_sid",
-                        lambda sid, procs: (4242, True))
-
-    app = FakeApp()
-    view = AgentsView(app)
-    app.views = [view]
-    view.fetch_pending()  # no snapshot -> self fetch + enrich
-
-    assert view._pending[0].host_pid == 4242
-    assert view._pending[0].host_alive is True
-
-
-def test_apply_data_swaps_pending_into_walker():
+def test_apply_refresh_rebuilds_walker():
     app, view = _make_view([])
-    view._pending = [_make_job(short="j1"), _make_job(short="j2")]
-    view.apply_data()
+    view.apply_refresh(
+        _refresh_batch([_make_job(short="j1"), _make_job(short="j2")])
+    )
     assert len(view.walker) == 2
     assert view._loaded is True
 
 
-def test_load_enriches_and_renders(monkeypatch):
-    monkeypatch.setattr(av_mod.registry, "read_agent_jobs", lambda *a, **k: [_make_job()])
-    monkeypatch.setattr(av_mod.agent_ops, "job_host", lambda job: (None, False))
+def test_apply_refresh_renders_one_job():
     app = FakeApp()
     view = AgentsView(app)
     app.views = [view]
-    view.load()
+    view.apply_refresh(_refresh_batch([_make_job()]))
     assert view._loaded is True
     assert len(view.walker) == 1
 

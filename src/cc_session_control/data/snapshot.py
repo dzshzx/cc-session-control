@@ -1,16 +1,15 @@
 """Shared world snapshot — ONE scan per refresh cycle (R11 / D8).
 
-The async refresh used to call `fetch_pending()` on every view, so three tabs
-each re-scanned `/proc`, the transcripts, and the registries. `build_world_snapshot`
-computes that world ONCE on the worker thread; `App` then hands the same
-immutable snapshot to each view's `fetch_pending(snapshot)` so they only project
-it (no per-view IO). Views stay back-compatible: `fetch_pending(None)` self-fetches.
+The async refresh used to let every view scan `/proc`, transcripts, and
+registries independently. `build_world_snapshot` computes that world ONCE on
+the worker thread; `data.refresh.build_refresh_result` derives one complete batch
+from it before the App main loop gives that batch to every view.
 
 This is the TOP of the data layer — it composes `sessions` / `rc` / `liveness` /
-`environments`. Nothing in `data/` imports it (only `app`/`views` do), so there
-is no cycle. Recoverable external failures are typed by their owning data
-module; `App` additionally guards the snapshot boundary so a failed build
-degrades to per-view self-fetch.
+`environments`. Only the data layer's top-level `refresh` module imports it, so
+there is no cycle. Recoverable external failures are typed by their owning data
+module. Expected boundary I/O failures become an explicit `RefreshFailure`;
+programming and invariant errors are not converted into empty view data.
 """
 
 from __future__ import annotations

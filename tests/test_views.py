@@ -7,7 +7,10 @@ from pathlib import Path
 import urwid
 import pytest
 
+from cc_session_control.data.cleanup import CleanupPlan
 from cc_session_control.data.project_settings import (
+    ProjectSettingsResult,
+    ProjectSettingsState,
     SettingWriteFailure,
     SettingWriteResult,
     SettingWriteState,
@@ -20,6 +23,7 @@ from cc_session_control.actions.session_ops import (
     TmuxResumeIntent,
 )
 from cc_session_control.models import RCProject, RCServer, Session
+from cc_session_control.data.refresh import RefreshBatch
 from cc_session_control.views.sessions import SessionRow, SessionsView
 from cc_session_control.views.rc import RCRow, RCView, ServerRow
 
@@ -91,6 +95,55 @@ def _updated_setting(directory):
     return SettingWriteResult(
         SettingWriteState.UPDATED,
         Path(directory) / ".claude" / "settings.local.json",
+    )
+
+
+def _refresh_batch(
+    snapshot: WorldSnapshot | None = None,
+    *,
+    plan: CleanupPlan | None = None,
+    ordered_projects: tuple[RCProject, ...] | None = None,
+) -> RefreshBatch:
+    snapshot = snapshot or WorldSnapshot()
+    plan = plan or CleanupPlan()
+    counts = plan.counts()
+    return RefreshBatch(
+        generation=1,
+        snapshot=snapshot,
+        cleanup_plan=plan,
+        cleanup_counts=counts,
+        session_stats={
+            "total": len(snapshot.sessions),
+            "empty": counts["empty"],
+            "short": counts["short"],
+            "orphans": counts["orphan_dirs"],
+        },
+        ordered_projects=(
+            ordered_projects
+            if ordered_projects is not None
+            else tuple(snapshot.rc_projects)
+        ),
+    )
+
+
+def _apply_projects(
+    view: RCView,
+    projects: list[RCProject],
+    *,
+    settings: ProjectSettingsResult | None = None,
+    servers: list[RCServer] | None = None,
+) -> None:
+    snapshot = WorldSnapshot(
+        rc_projects=projects,
+        rc_project_settings=(
+            settings
+            if settings is not None
+            else ProjectSettingsResult(ProjectSettingsState.MISSING, {})
+        ),
+        rc_servers=servers or [],
+    )
+    view.apply_refresh(
+        _refresh_batch(snapshot, ordered_projects=tuple(projects))
     )
 
 
@@ -517,8 +570,7 @@ def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="ghost", dir_exists=False)]
-    view.apply_data()
+    _apply_projects(view, [_make_project(name="ghost", dir_exists=False)])
 
     view.handle_key("enter")   # tmux new → refused (no exit intent)
     view.handle_key("o")       # RC start → refused
@@ -531,51 +583,28 @@ def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
     assert any("开机自启" in m for m in app._notifications)
 
 
-def test_sessions_view_fetch_pending(monkeypatch):
-    import cc_session_control.views.sessions as sv_mod
-
+def test_sessions_view_applies_complete_refresh_batch():
     fake = [_make_session(sid="x1")]
-    monkeypatch.setattr(sv_mod, "scan", lambda: fake)
-    # The submenu counts (and the derived status-bar stats) now come from the
-    # frozen CleanupPlan; stub its builder + the shared self-fetch assembly so
-    # the no-snapshot path does no disk IO.
-    from cc_session_control.data.cleanup import CleanupPlan
-    monkeypatch.setattr(sv_mod, "build_plan", lambda *a, **k: CleanupPlan())
-    monkeypatch.setattr(sv_mod, "liveness_inputs", lambda: ([], set(), [], {}))
-
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
-    view.fetch_pending()
+    view.apply_refresh(_refresh_batch(WorldSnapshot(sessions=fake)))
 
-    assert view._pending == fake
+    assert view._all_sessions == fake
     assert view._cleanup_stats == {"total": 1, "empty": 0, "short": 0, "orphans": 0}
-    assert view._pending_classified == {
+    assert view._classified == {
         "empty": 0, "short": 0, "orphan_dirs": 0, "zombie_procs": 0, "aged_entries": 0,
     }
 
 
-def test_rc_view_fetch_pending(monkeypatch):
-    from cc_session_control.data import rc as rc_mod
-    from cc_session_control.data.project_settings import (
-        ProjectSettingsResult,
-        ProjectSettingsState,
-    )
-
+def test_rc_view_applies_complete_refresh_batch():
     fake = [_make_project(name="p1")]
-    monkeypatch.setattr(
-        rc_mod, "scan_result",
-        lambda: rc_mod.RCScanResult(
-            fake, ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
-        ),
-    )
-
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view.fetch_pending()
+    _apply_projects(view, fake)
 
-    assert view._pending == fake
+    assert view._projects == fake
 
 
 def test_rc_view_keyhints_uses_new_labels():
@@ -594,12 +623,11 @@ def test_rc_view_status_bar_counts_use_new_labels():
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [
+    _apply_projects(view, [
         _make_project(name="p1", auto_start=True, rc_at_startup=None),
         _make_project(name="p2", auto_start=True, rc_at_startup=False),
         _make_project(name="p3", auto_start=False, rc_at_startup=False),
-    ]
-    view.apply_data()
+    ])
     text = view.status.original_widget.get_text()[0]
     assert "开机自启 2" in text
     assert "自动远控关 2" in text
@@ -620,8 +648,7 @@ def test_rc_view_status_exposes_snapshot_ledger_warning():
         ),
     )
 
-    view.fetch_pending(snap)
-    view.apply_data()
+    view.apply_refresh(_refresh_batch(snap))
 
     assert "⚠ 环境台账异常 1" in view.status.original_widget.get_text()[0]
 
@@ -631,8 +658,7 @@ def test_rc_view_enter_exits_with_tmux_new():
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1", directory="/tmp/p1")]
-    view.apply_data()
+    _apply_projects(view, [_make_project(name="p1", directory="/tmp/p1")])
 
     view.handle_key("enter")
 
@@ -651,8 +677,7 @@ def test_rc_view_o_key_starts_rc_server(monkeypatch):
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1", status="stopped")]
-    view.apply_data()
+    _apply_projects(view, [_make_project(name="p1", status="stopped")])
 
     view.handle_key("o")
 
@@ -669,12 +694,10 @@ def test_rc_view_focus_follows_project_across_reorder():
     app.views = [view]
     a = _make_project(name="a", directory="/tmp/a")
     b = _make_project(name="b", directory="/tmp/b")
-    view._pending = [a, b]
-    view.apply_data()
+    _apply_projects(view, [a, b])
     view.walker.set_focus(1)                       # cursor on /tmp/b
 
-    view._pending = [b, a]                         # reorder (activity flip)
-    view.apply_data()
+    _apply_projects(view, [b, a])                  # reorder (activity flip)
 
     focused = view.walker.get_focus()[0]
     assert focused.project.directory == "/tmp/b"   # followed identity, not index
@@ -691,8 +714,7 @@ def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1", rc_at_startup=None)]
-    view.apply_data()
+    _apply_projects(view, [_make_project(name="p1", rc_at_startup=None)])
 
     view.handle_key("c")
 
@@ -718,17 +740,20 @@ def test_rc_view_reports_unavailable_trust_in_status_and_start_refusal(
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [
+    projects = [
         _make_project(
             name="p1",
             trusted=False,
             trust_decision=TrustDecision.UNAVAILABLE,
         ),
     ]
-    view._pending_settings = ProjectSettingsResult(
-        ProjectSettingsState.MALFORMED, {}, "bad JSON",
+    _apply_projects(
+        view,
+        projects,
+        settings=ProjectSettingsResult(
+            ProjectSettingsState.MALFORMED, {}, "bad JSON",
+        ),
     )
-    view.apply_data()
 
     assert "项目设置不可用" in view._status_text()
     view.handle_key("o")
@@ -751,8 +776,7 @@ def test_rc_view_reports_typed_settings_write_failure(monkeypatch):
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1", rc_at_startup=None)]
-    view.apply_data()
+    _apply_projects(view, [_make_project(name="p1", rc_at_startup=None)])
 
     view.handle_key("c")
 
@@ -767,8 +791,7 @@ def test_rc_view_a_key_notifies_with_new_label(monkeypatch):
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1")]
-    view.apply_data()
+    _apply_projects(view, [_make_project(name="p1")])
 
     view.handle_key("a")
 
@@ -784,8 +807,7 @@ def test_rc_S_key_confirms_then_stops_all(monkeypatch):
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1", status="running")]
-    view.apply_data()
+    _apply_projects(view, [_make_project(name="p1", status="running")])
 
     view.handle_key("S")
     assert stopped["n"] == 0  # nothing stopped until the confirm is accepted
@@ -985,8 +1007,7 @@ def test_rc_s_running_confirms_stop(monkeypatch):
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1", status="running")]
-    view.apply_data()
+    _apply_projects(view, [_make_project(name="p1", status="running")])
 
     view.handle_key("s")
     assert stopped["n"] == 0
@@ -1000,8 +1021,7 @@ def test_rc_s_not_running_no_confirm():
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1", status="stopped")]
-    view.apply_data()
+    _apply_projects(view, [_make_project(name="p1", status="stopped")])
 
     view.handle_key("s")
     assert app._confirm_messages == []
@@ -1045,18 +1065,8 @@ def test_hide_filter_unions_source_sdk(monkeypatch):
     assert [s.sid for s in view._sessions] == ["normal"]
 
 
-def test_sessions_view_fetch_pending_uses_snapshot(monkeypatch):
-    import cc_session_control.views.sessions as sv_mod
-
-    monkeypatch.setattr(sv_mod, "scan", lambda: (_ for _ in ()).throw(
-        AssertionError("scan() must not run when a snapshot is provided")))
-    # The plan is built from the snapshot's own liveness inputs (no re-scan).
-    from cc_session_control.data.cleanup import CleanupPlan
-    seen = {}
+def test_sessions_view_applies_snapshot_and_plan_from_same_batch():
     plan = CleanupPlan()
-    monkeypatch.setattr(sv_mod, "build_plan",
-                        lambda s, procs, cur, jobs, agents: seen.update(
-                            n=len(s), procs=procs, cur=cur) or plan)
 
     fake = [_make_session(sid="snap1")]
     from cc_session_control.models import SessionProc
@@ -1066,12 +1076,10 @@ def test_sessions_view_fetch_pending_uses_snapshot(monkeypatch):
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
-    view.fetch_pending(snap)
-    assert view._pending == fake
-    # Snapshot liveness inputs were projected straight through (no second scan).
-    assert view._pending_plan is plan
-    assert seen["procs"] == snap.session_procs
-    assert seen["cur"] == {42}
+    view.apply_refresh(_refresh_batch(snap, plan=plan))
+
+    assert view._all_sessions == fake
+    assert view._plan is plan
 
 
 # === Phase 7: RC tri-state + spawn_mode + servers + env ledger ==============
@@ -1099,9 +1107,13 @@ def test_rc_view_renders_servers_but_no_env_ledger():
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1")]
-    view._pending_servers = [RCServer(name="ws/ext", managed=False, pid=7, status="running")]
-    view.apply_data()
+    _apply_projects(
+        view,
+        [_make_project(name="p1")],
+        servers=[
+            RCServer(name="ws/ext", managed=False, pid=7, status="running"),
+        ],
+    )
 
     blob = "\n".join(_row_text(view.walker[i]) for i in range(len(view.walker)))
     assert "外部" in blob        # external server badge still shown
@@ -1109,7 +1121,7 @@ def test_rc_view_renders_servers_but_no_env_ledger():
     assert "云端需手动删除" not in blob
 
 
-def test_rc_view_fetch_pending_uses_snapshot():
+def test_rc_view_applies_servers_from_snapshot():
     snap = WorldSnapshot(
         rc_projects=[_make_project(name="p1")],
         rc_servers=[RCServer(name="ws/x", managed=True, pid=3, status="running")],
@@ -1118,10 +1130,10 @@ def test_rc_view_fetch_pending_uses_snapshot():
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view.fetch_pending(snap)
+    view.apply_refresh(_refresh_batch(snap))
 
-    assert view._pending[0].name == "p1"
-    assert view._pending_servers[0].name == "ws/x"
+    assert view._projects[0].name == "p1"
+    assert view._servers[0].name == "ws/x"
 
 
 def test_rc_view_server_rows_are_read_only(monkeypatch):
@@ -1219,8 +1231,7 @@ def test_rc_view_help_is_overlay_and_keeps_list(monkeypatch):
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
-    view._pending = [_make_project(name="p1")]
-    view.apply_data()
+    _apply_projects(view, [_make_project(name="p1")])
     rows_before = len(view.walker)
 
     view._show_help()
@@ -1249,8 +1260,7 @@ def test_rc_view_c_key_full_tristate_cycle(monkeypatch):
     app.views = [view]
 
     for start, expected in ((None, True), (True, False), (False, None)):
-        view._pending = [_make_project(name="p", rc_at_startup=start)]
-        view.apply_data()
+        _apply_projects(view, [_make_project(name="p", rc_at_startup=start)])
         view.handle_key("c")
         assert writes[-1] is expected
 
@@ -1517,17 +1527,3 @@ def test_cleanup_menu_surfaces_partial_plan_warning():
 
     assert "预览不完整" in app._notifications[-1]
     assert "permission denied" in app._notifications[-1]
-
-
-def test_sessions_build_plan_does_not_swallow_programming_error(monkeypatch):
-    import cc_session_control.views.sessions as sv_mod
-
-    monkeypatch.setattr(
-        sv_mod,
-        "build_plan",
-        lambda *args: (_ for _ in ()).throw(RuntimeError("broken invariant")),
-    )
-    view = SessionsView(FakeApp())
-
-    with pytest.raises(RuntimeError, match="broken invariant"):
-        view._build_plan([], [], set(), [], {})

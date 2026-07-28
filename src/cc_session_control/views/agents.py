@@ -16,7 +16,7 @@ import urwid
 
 from ..actions import agent_ops
 from ..actions.session_ops import ResumeIntent
-from ..data import liveness, proc, registry
+from ..data import proc
 from ..models import AgentJob
 from ._base import ListTabView
 from ._cleanup_feedback import format_delete_notice
@@ -27,9 +27,8 @@ from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 
 if TYPE_CHECKING:
-    from ..data.snapshot import WorldSnapshot
-
     from ..app import App
+    from ..data.refresh import RefreshBatch
 
 
 # One spec drives header + rows (_colspec.py). The 状态 text column already
@@ -126,7 +125,6 @@ class AgentsView(ListTabView):
     def __init__(self, app: App) -> None:
         super().__init__(app, _AGENTS_HEADER)
         self._jobs: list[AgentJob] = []
-        self._pending: list[AgentJob] | None = None
         self._mode = "list"
 
     # --- TabView contract ---
@@ -141,29 +139,12 @@ class AgentsView(ListTabView):
     def _overlay_active(self) -> bool:
         return self._mode in ("help", "watch")
 
-    def load(self) -> None:
-        self._jobs = liveness.enrich_jobs(registry.read_agent_jobs())
+    def apply_refresh(self, batch: RefreshBatch) -> None:
+        """Apply one complete generation on the urwid main loop."""
+        self._jobs = batch.snapshot.agent_jobs
         self._loaded = True
-        self._rebuild()
-
-    def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
-        """Worker-thread data fetch. Only sets pending fields — no widgets.
-
-        The self-fetch path uses the same `liveness.enrich_jobs` loop as the
-        snapshot (self-fetching the registry ONCE), so the two can't drift.
-        """
-        if snapshot is not None:
-            self._pending = snapshot.agent_jobs
-        else:
-            self._pending = liveness.enrich_jobs(registry.read_agent_jobs())
-
-    def apply_data(self) -> None:
-        if self._pending is not None:
-            self._jobs = self._pending
-            self._pending = None
-            self._loaded = True
-            if self._mode == "list":
-                self._rebuild()
+        if self._mode == "list":
+            self._rebuild()
 
     # --- rendering ---
 

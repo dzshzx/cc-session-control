@@ -26,11 +26,10 @@ def liveness_inputs() -> tuple[
     """The shared liveness inputs — `(session_procs, cur, agent_jobs,
     agents_map)` — fetched ONCE, jobs already host-enriched.
 
-    `build_world_snapshot`, the Sessions view's `fetch_pending(None)`
-    self-fetch, and `cleanup`'s protection-set assembly all consume this, so
-    the degraded/self-fetch paths are the same assembly instead of a
-    hand-kept mirror that can drift. Each read swallows its own errors → safe
-    empties.
+    `build_world_snapshot` and `cleanup`'s protection-set assembly consume this,
+    so the refresh generation and cleanup protection set share one assembly
+    instead of a hand-kept mirror that can drift. Expected source failures are
+    handled by their owning readers.
     """
     session_procs = live_session_procs()
     try:

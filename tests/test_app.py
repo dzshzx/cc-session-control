@@ -1,44 +1,29 @@
-"""App orchestration tests — drive the refresh seam WITHOUT a real MainLoop.
+"""App orchestration tests without a real MainLoop or live data sources."""
 
-`App._run_fetch_cycle` is the synchronous worker-phase seam (R11/D8): it builds
-ONE shared `WorldSnapshot` and projects it into every view's `_pending` via
-`fetch_pending(snapshot)`, degrading to per-view self-fetch (`snapshot=None`)
-when the build raises. `_on_pipe` is the main-loop phase that swaps each view's
-pending into its walker via `apply_data()`. These tests exercise both phases with
-recorder views (so no real disk/`/proc`/`claude` IO) and assert the
-"worker never touches widgets, main loop applies" contract holds. The degraded
-header banner (D7) is covered too.
-"""
-
+import threading
+from queue import Queue
 import urwid
 
 import cc_session_control.app as app_mod
 from cc_session_control.app import App
+from cc_session_control.data.cleanup import CleanupPlan
 from cc_session_control.data.snapshot import WorldSnapshot
+from cc_session_control.data.refresh import RefreshBatch, RefreshFailure
 
 
 class _RecorderView:
-    """A minimal TabView that records the snapshot it was handed (no widgets)."""
+    """A minimal TabView that records main-loop batch application."""
 
     def __init__(self):
         self.widget = urwid.Text("body")
         self._loaded = False
-        self.fetched = []      # snapshots passed to fetch_pending (worker phase)
-        self.applied = 0       # apply_data calls (main-loop phase)
-        self._pending = None
+        self.applied = []
+        self.apply_threads = []
 
-    def load(self):
+    def apply_refresh(self, batch):
+        self.applied.append(batch)
+        self.apply_threads.append(threading.get_ident())
         self._loaded = True
-
-    def fetch_pending(self, snapshot=None):
-        # Worker-thread phase: only stash, never touch widgets.
-        self.fetched.append(snapshot)
-        self._pending = snapshot
-
-    def apply_data(self):
-        # Main-loop phase: swap pending in.
-        self.applied += 1
-        self._pending = None
 
     def keyhints(self):
         return ""
@@ -57,77 +42,109 @@ def _app_with_recorders(n=3):
     return app, views
 
 
-# --- Fix 6: the worker-phase seam ---
-
-def test_run_fetch_cycle_dispatches_shared_snapshot(monkeypatch):
-    app, views = _app_with_recorders()
-    snap = WorldSnapshot()
-    monkeypatch.setattr(app_mod, "build_world_snapshot", lambda: snap)
-
-    app._run_fetch_cycle()
-
-    # Every view received the SAME snapshot instance (one scan, projected).
-    for v in views:
-        assert v.fetched == [snap]
-        assert v._pending is snap
+def _batch(generation=1, snapshot=None):
+    return RefreshBatch(
+        generation=generation,
+        snapshot=snapshot or WorldSnapshot(),
+        cleanup_plan=CleanupPlan(),
+        cleanup_counts={},
+        session_stats={"total": 0, "empty": 0, "short": 0, "orphans": 0},
+        ordered_projects=(),
+    )
 
 
-def test_run_fetch_cycle_degrades_to_self_fetch_when_build_raises(monkeypatch):
-    app, views = _app_with_recorders()
+def test_worker_publishes_then_main_loop_applies_same_batch_to_all_views():
+    built = Queue()
+    batch = _batch()
 
-    def boom():
-        raise RuntimeError("no world")
+    def build(generation):
+        built.put(threading.get_ident())
+        return batch
 
-    monkeypatch.setattr(app_mod, "build_world_snapshot", boom)
+    app = App(refresh_builder=build)
+    views = [_RecorderView() for _ in range(3)]
+    app.views = views
+    main_thread = threading.get_ident()
 
-    app._run_fetch_cycle()
+    app.trigger_async_refresh()
+    worker_thread = built.get(timeout=1)
+    assert worker_thread != main_thread
+    assert all(not view.applied for view in views)
 
-    # A failed build -> each view is asked to self-fetch (snapshot=None).
-    for v in views:
-        assert v.fetched == [None]
+    assert app._on_pipe(b"1") is True
+    assert all(view.applied == [batch] for view in views)
+    assert all(view.apply_threads == [main_thread] for view in views)
 
 
-# --- Fix 6: the main-loop phase ---
+def test_failed_generation_keeps_last_good_views_and_notifies():
+    completed = Queue()
+    results = [
+        _batch(1),
+        RefreshFailure(2, "/tmp/runtime", "permission denied"),
+    ]
 
-def test_on_pipe_applies_data_on_all_views():
-    app, views = _app_with_recorders()
-    # _on_pipe runs on the main loop; with _exiting False it applies every view.
-    handled = app._on_pipe(b"1")
-    assert handled is True
-    for v in views:
-        assert v.applied == 1
+    def build(generation):
+        result = results[generation - 1]
+        completed.put(generation)
+        return result
+
+    app = App(refresh_builder=build)
+    views = [_RecorderView() for _ in range(3)]
+    app.views = views
+    notifications = []
+    app.notify = notifications.append
+
+    app.trigger_async_refresh()
+    assert completed.get(timeout=1) == 1
+    app._on_pipe(b"1")
+    app.trigger_async_refresh()
+    assert completed.get(timeout=1) == 2
+    app._on_pipe(b"1")
+
+    assert all(view.applied == [results[0]] for view in views)
+    assert notifications == [
+        "刷新失败（/tmp/runtime）：permission denied",
+    ]
 
 
 def test_on_pipe_noop_while_exiting():
     app, views = _app_with_recorders()
     app._exiting = True
     app._on_pipe(b"1")
-    for v in views:
-        assert v.applied == 0
+    assert all(not view.applied for view in views)
 
 
-def test_full_cycle_worker_stashes_then_main_loop_swaps(monkeypatch):
-    # End-to-end without a MainLoop: worker dispatch stashes _pending, then the
-    # main-loop apply swaps it in (clearing _pending).
-    app, views = _app_with_recorders()
-    snap = WorldSnapshot()
-    monkeypatch.setattr(app_mod, "build_world_snapshot", lambda: snap)
+def test_exit_drops_late_completion_without_second_apply():
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    batch = _batch()
 
-    app._run_fetch_cycle()
-    for v in views:
-        assert v._pending is snap   # worker stashed
-        assert v.applied == 0       # widgets untouched yet
+    def build(generation):
+        started.set()
+        assert release.wait(1)
+        finished.set()
+        return batch
 
-    app._on_pipe(b"1")
-    for v in views:
-        assert v.applied == 1       # main loop applied
-        assert v._pending is None   # swapped in
+    app = App(refresh_builder=build)
+    views = [_RecorderView() for _ in range(3)]
+    app.views = views
+    app.trigger_async_refresh()
+    assert started.wait(1)
+
+    try:
+        app._exit()
+    except urwid.ExitMainLoop:
+        pass
+    release.set()
+    assert finished.wait(1)
+
+    assert app.trigger_async_refresh() is app_mod.RequestResult.CLOSED
+    app._on_pipe(b"stale")
+    assert all(not view.applied for view in views)
 
 
-def test_full_cycle_drives_real_views(monkeypatch):
-    # Same path with the THREE real views: a controlled snapshot is projected
-    # into each _pending then swapped into each walker by the main-loop phase.
-    import cc_session_control.views.sessions as sv_mod
+def test_complete_batch_drives_real_views():
     from cc_session_control.models import RCProject, Session
 
     sess = [Session(sid="s1", cwd="/tmp/p", label="t", mtime=0.0, prompts=1,
@@ -135,20 +152,27 @@ def test_full_cycle_drives_real_views(monkeypatch):
     proj = [RCProject(name="p1", directory="/tmp/p1", trusted=True,
                       in_list=True, status="stopped", auto_start=True)]
     snap = WorldSnapshot(sessions=sess, rc_projects=proj)
-
-    monkeypatch.setattr(app_mod, "build_world_snapshot", lambda: snap)
-    # Keep the views' projection IO-free / deterministic.
-    from cc_session_control.data.cleanup import CleanupPlan
-    monkeypatch.setattr(sv_mod, "build_plan", lambda *a, **k: CleanupPlan())
+    batch = RefreshBatch(
+        generation=1,
+        snapshot=snap,
+        cleanup_plan=CleanupPlan(),
+        cleanup_counts={},
+        session_stats={"total": 1, "empty": 0, "short": 0, "orphans": 0},
+        ordered_projects=tuple(proj),
+    )
 
     app = App()
-    app._run_fetch_cycle()
-    assert app.views[0]._pending == proj          # RCView stashed (tab order: 项目/会话/后台)
-    assert app.views[1]._pending == sess          # SessionsView stashed
+    ready = threading.Event()
+    app._refresh = app_mod.RefreshCoordinator(
+        lambda _generation: batch,
+        ready.set,
+    )
+    app.trigger_async_refresh()
+    assert ready.wait(1)
 
     app._on_pipe(b"1")
-    assert len(app.views[1].walker) == len(sess)  # swapped into the walker
-    assert app.views[1]._pending is None
+    assert len(app.views[1].walker) == len(sess)
+    assert app.views[0]._projects == proj
 
 
 def test_tab_order_launcher_first():

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import curses
 import os
-import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -12,7 +11,14 @@ import urwid
 
 from . import theme
 from .data import proc
-from .data.snapshot import WorldSnapshot, build_world_snapshot
+from .data.refresh import (
+    RefreshBatch,
+    RefreshBuilder,
+    RefreshCoordinator,
+    RefreshFailure,
+    RequestResult,
+    build_refresh_result,
+)
 from .views.agents import AgentsView
 from .views.rc import RCView
 from .views.sessions import SessionsView
@@ -30,20 +36,17 @@ class TabView(Protocol):
     """The contract App uses to drive each tab generically.
 
     A tab satisfies this structurally — App never special-cases a concrete
-    view. `fetch_pending(snapshot)` runs on the worker thread and must not touch
-    widgets; `apply_data()` runs on the main loop and swaps `_pending` into the
-    walker. The `snapshot` is the shared per-cycle world (R11/D8); it is OPTIONAL
-    — a view called with `None` self-fetches (back-compat / tests). Adding a tab
-    means honoring every member below; subclass `views/_base.py::ListTabView`
-    for the shared walker/overlay/footer plumbing instead of re-writing it.
+    view. `apply_refresh(batch)` runs only on the main loop and receives one
+    complete generation built by `RefreshCoordinator`; views never perform
+    refresh I/O or hold worker-written pending fields. Adding a tab means
+    honoring every member below; subclass `views/_base.py::ListTabView` for the
+    shared walker/overlay/footer plumbing instead of re-writing it.
     """
 
     widget: urwid.Widget
     _loaded: bool
 
-    def load(self) -> None: ...
-    def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None: ...
-    def apply_data(self) -> None: ...
+    def apply_refresh(self, batch: RefreshBatch) -> None: ...
     def keyhints(self) -> str: ...
     def handle_key(self, key: str) -> None: ...
     def captures_text(self) -> bool: ...  # True while a text mode owns EVERY key (incl. tab/q)
@@ -76,13 +79,21 @@ def _make_screen() -> urwid.raw_display.Screen:
 
 
 class App:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        refresh_builder: RefreshBuilder = build_refresh_result,
+    ) -> None:
         self.result: ExitIntent | None = None
         self._exiting = False
         self._alarm_handle: object | None = None
         self._notify_alarm: object | None = None
         self._pipe_fd: int | None = None
-        self._refreshing = False
+        self._last_refresh_generation = 0
+        self._refresh = RefreshCoordinator(
+            refresh_builder,
+            self._signal_refresh_ready,
+        )
         # When set, a confirm modal is up: `_input` routes Enter/y/n/esc here and
         # swallows every other key (App-level so all tabs share it — D8 view files
         # stay small). `_confirm_base` is the widget restored on close.
@@ -205,8 +216,17 @@ class App:
 
     def _exit(self, result: ExitIntent | None = None) -> None:
         self._exiting = True
+        self._refresh.close()
         if self._alarm_handle:
             self.loop.remove_alarm(self._alarm_handle)
+        pipe_fd = self._pipe_fd
+        self._pipe_fd = None
+        if pipe_fd is not None:
+            self.loop.remove_watch_pipe(pipe_fd)
+            try:
+                os.close(pipe_fd)
+            except OSError:
+                pass
         self.result = result
         raise urwid.ExitMainLoop()
 
@@ -248,46 +268,23 @@ class App:
         self._notify_alarm = None
         self.frame.footer = self.footer
 
-    def _run_fetch_cycle(self) -> None:
-        """Worker-phase of a refresh — the synchronous, testable seam (R11/D8).
-
-        Computes ONE shared world snapshot per cycle so the three tabs don't each
-        re-scan /proc + transcripts, then projects it into every view's `_pending`
-        via `fetch_pending(snapshot)`. A failed build degrades to per-view
-        self-fetch (`snapshot=None`). Pure data side: it only sets `_pending`
-        fields and NEVER touches widgets, so it is safe on the worker thread and
-        can be driven directly in tests without a MainLoop.
-        """
-        try:
-            snapshot: WorldSnapshot | None = build_world_snapshot()
-        except Exception:
-            snapshot = None
-        for v in self.views:
-            v.fetch_pending(snapshot)
-
     def refresh_with_notice(self) -> None:
         """Refresh + the standard footer notice — the single body of the
         footer-prefix promise `r 刷新` (list AND modal modes, every tab)."""
         self.trigger_async_refresh()
         self.notify("刷新中…")
 
-    def trigger_async_refresh(self) -> None:
-        if self._refreshing or self._exiting:
+    def trigger_async_refresh(self) -> RequestResult:
+        return self._refresh.request()
+
+    def _signal_refresh_ready(self) -> None:
+        pipe_fd = self._pipe_fd
+        if pipe_fd is None or self._exiting:
             return
-        self._refreshing = True
-
-        def worker() -> None:
-            try:
-                self._run_fetch_cycle()
-            finally:
-                self._refreshing = False
-            if self._pipe_fd is not None:
-                try:
-                    os.write(self._pipe_fd, b"1")
-                except OSError:
-                    pass
-
-        threading.Thread(target=worker, daemon=True).start()
+        try:
+            os.write(pipe_fd, b"1")
+        except OSError:
+            pass
 
     def _schedule_refresh(self, loop: object = None, data: object = None) -> None:
         if self._exiting:
@@ -296,14 +293,21 @@ class App:
         self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)
 
     def _on_pipe(self, data: bytes) -> bool:
-        if not self._exiting:
-            for view in self.views:
-                view.apply_data()
+        if self._exiting:
+            return True
+        result = self._refresh.consume_latest()
+        if result is None or result.generation <= self._last_refresh_generation:
+            return True
+        self._last_refresh_generation = result.generation
+        if isinstance(result, RefreshFailure):
+            self.notify(f"刷新失败（{result.source}）：{result.detail}")
+            return True
+        for view in self.views:
+            view.apply_refresh(result)
         return True
 
     def run(self) -> ExitIntent | None:
         self._pipe_fd = self.loop.watch_pipe(self._on_pipe)
-        self.views[self._active].load()
         self.set_hints(self.views[self._active].keyhints())
         self.trigger_async_refresh()
         self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)

@@ -40,9 +40,8 @@ from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 
 if TYPE_CHECKING:
-    from ..data.snapshot import WorldSnapshot
-
     from ..app import App
+    from ..data.refresh import RefreshBatch
 
 _STATUS_MAP = {"running": "● 运行中", "dead": "✖ 已退出", "stopped": "○ 已停止"}
 # Row attr per server/project status — dead (crashed pane) is a semantic error
@@ -204,12 +203,8 @@ class RCView(ListTabView):
         super().__init__(app, header_columns(_PROJECT_COLS))
         self._projects: list[RCProject] = []
         self._servers: list[RCServer] = []
-        self._pending: list[RCProject] | None = None
-        self._pending_servers: list[RCServer] | None = None
         self._settings = ProjectSettingsResult(ProjectSettingsState.MISSING, {})
-        self._pending_settings: ProjectSettingsResult | None = None
         self._environment_warnings: tuple[str, ...] = ()
-        self._pending_environment_warnings: tuple[str, ...] | None = None
         self._help = False
 
     def keyhints(self) -> str:
@@ -224,51 +219,17 @@ class RCView(ListTabView):
     def _overlay_active(self) -> bool:
         return self._help
 
-    def load(self) -> None:
-        result = rc.scan_result()
-        self._projects = result.projects
-        self._settings = result.settings
-        self._servers = rc.scan_servers()
+    def apply_refresh(self, batch: RefreshBatch) -> None:
+        """Apply one complete generation on the urwid main loop."""
+        self._projects = list(batch.ordered_projects)
+        self._settings = batch.snapshot.rc_project_settings
+        self._servers = batch.snapshot.rc_servers
+        self._environment_warnings = (
+            batch.snapshot.environment_reconciliation.warnings
+        )
         self._loaded = True
-        self._rebuild()
-
-    def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
-        """Worker-thread data fetch. Only sets pending fields — no widgets."""
-        if snapshot is not None:
-            self.set_pending(
-                rc.order_by_activity(snapshot.rc_projects, snapshot.sessions))
-            self._pending_settings = snapshot.rc_project_settings
-            self._pending_servers = snapshot.rc_servers
-            self._pending_environment_warnings = (
-                snapshot.environment_reconciliation.warnings
-            )
-        else:
-            # Self-fetch fallback (snapshot build failure / unit tests) has no
-            # session scan — degrades to scan()'s path order by design.
-            result = rc.scan_result()
-            self.set_pending(result.projects)
-            self._pending_settings = result.settings
-            self._pending_servers = rc.scan_servers()
-
-    def set_pending(self, projects: list[RCProject]) -> None:
-        self._pending = projects
-
-    def apply_data(self) -> None:
-        if self._pending is not None:
-            self._projects = self._pending
-            self._pending = None
-            self._loaded = True
-            if self._pending_settings is not None:
-                self._settings = self._pending_settings
-                self._pending_settings = None
-            if self._pending_servers is not None:
-                self._servers = self._pending_servers
-                self._pending_servers = None
-            if self._pending_environment_warnings is not None:
-                self._environment_warnings = self._pending_environment_warnings
-                self._pending_environment_warnings = None
-            if not self._help:
-                self._rebuild()
+        if not self._help:
+            self._rebuild()
 
     def _build_rows(self) -> None:
         # Projects first, so default focus lands on an actionable row.
