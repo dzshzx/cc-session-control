@@ -1,10 +1,9 @@
 """Generic tmux adapter — THE single tmux seam.
 
-Only `_tmux_run_result` touches `subprocess`; `_tmux_run` is its result-only
-compatibility view. Read/spawn wrappers keep the legacy swallow-errors contract
-(return empty/False/None on failure), while kill wrappers expose typed missing
-target vs external-failure outcomes. Add new tmux operations here, not as raw
-`subprocess` calls elsewhere.
+`_tmux_run_result` owns ordinary invocations; `_capture_pane_bytes` owns bounded
+streaming capture. Read/spawn wrappers keep the empty/False/None failure contract;
+kill wrappers expose typed missing-target vs external-failure outcomes. Add new
+tmux operations here, never as raw `subprocess` calls elsewhere.
 
 Bottom of the `data/` DAG: this module may import only `proc` from this
 package (plus stdlib) — it knows nothing about RC servers or sessions. `rc.py`
@@ -16,7 +15,10 @@ don't conflate tmux windows with Remote Control).
 
 from __future__ import annotations
 
+import os
+import selectors
 import subprocess
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -107,7 +109,11 @@ _WINDOWS_FMT = (
     "\t#{@csctl_path}\t#{pane_current_path}"
 )
 _CAPTURE_HISTORY_LINES = 2_000
-_CAPTURE_TEXT_CHAR_LIMIT = 1_048_576
+_CAPTURE_START = f"-{_CAPTURE_HISTORY_LINES}"
+_CAPTURE_BYTE_LIMIT = 1_048_576
+_CAPTURE_READ_SIZE = 64 * 1_024
+_TMUX_TIMEOUT_SECONDS = 5.0
+_REAP_GRACE_SECONDS = 0.2
 
 
 def list_windows_inventory(session: str) -> WindowInventory:
@@ -173,30 +179,120 @@ def set_window_option(target: str, option: str, value: str) -> bool:
     return cp is not None and cp.returncode == 0
 
 
+def _terminate_and_reap(process: subprocess.Popen[bytes]) -> None:
+    """Stop a bounded capture and always consume its child process state."""
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=_REAP_GRACE_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    if process.poll() is None:
+        try:
+            process.kill()
+        except OSError:
+            pass
+    process.wait()
+
+
+def _capture_pane_bytes(args: list[str]) -> bytearray | None:
+    """Read tmux output concurrently, never accumulating beyond the stdout cap."""
+    try:
+        selector = selectors.DefaultSelector()
+    except OSError:
+        return None
+    try:
+        process = subprocess.Popen(
+            ["tmux", *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (OSError, subprocess.SubprocessError):
+        selector.close()
+        return None
+
+    stdout = process.stdout
+    stderr = process.stderr
+    if stdout is None or stderr is None:
+        _terminate_and_reap(process)
+        selector.close()
+        return None
+
+    output = bytearray()
+    deadline = time.monotonic() + _TMUX_TIMEOUT_SECONDS
+    hit_limit = False
+    failed = False
+    try:
+        selector.register(stdout, selectors.EVENT_READ, "stdout")
+        selector.register(stderr, selectors.EVENT_READ, "stderr")
+        while selector.get_map():
+            timeout = deadline - time.monotonic()
+            if timeout <= 0:
+                failed = True
+                break
+            events = selector.select(timeout)
+            if not events:
+                failed = True
+                break
+            for key, _mask in events:
+                if key.data == "stdout":
+                    remaining = _CAPTURE_BYTE_LIMIT - len(output)
+                    chunk = os.read(key.fd, min(_CAPTURE_READ_SIZE, remaining))
+                    if chunk:
+                        output.extend(chunk)
+                        hit_limit = len(output) == _CAPTURE_BYTE_LIMIT
+                    else:
+                        selector.unregister(key.fileobj)
+                else:  # Drain stderr without retaining it or blocking its producer.
+                    chunk = os.read(key.fd, _CAPTURE_READ_SIZE)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                if hit_limit:
+                    break
+            if hit_limit:
+                break
+    except OSError:
+        failed = True
+    finally:
+        selector.close()
+
+    if failed or hit_limit:
+        _terminate_and_reap(process)
+        stdout.close()
+        stderr.close()
+        return output if hit_limit and not failed else None
+
+    try:
+        returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        _terminate_and_reap(process)
+        return None
+    finally:
+        stdout.close()
+        stderr.close()
+    return output if returncode == 0 else None
+
+
 def capture_pane(target: str) -> str:
     """Recent scrollback of a tmux pane as bounded text; "" on failure.
 
     tmux documents negative `-S` values as history lines and `-E -` as the end
     of the visible pane. The 2,000-line range covers tmux's default history
     limit without reading the entirety of a larger user-configured history.
-    Retaining the first 1,048,576 characters favors the RC environment id
+    Retaining the first 1,048,576 bytes favors the RC environment id
     printed near server startup.
     """
-    cp = _tmux_run(
-        [
-            "capture-pane",
-            "-p",
-            "-S",
-            f"-{_CAPTURE_HISTORY_LINES}",
-            "-E",
-            "-",
-            "-t",
-            target,
-        ]
+    captured = _capture_pane_bytes(
+        ["capture-pane", "-p", "-S", _CAPTURE_START, "-E", "-", "-t", target]
     )
-    if cp is None or cp.returncode != 0:
+    if captured is None:
         return ""
-    return cp.stdout[:_CAPTURE_TEXT_CHAR_LIMIT]
+    bounded_text = captured.decode("utf-8", errors="ignore")
+    return "".join(bounded_text.splitlines(keepends=True)[:_CAPTURE_HISTORY_LINES])
 
 
 def _tmux_has_session(session: str) -> bool:
