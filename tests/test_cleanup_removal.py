@@ -146,8 +146,8 @@ def test_build_plan_keeps_partial_results_and_reports_source_issue(
         agents_map={},
     )
 
-    assert plan.aged_entries == ["shell-snapshots/old.txt"]
-    assert plan.zombie_pids == [7]
+    assert plan.aged_entries == ("shell-snapshots/old.txt",)
+    assert plan.zombie_pids == (7,)
     assert len(plan.issues) == 1
     assert plan.issues[0].source == "orphan_dirs"
     assert "cannot read artifacts" in plan.issues[0].error

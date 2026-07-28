@@ -14,6 +14,7 @@ import os
 import shlex
 import tempfile
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -179,7 +180,7 @@ def toggle_autostart(path: str) -> bool:
     return _enabled_store().toggle(path)
 
 
-def _load_projects() -> dict:
+def _load_projects() -> Mapping[str, Mapping[str, object]]:
     """Compatibility map-only reader; typed callers use ``_read_projects``.
 
     Failures become an empty map only at this legacy boundary. Safety decisions
@@ -194,7 +195,7 @@ def _read_projects() -> ProjectSettingsResult:
     return read_project_settings(cfg.claude_json)
 
 
-def _trusted_in(projects: dict) -> set[str]:
+def _trusted_in(projects: Mapping[str, object]) -> set[str]:
     """Effectively-trusted absolute-path keys of a claude.json projects map."""
     return {
         key
@@ -324,7 +325,9 @@ def scan_result() -> RCScanResult:
         else:
             status = "stopped"
         entry = projects_map.get(path)
-        spawn = entry.get("remoteControlSpawnMode") if isinstance(entry, dict) else None
+        spawn = (
+            entry.get("remoteControlSpawnMode") if isinstance(entry, Mapping) else None
+        )
         decision = effective_trust_decision(
             path,
             projects_map if settings.available else None,
@@ -353,7 +356,8 @@ def scan() -> list[RCProject]:
 
 
 def order_by_activity(
-    projects: list[RCProject], sessions: list[Session]
+    projects: Sequence[RCProject],
+    sessions: Sequence[Session],
 ) -> list[RCProject]:
     """PURE: most-recently-active projects first (exact-cwd session join).
 

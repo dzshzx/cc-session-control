@@ -255,7 +255,7 @@ def test_reconcile_incomplete_evidence_never_writes_or_classifies_orphans(
     assert recon.evidence_complete is False
     assert recon.liveness_issues == evidence.issues
     assert [item.env_id for item in recon.current] == ["session_LIVE"]
-    assert recon.orphans == []
+    assert recon.orphans == ()
     assert recon.success is False
 
 
@@ -328,7 +328,7 @@ def test_reconcile_read_failure_keeps_current_and_marks_history_incomplete(
     )
 
     assert [item.env_id for item in recon.current] == ["session_LIVE"]
-    assert recon.orphans == []
+    assert recon.orphans == ()
     assert recon.ledger.state is ledger.LedgerUpdateState.FAILED
     assert recon.ledger.failure is ledger.LedgerFailure.READ
     assert not recon.ledger_history_complete

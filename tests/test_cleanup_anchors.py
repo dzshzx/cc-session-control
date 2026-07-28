@@ -55,7 +55,7 @@ def test_public_aged_cleanup_refuses_base_replaced_by_external_symlink(
     target.mkdir(parents=True)
     _old_enough(target, now)
     plan = _aged_plan(now)
-    assert plan.aged_entries == ["shell-snapshots/old"]
+    assert plan.aged_entries == ("shell-snapshots/old",)
 
     saved = tmp_path / "saved"
     base.rename(saved)

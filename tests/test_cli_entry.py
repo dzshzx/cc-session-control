@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import subprocess
 from argparse import Namespace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -153,9 +154,8 @@ def test_rc_status_orders_by_activity_and_marks_missing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    older = _project(tmp_path / "older", status="dead")
+    older = replace(_project(tmp_path / "older", status="dead"), dir_exists=False)
     newer = _project(tmp_path / "newer", status="running")
-    older.dir_exists = False
     monkeypatch.setattr(
         rc,
         "scan_result",

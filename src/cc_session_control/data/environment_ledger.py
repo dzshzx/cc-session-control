@@ -8,10 +8,11 @@ import math
 import os
 import tempfile
 import time
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import IO, Literal
 
 from ..config import cfg
@@ -59,31 +60,46 @@ class LedgerWarning:
     detail: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class LedgerRead:
     """A ledger read that never conflates absence with failure."""
 
     state: LedgerReadState
-    entries: dict[tuple[str, str], BridgeEnv] = field(default_factory=dict)
+    entries: Mapping[tuple[str, str], BridgeEnv] = field(default_factory=dict)
     warnings: tuple[LedgerWarning, ...] = ()
     failure: LedgerFailure | None = None
     detail: str = ""
     raw_text: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "entries",
+            MappingProxyType(dict(self.entries)),
+        )
+        object.__setattr__(self, "warnings", tuple(self.warnings))
 
     @property
     def usable(self) -> bool:
         return self.state is not LedgerReadState.FAILED
 
 
-@dataclass
+@dataclass(frozen=True)
 class LedgerUpdate:
     """Typed result of merging observations into the ledger."""
 
     state: LedgerUpdateState
-    entries: dict[tuple[str, str], BridgeEnv] = field(default_factory=dict)
+    entries: Mapping[tuple[str, str], BridgeEnv] = field(default_factory=dict)
     read: LedgerRead | None = None
     failure: LedgerFailure | None = None
     detail: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "entries",
+            MappingProxyType(dict(self.entries)),
+        )
 
     @property
     def success(self) -> bool:
@@ -232,7 +248,7 @@ def _timestamp(value: object) -> float | None:
 
 
 def update(
-    records: list[EnvRecord],
+    records: Sequence[EnvRecord],
     now: float | None = None,
 ) -> LedgerUpdate:
     """Merge observations under one lock and atomically persist real changes."""
@@ -301,7 +317,7 @@ def _failed(
 
 
 def _copy_entries(
-    entries: dict[tuple[str, str], BridgeEnv],
+    entries: Mapping[tuple[str, str], BridgeEnv],
 ) -> dict[tuple[str, str], BridgeEnv]:
     return {
         key: BridgeEnv(
@@ -317,7 +333,7 @@ def _copy_entries(
 
 def _merge(
     entries: dict[tuple[str, str], BridgeEnv],
-    records: list[EnvRecord],
+    records: Sequence[EnvRecord],
     now: float,
 ) -> dict[tuple[str, str], BridgeEnv]:
     grouped: dict[tuple[str, str], list[str]] = {}
@@ -342,8 +358,11 @@ def _merge(
                 last_seen=now,
             )
         else:
-            existing.bound_sid = bound_sid
-            existing.last_seen = now
+            entries[(prefix, key)] = replace(
+                existing,
+                bound_sid=bound_sid,
+                last_seen=now,
+            )
     return entries
 
 

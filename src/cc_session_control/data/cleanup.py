@@ -383,7 +383,7 @@ def execute_aged_removals(
 # --- Session prune + full delete -------------------------------------------
 
 
-def prune_sessions(sessions: list[Session], max_prompts: int = 0) -> list[Session]:
+def prune_sessions(sessions: Sequence[Session], max_prompts: int = 0) -> list[Session]:
     """Prunable sessions: not alive, not current, <= max_prompts, not recent.
 
     Refuses (returns []) when current can't be determined (R10): without `/proc`
@@ -538,7 +538,7 @@ def _plan_source[PlanItems](
 
 
 def build_plan(
-    sessions: list[Session],
+    sessions: Sequence[Session],
     session_procs: Sequence[SessionProc],
     cur: AbstractSet[int],
     agent_jobs: Sequence[AgentJob] | None = None,
@@ -583,12 +583,14 @@ def build_plan(
         PlanAnchors({}, {}, {}, {}),
     )
     return CleanupPlan(
-        empty=[s for s in empty if s.sid in pinned.sessions],
-        short=[s for s in short if s.sid in pinned.sessions],
-        orphan_entries=[entry for entry in orphan_entries if entry in pinned.orphans],
-        zombie_pids=[pid for pid in zombie_pids if pid in pinned.zombies],
-        aged_entries=[entry for entry in aged_entries if entry in pinned.aged],
-        issues=issues,
+        empty=tuple(s for s in empty if s.sid in pinned.sessions),
+        short=tuple(s for s in short if s.sid in pinned.sessions),
+        orphan_entries=tuple(
+            entry for entry in orphan_entries if entry in pinned.orphans
+        ),
+        zombie_pids=tuple(pid for pid in zombie_pids if pid in pinned.zombies),
+        aged_entries=tuple(entry for entry in aged_entries if entry in pinned.aged),
+        issues=tuple(issues),
         session_anchors=pinned.sessions,
         orphan_anchors=pinned.orphans,
         zombie_anchors=pinned.zombies,

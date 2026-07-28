@@ -282,7 +282,7 @@ class RCView(ListTabView):
         """Apply one complete generation on the urwid main loop."""
         self._projects = list(batch.ordered_projects)
         self._settings = batch.snapshot.rc_project_settings
-        self._servers = batch.snapshot.rc_servers
+        self._servers = list(batch.snapshot.rc_servers)
         self._environment_warnings = batch.snapshot.environment_reconciliation.warnings
         self._loaded = True
         if not self._help:

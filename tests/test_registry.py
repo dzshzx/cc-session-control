@@ -231,7 +231,7 @@ def test_read_agent_jobs(tmp_path, monkeypatch):
     assert j.cwd == "/work/local"
     assert j.name == "关闭沙箱环境"
     assert j.env_suffix == "01DgeqMqXMrSFpW59uSZwK99"  # suffix of cse_*
-    assert j.respawn_flags == ["--reply-on-resume", "--effort", "xhigh"]
+    assert j.respawn_flags == ("--reply-on-resume", "--effort", "xhigh")
     # state.json carries NO pid -> these default until joined later (Phase 6)
     assert j.host_pid is None
     assert j.host_alive is False
@@ -239,7 +239,7 @@ def test_read_agent_jobs(tmp_path, monkeypatch):
     j2 = rows["abcd1234"]
     assert j2.resume_sid == "abcd1234-xxxx"  # falls back to sessionId
     assert j2.env_suffix == ""
-    assert j2.respawn_flags == []
+    assert j2.respawn_flags == ()
 
 
 def test_read_agent_jobs_missing_dir(tmp_path, monkeypatch):

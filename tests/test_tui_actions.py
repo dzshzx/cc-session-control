@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+
+import pytest
 
 from cc_session_control.actions import tui_actions
 from cc_session_control.actions.runner import ActionStatus
@@ -47,17 +50,19 @@ def _job() -> AgentJob:
     )
 
 
-def test_requests_snapshot_mutable_models() -> None:
+def test_requests_round_trip_immutable_models() -> None:
     session = _session()
     job = _job()
 
     session_request = tui_actions.SessionRequest.from_session(session)
     agent_request = tui_actions.AgentRequest.from_job(job)
-    session.sid = "changed"
-    job.respawn_flags.append("--verbose")
+    with pytest.raises(FrozenInstanceError):
+        session.sid = "changed"
+    with pytest.raises(AttributeError):
+        job.respawn_flags.append("--verbose")
 
     assert session_request.to_session().sid == "sid-1"
-    assert agent_request.to_job().respawn_flags == ["--model", "opus"]
+    assert agent_request.to_job().respawn_flags == ("--model", "opus")
 
 
 def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:

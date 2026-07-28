@@ -6,6 +6,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 from ..models import Session
 from .removal import RemovalAnchor, anchor_path
@@ -13,10 +14,34 @@ from .removal import RemovalAnchor, anchor_path
 
 @dataclass(frozen=True)
 class PlanAnchors:
-    sessions: dict[str, tuple[RemovalAnchor, ...]]
-    orphans: dict[str, RemovalAnchor]
-    zombies: dict[int, RemovalAnchor]
-    aged: dict[str, RemovalAnchor]
+    sessions: Mapping[str, tuple[RemovalAnchor, ...]]
+    orphans: Mapping[str, RemovalAnchor]
+    zombies: Mapping[int, RemovalAnchor]
+    aged: Mapping[str, RemovalAnchor]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "sessions",
+            MappingProxyType(
+                {sid: tuple(anchors) for sid, anchors in self.sessions.items()}
+            ),
+        )
+        object.__setattr__(
+            self,
+            "orphans",
+            MappingProxyType(dict(self.orphans)),
+        )
+        object.__setattr__(
+            self,
+            "zombies",
+            MappingProxyType(dict(self.zombies)),
+        )
+        object.__setattr__(
+            self,
+            "aged",
+            MappingProxyType(dict(self.aged)),
+        )
 
 
 def entry_anchors(

@@ -738,6 +738,29 @@ def test_sessions_view_applies_complete_refresh_batch():
     }
 
 
+def test_two_sessions_views_own_independent_lists_from_one_batch():
+    batch = _refresh_batch(
+        WorldSnapshot(
+            sessions=[
+                _make_session(sid="one"),
+                _make_session(sid="two"),
+            ]
+        )
+    )
+    first = SessionsView(FakeApp())
+    second = SessionsView(FakeApp())
+
+    first.apply_refresh(batch)
+    second.apply_refresh(batch)
+    removed = first._all_sessions.pop()
+    first._apply_filter()
+
+    assert removed.sid == "two"
+    assert [session.sid for session in first._sessions] == ["one"]
+    assert [session.sid for session in second._sessions] == ["one", "two"]
+    assert [session.sid for session in batch.snapshot.sessions] == ["one", "two"]
+
+
 def test_rc_view_applies_complete_refresh_batch():
     fake = [_make_project(name="p1")]
     app = FakeApp()

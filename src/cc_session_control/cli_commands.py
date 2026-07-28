@@ -139,7 +139,7 @@ def _cmd_prune(args: Namespace) -> int:
         # protection data (删除 ⊆ 预览 — same executor as the TUI; `sessions`
         # feeds the transcript tier of the protection set).
         result = execute_orphan_removals(
-            orphans,
+            list(orphans),
             sessions=scan(),
             anchors=plan.orphan_anchors,
         )
@@ -152,13 +152,13 @@ def _cmd_prune(args: Namespace) -> int:
 
     if args.sweep_zombies:
         return max(
-            _cmd_prune_zombies(args, plan.zombie_pids, plan.zombie_anchors),
+            _cmd_prune_zombies(args, list(plan.zombie_pids), plan.zombie_anchors),
             plan_status,
         )
 
     if args.sweep_aged:
         return max(
-            _cmd_prune_aged(args, plan.aged_entries, plan.aged_anchors),
+            _cmd_prune_aged(args, list(plan.aged_entries), plan.aged_anchors),
             plan_status,
         )
 

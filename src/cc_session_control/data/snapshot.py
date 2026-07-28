@@ -14,16 +14,16 @@ programming and invariant errors are not converted into empty view data.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from collections.abc import Set as AbstractSet
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
 from . import environments, liveness, rc, sessions
 from .project_settings import ProjectSettingsResult, ProjectSettingsState
 
 
-@dataclass
+@dataclass(frozen=True)
 class WorldSnapshot:
     """One cycle's shared view of the machine (read-only data for the views).
 
@@ -45,25 +45,44 @@ class WorldSnapshot:
     `select_zombie_pids` WITHOUT a second scan (R11/D8).
     """
 
-    sessions: list[Session] = field(default_factory=list)
-    agent_jobs: Sequence[AgentJob] = field(default_factory=tuple)
-    rc_projects: list[RCProject] = field(default_factory=list)
+    sessions: tuple[Session, ...] = ()
+    agent_jobs: tuple[AgentJob, ...] = ()
+    rc_projects: tuple[RCProject, ...] = ()
     rc_project_settings: ProjectSettingsResult = field(
         default_factory=lambda: ProjectSettingsResult(
             ProjectSettingsState.MISSING,
             {},
         ),
     )
-    rc_servers: list[RCServer] = field(default_factory=list)
-    observed_envs: list[EnvRecord] = field(default_factory=list)
-    file_referenced_envs: list[EnvRecord] = field(default_factory=list)
+    rc_servers: tuple[RCServer, ...] = ()
+    observed_envs: tuple[EnvRecord, ...] = ()
+    file_referenced_envs: tuple[EnvRecord, ...] = ()
     environment_reconciliation: environments.Reconciliation = field(
         default_factory=environments.Reconciliation,
     )
-    session_procs: Sequence[SessionProc] = field(default_factory=tuple)
+    session_procs: tuple[SessionProc, ...] = ()
     agents_map: Mapping[str, int | None] = field(default_factory=dict)
-    cur: AbstractSet[int] = field(default_factory=frozenset)
+    cur: frozenset[int] = frozenset()
     liveness_snapshot: liveness.LivenessSnapshot | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sessions", tuple(self.sessions))
+        object.__setattr__(self, "agent_jobs", tuple(self.agent_jobs))
+        object.__setattr__(self, "rc_projects", tuple(self.rc_projects))
+        object.__setattr__(self, "rc_servers", tuple(self.rc_servers))
+        object.__setattr__(self, "observed_envs", tuple(self.observed_envs))
+        object.__setattr__(
+            self,
+            "file_referenced_envs",
+            tuple(self.file_referenced_envs),
+        )
+        object.__setattr__(self, "session_procs", tuple(self.session_procs))
+        object.__setattr__(
+            self,
+            "agents_map",
+            MappingProxyType(dict(self.agents_map)),
+        )
+        object.__setattr__(self, "cur", frozenset(self.cur))
 
 
 def build_world_snapshot() -> WorldSnapshot:
@@ -92,13 +111,13 @@ def build_world_snapshot() -> WorldSnapshot:
         rc_servers,
     )
     return WorldSnapshot(
-        sessions=all_sessions,
+        sessions=tuple(all_sessions),
         agent_jobs=inputs.agent_jobs,
-        rc_projects=rc_scan.projects,
+        rc_projects=tuple(rc_scan.projects),
         rc_project_settings=rc_scan.settings,
-        rc_servers=rc_servers,
-        observed_envs=recon.observed,
-        file_referenced_envs=recon.file_referenced,
+        rc_servers=tuple(rc_servers),
+        observed_envs=tuple(recon.observed),
+        file_referenced_envs=tuple(recon.file_referenced),
         environment_reconciliation=recon,
         session_procs=inputs.session_procs,
         agents_map=inputs.agents_map,

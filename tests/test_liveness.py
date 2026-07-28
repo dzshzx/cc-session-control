@@ -76,12 +76,12 @@ def test_live_index_records_all_alive_pids():
 def test_live_index_dead_sid_has_no_pids():
     info = liveness.live_index([_sp("dead", 4242, "123")], {})["dead"]
     assert info.alive is False
-    assert info.pids == []
+    assert info.pids == ()
 
 
 def test_live_index_agent_only_records_pid():
     info = liveness.live_index([], {"agentsid": 9001})["agentsid"]
-    assert info.pids == [9001]
+    assert info.pids == (9001,)
 
 
 def test_live_index_degrades_to_agents_map():
@@ -116,7 +116,7 @@ def test_live_index_pidless_agent_only_sid_not_alive():
     # Same, without any sessions/*.json backing the sid.
     idx = liveness.live_index([], {"bgsid": None})
     assert idx["bgsid"].alive is False
-    assert idx["bgsid"].pids == []
+    assert idx["bgsid"].pids == ()
 
 
 def test_live_index_source_buckets():
@@ -157,7 +157,7 @@ def test_scrubbed_agent_only_sid_not_alive():
     scrubbed = liveness._scrub_dead_pids({"ghost": 9999}, exists=lambda pid: False)
     idx = liveness.live_index([], scrubbed)
     assert idx["ghost"].alive is False
-    assert idx["ghost"].pids == []
+    assert idx["ghost"].pids == ()
 
 
 def test_scrub_keeps_live_pid_alive_path_intact():

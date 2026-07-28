@@ -1,8 +1,9 @@
 """Typed adapters for mutations that return to the TUI.
 
-Views snapshot mutable row models into frozen requests before submission.
-Workers receive only those requests and return ``ActionResult`` data; they
-never receive or mutate an urwid widget, walker, selection, or App.
+Views project immutable published row models into action-specific frozen
+requests before submission. Workers receive only those requests and return
+``ActionResult`` data; they never receive or mutate an urwid widget, walker,
+selection, or App.
 """
 
 from __future__ import annotations
@@ -111,7 +112,7 @@ class AgentRequest:
             cwd=self.cwd,
             name=self.name,
             env_suffix=self.env_suffix,
-            respawn_flags=list(self.respawn_flags),
+            respawn_flags=self.respawn_flags,
             host_pid=self.host_pid,
             host_alive=self.host_alive,
         )

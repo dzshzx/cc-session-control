@@ -184,7 +184,7 @@ class SessionsView(CleanupMixin, ListTabView):
 
     def apply_refresh(self, batch: RefreshBatch) -> None:
         """Apply one complete generation on the urwid main loop."""
-        self._all_sessions = batch.snapshot.sessions
+        self._all_sessions = list(batch.snapshot.sessions)
         self._plan = batch.cleanup_plan
         self._classified = dict(batch.cleanup_counts)
         self._cleanup_stats = dict(batch.session_stats)

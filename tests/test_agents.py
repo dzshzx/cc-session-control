@@ -137,7 +137,7 @@ def test_apply_refresh_uses_snapshot_agent_jobs():
     app.views = [view]
     jobs = [_make_job(short="s1")]
     view.apply_refresh(_refresh_batch(jobs))
-    assert view._jobs == jobs
+    assert view._jobs == tuple(jobs)
 
 
 def test_apply_refresh_rebuilds_walker():

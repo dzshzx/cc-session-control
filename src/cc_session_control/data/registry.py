@@ -214,7 +214,7 @@ def _parse_agent_job(
             cwd=d.get("cwd", "") or "",
             name=d.get("name", "") or "",
             env_suffix=split_env_id(bridge)[1],
-            respawn_flags=[str(x) for x in flags],
+            respawn_flags=tuple(str(x) for x in flags),
         ),
         None,
     )

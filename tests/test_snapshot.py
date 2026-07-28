@@ -104,7 +104,7 @@ def test_snapshot_toggle_away_becomes_orphan(tmp_path, monkeypatch):
     _stub_sources(monkeypatch, [_sp(1, "sid-x", bridge=None)])
     snap2 = snapshot.build_world_snapshot()
 
-    assert snap2.file_referenced_envs == []
+    assert snap2.file_referenced_envs == ()
     orphans = env.orphan_envs(snap2.file_referenced_envs)
     assert any(e.env_id == "session_X" for e in orphans)
 
@@ -344,7 +344,8 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
     assert first.liveness_snapshot is not second.liveness_snapshot
     assert first.session_procs is first.liveness_snapshot.session_procs
     assert first.agent_jobs is first.liveness_snapshot.agent_jobs
-    assert first.agents_map is first.liveness_snapshot.agents_map
+    assert first.agents_map == first.liveness_snapshot.agents_map
+    assert first.agents_map is not first.liveness_snapshot.agents_map
     assert first.cur is first.liveness_snapshot.cur
     assert [sp.pid for sp in first.session_procs] == [101]
     assert [sp.pid for sp in second.session_procs] == [202]

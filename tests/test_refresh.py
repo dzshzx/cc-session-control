@@ -8,7 +8,18 @@ from threading import Event, ExceptHookArgs, Thread
 import pytest
 
 from cc_session_control.data.cleanup import CleanupPlan
+from cc_session_control.data.environment_ledger import (
+    LedgerRead,
+    LedgerReadState,
+    LedgerUpdate,
+    LedgerUpdateState,
+)
+from cc_session_control.data.environments import Reconciliation
 from cc_session_control.data.liveness import LivenessIssue, LivenessSnapshot
+from cc_session_control.data.project_settings import (
+    ProjectSettingsResult,
+    ProjectSettingsState,
+)
 from cc_session_control.data.refresh import (
     RefreshBatch,
     RefreshCoordinator,
@@ -17,7 +28,15 @@ from cc_session_control.data.refresh import (
     build_refresh_result,
 )
 from cc_session_control.data.snapshot import WorldSnapshot
-from cc_session_control.models import RCProject, Session
+from cc_session_control.models import (
+    AgentJob,
+    BridgeEnv,
+    EnvRecord,
+    RCProject,
+    RCServer,
+    Session,
+    SessionProc,
+)
 
 
 def _batch(generation: int) -> RefreshBatch:
@@ -73,6 +92,217 @@ def test_complete_generation_is_published_once_and_is_frozen() -> None:
         result.generation = 2
     with pytest.raises(TypeError):
         result.cleanup_counts["empty"] = 1
+
+
+def test_refresh_batch_copies_and_freezes_nested_handoff_containers() -> None:
+    session = Session(
+        sid="session-1",
+        cwd="/tmp/project",
+        label="published",
+        mtime=1.0,
+        prompts=0,
+        pid=None,
+        alive=False,
+        current=False,
+    )
+    sessions = [session]
+    agent_jobs = []
+    projects = []
+    servers = []
+    observed = []
+    referenced = []
+    session_procs = []
+    agents_map = {"session-1": None}
+    current_pids = {123}
+    empty = [session]
+    orphan_entries = ["projects/orphan"]
+
+    batch = RefreshBatch(
+        generation=1,
+        snapshot=WorldSnapshot(
+            sessions=sessions,
+            agent_jobs=agent_jobs,
+            rc_projects=projects,
+            rc_servers=servers,
+            observed_envs=observed,
+            file_referenced_envs=referenced,
+            session_procs=session_procs,
+            agents_map=agents_map,
+            cur=current_pids,
+        ),
+        cleanup_plan=CleanupPlan(
+            empty=empty,
+            orphan_entries=orphan_entries,
+        ),
+        cleanup_counts={},
+        session_stats={},
+        ordered_projects=(),
+    )
+
+    sessions.append(session)
+    agent_jobs.append(object())
+    projects.append(object())
+    servers.append(object())
+    observed.append(object())
+    referenced.append(object())
+    session_procs.append(object())
+    agents_map["later"] = 7
+    current_pids.add(456)
+    empty.append(session)
+    orphan_entries.append("projects/later")
+
+    assert batch.snapshot.sessions == (session,)
+    assert batch.snapshot.agent_jobs == ()
+    assert batch.snapshot.rc_projects == ()
+    assert batch.snapshot.rc_servers == ()
+    assert batch.snapshot.observed_envs == ()
+    assert batch.snapshot.file_referenced_envs == ()
+    assert batch.snapshot.session_procs == ()
+    assert dict(batch.snapshot.agents_map) == {"session-1": None}
+    assert batch.snapshot.cur == frozenset({123})
+    assert batch.cleanup_plan.empty == (session,)
+    assert batch.cleanup_plan.orphan_entries == ("projects/orphan",)
+    with pytest.raises(AttributeError):
+        batch.snapshot.sessions.append(session)
+    with pytest.raises(TypeError):
+        batch.snapshot.agents_map["later"] = 7
+    with pytest.raises(AttributeError):
+        batch.snapshot.cur.add(456)
+    with pytest.raises(AttributeError):
+        batch.cleanup_plan.empty.append(session)
+
+
+def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
+    hidden = {"tool"}
+    respawn_flags = ["--verbose"]
+    project_document = {
+        "/tmp/project": {
+            "hasTrustDialogAccepted": True,
+            "metadata": {"tags": ["one"]},
+        }
+    }
+    session = Session(
+        sid="session-1",
+        cwd="/tmp/project",
+        label="published",
+        mtime=1.0,
+        prompts=0,
+        pid=123,
+        alive=True,
+        current=False,
+        hidden=hidden,
+    )
+    session_proc = SessionProc(123, "session-1", proc_alive=True)
+    job = AgentJob(
+        "job-1",
+        "session-1",
+        "session-1",
+        respawn_flags=respawn_flags,
+        host_pid=123,
+        host_alive=True,
+    )
+    project = RCProject(
+        "project",
+        "/tmp/project",
+        True,
+        True,
+        "running",
+        True,
+    )
+    server = RCServer("project", "/tmp/project", True, 456, "env-server", "running")
+    environment = BridgeEnv("session", "bridge", "session-1", 1.0, 2.0, "current")
+    ledger_entries = {("session", "bridge"): environment}
+    ledger_read = LedgerRead(LedgerReadState.READY, ledger_entries)
+    ledger_update = LedgerUpdate(
+        LedgerUpdateState.UNCHANGED,
+        ledger_entries,
+        ledger_read,
+    )
+    observed = EnvRecord("session", "bridge", "session-1")
+    current_environments = [environment]
+    reconciliation = Reconciliation(
+        current=current_environments,
+        observed=[observed],
+        file_referenced=[observed],
+        ledger=ledger_update,
+    )
+    settings = ProjectSettingsResult(
+        ProjectSettingsState.AVAILABLE,
+        project_document,
+    )
+    batch = RefreshBatch(
+        generation=1,
+        snapshot=WorldSnapshot(
+            sessions=[session],
+            agent_jobs=[job],
+            rc_projects=[project],
+            rc_project_settings=settings,
+            rc_servers=[server],
+            observed_envs=[observed],
+            file_referenced_envs=[observed],
+            environment_reconciliation=reconciliation,
+            session_procs=[session_proc],
+            liveness_snapshot=LivenessSnapshot(
+                session_procs=[session_proc],
+                agent_jobs=[job],
+            ),
+        ),
+        cleanup_plan=CleanupPlan(empty=[session]),
+        cleanup_counts={"empty": 1},
+        session_stats={"total": 1},
+        ordered_projects=[project],
+    )
+
+    hidden.add("later")
+    respawn_flags.append("--later")
+    project_document["/tmp/project"]["hasTrustDialogAccepted"] = False
+    project_document["/tmp/project"]["metadata"]["tags"].append("later")
+    ledger_entries[("session", "other")] = BridgeEnv("session", "other")
+    current_environments.append(BridgeEnv("session", "later"))
+
+    assert batch.snapshot.sessions[0].hidden == frozenset({"tool"})
+    assert batch.snapshot.agent_jobs[0].respawn_flags == ("--verbose",)
+    published_settings = batch.snapshot.rc_project_settings.projects["/tmp/project"]
+    assert published_settings["hasTrustDialogAccepted"] is True
+    assert published_settings["metadata"]["tags"] == ("one",)
+    assert tuple(reconciliation.ledger.entries) == (("session", "bridge"),)
+    assert reconciliation.current == (environment,)
+    with pytest.raises(FrozenInstanceError):
+        batch.snapshot.sessions = ()
+    with pytest.raises(FrozenInstanceError):
+        batch.cleanup_plan.empty = ()
+    with pytest.raises(FrozenInstanceError):
+        batch.snapshot.sessions[0].label = "changed"
+    with pytest.raises(AttributeError):
+        batch.snapshot.sessions[0].hidden.add("changed")
+    with pytest.raises(FrozenInstanceError):
+        batch.snapshot.session_procs[0].status = "changed"
+    with pytest.raises(FrozenInstanceError):
+        batch.snapshot.agent_jobs[0].host_alive = False
+    with pytest.raises(AttributeError):
+        batch.snapshot.agent_jobs[0].respawn_flags.append("--changed")
+    with pytest.raises(FrozenInstanceError):
+        batch.snapshot.rc_projects[0].status = "stopped"
+    with pytest.raises(FrozenInstanceError):
+        batch.snapshot.rc_servers[0].status = "stopped"
+    with pytest.raises(FrozenInstanceError):
+        batch.snapshot.environment_reconciliation.current[0].status = "orphan"
+    with pytest.raises(AttributeError):
+        batch.snapshot.environment_reconciliation.current.append(environment)
+    with pytest.raises(TypeError):
+        batch.snapshot.environment_reconciliation.ledger.entries[
+            ("session", "other")
+        ] = environment
+    with pytest.raises(TypeError):
+        ledger_read.entries[("session", "other")] = environment
+    with pytest.raises(TypeError):
+        batch.cleanup_plan.orphan_anchors["projects/later"] = None
+    with pytest.raises(TypeError):
+        batch.snapshot.rc_project_settings.projects["/tmp/other"] = {}
+    with pytest.raises(TypeError):
+        published_settings["hasTrustDialogAccepted"] = False
+    with pytest.raises(TypeError):
+        published_settings["metadata"]["tags"][0] = "changed"
 
 
 def test_ready_generation_is_not_overwritten_and_old_signal_cannot_consume_next() -> (

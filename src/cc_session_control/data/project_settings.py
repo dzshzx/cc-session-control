@@ -6,9 +6,11 @@ import fcntl
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import IO, Any
 
 from ..models import RCStartupSettingRead, RCStartupSettingState
@@ -24,13 +26,44 @@ class ProjectSettingsState(Enum):
     INVALID = "invalid"
 
 
+def _freeze_project_value(value: object) -> object:
+    """Copy one JSON-shaped project setting into immutable containers."""
+
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {key: _freeze_project_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_project_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_project_value(item) for item in value)
+    return value
+
+
 @dataclass(frozen=True)
 class ProjectSettingsResult:
     """A project-map read whose external failure remains observable."""
 
     state: ProjectSettingsState
-    projects: dict[str, Any]
+    projects: Mapping[str, Mapping[str, object]]
     detail: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "projects",
+            MappingProxyType(
+                {
+                    path: MappingProxyType(
+                        {
+                            key: _freeze_project_value(value)
+                            for key, value in project.items()
+                        }
+                    )
+                    for path, project in self.projects.items()
+                }
+            ),
+        )
 
     @property
     def available(self) -> bool:

@@ -61,7 +61,7 @@ class RCStartupSettingRead:
         }
 
 
-@dataclass
+@dataclass(frozen=True)
 class Session:
     sid: str
     cwd: str
@@ -74,7 +74,7 @@ class Session:
     # registry `procStart` of the chosen pid — lets kill-time `pid_alive`
     # rechecks defeat pid reuse ("" = unknown, recheck degrades to existence).
     proc_start: str = ""
-    hidden: set[str] = field(default_factory=set)
+    hidden: frozenset[str] = frozenset()
     file: str = ""
     # Unified-workbench fields (all default so existing construction stays valid).
     kind: str = ""  # registry `kind` (e.g. interactive / bg)
@@ -90,6 +90,9 @@ class Session:
     # tmux.residency_targets — actions and the ⧉ badge read the SAME field.
     tmux_target: str | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "hidden", frozenset(self.hidden))
+
     @property
     def bridge_or_sdk(self) -> bool:
         """D9: union of the transcript `hidden` tags and registry source==sdk.
@@ -102,7 +105,7 @@ class Session:
         return bool(self.hidden) or self.source == "sdk"
 
 
-@dataclass
+@dataclass(frozen=True)
 class SessionProc:
     """One `sessions/<pid>.json` registry entry (a session's local runtime).
 
@@ -126,7 +129,7 @@ class SessionProc:
     bridge: str | None = None  # `bridgeSessionId` (session_* namespace)
 
 
-@dataclass
+@dataclass(frozen=True)
 class AgentJob:
     """One `jobs/<short>/state.json` background-agent record.
 
@@ -142,12 +145,15 @@ class AgentJob:
     cwd: str = ""
     name: str = ""
     env_suffix: str = ""  # suffix of the cse_* bridge id
-    respawn_flags: list[str] = field(default_factory=list)
+    respawn_flags: tuple[str, ...] = ()
     host_pid: int | None = None
     host_alive: bool = False
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "respawn_flags", tuple(self.respawn_flags))
 
-@dataclass
+
+@dataclass(frozen=True)
 class LiveInfo:
     """Merged liveness/identity for one sessionId (output of live_index)."""
 
@@ -165,10 +171,13 @@ class LiveInfo:
     # keeping the sid). `pid` is the chosen one for display; `pids` is the full
     # candidate set so "current" detection protects ANY ancestor pid, not just
     # the newest (multi-pid under-protection fix).
-    pids: list[int] = field(default_factory=list)
+    pids: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "pids", tuple(self.pids))
 
 
-@dataclass
+@dataclass(frozen=True)
 class RCProject:
     name: str
     directory: str
@@ -189,10 +198,16 @@ class RCProject:
 
     def __post_init__(self) -> None:
         if self.trust_decision is None:
-            self.trust_decision = (
-                TrustDecision.TRUSTED if self.trusted else TrustDecision.UNTRUSTED
+            object.__setattr__(
+                self,
+                "trust_decision",
+                TrustDecision.TRUSTED if self.trusted else TrustDecision.UNTRUSTED,
             )
-        self.trusted = self.trust_decision is TrustDecision.TRUSTED
+        object.__setattr__(
+            self,
+            "trusted",
+            self.trust_decision is TrustDecision.TRUSTED,
+        )
 
     @property
     def rc_at_startup(self) -> bool | None:
@@ -201,7 +216,7 @@ class RCProject:
         return self.rc_at_startup_setting.value
 
 
-@dataclass
+@dataclass(frozen=True)
 class RCServer:
     """A project RC server process (`claude remote-control --name`) — R5/D5.
 
@@ -248,7 +263,7 @@ def effective_trust_decision(
     for key, val in projects.items():
         if (
             not isinstance(key, str)
-            or not isinstance(val, dict)
+            or not isinstance(val, Mapping)
             or val.get("hasTrustDialogAccepted") is not True
         ):
             continue
@@ -300,7 +315,7 @@ class EnvRecord:
     bound_sid: str | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class BridgeEnv:
     """A ledger entry for one bridge environment (R6, D4).
 

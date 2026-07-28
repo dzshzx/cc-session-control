@@ -59,7 +59,7 @@ type RefreshBuilder = Callable[[int], RefreshResult]
 type SnapshotBuilder = Callable[[], WorldSnapshot]
 type CleanupBuilder = Callable[
     [
-        list[Session],
+        Sequence[Session],
         Sequence[SessionProc],
         AbstractSet[int],
         Sequence[AgentJob],

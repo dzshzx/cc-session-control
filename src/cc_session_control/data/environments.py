@@ -37,8 +37,8 @@ incomplete.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 
 from ..models import (
     AgentJob,
@@ -57,14 +57,14 @@ from .environment_ledger import (
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class Reconciliation:
     """One observation and ledger reconciliation for CLI/TUI consumers."""
 
-    current: list[BridgeEnv] = field(default_factory=list)
-    orphans: list[BridgeEnv] = field(default_factory=list)
-    observed: list[EnvRecord] = field(default_factory=list)
-    file_referenced: list[EnvRecord] = field(default_factory=list)
+    current: tuple[BridgeEnv, ...] = ()
+    orphans: tuple[BridgeEnv, ...] = ()
+    observed: tuple[EnvRecord, ...] = ()
+    file_referenced: tuple[EnvRecord, ...] = ()
     ledger: LedgerUpdate = field(
         default_factory=lambda: LedgerUpdate(
             LedgerUpdateState.UNCHANGED,
@@ -74,6 +74,22 @@ class Reconciliation:
     ledger_history_complete: bool = True
     liveness_issues: tuple[liveness.LivenessIssue, ...] = ()
     warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "current", tuple(self.current))
+        object.__setattr__(self, "orphans", tuple(self.orphans))
+        object.__setattr__(self, "observed", tuple(self.observed))
+        object.__setattr__(
+            self,
+            "file_referenced",
+            tuple(self.file_referenced),
+        )
+        object.__setattr__(
+            self,
+            "liveness_issues",
+            tuple(self.liveness_issues),
+        )
+        object.__setattr__(self, "warnings", tuple(self.warnings))
 
     @property
     def evidence_complete(self) -> bool:
@@ -231,9 +247,9 @@ def reconcile(
     )
     if not evidence.complete:
         return Reconciliation(
-            current=_current_envs(observed, {}),
-            observed=observed,
-            file_referenced=file_referenced,
+            current=tuple(_current_envs(observed, {})),
+            observed=tuple(observed),
+            file_referenced=tuple(file_referenced),
             ledger_history_complete=False,
             liveness_issues=evidence.issues,
         )
@@ -244,10 +260,10 @@ def reconcile(
         update.success and update.history_available and not update.warnings
     )
     return Reconciliation(
-        current=_current_envs(observed, entries),
-        orphans=_orphan_envs(file_referenced, entries),
-        observed=observed,
-        file_referenced=file_referenced,
+        current=tuple(_current_envs(observed, entries)),
+        orphans=tuple(_orphan_envs(file_referenced, entries)),
+        observed=tuple(observed),
+        file_referenced=tuple(file_referenced),
         ledger=update,
         ledger_history_complete=ledger_history_complete,
         liveness_issues=evidence.issues,
@@ -256,7 +272,7 @@ def reconcile(
 
 
 def upsert(
-    records: list[EnvRecord],
+    records: Sequence[EnvRecord],
     now: float | None = None,
 ) -> LedgerUpdate:
     """Merge observed env records into the ledger (passive store, R6/D4).
@@ -283,7 +299,7 @@ def read_ledger() -> LedgerRead:
     return environment_ledger.read()
 
 
-def current_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
+def current_envs(observed: Sequence[EnvRecord]) -> list[BridgeEnv]:
     """Envs bound to something observed right now (status='current').
 
     Classifies the ledger against the observation. An observed env not yet in
@@ -297,16 +313,15 @@ def current_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
 
 
 def _current_envs(
-    observed: list[EnvRecord],
-    entries: dict[tuple[str, str], BridgeEnv],
+    observed: Sequence[EnvRecord],
+    entries: Mapping[tuple[str, str], BridgeEnv],
 ) -> list[BridgeEnv]:
     obs = {(r.prefix, r.key): r for r in observed if r.prefix and r.key}
     out: list[BridgeEnv] = []
     seen: set[tuple[str, str]] = set()
     for k, env in entries.items():
         if k in obs:
-            env.status = "current"
-            out.append(env)
+            out.append(replace(env, status="current"))
             seen.add(k)
     for k, rec in obs.items():
         if k not in seen:
@@ -321,7 +336,7 @@ def _current_envs(
     return sorted(out, key=lambda e: e.last_seen, reverse=True)
 
 
-def orphan_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
+def orphan_envs(observed: Sequence[EnvRecord]) -> list[BridgeEnv]:
     """Ledger entries NOT in the current observation (status='orphan').
 
     Pass the FILE-REFERENCED set (`observe()`) here so orphans are precisely
@@ -338,15 +353,14 @@ def orphan_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
 
 
 def _orphan_envs(
-    observed: list[EnvRecord],
-    entries: dict[tuple[str, str], BridgeEnv],
+    observed: Sequence[EnvRecord],
+    entries: Mapping[tuple[str, str], BridgeEnv],
 ) -> list[BridgeEnv]:
     obs_keys = {(r.prefix, r.key) for r in observed if r.prefix and r.key}
     out: list[BridgeEnv] = []
     for k, env in entries.items():
         if k not in obs_keys:
-            env.status = "orphan"
-            out.append(env)
+            out.append(replace(env, status="orphan"))
     return sorted(out, key=lambda e: e.last_seen, reverse=True)
 
 

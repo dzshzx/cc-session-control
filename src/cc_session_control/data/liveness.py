@@ -372,11 +372,11 @@ def live_index(
             alive = True
             # All alive pids, not just the newest — "current" must protect any
             # ancestor pid of a resumed (multi-pid) sid.
-            pids = [p.pid for p in alive_procs]
+            pids = tuple(p.pid for p in alive_procs)
         else:
             chosen = max(procs, key=lambda p: _start_key(p.proc_start))
             alive = False
-            pids = []
+            pids = ()
         index[sid] = LiveInfo(
             sid=sid,
             pid=chosen.pid if alive else None,
@@ -402,14 +402,18 @@ def live_index(
         info = index.get(sid)
         if info is None:
             index[sid] = LiveInfo(
-                sid=sid, pid=pid, alive=bool(pid), pids=[pid] if pid else []
+                sid=sid,
+                pid=pid,
+                alive=bool(pid),
+                pids=(pid,) if pid else (),
             )
             continue
         if not pid:
             continue  # pid-less entry: the proc-based verdict stands
-        info.alive = True
-        if info.pid is None:
-            info.pid = pid
-        if pid not in info.pids:
-            info.pids.append(pid)
+        index[sid] = replace(
+            info,
+            alive=True,
+            pid=info.pid if info.pid is not None else pid,
+            pids=info.pids if pid in info.pids else (*info.pids, pid),
+        )
     return index

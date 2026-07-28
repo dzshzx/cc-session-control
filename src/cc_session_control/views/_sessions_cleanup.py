@@ -15,7 +15,7 @@ must be mixed into `SessionsView` only.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -82,7 +82,7 @@ class _CleanupAction:
     label: str  # submenu row label
     stat: str  # `CleanupPlan.counts()` key
     gated: bool  # R10-gated (age sweep is not)
-    targets: Callable[[CleanupPlan], list]  # frozen preview/exec list
+    targets: Callable[[CleanupPlan], Sequence[Session | str | int]]
     format_row: Callable[[object], str]  # one preview row per target
     execute: Callable[[CleanupPlan, list], CleanupExecution]
     none_notice: str  # "无…需要清理"
@@ -239,7 +239,7 @@ class CleanupMixin:
             return
         self._mode = "preview"
         self._preview_action = action
-        self._preview_targets = targets
+        self._preview_targets = list(targets)
         rows = [TextRow(action.format_row(t)) for t in targets]
         self._show_overlay(action.title_tpl.format(n=len(targets)), rows)
         self._update_footer()

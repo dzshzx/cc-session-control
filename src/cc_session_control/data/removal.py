@@ -147,16 +147,16 @@ class CleanupIssue:
     path: str | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class CleanupPlan:
     """Frozen cleanup candidates shared by counts, preview, and execution."""
 
-    empty: list[Session] = field(default_factory=list)
-    short: list[Session] = field(default_factory=list)
-    orphan_entries: list[str] = field(default_factory=list)
-    zombie_pids: list[int] = field(default_factory=list)
-    aged_entries: list[str] = field(default_factory=list)
-    issues: list[CleanupIssue] = field(default_factory=list)
+    empty: tuple[Session, ...] = ()
+    short: tuple[Session, ...] = ()
+    orphan_entries: tuple[str, ...] = ()
+    zombie_pids: tuple[int, ...] = ()
+    aged_entries: tuple[str, ...] = ()
+    issues: tuple[CleanupIssue, ...] = ()
     session_anchors: Mapping[str, tuple[RemovalAnchor, ...]] = field(
         default_factory=dict
     )
@@ -165,10 +165,34 @@ class CleanupPlan:
     aged_anchors: Mapping[str, RemovalAnchor] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        self.session_anchors = MappingProxyType(dict(self.session_anchors))
-        self.orphan_anchors = MappingProxyType(dict(self.orphan_anchors))
-        self.zombie_anchors = MappingProxyType(dict(self.zombie_anchors))
-        self.aged_anchors = MappingProxyType(dict(self.aged_anchors))
+        object.__setattr__(self, "empty", tuple(self.empty))
+        object.__setattr__(self, "short", tuple(self.short))
+        object.__setattr__(self, "orphan_entries", tuple(self.orphan_entries))
+        object.__setattr__(self, "zombie_pids", tuple(self.zombie_pids))
+        object.__setattr__(self, "aged_entries", tuple(self.aged_entries))
+        object.__setattr__(self, "issues", tuple(self.issues))
+        object.__setattr__(
+            self,
+            "session_anchors",
+            MappingProxyType(
+                {sid: tuple(anchors) for sid, anchors in self.session_anchors.items()}
+            ),
+        )
+        object.__setattr__(
+            self,
+            "orphan_anchors",
+            MappingProxyType(dict(self.orphan_anchors)),
+        )
+        object.__setattr__(
+            self,
+            "zombie_anchors",
+            MappingProxyType(dict(self.zombie_anchors)),
+        )
+        object.__setattr__(
+            self,
+            "aged_anchors",
+            MappingProxyType(dict(self.aged_anchors)),
+        )
 
     def counts(self) -> dict[str, int]:
         return {
