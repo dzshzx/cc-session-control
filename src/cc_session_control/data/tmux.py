@@ -58,6 +58,8 @@ _WINDOWS_FMT = (
     "#{window_id}\t#{window_name}\t#{pane_dead}\t#{pane_pid}"
     "\t#{@csctl_path}\t#{pane_current_path}"
 )
+_CAPTURE_HISTORY_LINES = 2_000
+_CAPTURE_TEXT_CHAR_LIMIT = 1_048_576
 
 
 def list_windows_meta(session: str) -> list[TmuxWindow]:
@@ -96,15 +98,29 @@ def set_window_option(target: str, option: str, value: str) -> bool:
 
 
 def capture_pane(target: str) -> str:
-    """Full scrollback of a tmux pane as text; "" on failure.
+    """Recent scrollback of a tmux pane as bounded text; "" on failure.
 
-    Captures from the start of history (`-S -`) so an `env_*` id printed at
-    server startup is still grep-able after it scrolls off the visible region.
+    tmux documents negative `-S` values as history lines and `-E -` as the end
+    of the visible pane. The 2,000-line range covers tmux's default history
+    limit without reading the entirety of a larger user-configured history.
+    Retaining the first 1,048,576 characters favors the RC environment id
+    printed near server startup.
     """
-    cp = _tmux_run(["capture-pane", "-p", "-S", "-", "-t", target])
+    cp = _tmux_run(
+        [
+            "capture-pane",
+            "-p",
+            "-S",
+            f"-{_CAPTURE_HISTORY_LINES}",
+            "-E",
+            "-",
+            "-t",
+            target,
+        ]
+    )
     if cp is None or cp.returncode != 0:
         return ""
-    return cp.stdout
+    return cp.stdout[:_CAPTURE_TEXT_CHAR_LIMIT]
 
 
 def _tmux_has_session(session: str) -> bool:

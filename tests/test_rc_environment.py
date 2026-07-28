@@ -137,6 +137,26 @@ def test_explicit_window_and_global_invalidation_force_recapture():
     assert cache.resolve([_window()], capture) == {"@1": "env_3"}
 
 
+def test_tmux_capture_uses_finite_range_and_caps_returned_text(monkeypatch):
+    calls: list[list[str]] = []
+
+    class Captured:
+        returncode = 0
+        stdout = "environment=env_KEPT\n" + "x" * 1_048_576
+
+    def run(args: list[str]) -> Captured:
+        calls.append(args)
+        return Captured()
+
+    monkeypatch.setattr(tmux, "_tmux_run", run)
+
+    captured = tmux.capture_pane("@1")
+
+    assert calls == [["capture-pane", "-p", "-S", "-2000", "-E", "-", "-t", "@1"]]
+    assert len(captured) == 1_048_576
+    assert rc_environment.extract_env_id(captured) == "env_KEPT"
+
+
 def test_tmux_capture_failure_and_nonzero_return_safe_empty(monkeypatch):
     monkeypatch.setattr(tmux, "_tmux_run", lambda args: None)
     assert tmux.capture_pane("@1") == ""
