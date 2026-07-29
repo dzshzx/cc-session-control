@@ -9,7 +9,7 @@ from factories import make_session
 from cc_session_control.actions.session_ops import resume_cmd
 from cc_session_control.data.cleanup import prune_sessions
 from cc_session_control.data.sessions import _parse_transcript
-from cc_session_control.models import LiveInfo, Session
+from cc_session_control.models import LiveInfo
 
 
 def _created_target(tmux, target):

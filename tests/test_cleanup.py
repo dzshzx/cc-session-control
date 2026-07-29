@@ -23,7 +23,7 @@ from cc_session_control.data import (
 )
 from cc_session_control.data import proc as proc_mod
 from cc_session_control.data.removal import CleanupIssue, CleanupPlan, RemovalAnchor
-from cc_session_control.models import AgentJob, Session, SessionProc
+from cc_session_control.models import AgentJob, SessionProc
 
 
 @pytest.fixture(autouse=True)

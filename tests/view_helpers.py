@@ -20,7 +20,6 @@ from cc_session_control.models import (
     RCServer,
     RCStartupSettingRead,
     RCStartupSettingState,
-    Session,
 )
 from cc_session_control.views.rc import RCView
 
