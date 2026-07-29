@@ -13,6 +13,7 @@ import pytest
 
 from cc_session_control.data.rc_enabled import (
     EnabledListOperation,
+    EnabledListResult,
     EnabledListStage,
     EnabledListState,
     EnabledListStore,
@@ -411,6 +412,51 @@ def test_typed_create_file_failure_is_uncommitted(
     assert result.changed is False
     assert result.committed is False
     assert result.value is None
+
+
+def test_typed_create_file_and_lock_release_failures_retain_all_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cc_session_control.data.rc_enabled as enabled_module
+
+    path = tmp_path / "rc-enabled"
+    original_open = Path.open
+
+    class CloseFailingLock:
+        def close(self) -> None:
+            raise OSError("lock close failed")
+
+    def fail_boundaries(
+        target: Path, mode: str = "r", *args: object, **kwargs: object
+    ) -> object:
+        if mode == "a+b":
+            return CloseFailingLock()
+        if target == path and "x" in mode:
+            raise OSError("create file failed")
+        return original_open(target, mode, *args, **kwargs)
+
+    def fail_unlock(_file: object, operation: int) -> None:
+        if operation == enabled_module.fcntl.LOCK_UN:
+            raise OSError("unlock failed")
+
+    monkeypatch.setattr(Path, "open", fail_boundaries)
+    monkeypatch.setattr(enabled_module.fcntl, "flock", fail_unlock)
+
+    result = _store(path).list_result()
+
+    assert result == EnabledListResult(
+        operation=EnabledListOperation.LIST,
+        state=EnabledListState.FAILED,
+        value=None,
+        changed=False,
+        committed=False,
+        stage=EnabledListStage.UNLOCK,
+        detail=(
+            "create-file: create file failed; "
+            "unlock: flock: unlock failed; close: lock close failed"
+        ),
+    )
 
 
 def test_read_failure_preserves_original(

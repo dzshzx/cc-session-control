@@ -238,6 +238,11 @@ class _EnabledListLock:
         if not failures:
             return False
         detail = "; ".join(failures)
+        if isinstance(exc, _EnabledListBoundaryError):
+            raise _EnabledListBoundaryError(
+                EnabledListStage.UNLOCK,
+                f"{exc.stage.value}: {exc.detail}; unlock: {detail}",
+            ) from exc
         if exc is not None:
             exc.add_note(f"enabled-list lock release failed: {detail}")
             return False
