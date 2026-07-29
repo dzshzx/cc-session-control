@@ -19,11 +19,17 @@ from ..models import Session
 type Pathish = str | os.PathLike[str]
 
 _RENAME_NOREPLACE = 1
-_LIBC = ctypes.CDLL(None, use_errno=True)
-_renameat2 = getattr(_LIBC, "renameat2", None)
-if _renameat2 is not None:
-    _renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p] * 2 + [ctypes.c_uint]
-    _renameat2.restype = ctypes.c_int
+try:
+    # A platform that cannot open the process's own libc handle must degrade
+    # to the typed "renameat2 unavailable" refusal, not fail at import time.
+    _libc = ctypes.CDLL(None, use_errno=True)
+except OSError:
+    _renameat2 = None
+else:
+    _renameat2 = getattr(_libc, "renameat2", None)
+    if _renameat2 is not None:
+        _renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p] * 2 + [ctypes.c_uint]
+        _renameat2.restype = ctypes.c_int
 
 
 class RemovalStatus(StrEnum):
