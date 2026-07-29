@@ -186,7 +186,11 @@ def test_scan_servers_classifies_managed_and_external(monkeypatch):
         "_tmux_window_inventory",
         lambda: WindowInventory((TmuxWindow("@1", "foo", False, 111, "/a"),)),
     )
-    monkeypatch.setattr(rc, "_capture_env_id", lambda target: "")
+    monkeypatch.setattr(
+        rc,
+        "_tmux_capture_pane_result",
+        lambda target: rc.tmux.PaneCaptureResult(target),
+    )
     monkeypatch.setattr(
         rc.proc,
         "scan_rc_server_inventory",
@@ -211,7 +215,11 @@ def test_scan_servers_classifies_managed_and_external(monkeypatch):
 
 def test_server_scan_retains_partial_proc_records_and_issues(monkeypatch):
     window = TmuxWindow("@1", "foo", False, 111, "/a")
-    monkeypatch.setattr(rc, "_capture_env_id", lambda _target: "")
+    monkeypatch.setattr(
+        rc,
+        "_tmux_capture_pane_result",
+        lambda target: rc.tmux.PaneCaptureResult(target),
+    )
 
     result = rc.scan_servers_result(
         window_inventory=WindowInventory((window,)),
@@ -242,7 +250,11 @@ def test_scan_servers_managed_window_without_proc_match(monkeypatch):
         "_tmux_window_inventory",
         lambda: WindowInventory((TmuxWindow("@1", "foo", True, 111, "/a"),)),
     )
-    monkeypatch.setattr(rc, "_capture_env_id", lambda target: "")
+    monkeypatch.setattr(
+        rc,
+        "_tmux_capture_pane_result",
+        lambda target: rc.tmux.PaneCaptureResult(target),
+    )
     monkeypatch.setattr(
         rc.proc,
         "scan_rc_server_inventory",
@@ -275,9 +287,13 @@ def test_scan_servers_captures_env_id_without_ledger_side_effect(
     )
     monkeypatch.setattr(
         rc,
-        "_tmux_capture_pane",
+        "_tmux_capture_pane_result",
         lambda target: (
-            targets.append(target) or "starting...\nenvironment=env_abc123XYZ\nready"
+            targets.append(target)
+            or rc.tmux.PaneCaptureResult(
+                target,
+                "starting...\nenvironment=env_abc123XYZ\nready",
+            )
         ),
     )
     monkeypatch.setattr(
@@ -302,7 +318,11 @@ def test_scan_servers_returns_no_env_id_when_capture_has_none(monkeypatch):
         "_tmux_window_inventory",
         lambda: WindowInventory((TmuxWindow("@1", "foo", False, 111, "/a"),)),
     )
-    monkeypatch.setattr(rc, "_tmux_capture_pane", lambda target: "no env here")
+    monkeypatch.setattr(
+        rc,
+        "_tmux_capture_pane_result",
+        lambda target: rc.tmux.PaneCaptureResult(target, "no env here"),
+    )
     monkeypatch.setattr(
         rc.proc,
         "scan_rc_server_inventory",
@@ -313,6 +333,88 @@ def test_scan_servers_returns_no_env_id_when_capture_has_none(monkeypatch):
         environment_cache=rc_environment.EnvironmentIdCache(),
     )
     assert servers[0].env_id is None
+
+
+def test_successful_pane_capture_without_env_id_keeps_server_scan_complete(
+    monkeypatch,
+):
+    window = TmuxWindow("@1", "foo", False, 111, "/a")
+    monkeypatch.setattr(
+        rc,
+        "_tmux_capture_pane_result",
+        lambda target: rc.tmux.PaneCaptureResult(target, "server starting"),
+    )
+
+    result = rc.scan_servers_result(
+        window_inventory=WindowInventory((window,)),
+        proc_inventory=ProcRCInventory((ProcRC(111, "ws/foo", "/a"),)),
+        environment_cache=rc_environment.EnvironmentIdCache(),
+    )
+
+    assert result.complete is True
+    assert result.issues == ()
+    assert result.servers[0].env_id is None
+
+
+def test_server_scan_retains_mixed_rows_ids_and_pane_capture_issue(monkeypatch):
+    windows = (
+        TmuxWindow("@1", "one", False, 111, "/a"),
+        TmuxWindow("@2", "two", False, 222, "/b"),
+    )
+    targets: list[str] = []
+
+    def capture(target: str) -> rc.tmux.PaneCaptureResult:
+        targets.append(target)
+        if target == "@1":
+            return rc.tmux.PaneCaptureResult(
+                target,
+                "environment=env_KNOWN",
+            )
+        return rc.tmux.PaneCaptureResult(
+            target,
+            issue=rc.tmux.PaneCaptureIssue(
+                "tmux capture-pane",
+                target,
+                "timed out after 5 seconds",
+            ),
+        )
+
+    monkeypatch.setattr(rc, "_tmux_capture_pane_result", capture)
+    monkeypatch.setattr(
+        rc,
+        "_tmux_capture_pane",
+        lambda _target: (_ for _ in ()).throw(
+            AssertionError("production used string-only pane capture"),
+        ),
+    )
+    monkeypatch.setattr(
+        rc,
+        "_capture_env_id",
+        lambda _target: (_ for _ in ()).throw(
+            AssertionError("production used string-only env-id capture"),
+        ),
+    )
+
+    result = rc.scan_servers_result(
+        window_inventory=WindowInventory(windows),
+        proc_inventory=ProcRCInventory(
+            (
+                ProcRC(111, "ws/one", "/a"),
+                ProcRC(222, "ws/two", "/b"),
+            ),
+        ),
+        environment_cache=rc_environment.EnvironmentIdCache(),
+    )
+
+    assert result.complete is False
+    assert [(server.name, server.env_id) for server in result.servers] == [
+        ("ws/one", "env_KNOWN"),
+        ("ws/two", None),
+    ]
+    assert result.issues[0].source == "tmux capture-pane"
+    assert result.issues[0].path == "/b [@2]"
+    assert result.issues[0].detail == "timed out after 5 seconds"
+    assert targets == ["@1", "@2"]
 
 
 def test_start_stop_remove_and_stop_all_invalidate_capture_cache(

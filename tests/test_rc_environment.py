@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from importlib import import_module
+
+import pytest
 
 from cc_session_control.data import rc_environment, tmux
 from cc_session_control.data.tmux import TmuxWindow
@@ -37,6 +40,26 @@ def _replace_tmux_with_python(monkeypatch, source: str):
 
     monkeypatch.setattr(tmux.subprocess, "Popen", popen)
     return calls, processes
+
+
+def test_tmux_reexports_pure_outcome_types_from_the_split_module():
+    outcomes = import_module("cc_session_control.data.tmux_outcomes")
+
+    for name in (
+        "TmuxWindow",
+        "TmuxIssue",
+        "WindowInventory",
+        "PaneCaptureIssue",
+        "PaneCaptureResult",
+        "KillState",
+        "KillResult",
+        "TmuxPane",
+        "ResidencyIssue",
+        "PaneInventory",
+        "ResidencyInventory",
+        "SessionWindowResult",
+    ):
+        assert getattr(tmux, name) is getattr(outcomes, name)
 
 
 def test_successful_capture_is_reused_for_the_same_window_and_pid():
@@ -137,6 +160,67 @@ def test_negative_capture_eventually_picks_up_a_delayed_environment_id():
     assert calls == 3
 
 
+def test_capture_failure_stays_visible_during_backoff_then_success_clears_it():
+    clock = Clock()
+    calls = 0
+    cache = rc_environment.EnvironmentIdCache(
+        clock=clock,
+        initial_backoff=1.0,
+        maximum_backoff=4.0,
+    )
+
+    def capture(target: str) -> tmux.PaneCaptureResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return tmux.PaneCaptureResult(
+                target,
+                issue=tmux.PaneCaptureIssue(
+                    "tmux capture-pane",
+                    target,
+                    "timed out after 5 seconds",
+                ),
+            )
+        return tmux.PaneCaptureResult(target, "server starting")
+
+    failed = cache.resolve_result([_window()], capture)
+    clock.advance(0.5)
+    backed_off = cache.resolve_result([_window()], capture)
+    clock.advance(0.5)
+    recovered = cache.resolve_result([_window()], capture)
+
+    assert failed.environment_ids == {}
+    assert failed.issues == backed_off.issues
+    assert failed.issues[0].source == "tmux capture-pane"
+    assert failed.issues[0].target == "@1"
+    assert failed.issues[0].path == "/same/path"
+    assert failed.issues[0].detail == "timed out after 5 seconds"
+    assert recovered.environment_ids == {}
+    assert recovered.issues == ()
+    assert calls == 2
+
+
+def test_disappeared_window_prunes_cached_capture_issue():
+    cache = rc_environment.EnvironmentIdCache(clock=Clock())
+
+    def capture(target: str) -> tmux.PaneCaptureResult:
+        return tmux.PaneCaptureResult(
+            target,
+            issue=tmux.PaneCaptureIssue(
+                "tmux capture-pane",
+                target,
+                "timed out after 5 seconds",
+            ),
+        )
+
+    assert cache.resolve_result([_window()], capture).issues
+
+    disappeared = cache.resolve_result([], capture)
+
+    assert disappeared.issues == ()
+    assert len(cache) == 0
+
+
 def test_explicit_window_and_global_invalidation_force_recapture():
     calls = 0
     cache = rc_environment.EnvironmentIdCache(clock=Clock())
@@ -175,8 +259,11 @@ def test_tmux_capture_caps_utf8_bytes_without_splitting_a_character(monkeypatch)
         "import sys; sys.stdout.write('environment=env_KEPT\\n' + '界' * 400_000)",
     )
 
-    captured = tmux.capture_pane("@1")
+    result = tmux.capture_pane_result("@1")
+    captured = result.text
 
+    assert result.success is True
+    assert result.truncated is True
     assert len(captured.encode("utf-8")) == 1_048_575
     assert captured.endswith("界")
     assert rc_environment.extract_env_id(captured) == "env_KEPT"
@@ -238,8 +325,11 @@ def test_tmux_capture_stops_and_reaps_a_producer_at_the_byte_limit(monkeypatch):
 
     monkeypatch.setattr(tmux.subprocess, "Popen", popen)
 
-    captured = tmux.capture_pane("@1")
+    result = tmux.capture_pane_result("@1")
+    captured = result.text
 
+    assert result.success is True
+    assert result.truncated is True
     assert len(captured.encode("utf-8")) == 1_048_576
     assert processes[0].communicate_called is False
     assert processes[0].terminate_called or processes[0].kill_called
@@ -263,6 +353,30 @@ def test_tmux_capture_drains_large_stderr_and_returns_empty_on_nonzero(monkeypat
     assert processes[0].returncode == 7
 
 
+def test_tmux_capture_result_reports_nonzero_exit_without_returning_stdout(
+    monkeypatch,
+):
+    _calls, processes = _replace_tmux_with_python(
+        monkeypatch,
+        (
+            "import sys; "
+            "sys.stdout.write('environment=env_MUST_NOT_ESCAPE'); "
+            "sys.stdout.flush(); "
+            "raise SystemExit(7)"
+        ),
+    )
+
+    result = tmux.capture_pane_result("@1")
+
+    assert result.text == ""
+    assert result.success is False
+    assert result.issue is not None
+    assert result.issue.source == "tmux capture-pane"
+    assert result.issue.target == "@1"
+    assert result.issue.detail == "exited with status 7"
+    assert processes[0].returncode == 7
+
+
 def test_tmux_capture_timeout_terminates_and_reaps_without_sleep(monkeypatch):
     _calls, processes = _replace_tmux_with_python(
         monkeypatch,
@@ -270,7 +384,14 @@ def test_tmux_capture_timeout_terminates_and_reaps_without_sleep(monkeypatch):
     )
     monkeypatch.setattr(tmux, "_TMUX_TIMEOUT_SECONDS", 0.05)
 
-    assert tmux.capture_pane("@1") == ""
+    result = tmux.capture_pane_result("@1")
+
+    assert result.text == ""
+    assert result.success is False
+    assert result.issue is not None
+    assert result.issue.source == "tmux capture-pane"
+    assert result.issue.target == "@1"
+    assert result.issue.detail == "timed out after 0.05 seconds"
     assert processes[0].returncode is not None
 
 
@@ -281,3 +402,152 @@ def test_tmux_capture_spawn_oserror_returns_empty(monkeypatch):
     monkeypatch.setattr(tmux.subprocess, "Popen", popen)
 
     assert tmux.capture_pane("@1") == ""
+
+
+def test_tmux_capture_result_bounds_spawn_failure_detail(monkeypatch):
+    def popen(*_args, **_kwargs):
+        raise FileNotFoundError("x" * 2_000)
+
+    monkeypatch.setattr(tmux.subprocess, "Popen", popen)
+
+    result = tmux.capture_pane_result("@spawn")
+
+    assert result.success is False
+    assert result.issue is not None
+    assert result.issue.source == "tmux capture-pane"
+    assert result.issue.target == "@spawn"
+    assert result.issue.detail.startswith("spawn failed: ")
+    assert len(result.issue.detail) <= 512
+
+
+def test_tmux_capture_result_does_not_hide_programming_errors(monkeypatch):
+    def popen(*_args, **_kwargs):
+        raise RuntimeError("capture invariant broken")
+
+    monkeypatch.setattr(tmux.subprocess, "Popen", popen)
+
+    with pytest.raises(RuntimeError, match="capture invariant broken"):
+        tmux.capture_pane_result("@bug")
+
+
+def test_tmux_capture_result_reports_selector_failure(monkeypatch):
+    def selector():
+        raise OSError("selector unavailable")
+
+    monkeypatch.setattr(tmux.selectors, "DefaultSelector", selector)
+
+    result = tmux.capture_pane_result("@selector")
+
+    assert result.success is False
+    assert result.issue is not None
+    assert result.issue.source == "tmux capture-pane"
+    assert result.issue.target == "@selector"
+    assert result.issue.detail == "selector failed: selector unavailable"
+
+
+def test_tmux_capture_result_reports_selector_close_failure_and_reaps_child(
+    monkeypatch,
+):
+    real_selector = tmux.selectors.DefaultSelector
+    _calls, processes = _replace_tmux_with_python(monkeypatch, "print('ready')")
+
+    class FailClose:
+        def __init__(self):
+            self._selector = real_selector()
+
+        def __getattr__(self, name):
+            return getattr(self._selector, name)
+
+        def close(self):
+            self._selector.close()
+            raise OSError("selector close denied")
+
+    monkeypatch.setattr(tmux.selectors, "DefaultSelector", FailClose)
+
+    result = tmux.capture_pane_result("@selector-close")
+
+    assert result.success is False
+    assert result.issue is not None
+    assert result.issue.source == "tmux capture-pane"
+    assert result.issue.target == "@selector-close"
+    assert result.issue.detail == "selector close failed: selector close denied"
+    assert processes[0].returncode is not None
+
+
+def test_tmux_capture_result_reports_wait_failure_and_reaps_child(monkeypatch):
+    real_popen = tmux.subprocess.Popen
+    processes = []
+
+    class FailFirstWait:
+        def __init__(self, process):
+            self._process = process
+            self.wait_calls = 0
+
+        def __getattr__(self, name):
+            return getattr(self._process, name)
+
+        def wait(self, *args, **kwargs):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise OSError("w" * 2_000)
+            return self._process.wait(*args, **kwargs)
+
+    def popen(_argv, **kwargs):
+        process = FailFirstWait(
+            real_popen(
+                [sys.executable, "-c", "print('ready')"],
+                **kwargs,
+            ),
+        )
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(tmux.subprocess, "Popen", popen)
+
+    result = tmux.capture_pane_result("@wait")
+
+    assert result.success is False
+    assert result.issue is not None
+    assert result.issue.source == "tmux capture-pane"
+    assert result.issue.target == "@wait"
+    assert result.issue.detail.startswith("wait failed: ")
+    assert len(result.issue.detail) <= 512
+    assert processes[0].wait_calls >= 2
+    assert processes[0].returncode is not None
+
+
+def test_tmux_capture_result_reports_read_failure_and_reaps_child(monkeypatch):
+    real_popen = tmux.subprocess.Popen
+    processes = []
+
+    def fail_read(_fd, _size):
+        raise OSError("read denied")
+
+    def popen(_argv, **kwargs):
+        process = real_popen(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import signal, sys; "
+                    "sys.stdout.write('ready'); "
+                    "sys.stdout.flush(); "
+                    "signal.pause()"
+                ),
+            ],
+            **kwargs,
+        )
+        processes.append(process)
+        monkeypatch.setattr(tmux.os, "read", fail_read)
+        return process
+
+    monkeypatch.setattr(tmux.subprocess, "Popen", popen)
+
+    result = tmux.capture_pane_result("@read")
+
+    assert result.success is False
+    assert result.issue is not None
+    assert result.issue.source == "tmux capture-pane"
+    assert result.issue.target == "@read"
+    assert result.issue.detail == "read failed: read denied"
+    assert processes[0].returncode is not None

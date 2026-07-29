@@ -8,12 +8,15 @@ import pytest
 
 from cc_session_control import cli
 from cc_session_control.config import cfg
-from cc_session_control.data import liveness, rc, sessions
+from cc_session_control.data import environments, liveness, rc, sessions
+from cc_session_control.data.proc import ProcRC, ProcRCInventory
 from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
-from cc_session_control.models import InventoryIssue, RCProject, Session
+from cc_session_control.data.rc_environment import EnvironmentIdCache
+from cc_session_control.data.tmux import TmuxWindow, WindowInventory
+from cc_session_control.models import EnvRecord, InventoryIssue, RCProject, Session
 
 
 def test_rc_status_reports_unknown_inventory_and_returns_nonzero(
@@ -129,6 +132,62 @@ def test_env_reports_partial_rc_inventory_and_returns_nonzero(
     assert "environment inventory is partial" in captured.err
     assert "/proc/4242/cmdline" in captured.err
     assert "permission denied" in captured.err
+
+
+def test_env_pane_capture_failure_warns_without_ledger_write_or_orphans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    environments.upsert([EnvRecord("env", "OLD", "")], now=1.0)
+    original = cfg.environments_ledger.read_bytes()
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
+        rc,
+        "_tmux_window_inventory",
+        lambda: WindowInventory((TmuxWindow("@1", "foo", False, 111, "/a"),)),
+    )
+    monkeypatch.setattr(
+        rc.proc,
+        "scan_rc_server_inventory",
+        lambda: ProcRCInventory((ProcRC(111, "ws/foo", "/a"),)),
+    )
+    monkeypatch.setattr(
+        rc,
+        "_tmux_capture_pane_result",
+        lambda target: rc.tmux.PaneCaptureResult(
+            target,
+            issue=rc.tmux.PaneCaptureIssue(
+                "tmux capture-pane",
+                target,
+                "timed out after 5 seconds",
+            ),
+        ),
+    )
+    monkeypatch.setattr(rc, "_environment_ids", EnvironmentIdCache())
+    monkeypatch.setattr(
+        rc,
+        "scan_servers",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("records-only wrapper used by production CLI"),
+        ),
+    )
+
+    assert cli.main(["env"]) == 1
+    captured = capsys.readouterr()
+    assert "Current bridge environments (partial): 0" in captured.out
+    assert "Orphan environments: unavailable" in captured.out
+    assert "env_OLD" not in captured.out
+    assert "environment inventory is partial" in captured.err
+    assert "tmux capture-pane" in captured.err
+    assert "/a [@1]" in captured.err
+    assert "timed out after 5 seconds" in captured.err
+    assert cfg.environments_ledger.read_bytes() == original
 
 
 def test_rc_stop_one_reports_all_states(

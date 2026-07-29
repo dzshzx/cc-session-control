@@ -268,8 +268,11 @@ def test_snapshot_reconciliation_owns_single_rc_environment_ledger_update(
     )
     monkeypatch.setattr(
         snapshot.rc,
-        "_tmux_capture_pane",
-        lambda target: "environment=env_CAPTURED",
+        "_tmux_capture_pane_result",
+        lambda target: snapshot.rc.tmux.PaneCaptureResult(
+            target,
+            "environment=env_CAPTURED",
+        ),
     )
     monkeypatch.setattr(
         snapshot.rc.proc,
@@ -311,6 +314,51 @@ def test_snapshot_reconciliation_owns_single_rc_environment_ledger_update(
         "first write failed" in warning
         for warning in snap.environment_reconciliation.warnings
     )
+
+
+def test_pane_capture_failure_keeps_snapshot_rows_but_blocks_ledger_and_orphans(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    env.upsert([env.EnvRecord("env", "OLD", "")], now=1.0)
+    original = cfg.environments_ledger.read_bytes()
+    actual_scan_servers = snapshot.rc.scan_servers_result
+    _stub_sources(monkeypatch, [])
+    monkeypatch.setattr(snapshot.rc, "scan_servers_result", actual_scan_servers)
+    monkeypatch.setattr(
+        snapshot.rc,
+        "_tmux_window_inventory",
+        lambda: WindowInventory((TmuxWindow("@1", "foo", False, 111, "/a"),)),
+    )
+    monkeypatch.setattr(
+        snapshot.rc,
+        "_tmux_capture_pane_result",
+        lambda target: snapshot.rc.tmux.PaneCaptureResult(
+            target,
+            issue=snapshot.rc.tmux.PaneCaptureIssue(
+                "tmux capture-pane",
+                target,
+                "timed out after 5 seconds",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        snapshot.rc.proc,
+        "scan_rc_server_inventory",
+        lambda: ProcRCInventory((ProcRC(111, "ws/foo", "/a"),)),
+    )
+    monkeypatch.setattr(snapshot.rc, "_environment_ids", EnvironmentIdCache())
+
+    snap = snapshot.build_world_snapshot()
+
+    assert [(server.name, server.env_id) for server in snap.rc_servers] == [
+        ("ws/foo", None),
+    ]
+    assert snap.environment_reconciliation.evidence_complete is False
+    assert snap.environment_reconciliation.orphans == ()
+    assert snap.environment_reconciliation.inventory_issues[0].path == "/a [@1]"
+    assert cfg.environments_ledger.read_bytes() == original
 
 
 def test_snapshot_captures_each_liveness_source_once_per_generation(

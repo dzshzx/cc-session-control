@@ -1,9 +1,9 @@
 """Generic tmux adapter — THE single tmux seam.
 
-`_tmux_run_result` owns ordinary invocations; `_capture_pane_bytes` owns bounded
-streaming capture. Read/spawn wrappers keep the empty/False/None failure contract;
-kill wrappers expose typed missing-target vs external-failure outcomes. Add new
-tmux operations here, never as raw `subprocess` calls elsewhere.
+`_tmux_run_result` owns ordinary invocations; `capture_pane_result` owns bounded
+streaming capture. Compatibility wrappers keep the empty/False/None views while
+typed operations retain expected external failures. Add new tmux operations
+here, never as raw `subprocess` calls elsewhere.
 
 Bottom of the `data/` DAG: this module may import only `proc` from this
 package (plus stdlib) — it knows nothing about RC servers or sessions. `rc.py`
@@ -19,13 +19,24 @@ import os
 import selectors
 import subprocess
 import time
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
-from enum import Enum
-from types import MappingProxyType
-from typing import NamedTuple
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 
 from . import proc
+from .tmux_outcomes import (
+    KillResult,
+    KillState,
+    PaneCaptureIssue,
+    PaneCaptureResult,
+    PaneInventory,
+    ResidencyInventory,
+    ResidencyIssue,
+    SessionWindowResult,
+    TmuxIssue,
+    TmuxPane,
+    TmuxWindow,
+    WindowInventory,
+)
 
 
 @dataclass(frozen=True)
@@ -65,45 +76,6 @@ def _tmux_run(args: list[str]) -> subprocess.CompletedProcess[str] | None:
     return _tmux_run_result(args).completed
 
 
-class TmuxWindow(NamedTuple):
-    """One window of a session, with its identity metadata.
-
-    `wid` is tmux's server-unique `@N` window id — THE collision-safe address
-    for kill/capture (window NAMES are cosmetic and may collide; tmux `-t` by
-    name falls back to prefix matching, which can hit the wrong window).
-    `path` is the project directory the window belongs to: the `@csctl_path`
-    window option when csctl declared it at spawn, else `pane_current_path`
-    (adopts pre-0.7.3 windows and hand-made ones). `pid` is the pane root pid
-    (the hosted process itself — spawns use `exec`, replacing the shell).
-    """
-
-    wid: str
-    name: str
-    dead: bool
-    pid: int | None
-    path: str
-
-
-@dataclass(frozen=True)
-class TmuxIssue:
-    """One expected tmux inventory failure."""
-
-    source: str
-    detail: str
-
-
-@dataclass(frozen=True)
-class WindowInventory:
-    """Known windows plus whether tmux proved the inventory complete."""
-
-    records: tuple[TmuxWindow, ...] = ()
-    issues: tuple[TmuxIssue, ...] = ()
-
-    @property
-    def complete(self) -> bool:
-        return not self.issues
-
-
 _WINDOWS_FMT = (
     "#{window_id}\t#{window_name}\t#{pane_dead}\t#{pane_pid}"
     "\t#{@csctl_path}\t#{pane_current_path}"
@@ -112,8 +84,40 @@ _CAPTURE_HISTORY_LINES = 2_000
 _CAPTURE_START = f"-{_CAPTURE_HISTORY_LINES}"
 _CAPTURE_BYTE_LIMIT = 1_048_576
 _CAPTURE_READ_SIZE = 64 * 1_024
+_CAPTURE_DETAIL_LIMIT = 512
 _TMUX_TIMEOUT_SECONDS = 5.0
 _REAP_GRACE_SECONDS = 0.2
+
+
+def _capture_failure_detail(label: str, exc: BaseException) -> str:
+    raw = " ".join(str(exc).split()) or type(exc).__name__
+    return f"{label}: {raw}"[:_CAPTURE_DETAIL_LIMIT]
+
+
+def _close_selector(selector: selectors.BaseSelector) -> str:
+    try:
+        selector.close()
+    except OSError as exc:
+        return _capture_failure_detail("selector close failed", exc)
+    return ""
+
+
+def _pane_failure(target: str, detail: str) -> PaneCaptureResult:
+    issue = PaneCaptureIssue(
+        "tmux capture-pane", target, detail[:_CAPTURE_DETAIL_LIMIT]
+    )
+    return PaneCaptureResult(target, issue=issue)
+
+
+def _pane_success(
+    target: str,
+    output: bytearray,
+    *,
+    truncated: bool = False,
+) -> PaneCaptureResult:
+    decoded = output.decode("utf-8", errors="ignore")
+    text = "".join(decoded.splitlines(keepends=True)[:_CAPTURE_HISTORY_LINES])
+    return PaneCaptureResult(target, text, truncated=truncated)
 
 
 def list_windows_inventory(session: str) -> WindowInventory:
@@ -179,8 +183,9 @@ def set_window_option(target: str, option: str, value: str) -> bool:
     return cp is not None and cp.returncode == 0
 
 
-def _terminate_and_reap(process: subprocess.Popen[bytes]) -> None:
-    """Stop a bounded capture and always consume its child process state."""
+def _terminate_and_reap(process: subprocess.Popen[bytes]) -> str:
+    """Stop a bounded capture and consume its child state; detail wait failure."""
+    detail = ""
     if process.poll() is None:
         try:
             process.terminate()
@@ -188,111 +193,140 @@ def _terminate_and_reap(process: subprocess.Popen[bytes]) -> None:
             pass
     try:
         process.wait(timeout=_REAP_GRACE_SECONDS)
-        return
+        return ""
     except subprocess.TimeoutExpired:
         pass
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = _capture_failure_detail("wait/reap failed", exc)
     if process.poll() is None:
         try:
             process.kill()
         except OSError:
             pass
-    process.wait()
+    try:
+        process.wait()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return _capture_failure_detail("wait/reap failed", exc)
+    return detail
 
 
-def _capture_pane_bytes(args: list[str]) -> bytearray | None:
-    """Read tmux output concurrently, never accumulating beyond the stdout cap."""
+def capture_pane_result(target: str) -> PaneCaptureResult:
+    """Capture bounded pane text, retaining expected external failures."""
     try:
         selector = selectors.DefaultSelector()
-    except OSError:
-        return None
+    except OSError as exc:
+        return _pane_failure(target, _capture_failure_detail("selector failed", exc))
     try:
         process = subprocess.Popen(
-            ["tmux", *args],
+            [
+                "tmux",
+                "capture-pane",
+                "-p",
+                "-S",
+                _CAPTURE_START,
+                "-E",
+                "-",
+                "-t",
+                target,
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-    except (OSError, subprocess.SubprocessError):
-        selector.close()
-        return None
-
-    stdout = process.stdout
-    stderr = process.stderr
+    except (OSError, subprocess.SubprocessError) as exc:
+        _close_selector(selector)
+        return _pane_failure(target, _capture_failure_detail("spawn failed", exc))
+    stdout, stderr = process.stdout, process.stderr
     if stdout is None or stderr is None:
-        _terminate_and_reap(process)
-        selector.close()
-        return None
+        cleanup_detail = _terminate_and_reap(process)
+        close_detail = _close_selector(selector)
+        return _pane_failure(
+            target,
+            cleanup_detail or close_detail or "spawn returned no stdout/stderr pipe",
+        )
 
     output = bytearray()
     deadline = time.monotonic() + _TMUX_TIMEOUT_SECONDS
     hit_limit = False
-    failed = False
+    detail = ""
+    close_detail = ""
     try:
-        selector.register(stdout, selectors.EVENT_READ, "stdout")
-        selector.register(stderr, selectors.EVENT_READ, "stderr")
-        while selector.get_map():
+        try:
+            selector.register(stdout, selectors.EVENT_READ, "stdout")
+            selector.register(stderr, selectors.EVENT_READ, "stderr")
+        except OSError as exc:
+            detail = _capture_failure_detail("selector failed", exc)
+        while selector.get_map() and not detail:
             timeout = deadline - time.monotonic()
             if timeout <= 0:
-                failed = True
+                detail = f"timed out after {_TMUX_TIMEOUT_SECONDS:g} seconds"
                 break
-            events = selector.select(timeout)
+            try:
+                events = selector.select(timeout)
+            except OSError as exc:
+                detail = _capture_failure_detail("selector failed", exc)
+                break
             if not events:
-                failed = True
+                detail = f"timed out after {_TMUX_TIMEOUT_SECONDS:g} seconds"
                 break
             for key, _mask in events:
-                if key.data == "stdout":
-                    remaining = _CAPTURE_BYTE_LIMIT - len(output)
-                    chunk = os.read(key.fd, min(_CAPTURE_READ_SIZE, remaining))
-                    if chunk:
-                        output.extend(chunk)
-                        hit_limit = len(output) == _CAPTURE_BYTE_LIMIT
-                    else:
-                        selector.unregister(key.fileobj)
-                else:  # Drain stderr without retaining it or blocking its producer.
-                    chunk = os.read(key.fd, _CAPTURE_READ_SIZE)
-                    if not chunk:
-                        selector.unregister(key.fileobj)
-                if hit_limit:
+                read_size = (
+                    min(_CAPTURE_READ_SIZE, _CAPTURE_BYTE_LIMIT - len(output))
+                    if key.data == "stdout"
+                    else _CAPTURE_READ_SIZE
+                )
+                try:
+                    chunk = os.read(key.fd, read_size)
+                except OSError as exc:
+                    detail = _capture_failure_detail("read failed", exc)
                     break
-            if hit_limit:
+                if chunk and key.data == "stdout":
+                    output.extend(chunk)
+                    hit_limit = len(output) == _CAPTURE_BYTE_LIMIT
+                elif not chunk:
+                    try:
+                        selector.unregister(key.fileobj)
+                    except OSError as exc:
+                        detail = _capture_failure_detail("selector failed", exc)
+                if hit_limit or detail:
+                    break
+            if hit_limit or detail:
                 break
-    except OSError:
-        failed = True
     finally:
-        selector.close()
+        close_detail = _close_selector(selector)
+    detail = detail or close_detail
 
-    if failed or hit_limit:
-        _terminate_and_reap(process)
+    if detail or hit_limit:
+        cleanup_detail = _terminate_and_reap(process)
         stdout.close()
         stderr.close()
-        return output if hit_limit and not failed else None
+        if hit_limit and not detail and not cleanup_detail:
+            return _pane_success(target, output, truncated=True)
+        return _pane_failure(target, detail or cleanup_detail)
 
     try:
         returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         _terminate_and_reap(process)
-        return None
+        return _pane_failure(
+            target,
+            f"timed out after {_TMUX_TIMEOUT_SECONDS:g} seconds",
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = _capture_failure_detail("wait failed", exc)
+        _terminate_and_reap(process)
+        return _pane_failure(target, detail)
     finally:
         stdout.close()
         stderr.close()
-    return output if returncode == 0 else None
+    if returncode != 0:
+        return _pane_failure(target, f"exited with status {returncode}")
+    return _pane_success(target, output)
 
 
 def capture_pane(target: str) -> str:
-    """Recent scrollback of a tmux pane as bounded text; "" on failure.
+    """Compatibility text-only view of :func:`capture_pane_result`."""
 
-    tmux documents negative `-S` values as history lines and `-E -` as the end
-    of the visible pane. The 2,000-line range covers tmux's default history
-    limit without reading the entirety of a larger user-configured history.
-    Retaining the first 1,048,576 bytes favors the RC environment id
-    printed near server startup.
-    """
-    captured = _capture_pane_bytes(
-        ["capture-pane", "-p", "-S", _CAPTURE_START, "-E", "-", "-t", target]
-    )
-    if captured is None:
-        return ""
-    bounded_text = captured.decode("utf-8", errors="ignore")
-    return "".join(bounded_text.splitlines(keepends=True)[:_CAPTURE_HISTORY_LINES])
+    return capture_pane_result(target).text
 
 
 def _tmux_has_session(session: str) -> bool:
@@ -325,25 +359,6 @@ def _tmux_new_session(session: str, name: str, cmd: str) -> str | None:
         ["new-session", "-d", "-P", "-F", _TARGET_FMT, "-s", session, "-n", name, cmd]
     )
     return _spawned_target(cp)
-
-
-class KillState(Enum):
-    """Observable outcome of killing one tmux target."""
-
-    KILLED = "killed"
-    TARGET_NOT_FOUND = "target-not-found"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True)
-class KillResult:
-    state: KillState
-    target: str
-    detail: str = ""
-
-    @property
-    def success(self) -> bool:
-        return self.state is KillState.KILLED
 
 
 _MISSING_TARGET_PREFIXES = (
@@ -414,52 +429,6 @@ def run_in_tmux(session: str, window: str, cmd: str) -> str | None:
     if _tmux_has_session(session):
         return _tmux_new_window(session, window, cmd)
     return _tmux_new_session(session, window, cmd)
-
-
-class TmuxPane(NamedTuple):
-    """One pane root pid and its enterable session/window target."""
-
-    target: str
-    pid: int
-
-
-@dataclass(frozen=True)
-class ResidencyIssue:
-    """One source preventing a complete tmux-residency inventory."""
-
-    source: str
-    path: str | None
-    detail: str
-
-
-@dataclass(frozen=True)
-class PaneInventory:
-    """Known panes plus whether tmux proved the global list complete."""
-
-    records: tuple[TmuxPane, ...] = ()
-    issues: tuple[ResidencyIssue, ...] = ()
-
-    @property
-    def complete(self) -> bool:
-        return not self.issues
-
-
-@dataclass(frozen=True)
-class ResidencyInventory:
-    """Known pid→target joins plus completeness across tmux and `/proc`."""
-
-    targets: Mapping[int, str] = field(
-        default_factory=lambda: MappingProxyType({}),
-    )
-    issues: tuple[ResidencyIssue, ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "targets", MappingProxyType(dict(self.targets)))
-        object.__setattr__(self, "issues", tuple(self.issues))
-
-    @property
-    def complete(self) -> bool:
-        return not self.issues
 
 
 def list_panes_inventory() -> PaneInventory:
@@ -557,18 +526,6 @@ def residency_targets(pids: Iterable[int]) -> dict[int, str]:
     """Compatibility records-only view of :func:`residency_inventory`."""
 
     return dict(residency_inventory(pids).targets)
-
-
-@dataclass(frozen=True)
-class SessionWindowResult:
-    """First matching pane target plus evidence completeness."""
-
-    target: str | None = None
-    issues: tuple[ResidencyIssue, ...] = ()
-
-    @property
-    def complete(self) -> bool:
-        return not self.issues
 
 
 def find_session_window_result(pids: list[int]) -> SessionWindowResult:

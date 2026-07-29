@@ -189,7 +189,15 @@ def _tmux_windows() -> list[tmux.TmuxWindow]:
 
 
 def _tmux_capture_pane(target: str) -> str:
+    """Compatibility text-only pane capture."""
+
     return tmux.capture_pane(target)
+
+
+def _tmux_capture_pane_result(target: str) -> tmux.PaneCaptureResult:
+    """Typed pane capture used by production RC inventory."""
+
+    return tmux.capture_pane_result(target)
 
 
 def _window_for(path: str) -> tmux.TmuxWindow | None:
@@ -356,7 +364,11 @@ def scan_servers_result(
     windows = window_scan.records
     discovered = process_scan.records
     cache = _environment_ids if environment_cache is None else environment_cache
-    captured_env_ids = cache.resolve(windows, _capture_env_id)
+    environment_resolution = cache.resolve_result(
+        windows,
+        _tmux_capture_pane_result,
+    )
+    captured_env_ids = environment_resolution.environment_ids
 
     by_pid = {p.pid: p for p in discovered}
     managed_pid_set = {w.pid for w in windows if w.pid}
@@ -397,6 +409,7 @@ def scan_servers_result(
     issues = (
         *rc_outcomes.window_inventory_issues(window_scan),
         *rc_outcomes.proc_inventory_issues(process_scan),
+        *rc_outcomes.environment_capture_issues(environment_resolution),
     )
     return RCServerScanResult(tuple(servers), issues)
 
