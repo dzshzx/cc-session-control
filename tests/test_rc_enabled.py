@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import multiprocessing
-from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event
@@ -34,11 +33,11 @@ def _worker(
     try:
         start.wait(timeout=5)
         if operation == "add":
-            result = store.add(value)
+            result = store.add_result(value).value
         elif operation == "remove":
-            result = store.remove(value)
+            result = store.remove_result(value).value
         else:
-            result = store.list()
+            result = store.list_result().value
         results.put(("ok", result))
     except (OSError, UnicodeError) as exc:
         results.put(("error", repr(exc)))
@@ -198,7 +197,7 @@ def test_typed_methods_do_not_convert_programming_errors(tmp_path: Path) -> None
 def test_missing_list_is_created_and_reads_empty(tmp_path: Path) -> None:
     path = tmp_path / "config" / "rc-enabled"
 
-    assert _store(path).list() == []
+    assert _store(path).list_result().value == ()
     assert path.read_bytes() == b""
 
 
@@ -209,16 +208,16 @@ def test_add_remove_toggle_are_canonical_and_preserve_layout(tmp_path: Path) -> 
     path.write_text(f"  # before\n\n{one}/../one/\n# after\n", encoding="utf-8")
     store = _store(path)
 
-    assert store.list() == [str(one)]
-    assert store.contains(str(one / ".")) is True
-    assert store.add(str(one / ".")) is False
-    assert store.add(str(two)) is True
-    assert store.remove(str(one / ".." / "one")) is True
-    assert store.remove(str(one)) is False
-    assert store.toggle(str(two / ".")) is False
-    assert store.toggle(str(one)) is True
+    assert store.list_result().value == (str(one),)
+    assert store.contains_result(str(one / ".")).value is True
+    assert store.add_result(str(one / ".")).value is False
+    assert store.add_result(str(two)).value is True
+    assert store.remove_result(str(one / ".." / "one")).value is True
+    assert store.remove_result(str(one)).value is False
+    assert store.toggle_result(str(two / ".")).value is False
+    assert store.toggle_result(str(one)).value is True
 
-    assert store.list() == [str(one)]
+    assert store.list_result().value == (str(one),)
     assert path.read_text(encoding="utf-8") == f"  # before\n\n# after\n{one}\n"
 
 
@@ -229,9 +228,9 @@ def test_unchanged_operations_do_not_replace_file(tmp_path: Path) -> None:
     store = _store(path)
     inode = path.stat().st_ino
 
-    assert store.list() == [str(project)]
-    assert store.add(str(project)) is False
-    assert store.remove(str(tmp_path / "missing")) is False
+    assert store.list_result().value == (str(project),)
+    assert store.add_result(str(project)).value is False
+    assert store.remove_result(str(tmp_path / "missing")).value is False
 
     assert path.stat().st_ino == inode
     assert path.read_text(encoding="utf-8") == f"# keep\n{project}\n"
@@ -245,12 +244,13 @@ def test_migration_is_once_and_preserves_comments_and_blank_lines(
     path.write_text("# keep\n\nold-name\n/absolute\n", encoding="utf-8")
     store = _store(path, legacy_root)
 
-    assert store.list() == [str(legacy_root / "old-name"), "/absolute"]
+    expected = (str(legacy_root / "old-name"), "/absolute")
+    assert store.list_result().value == expected
     migrated = path.read_bytes()
     inode = path.stat().st_ino
     assert migrated == (f"# keep\n\n{legacy_root / 'old-name'}\n/absolute\n".encode())
 
-    assert store.list() == [str(legacy_root / "old-name"), "/absolute"]
+    assert store.list_result().value == expected
     assert path.stat().st_ino == inode
     assert path.read_bytes() == migrated
 
@@ -266,7 +266,7 @@ def test_concurrent_adds_have_no_duplicate_or_lost_update(tmp_path: Path) -> Non
         [("add", str(first)), ("add", str(first / ".")), ("add", str(second))],
     )
 
-    enabled = _store(path).list()
+    enabled = _store(path).list_result().value
     assert set(enabled) == {str(first), str(second)}
     assert len(enabled) == 2
 
@@ -285,7 +285,7 @@ def test_concurrent_add_and_remove_do_not_resurrect_removed_entry(
         [("add", str(added)), ("remove", str(removed))],
     )
 
-    assert _store(path).list() == [str(added)]
+    assert _store(path).list_result().value == (str(added),)
     assert path.read_text(encoding="utf-8") == f"# keep\n{added}\n"
 
 
@@ -300,42 +300,12 @@ def test_concurrent_migration_is_serialized_and_stable(tmp_path: Path) -> None:
         [("list", ""), ("list", "")],
     )
 
-    expected = [str(legacy_root / "old")]
+    expected = (str(legacy_root / "old"),)
     assert results == [expected, expected]
     assert path.read_text(encoding="utf-8") == f"# keep\n\n{expected[0]}\n"
     inode = path.stat().st_ino
-    assert _store(path, legacy_root).list() == expected
+    assert _store(path, legacy_root).list_result().value == expected
     assert path.stat().st_ino == inode
-
-
-def _assert_failed_update_preserves_original(
-    path: Path,
-    action: Callable[[], object],
-) -> None:
-    original = path.read_bytes()
-    with pytest.raises(OSError):
-        action()
-    assert path.read_bytes() == original
-    assert _temporary_files(path) == []
-
-
-def test_lock_failure_does_not_fall_back_to_unlocked_write(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import cc_session_control.data.rc_enabled as enabled_module
-
-    path = tmp_path / "rc-enabled"
-    path.write_bytes(b"# original\n")
-
-    def fail_lock(_file: object, _operation: int) -> None:
-        raise OSError("lock unavailable")
-
-    monkeypatch.setattr(enabled_module.fcntl, "flock", fail_lock)
-    _assert_failed_update_preserves_original(
-        path,
-        lambda: _store(path).add(str(tmp_path / "new")),
-    )
 
 
 def test_typed_lock_failure_is_uncommitted(
@@ -362,6 +332,7 @@ def test_typed_lock_failure_is_uncommitted(
     assert result.stage is EnabledListStage.LOCK
     assert result.detail == "lock unavailable"
     assert path.read_bytes() == b"# original\n"
+    assert _temporary_files(path) == []
 
 
 def test_typed_create_directory_failure_is_uncommitted(
@@ -459,30 +430,6 @@ def test_typed_create_file_and_lock_release_failures_retain_all_evidence(
     )
 
 
-def test_read_failure_preserves_original(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    path = tmp_path / "rc-enabled"
-    path.write_bytes(b"# original\n")
-    original = path.read_bytes()
-    original_open = Path.open
-
-    def fail_target_read(
-        target: Path, mode: str = "r", *args: object, **kwargs: object
-    ) -> object:
-        if target == path and "r" in mode:
-            raise OSError("read failed")
-        return original_open(target, mode, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", fail_target_read)
-    with pytest.raises(OSError):
-        _store(path).list()
-    with original_open(path, "rb") as stream:
-        assert stream.read() == original
-    assert _temporary_files(path) == []
-
-
 def test_typed_read_failure_is_uncommitted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -508,25 +455,9 @@ def test_typed_read_failure_is_uncommitted(
     assert result.changed is False
     assert result.committed is False
     assert result.value is None
-
-
-def test_temp_write_failure_preserves_original(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import cc_session_control.data.rc_enabled as enabled_module
-
-    path = tmp_path / "rc-enabled"
-    path.write_bytes(b"# original\n")
-
-    def fail_fdopen(*_args: object, **_kwargs: object) -> object:
-        raise OSError("write failed")
-
-    monkeypatch.setattr(enabled_module.os, "fdopen", fail_fdopen)
-    _assert_failed_update_preserves_original(
-        path,
-        lambda: _store(path).add(str(tmp_path / "new")),
-    )
+    with original_open(path, "rb") as stream:
+        assert stream.read() == b"# original\n"
+    assert _temporary_files(path) == []
 
 
 def test_typed_write_failure_is_uncommitted(
@@ -648,24 +579,3 @@ def test_post_commit_unlock_failure_is_failed_but_committed(
     assert result.changed is True
     assert result.committed is True
     assert path.read_bytes() == f"# original\n{new}\n".encode()
-
-
-@pytest.mark.parametrize("boundary", ["fsync", "replace"])
-def test_commit_failure_preserves_original(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    boundary: str,
-) -> None:
-    import cc_session_control.data.rc_enabled as enabled_module
-
-    path = tmp_path / "rc-enabled"
-    path.write_bytes(b"# original\n")
-
-    def fail(*_args: object, **_kwargs: object) -> object:
-        raise OSError(f"{boundary} failed")
-
-    monkeypatch.setattr(enabled_module.os, boundary, fail)
-    _assert_failed_update_preserves_original(
-        path,
-        lambda: _store(path).add(str(tmp_path / "new")),
-    )

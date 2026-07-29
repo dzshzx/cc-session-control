@@ -123,12 +123,12 @@ def test_match_empty_cmdline():
     assert proc._match_rc_cmdline("", "\0\0") is None
 
 
-# --- scan_rc_servers degrades off Linux ------------------------------------
+# --- scan_rc_server_inventory degrades off Linux ---------------------------
 
 
 def test_scan_rc_servers_degrades_without_proc(monkeypatch):
     monkeypatch.setattr(proc, "has_proc", lambda: False)
-    assert proc.scan_rc_servers() == []
+    assert proc.scan_rc_server_inventory().records == ()
 
 
 # --- managed vs external classification (AC5) ------------------------------
@@ -516,20 +516,6 @@ def test_server_scan_retains_mixed_rows_ids_and_pane_capture_issue(monkeypatch):
         )
 
     monkeypatch.setattr(rc, "_tmux_capture_pane_result", capture)
-    monkeypatch.setattr(
-        rc,
-        "_tmux_capture_pane",
-        lambda _target: (_ for _ in ()).throw(
-            AssertionError("production used string-only pane capture"),
-        ),
-    )
-    monkeypatch.setattr(
-        rc,
-        "_capture_env_id",
-        lambda _target: (_ for _ in ()).throw(
-            AssertionError("production used string-only env-id capture"),
-        ),
-    )
 
     result = rc.scan_servers_result(
         window_inventory=WindowInventory(windows),
@@ -621,7 +607,8 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
             )
         ),
     )
-    assert rc.remove_one(project)
+    remove_result = rc.remove_one_result(project)
+    assert remove_result.stop is not None and remove_result.stop.success
     assert removed == [project]
     assert cache.windows == ["@7", "@7"]
 
@@ -630,7 +617,7 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
         "kill_session_result",
         lambda session: rc.tmux.KillResult(rc.tmux.KillState.KILLED, session),
     )
-    assert rc.stop_all()
+    assert rc.stop_all_result().success
     assert cache.all == 2
 
 
@@ -804,7 +791,7 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
     # tmp_path is under the real temp root — neutralize the membership filter.
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
 
-    rows = {p.name: p for p in rc.scan()}
+    rows = {p.name: p for p in rc.scan_result().projects}
     assert rows["proj"].spawn_mode == "new-window"
     assert rows["other"].spawn_mode is None  # key present, mode unset
 
@@ -913,7 +900,7 @@ def test_scan_marks_missing_directory(tmp_path, monkeypatch):
     # tmp_path is under the real temp root — neutralize the membership filter.
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
 
-    rows = {p.directory: p for p in rc.scan()}
+    rows = {p.directory: p for p in rc.scan_result().projects}
     assert set(rows) == {str(alive), gone_enabled, gone_running}
     assert deleted not in rows  # trust-only residue hidden
     assert rows[str(alive)].dir_exists is True

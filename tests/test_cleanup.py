@@ -3,7 +3,7 @@ the no-`/proc` degraded-refuse safety net (AC10).
 
 All filesystem tests monkeypatch `cfg.claude_home` to a tmp dir; the degraded
 path is forced by monkeypatching `proc.has_proc -> False` (so
-`current_determinable()` is False) — never the real `~/.claude`.
+`probe_current_ancestors().complete` is False) — never the real `~/.claude`.
 """
 
 import json
@@ -27,11 +27,12 @@ from cc_session_control.models import AgentJob, Session, SessionProc
 
 @pytest.fixture(autouse=True)
 def _hermetic_liveness(monkeypatch):
-    """Keep the orphan protected-sid self-fetch (H1) off the network/subprocess.
+    """Keep the H1 protected-sid evidence off the network/subprocess.
 
-    `list_orphan_dirs` now consults `liveness.alive_map` (`claude agents --json`)
-    and the registry when not given injected data; stub the subprocess and reset
-    the registry TTL cache so cleanup tests stay hermetic and deterministic.
+    Any self-fetch of fresh liveness (e.g. `execute_*` via
+    `fresh_liveness_inputs`) consults `liveness.alive_map` (`claude agents
+    --json`) and the registry; stub the subprocess and reset the registry TTL
+    cache so cleanup tests stay hermetic and deterministic.
     """
     monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
     monkeypatch.setattr(liveness, "scan_agents", lambda *a, **k: liveness.AgentsScan())
@@ -60,6 +61,21 @@ def _mkdir(base, *parts):
     p = os.path.join(str(base), *parts)
     os.makedirs(p, exist_ok=True)
     return p
+
+
+def _orphan_entries(sessions, **inject) -> list[str]:
+    """Live-seam orphan-dir preview: `build_plan(...).orphan_entries`.
+
+    `list_orphan_dirs` (the old preview-only compatibility wrapper) has been
+    removed; `build_plan` computes the identical `_list_orphan_dirs_for_known`
+    result plus session/zombie/aged candidates we don't care about here.
+    """
+    evidence = liveness.LivenessSnapshot(**inject)
+    return list(
+        cleanup.build_plan(
+            sessions, evidence, now=1_000_000_000.0, transcript_sids=frozenset()
+        ).orphan_entries
+    )
 
 
 def _fresh_execution(
@@ -107,7 +123,7 @@ def test_list_orphan_dirs_sid_keyed_per_dir(tmp_path, monkeypatch):
     _mkdir(tmp_path, "tasks", "orphan-c")
     _mkdir(tmp_path, "uploads", "orphan-d")
 
-    orphans = cleanup.list_orphan_dirs([_make_session(sid=known)])
+    orphans = _orphan_entries([_make_session(sid=known)])
     assert orphans == [
         "file-history/orphan-b",
         "session-env/orphan-a",
@@ -122,7 +138,7 @@ def test_debug_dir_not_treated_as_sid_orphan(tmp_path, monkeypatch):
     _mkdir(tmp_path, "debug", "11111111-2222-3333-4444-555555555555")
     _mkdir(tmp_path, "session-env", "orphan-a")
 
-    orphans = cleanup.list_orphan_dirs([_make_session(sid="some-other-sid")])
+    orphans = _orphan_entries([_make_session(sid="some-other-sid")])
     assert orphans == ["session-env/orphan-a"]
     assert not any(o.startswith("debug/") for o in orphans)
 
@@ -134,7 +150,7 @@ def test_execute_orphan_removals_deletes_listed_keeps_known(tmp_path, monkeypatc
     _mkdir(tmp_path, "session-env", "orphan-a")
     _mkdir(tmp_path, "file-history", "orphan-b")
 
-    entries = cleanup.list_orphan_dirs([_make_session(sid=known)])
+    entries = _orphan_entries([_make_session(sid=known)])
     _fresh_execution(monkeypatch, sessions=[_make_session(sid=known)])
     result = cleanup.execute_orphan_removals(entries)
     assert len(result.completed) == 2
@@ -150,7 +166,7 @@ def test_execute_orphan_removals_deletes_at_most_the_preview(tmp_path, monkeypat
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     _mkdir(tmp_path, "session-env", "ghost-sid")
     inject = dict(session_procs=[], agent_jobs=[], agents_map={}, cur=set())
-    entries = cleanup.list_orphan_dirs([], **inject)
+    entries = _orphan_entries([], **inject)
     assert entries == ["session-env/ghost-sid"]
 
     _mkdir(tmp_path, "session-env", "late-orphan")  # appears AFTER the preview
@@ -192,7 +208,7 @@ def test_orphan_sweep_keeps_live_bg_agent_artifacts(tmp_path, monkeypatch):
     job = _job(live_sid, host_alive=True)
 
     inject = dict(session_procs=[], agent_jobs=[job], agents_map={}, cur=set())
-    assert cleanup.list_orphan_dirs([], **inject) == []
+    assert _orphan_entries([], **inject) == []
     _fresh_execution(monkeypatch, agent_jobs=[job])
     result = cleanup.execute_orphan_removals([f"file-history/{live_sid}"])
     assert len(result.skipped) == 1
@@ -210,7 +226,7 @@ def test_orphan_sweep_keeps_registry_known_sid_without_transcript(
     sp = SessionProc(pid=4242, sid=reg_sid, proc_start="1", proc_alive=False)
 
     inject = dict(session_procs=[sp], agent_jobs=[], agents_map={}, cur=set())
-    assert cleanup.list_orphan_dirs([], **inject) == []
+    assert _orphan_entries([], **inject) == []
     _fresh_execution(monkeypatch, session_procs=[sp])
     result = cleanup.execute_orphan_removals([f"uploads/{reg_sid}"])
     assert len(result.skipped) == 1
@@ -223,7 +239,7 @@ def test_orphan_sweep_removes_genuinely_unknown_dead_sid(tmp_path, monkeypatch):
     _mkdir(tmp_path, "session-env", "ghost-sid")
 
     inject = dict(session_procs=[], agent_jobs=[], agents_map={}, cur=set())
-    assert cleanup.list_orphan_dirs([], **inject) == ["session-env/ghost-sid"]
+    assert _orphan_entries([], **inject) == ["session-env/ghost-sid"]
     _fresh_execution(monkeypatch)
     result = cleanup.execute_orphan_removals(["session-env/ghost-sid"])
     assert result.completed == ["session-env/ghost-sid"]
@@ -239,7 +255,7 @@ def test_orphan_sweep_keeps_alive_map_sid(tmp_path, monkeypatch):
     inject = dict(
         session_procs=[], agent_jobs=[], agents_map={live_sid: 999}, cur=set()
     )
-    assert cleanup.list_orphan_dirs([], **inject) == []
+    assert _orphan_entries([], **inject) == []
     assert os.path.isdir(os.path.join(tmp_path, "tasks", live_sid))
 
 
@@ -426,7 +442,6 @@ def test_build_plan_uses_only_injected_generation_evidence(tmp_path, monkeypatch
         raise AssertionError("plan construction must not reacquire liveness")
 
     monkeypatch.setattr(cleanup.proc, "probe_current_ancestors", unexpected_acquisition)
-    monkeypatch.setattr(cleanup, "fill_liveness_inputs", unexpected_acquisition)
 
     plan = cleanup.build_plan(
         [session],
@@ -470,12 +485,17 @@ def test_prune_refuses_without_proc(tmp_path, monkeypatch):
     assert cleanup.prune_sessions(sessions, max_prompts=0) == []
 
 
-def test_list_and_remove_orphans_refuse_without_proc(tmp_path, monkeypatch):
+def test_remove_orphans_refuses_without_proc(tmp_path, monkeypatch):
+    # The plan-construction side of R10 (`list_orphan_dirs`'s old internal
+    # gate) is covered by test_build_plan_rejects_incomplete_generation_evidence
+    # — production callers (cli_commands._cmd_prune) now check
+    # `liveness.liveness_inputs().complete` themselves before calling
+    # `build_plan`, so there is no longer a preview-only entry point that
+    # silently degrades to an empty list. Only the executor's own fresh-evidence
+    # refusal is exercised here.
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     _mkdir(tmp_path, "session-env", "orphan-a")
     _degrade(monkeypatch)
-    sessions = [_make_session(sid="keep")]
-    assert cleanup.list_orphan_dirs(sessions) == []
     result = cleanup.execute_orphan_removals(["session-env/orphan-a"])
     assert len(result.refused) == 1
     # nothing deleted while degraded
@@ -577,5 +597,5 @@ def test_terminate_refuses_without_proc(monkeypatch):
     monkeypatch.setattr(so.proc, "has_proc", lambda: False)
 
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
-    assert so.terminate_session(s) is False
+    assert so.take_over_result(s.pid, s.proc_start).success is False
     assert killed["n"] == 0  # no SIGTERM fired while current is undeterminable

@@ -95,7 +95,7 @@ class Session:
     status: str = ""  # registry `status` (busy / idle)
     # tmux residency (CONTEXT.md / ADR-0001): non-None means a live pid of this
     # session runs inside a tmux pane; the value is the enterable
-    # "session:window_index" target. Batch-computed in sessions.scan() via
+    # "session:window_index" target. Batch-computed in sessions.scan_result() via
     # tmux.residency_inventory — actions and the ⧉ badge read the SAME field.
     tmux_target: str | None = None
     # False means the global pane or per-pid ancestor inventory was incomplete:

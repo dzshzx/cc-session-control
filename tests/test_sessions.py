@@ -190,7 +190,7 @@ def test_scan_injects_tmux_residency_for_alive_sessions(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sessions_mod.tmux, "residency_inventory", fake_residency)
 
-    rows = {s.sid: s for s in sessions_mod.scan()}
+    rows = {s.sid: s for s in sessions_mod.scan_result().sessions}
 
     assert rows[CLI_SID].tmux_target == "proj1:2"  # alive + pane hit
     assert rows[VSC_SID].tmux_target is None  # alive, bare terminal
@@ -215,7 +215,7 @@ def test_scan_marks_alive_sessions_when_tmux_residency_is_incomplete(
         lambda _pids: sessions_mod.tmux.ResidencyInventory(issues=(issue,)),
     )
 
-    rows = {session.sid: session for session in sessions_mod.scan()}
+    rows = {session.sid: session for session in sessions_mod.scan_result().sessions}
 
     assert rows[CLI_SID].tmux_inventory_complete is False
     assert "lost server connection" in rows[CLI_SID].tmux_inventory_detail
@@ -255,7 +255,7 @@ def test_scan_residency_covers_all_alive_pids_of_a_sid(tmp_path, monkeypatch):
         ),
     )
 
-    rows = {s.sid: s for s in sessions_mod.scan()}
+    rows = {s.sid: s for s in sessions_mod.scan_result().sessions}
     assert rows[CLI_SID].tmux_target == "proj1:3"
 
 
@@ -280,7 +280,7 @@ def test_scan_transcript_only_session_is_dead(tmp_path, monkeypatch):
     monkeypatch.setattr(sessions_mod, "alive_map", lambda: {})
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", lambda: set())
 
-    rows = {s.sid: s for s in sessions_mod.scan()}
+    rows = {s.sid: s for s in sessions_mod.scan_result().sessions}
     s = rows["orphan-sid"]
     assert s.alive is False
     assert s.current is False
@@ -364,7 +364,7 @@ def test_scan_uses_injected_generation_liveness_without_reading_sources(
         lambda _pids: sessions_mod.tmux.ResidencyInventory(),
     )
 
-    rows = sessions_mod.scan(inputs)
+    rows = sessions_mod.scan_result(inputs).sessions
 
     assert len(rows) == 1
     assert rows[0].sid == sid

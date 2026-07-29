@@ -232,7 +232,14 @@ def test_zombie_execution_reports_proc_refusal(tmp_path, monkeypatch):
     target = tmp_path / "sessions" / "7.json"
     target.parent.mkdir()
     target.write_text("{}")
-    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: False)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_current_ancestors",
+        lambda: cleanup.proc.AncestorProbe(
+            frozenset(),
+            (cleanup.proc.ProcIssue("process ancestors", "/proc", "unavailable"),),
+        ),
+    )
 
     result = cleanup.execute_zombie_removals([7])
 
@@ -257,7 +264,11 @@ def test_remove_session_rechecks_liveness_before_deleting(tmp_path, monkeypatch)
         current=False,
         file=str(transcript),
     )
-    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_current_ancestors",
+        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+    )
     monkeypatch.setattr(cleanup.proc, "ancestor_pids", lambda: set())
     monkeypatch.setattr(
         cleanup_liveness.liveness,
@@ -295,7 +306,14 @@ def test_remove_session_retains_proc_issue_without_deleting(tmp_path, monkeypatc
         "/proc/88/stat",
         "permission denied",
     )
-    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: False)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_current_ancestors",
+        lambda: cleanup.proc.AncestorProbe(
+            frozenset(),
+            (cleanup.proc.ProcIssue("process ancestors", "/proc", "unavailable"),),
+        ),
+    )
     monkeypatch.setattr(
         cleanup_liveness.liveness,
         "liveness_inputs",
@@ -408,7 +426,11 @@ def test_session_execution_refuses_real_malformed_registry_before_removal(
     monkeypatch,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
-    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_current_ancestors",
+        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+    )
     monkeypatch.setattr(cleanup.proc, "ancestor_pids", lambda: set())
     transcript = tmp_path / "sid.jsonl"
     transcript.write_text("{}")
@@ -452,7 +474,11 @@ def test_session_execution_refuses_real_agents_nonzero_before_removal(
     monkeypatch,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
-    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_current_ancestors",
+        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+    )
     monkeypatch.setattr(cleanup.proc, "ancestor_pids", lambda: set())
     transcript = tmp_path / "sid.jsonl"
     transcript.write_text("{}")
@@ -497,7 +523,11 @@ def test_session_execution_allows_normal_complete_empty_protection_sources(
     monkeypatch,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
-    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_current_ancestors",
+        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+    )
     monkeypatch.setattr(cleanup.proc, "ancestor_pids", lambda: set())
     transcript = tmp_path / "sid.jsonl"
     transcript.write_text("{}")

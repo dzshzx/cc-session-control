@@ -89,7 +89,11 @@ def test_respawn_result_retains_tmux_failure(monkeypatch):
 
 
 def test_remove_job_refuses_live(monkeypatch):
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        ao.proc,
+        "probe_current_ancestors",
+        lambda: ao.proc.AncestorProbe(frozenset({999})),
+    )
     monkeypatch.setattr(
         ao.liveness,
         "liveness_inputs",
@@ -108,7 +112,11 @@ def test_remove_job_refuses_live(monkeypatch):
 
 def test_remove_job_deletes_settled(tmp_path, monkeypatch):
     monkeypatch.setattr(ao.cfg, "claude_home", tmp_path)
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        ao.proc,
+        "probe_current_ancestors",
+        lambda: ao.proc.AncestorProbe(frozenset({999})),
+    )
     monkeypatch.setattr(
         ao.liveness,
         "liveness_inputs",
@@ -157,7 +165,11 @@ def test_remove_job_refuses_real_agents_failure_before_deleting(
     monkeypatch,
 ):
     monkeypatch.setattr(ao.cfg, "claude_home", tmp_path)
-    monkeypatch.setattr(ao.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        ao.proc,
+        "probe_current_ancestors",
+        lambda: ao.proc.AncestorProbe(frozenset({999})),
+    )
     monkeypatch.setattr(ao.proc, "ancestor_pids", lambda: set())
     job = _make_job()
     state = tmp_path / "jobs" / job.short / "state.json"
@@ -241,10 +253,10 @@ def test_watch_reports_typed_read_failure(tmp_path, monkeypatch):
     assert result.detail == "denied"
 
 
-# --- resume_takeover: routes through the existing resume path ---
+# --- prepare_takeover: routes through the existing resume path ---
 
 
-def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
+def test_prepare_takeover_builds_session_for_existing_resume_path(monkeypatch):
     calls = {"snapshot": 0}
     evidence = liveness.LivenessSnapshot(
         session_procs=(
@@ -279,7 +291,10 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
         host_alive=True,
     )
 
-    s = ao.resume_takeover(job)
+    result = ao.prepare_takeover(job)
+    assert result.state is ao.TakeoverPreparationState.READY
+    s = result.session
+    assert s is not None
     assert s.sid == "sid-take"
     assert s.cwd == "/tmp/proj"
     assert s.pid == 4242
@@ -296,7 +311,7 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
     assert resume_cmd(s) == "csctl resume --take-over sid-take"
 
 
-def test_resume_takeover_dead_worker_no_kill(monkeypatch):
+def test_prepare_takeover_dead_worker_no_kill(monkeypatch):
     monkeypatch.setattr(
         ao.liveness,
         "liveness_inputs",
@@ -315,7 +330,10 @@ def test_resume_takeover_dead_worker_no_kill(monkeypatch):
         lambda pids: (_ for _ in ()).throw(AssertionError("dead: no tmux lookup")),
     )
     job = _make_job(resume_sid="sid-dead", cwd="/tmp/proj")
-    s = ao.resume_takeover(job)
+    result = ao.prepare_takeover(job)
+    assert result.state is ao.TakeoverPreparationState.READY
+    s = result.session
+    assert s is not None
     assert s.alive is False
     assert s.tmux_target is None
     assert resume_cmd(s) == "cd /tmp/proj && claude --resume sid-dead"
@@ -343,13 +361,6 @@ def test_prepare_takeover_refuses_incomplete_tmux_inventory(monkeypatch):
         "find_session_window_result",
         lambda _pids: ao.tmux.SessionWindowResult(issues=(issue,)),
     )
-    monkeypatch.setattr(
-        ao.tmux,
-        "find_session_window",
-        lambda _pids: (_ for _ in ()).throw(
-            AssertionError("records-only wrapper used by takeover")
-        ),
-    )
 
     result = ao.prepare_takeover(_make_job(host_pid=4242, host_alive=True))
 
@@ -359,7 +370,7 @@ def test_prepare_takeover_refuses_incomplete_tmux_inventory(monkeypatch):
     assert "tmux timed out after 5 seconds" in result.detail
 
 
-def test_resume_takeover_compatibility_refusal_returns_no_session(monkeypatch):
+def test_prepare_takeover_refuses_incomplete_liveness_evidence(monkeypatch):
     issue = liveness.LivenessIssue(
         "session registry",
         "/broken/session.json",
@@ -371,8 +382,11 @@ def test_resume_takeover_compatibility_refusal_returns_no_session(monkeypatch):
         lambda: liveness.LivenessSnapshot(issues=(issue,)),
     )
 
-    with pytest.raises(RuntimeError, match="session registry"):
-        ao.resume_takeover(_make_job(host_pid=4242, host_alive=True))
+    result = ao.prepare_takeover(_make_job(host_pid=4242, host_alive=True))
+
+    assert result.state is ao.TakeoverPreparationState.REFUSED
+    assert result.session is None
+    assert "session registry" in result.detail
 
 
 # --- stop_job: only a confirmed-live joined host pid ---
@@ -507,29 +521,6 @@ def test_stop_job_result_maps_take_over_without_second_scan(
     assert result.state is getattr(ao.AgentStopState, expected)
     assert result.pid == 4242
     assert calls == {"snapshot": 1, "take_over": [(4242, "777")]}
-
-
-@pytest.mark.parametrize(
-    ("state", "expected"),
-    [
-        (ao.AgentStopState.STOPPED, True),
-        (ao.AgentStopState.NOT_RUNNING, False),
-        (ao.AgentStopState.REFUSED, False),
-        (ao.AgentStopState.FAILED, False),
-    ],
-)
-def test_stop_job_bool_compatibility_derives_typed_result(
-    state,
-    expected,
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        ao,
-        "stop_job_result",
-        lambda _job: ao.AgentStopResult(state),
-    )
-
-    assert ao.stop_job(_make_job()) is expected
 
 
 # --- job_host: join sid -> sessions/<pid>.json ---

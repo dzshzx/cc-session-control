@@ -130,16 +130,6 @@ def take_over(pid: int, proc_start: str = "") -> TakeOverResult:
     return take_over_result(pid, proc_start).state.value
 
 
-def terminate_session(s: Session) -> bool:
-    """Send SIGTERM via `take_over_result` (which owns the R10 gate + the
-    liveness-cache invalidation — terminating is the one session op that
-    changes `claude agents` liveness; delete/cleanup only touch already-dead
-    sessions, so they don't invalidate)."""
-    if not s.pid:
-        return False
-    return take_over_result(s.pid, s.proc_start).success
-
-
 def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
     """Shared resume recipe: the cwd to enter, the claude argv, and whether
     to kill the old session first.
@@ -406,30 +396,16 @@ def tmux_foreground_cmd(s: Session, fork: bool = False) -> str:
     return f"cd {shlex.quote(cwd)} && {line}" if cwd else line
 
 
-def do_tmux_resume(s: Session, fork: bool = False) -> str | None:
-    """Kill-if-takeover (fork never kills), spawn the resume window in the
-    session's per-project tmux session, and return the exact tmux target;
-    None on failure. Enter/f enter the target afterwards (`TmuxResumeIntent`);
-    R 转后台 spawns it and stays in csctl."""
-    return do_tmux_resume_result(s, fork).target
-
-
 def do_tmux_resume_result(s: Session, fork: bool = False) -> TmuxResumeOutcome:
     """Typed tmux resume outcome retaining probe or spawn failure detail."""
     return _spawn_in_tmux_result(s, fork=fork)
-
-
-def do_tmux_new(directory: str) -> str | None:
-    """Compatibility target-only view of :func:`do_tmux_new_result`."""
-    result = do_tmux_new_result(directory)
-    return result.target if result.success else None
 
 
 def do_tmux_new_result(directory: str) -> tmux.TmuxWriteResult:
     """Start a NEW claude session in `directory`, inside that project's own
     tmux session, retaining the exact create stage and failure detail.
 
-    The 项目-tab Enter key: same skeleton as `do_tmux_resume` but nothing exists
+    The 项目-tab Enter key: same skeleton as `do_tmux_resume_result` but nothing exists
     yet — no kill, no confirm, no R10 gate (no process is terminated). Plain
     `claude` with NO --remote-control (same tradeoff as `tmux_foreground_cmd`:
     every RC process mints a new cloud environment entry). No trust gate

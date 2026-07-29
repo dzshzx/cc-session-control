@@ -243,7 +243,7 @@ def test_tmux_capture_keeps_only_the_first_two_thousand_lines(monkeypatch):
         "for number in range(2025): print(f'line-{number}')",
     )
 
-    captured = tmux.capture_pane("@1")
+    captured = tmux.capture_pane_result("@1").text
 
     assert len(captured.splitlines()) == 2_000
     assert captured.splitlines()[0] == "line-0"
@@ -349,7 +349,7 @@ def test_tmux_capture_drains_large_stderr_and_returns_empty_on_nonzero(monkeypat
         ),
     )
 
-    assert tmux.capture_pane("@1") == ""
+    assert tmux.capture_pane_result("@1").text == ""
     assert processes[0].returncode == 7
 
 
@@ -401,7 +401,7 @@ def test_tmux_capture_spawn_oserror_returns_empty(monkeypatch):
 
     monkeypatch.setattr(tmux.subprocess, "Popen", popen)
 
-    assert tmux.capture_pane("@1") == ""
+    assert tmux.capture_pane_result("@1").text == ""
 
 
 def test_tmux_capture_result_bounds_spawn_failure_detail(monkeypatch):

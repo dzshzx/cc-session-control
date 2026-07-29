@@ -223,8 +223,3 @@ def scan_result(inputs: LivenessSnapshot | None = None) -> SessionScanResult:
     rows = _inject_tmux_residency(rows, idx)
     rows.sort(key=lambda r: r.mtime, reverse=True)
     return SessionScanResult(tuple(rows), inventory.issues, inventory.path_sids)
-
-
-def scan(inputs: LivenessSnapshot | None = None) -> list[Session]:
-    """Compatibility list-only view over :func:`scan_result`."""
-    return list(scan_result(inputs).sessions)

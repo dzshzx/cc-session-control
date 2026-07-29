@@ -151,10 +151,10 @@ def test_probe_pid_enoent_race_is_gone_without_issue(monkeypatch):
     assert result.issue is None
 
 
-# --- proc_starttime: comm-with-parens-and-spaces parsing ---
+# --- read_proc_stat: comm-with-parens-and-spaces parsing ---
 
 
-def test_proc_starttime_parses_field_22_with_spaced_parens_comm(tmp_path, monkeypatch):
+def test_read_proc_stat_parses_field_22_with_spaced_parens_comm(tmp_path, monkeypatch):
     # comm field "(weird (cmd) name)" contains spaces AND nested parens — a naive
     # split()[21] would mis-index. The parser must slice after the LAST ')'.
     fake_pid = 4242
@@ -173,20 +173,20 @@ def test_proc_starttime_parses_field_22_with_spaced_parens_comm(tmp_path, monkey
 
     monkeypatch.setattr(proc, "_PROC", str(tmp_path))
     monkeypatch.setattr(proc, "has_proc", lambda: True)
-    assert proc.proc_starttime(fake_pid) == "987654"
+    assert proc.read_proc_stat(fake_pid).starttime == "987654"
 
 
-def test_proc_starttime_missing_pid_returns_none(tmp_path, monkeypatch):
+def test_read_proc_stat_missing_pid_returns_none_starttime(tmp_path, monkeypatch):
     monkeypatch.setattr(proc, "_PROC", str(tmp_path))
     monkeypatch.setattr(proc, "has_proc", lambda: True)
-    assert proc.proc_starttime(999999) is None
+    assert proc.read_proc_stat(999999).starttime is None
 
 
 # --- pid_alive: zombie vs alive vs reuse ---
 
 
 def test_pid_alive_zombie_no_proc(monkeypatch):
-    # No /proc entry -> proc_starttime None -> not alive.
+    # No /proc entry -> starttime None -> not alive.
     monkeypatch.setattr(
         proc,
         "probe_pid",
@@ -234,7 +234,7 @@ def test_pid_alive_none_pid_is_false():
 
 def test_non_linux_degrades(monkeypatch):
     monkeypatch.setattr(proc, "has_proc", lambda: False)
-    assert proc.proc_starttime(4242) is None
+    assert proc.read_proc_stat(4242).starttime is None
     assert proc.pid_alive(4242, "123") is False
     # ancestor_pids returns only self, so "current" can't be determined.
     import os

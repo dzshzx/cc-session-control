@@ -11,7 +11,7 @@ from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 from ..config import cfg
-from ..models import AgentJob, Session, SessionProc
+from ..models import Session, SessionProc
 from . import liveness, proc, registry, transcripts
 from .age_cleanup import (
     AgeCleanupPlan,
@@ -37,7 +37,6 @@ from .cleanup_anchors import (
     session_removal_anchors as _session_removal_anchors,
 )
 from .cleanup_liveness import (
-    fill_liveness_inputs,
     fresh_liveness_inputs,
     refuse_incomplete_liveness,
 )
@@ -174,35 +173,6 @@ def _list_orphan_dirs_for_known(known: AbstractSet[str]) -> list[str]:
             if name not in known:
                 orphans.append(os.path.join(label, name))
     return sorted(set(orphans))
-
-
-def _gather_known(
-    sessions: Sequence[Session],
-    session_procs: Sequence[SessionProc] | None = None,
-    agent_jobs: Sequence[AgentJob] | None = None,
-    agents_map: Mapping[str, int | None] | None = None,
-    cur: AbstractSet[int] | None = None,
-) -> set[str]:
-    """Resolve protected sids, self-fetching omitted liveness inputs."""
-    session_procs, agent_jobs, agents_map, cur = fill_liveness_inputs(
-        session_procs, agent_jobs, agents_map, cur
-    )
-    return known_sids(sessions, session_procs, agent_jobs, agents_map, cur)
-
-
-def list_orphan_dirs(
-    sessions: Sequence[Session],
-    *,
-    session_procs: Sequence[SessionProc] | None = None,
-    agent_jobs: Sequence[AgentJob] | None = None,
-    agents_map: Mapping[str, int | None] | None = None,
-    cur: AbstractSet[int] | None = None,
-) -> list[str]:
-    """Preview unprotected sid-keyed entries; return none in R10 degraded mode."""
-    if not proc.probe_current_ancestors().complete:
-        return []
-    known = _gather_known(sessions, session_procs, agent_jobs, agents_map, cur)
-    return _list_orphan_dirs_for_known(known)
 
 
 def execute_orphan_removals(

@@ -272,18 +272,6 @@ def prepare_takeover(job: AgentJob) -> TakeoverPreparationResult:
     )
 
 
-def resume_takeover(job: AgentJob) -> Session:
-    """Compatibility Session view of :func:`prepare_takeover`.
-
-    Production takeover decisions consume the typed result directly. Callers of
-    this legacy shape receive no executable Session when preparation is refused.
-    """
-    result = prepare_takeover(job)
-    if result.session is None:
-        raise RuntimeError(result.detail)
-    return result.session
-
-
 # --- stop (live workers only) -------------------------------------------------
 
 
@@ -372,9 +360,3 @@ def stop_job_result(job: AgentJob) -> AgentStopResult:
         pid=pid,
         detail=outcome.detail or "failed to signal background agent host",
     )
-
-
-def stop_job(job: AgentJob) -> bool:
-    """Compatibility bool view of :func:`stop_job_result`."""
-
-    return stop_job_result(job).success

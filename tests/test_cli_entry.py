@@ -435,7 +435,7 @@ def test_rc_rm_real_enabled_list_and_tmux_outcomes(
     project.mkdir()
     monkeypatch.setattr(cfg, "rc_list", tmp_path / "config" / "rc-enabled")
     monkeypatch.setattr(cfg, "rc_session", "isolated-rc")
-    rc.list_add(str(project))
+    rc.list_add_result(str(project))
 
     inventory = {
         "value": tmux.WindowInventory(
@@ -457,9 +457,9 @@ def test_rc_rm_real_enabled_list_and_tmux_outcomes(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert f"Removed and stopped: {project}" in captured.out
-    assert rc.list_enabled() == []
+    assert rc.list_enabled_result().value == ()
 
-    rc.list_add(str(project))
+    rc.list_add_result(str(project))
 
     monkeypatch.setattr(
         tmux,
@@ -474,9 +474,9 @@ def test_rc_rm_real_enabled_list_and_tmux_outcomes(
     captured = capsys.readouterr()
     assert "Removed and stopped" not in captured.out
     assert "failed to stop the RC window" in captured.err
-    assert rc.list_enabled() == []
+    assert rc.list_enabled_result().value == ()
 
-    rc.list_add(str(project))
+    rc.list_add_result(str(project))
     inventory["value"] = tmux.WindowInventory()
     monkeypatch.setattr(
         tmux,
@@ -491,7 +491,7 @@ def test_rc_rm_real_enabled_list_and_tmux_outcomes(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert "Removed from the enabled list (not running)" in captured.out
-    assert rc.list_enabled() == []
+    assert rc.list_enabled_result().value == ()
 
 
 def test_rc_up_empty_success_and_partial_failure(

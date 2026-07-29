@@ -307,19 +307,3 @@ def test_set_window_option_result_retains_target_and_nonzero_detail(
     assert result.state is tmux.TmuxWriteState.FAILED
     assert result.target == "project:7"
     assert result.detail == "permission denied"
-
-
-def test_bool_kill_compatibility_is_derived_from_typed_result(monkeypatch) -> None:
-    monkeypatch.setattr(
-        tmux,
-        "kill_window_result",
-        lambda target: tmux.KillResult(tmux.KillState.KILLED, target),
-    )
-    assert tmux.kill_window("@1") is True
-
-    monkeypatch.setattr(
-        tmux,
-        "kill_window_result",
-        lambda target: tmux.KillResult(tmux.KillState.TARGET_NOT_FOUND, target),
-    )
-    assert tmux.kill_window("@1") is False

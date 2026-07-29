@@ -358,7 +358,11 @@ def test_sessions_short_cleanup_preview_reads_frozen_plan(monkeypatch):
     import cc_session_control.views._sessions_cleanup as cl_mod
     from cc_session_control.data.cleanup import CleanupPlan
 
-    monkeypatch.setattr(cl_mod.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cl_mod.proc,
+        "probe_current_ancestors",
+        lambda: cl_mod.proc.AncestorProbe(frozenset({999})),
+    )
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -417,7 +421,11 @@ def test_t_key_live_confirms_terminal_takeover(monkeypatch):
         sid="sid1", alive=True, current=False, pid=4242, tmux_target="cc:2"
     )
     app, view = _sessions_view_with(monkeypatch, s)
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        sv_mod.proc,
+        "probe_current_ancestors",
+        lambda: sv_mod.proc.AncestorProbe(frozenset({999})),
+    )
     view.handle_key("t")
     assert app.result is None  # blocked on confirm (pull OUT of tmux = takeover)
     assert "终端接回" in app._confirm_messages[-1]
@@ -503,7 +511,11 @@ def test_cleanup_preview_label_limit_uses_terminal_cells(monkeypatch):
     import cc_session_control.views._sessions_cleanup as cleanup_view
     from cc_session_control.data.cleanup import CleanupPlan
 
-    monkeypatch.setattr(cleanup_view.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cleanup_view.proc,
+        "probe_current_ancestors",
+        lambda: cleanup_view.proc.AncestorProbe(frozenset({999})),
+    )
     session = _make_session(label="标" * 40)
     app = FakeApp()
     view = SessionsView(app)
@@ -1182,7 +1194,11 @@ def test_would_take_over_matches_resume_plan():
 def test_sessions_enter_live_confirms_takeover(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        sv_mod.proc,
+        "probe_current_ancestors",
+        lambda: sv_mod.proc.AncestorProbe(frozenset({999})),
+    )
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -1215,7 +1231,11 @@ def test_sessions_enter_dead_resumes_directly():
 def test_sessions_R_live_confirms_relaunch(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        sv_mod.proc,
+        "probe_current_ancestors",
+        lambda: sv_mod.proc.AncestorProbe(frozenset({999})),
+    )
     relaunched = {"n": 0}
     monkeypatch.setattr(
         sv_mod.tui_actions.session_ops,
@@ -1250,7 +1270,7 @@ def test_sessions_R_refuses_resident_session(monkeypatch):
     spawned = {"n": 0}
     monkeypatch.setattr(
         sv_mod.tui_actions.session_ops,
-        "do_tmux_resume",
+        "do_tmux_resume_result",
         lambda s: spawned.__setitem__("n", spawned["n"] + 1) or "proj:1",
     )
     s = _make_session(sid="res", alive=True, current=False, pid=1, tmux_target="proj:9")
@@ -1294,7 +1314,7 @@ def test_sessions_R_degraded_refuses_live_takeover(monkeypatch):
     relaunched = {"n": 0}
     monkeypatch.setattr(
         sv_mod.tui_actions.session_ops,
-        "do_tmux_resume",
+        "do_tmux_resume_result",
         lambda s: relaunched.__setitem__("n", relaunched["n"] + 1) or "proj:1",
     )
     app = FakeApp()
@@ -1723,7 +1743,11 @@ def test_delete_honest_feedback_true_then_false(monkeypatch):
     # Fix 3 / L4: only claim 已删除 when remove_session truly removed something.
     import cc_session_control.views.sessions as sv_mod
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        sv_mod.proc,
+        "probe_current_ancestors",
+        lambda: sv_mod.proc.AncestorProbe(frozenset({999})),
+    )
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -1754,7 +1778,11 @@ def test_delete_failure_does_not_claim_success(monkeypatch, tmp_path):
         RemovalStatus,
     )
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        sv_mod.proc,
+        "probe_current_ancestors",
+        lambda: sv_mod.proc.AncestorProbe(frozenset({999})),
+    )
     failed = CleanupExecution(
         removals=[PathRemoval(tmp_path / "locked", RemovalStatus.FAILED, "denied")]
     )
@@ -1778,7 +1806,11 @@ def test_delete_partial_failure_mentions_removed_path(monkeypatch, tmp_path):
         RemovalStatus,
     )
 
-    monkeypatch.setattr(sv_mod.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        sv_mod.proc,
+        "probe_current_ancestors",
+        lambda: sv_mod.proc.AncestorProbe(frozenset({999})),
+    )
     partial = CleanupExecution(
         removals=[
             PathRemoval(tmp_path / "gone", RemovalStatus.REMOVED),
@@ -1859,7 +1891,11 @@ def test_zombie_sweep_preview_and_confirm(monkeypatch):
     import cc_session_control.views._sessions_cleanup as cl_mod
     from cc_session_control.data.cleanup import CleanupPlan
 
-    monkeypatch.setattr(cl_mod.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cl_mod.proc,
+        "probe_current_ancestors",
+        lambda: cl_mod.proc.AncestorProbe(frozenset({999})),
+    )
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -1911,7 +1947,14 @@ def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
     import cc_session_control.views._sessions_cleanup as cl_mod
     from cc_session_control.data.cleanup import CleanupPlan
 
-    monkeypatch.setattr(cl_mod.proc, "current_determinable", lambda: False)
+    monkeypatch.setattr(
+        cl_mod.proc,
+        "probe_current_ancestors",
+        lambda: cl_mod.proc.AncestorProbe(
+            frozenset(),
+            (cl_mod.proc.ProcIssue("process ancestors", "/proc", "unavailable"),),
+        ),
+    )
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
@@ -2173,7 +2216,11 @@ def test_cleanup_confirmation_reports_partial_failure(monkeypatch, tmp_path):
         RemovalStatus,
     )
 
-    monkeypatch.setattr(cl_mod.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cl_mod.proc,
+        "probe_current_ancestors",
+        lambda: cl_mod.proc.AncestorProbe(frozenset({999})),
+    )
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]

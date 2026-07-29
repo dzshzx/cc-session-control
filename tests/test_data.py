@@ -158,39 +158,6 @@ def test_resume_cmd_quotes_cwd_with_spaces():
     assert cmd == "cd '/tmp/project with space' && claude --resume sid1"
 
 
-# --- D2: terminate_session owns liveness-cache invalidation ---
-
-
-def test_terminate_session_invalidates_cache(monkeypatch):
-    import cc_session_control.actions.session_ops as so
-
-    calls = {"kill": 0, "invalidate": 0}
-    monkeypatch.setattr(
-        so.proc,
-        "probe_current_ancestors",
-        lambda: so.proc.AncestorProbe(frozenset({999})),
-    )
-    monkeypatch.setattr(
-        so.proc,
-        "probe_pid",
-        lambda pid, start: so.proc.PidProbe(pid, True),
-    )
-    monkeypatch.setattr(
-        so.os, "kill", lambda *_: calls.__setitem__("kill", calls["kill"] + 1)
-    )
-    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(
-        so,
-        "invalidate_cache",
-        lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1),
-    )
-
-    s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
-    assert so.terminate_session(s) is True
-    assert calls["kill"] == 1
-    assert calls["invalidate"] == 1
-
-
 # --- take_over: the ONE kill primitive (gate → recheck → SIGTERM → settle) ---
 
 
@@ -366,9 +333,12 @@ def test_residency_targets_batch_join(monkeypatch):
         lambda pid: tmux.proc.AncestorProbe(frozenset(ancestors.get(pid, set()))),
     )
 
-    out = tmux.residency_targets([4242, 4343, 5555])
+    out = tmux.residency_inventory([4242, 4343, 5555])
 
-    assert out == {4242: "proj:1", 4343: "other:2"}  # 5555: no hit -> absent
+    assert dict(out.targets) == {
+        4242: "proj:1",
+        4343: "other:2",
+    }  # 5555: no hit -> absent
     assert calls["panes"] == 1  # one tmux subprocess total
 
 
@@ -380,7 +350,7 @@ def test_residency_targets_empty_pids_skips_tmux(monkeypatch):
         "list_panes_inventory",
         lambda: (_ for _ in ()).throw(AssertionError("no tmux call")),
     )
-    assert tmux.residency_targets([]) == {}
+    assert dict(tmux.residency_inventory([]).targets) == {}
 
 
 def test_residency_targets_tmux_failure_returns_empty(monkeypatch):
@@ -399,11 +369,11 @@ def test_residency_targets_tmux_failure_returns_empty(monkeypatch):
             )
         ),
     )
-    assert tmux.residency_targets([4242]) == {}
+    assert dict(tmux.residency_inventory([4242]).targets) == {}
 
 
 def test_find_session_window_first_hit_over_residency(monkeypatch):
-    # find_session_window is the target-only compatibility view over the typed
+    # find_session_window_result is the typed first-target view over the
     # residency result — first hit in pids order, None on no hit.
     from cc_session_control.data import tmux
 
@@ -412,13 +382,13 @@ def test_find_session_window_first_hit_over_residency(monkeypatch):
         "residency_inventory",
         lambda _pids: tmux.ResidencyInventory({4343: "other:2", 4242: "proj:1"}),
     )
-    assert tmux.find_session_window([4242, 4343]) == "proj:1"
+    assert tmux.find_session_window_result([4242, 4343]).target == "proj:1"
     monkeypatch.setattr(
         tmux,
         "residency_inventory",
         lambda _pids: tmux.ResidencyInventory(),
     )
-    assert tmux.find_session_window([4242]) is None
+    assert tmux.find_session_window_result([4242]).target is None
 
 
 def test_do_tmux_resume_kills_live_non_current(monkeypatch):
@@ -467,7 +437,7 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
         "resolve_execution_session",
         resolve_execution_session,
     )
-    target = so.do_tmux_resume(s)
+    target = so.do_tmux_resume_result(s).target
     assert calls["kill"] == [4242]
     assert target == "proj:1"  # per-project session, exact spawned target
     session, window, cmd = calls["spawn"][0]
@@ -488,7 +458,7 @@ def test_do_tmux_resume_dead_session_no_kill(monkeypatch):
         lambda session, window, cmd: _created_target(so.tmux, f"{session}:0"),
     )
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
-    assert so.do_tmux_resume(s) == "proj:0"
+    assert so.do_tmux_resume_result(s).target == "proj:0"
 
 
 def test_do_tmux_resume_refuses_takeover_when_degraded(monkeypatch):
@@ -504,7 +474,7 @@ def test_do_tmux_resume_refuses_takeover_when_degraded(monkeypatch):
         so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill"))
     )
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
-    assert so.do_tmux_resume(s) is None
+    assert so.do_tmux_resume_result(s).target is None
 
 
 def test_do_tmux_new_spawns_and_returns_target(monkeypatch):
@@ -522,8 +492,9 @@ def test_do_tmux_new_spawns_and_returns_target(monkeypatch):
             or _created_target(so.tmux, f"{session}:0")
         ),
     )
-    target = so.do_tmux_new("/tmp/proj with space")
-    assert target == "proj with space:0"
+    result = so.do_tmux_new_result("/tmp/proj with space")
+    assert result.success is True
+    assert result.target == "proj with space:0"
     session, window, cmd = spawns[0]
     assert session == "proj with space"  # per-project session = dir basename
     assert window == "claude"
@@ -539,7 +510,9 @@ def test_do_tmux_new_spawn_failure_returns_none(monkeypatch):
         "run_in_tmux_result",
         lambda *a: _create_failure(so.tmux),
     )
-    assert so.do_tmux_new("/tmp/proj") is None
+    result = so.do_tmux_new_result("/tmp/proj")
+    assert result.success is False
+    assert result.target is None
 
 
 def test_do_tmux_resume_fork_spawns_fork_window_no_kill(monkeypatch):
@@ -565,7 +538,7 @@ def test_do_tmux_resume_fork_spawns_fork_window_no_kill(monkeypatch):
     s = _make_session(
         sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242
     )
-    assert so.do_tmux_resume(s, fork=True) == "proj:2"
+    assert so.do_tmux_resume_result(s, fork=True).target == "proj:2"
     assert calls["kill"] == 0  # fork leaves the original running
     session, window, cmd = calls["tmux"]
     assert session == "proj"
@@ -611,7 +584,7 @@ def test_run_in_tmux_reports_new_window_failure(monkeypatch):
 
     monkeypatch.setattr(tmux.subprocess, "run", fake_tmux)
 
-    assert tmux.run_in_tmux("rc", "proj", "cmd") is None
+    assert tmux.run_in_tmux_result("rc", "proj", "cmd").success is False
 
 
 def test_run_in_tmux_reports_new_session_failure(monkeypatch):
@@ -626,7 +599,7 @@ def test_run_in_tmux_reports_new_session_failure(monkeypatch):
 
     monkeypatch.setattr(tmux.subprocess, "run", fake_tmux)
 
-    assert tmux.run_in_tmux("rc", "proj", "cmd") is None
+    assert tmux.run_in_tmux_result("rc", "proj", "cmd").success is False
 
 
 def test_run_in_tmux_returns_printed_target(monkeypatch):
@@ -642,7 +615,7 @@ def test_run_in_tmux_returns_printed_target(monkeypatch):
 
     monkeypatch.setattr(tmux.subprocess, "run", fake_tmux)
 
-    assert tmux.run_in_tmux("proj", "claude", "cmd") == "proj:3"
+    assert tmux.run_in_tmux_result("proj", "claude", "cmd").target == "proj:3"
 
 
 def test_session_name_for_sanitizes_tmux_separators():

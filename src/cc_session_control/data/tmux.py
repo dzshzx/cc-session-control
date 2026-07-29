@@ -129,8 +129,8 @@ def _pane_success(
 def list_windows_inventory(session: str) -> WindowInventory:
     """Typed window inventory retaining external and malformed evidence.
 
-    ONE tmux round-trip feeds both project↔window joins (`rc.scan`) and
-    managed-server classification (`rc.scan_servers`)."""
+    ONE tmux round-trip feeds both project↔window joins (`rc.scan_result`) and
+    managed-server classification (`rc.scan_servers_result`)."""
     invocation = _tmux_run_result(["list-windows", "-t", session, "-F", _WINDOWS_FMT])
     cp = invocation.completed
     if cp is None:
@@ -175,17 +175,6 @@ def list_windows_inventory(session: str) -> WindowInventory:
             )
         )
     return WindowInventory(tuple(out), tuple(issues))
-
-
-def list_windows_meta(session: str) -> list[TmuxWindow]:
-    """Compatibility records-only view of :func:`list_windows_inventory`."""
-
-    return list(list_windows_inventory(session).records)
-
-
-def set_window_option(target: str, option: str, value: str) -> bool:
-    """Compatibility bool view of :func:`set_window_option_result`."""
-    return set_window_option_result(target, option, value).success
 
 
 def set_window_option_result(
@@ -343,12 +332,6 @@ def capture_pane_result(target: str) -> PaneCaptureResult:
     return _pane_success(target, output)
 
 
-def capture_pane(target: str) -> str:
-    """Compatibility text-only view of :func:`capture_pane_result`."""
-
-    return capture_pane_result(target).text
-
-
 # -P -F makes tmux print the exact target of the window it just created, so
 # callers enter THAT window even when names collide (no select-by-name guess).
 _TARGET_FMT = "#{session_name}:#{window_index}"
@@ -414,19 +397,9 @@ def kill_window_result(target: str) -> KillResult:
     return _kill_result(["kill-window", "-t", target], target)
 
 
-def kill_window(target: str) -> bool:
-    """Compatibility bool view of :func:`kill_window_result`."""
-    return kill_window_result(target).success
-
-
 def kill_session_result(session: str) -> KillResult:
     """Kill one session while distinguishing absence from external failure."""
     return _kill_result(["kill-session", "-t", session], session)
-
-
-def kill_session(session: str) -> bool:
-    """Compatibility bool view of :func:`kill_session_result`."""
-    return kill_session_result(session).success
 
 
 def session_name_for(cwd: str) -> str:
@@ -438,12 +411,6 @@ def session_name_for(cwd: str) -> str:
     base = cwd.rstrip("/").rsplit("/", 1)[-1] if cwd else ""
     name = base.replace(".", "-").replace(":", "-").strip()
     return name or "claude"
-
-
-def run_in_tmux(session: str, window: str, cmd: str) -> str | None:
-    """Compatibility target-only view of :func:`run_in_tmux_result`."""
-    result = run_in_tmux_result(session, window, cmd)
-    return result.target if result.success else None
 
 
 def run_in_tmux_result(session: str, window: str, cmd: str) -> TmuxWriteResult:
@@ -515,12 +482,6 @@ def list_panes_inventory() -> PaneInventory:
     return PaneInventory(tuple(out), tuple(issues))
 
 
-def _tmux_list_all_panes() -> list[tuple[str, int]]:
-    """Compatibility records-only view of :func:`list_panes_inventory`."""
-
-    return list(list_panes_inventory().records)
-
-
 def window_containing(
     panes: Sequence[tuple[str, int]],
     ancestors: set[int],
@@ -561,12 +522,6 @@ def residency_inventory(pids: Iterable[int]) -> ResidencyInventory:
     return ResidencyInventory(out, tuple(issues))
 
 
-def residency_targets(pids: Iterable[int]) -> dict[int, str]:
-    """Compatibility records-only view of :func:`residency_inventory`."""
-
-    return dict(residency_inventory(pids).targets)
-
-
 def find_session_window_result(pids: list[int]) -> SessionWindowResult:
     """Typed first-target convenience over :func:`residency_inventory`."""
 
@@ -575,12 +530,6 @@ def find_session_window_result(pids: list[int]) -> SessionWindowResult:
         if pid in inventory.targets:
             return SessionWindowResult(inventory.targets[pid], inventory.issues)
     return SessionWindowResult(issues=inventory.issues)
-
-
-def find_session_window(pids: list[int]) -> str | None:
-    """Compatibility target-only view of :func:`find_session_window_result`."""
-
-    return find_session_window_result(pids).target
 
 
 def select_window(target: str) -> bool:

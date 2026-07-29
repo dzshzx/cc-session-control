@@ -140,7 +140,7 @@ def test_configured_base_symlink_is_legal_but_retarget_is_refused(
         anchors=plan.aged_anchors,
     )
 
-    assert result.path_refusals
+    assert result.refused
     assert outside.read_text() == "keep"
     assert target.read_text() == "old"
 
@@ -203,7 +203,7 @@ def test_canonical_ancestor_replaced_by_symlink_is_refused(
         anchors=plan.aged_anchors,
     )
 
-    assert result.path_refusals
+    assert result.refused
     assert sentinel.read_text() == "keep"
     assert (saved / "claude" / "shell-snapshots" / "old").exists()
 
@@ -231,7 +231,7 @@ def test_root_inode_replacement_is_refused(tmp_path, monkeypatch):
         anchors=plan.aged_anchors,
     )
 
-    assert result.path_refusals
+    assert result.refused
     assert "identity" in result.refused[0].reason
     assert sentinel.read_text() == "keep"
     assert (saved / "old").exists()
@@ -257,7 +257,7 @@ def test_target_inode_and_type_replacement_is_refused(tmp_path, monkeypatch):
         anchors=plan.aged_anchors,
     )
 
-    assert result.path_refusals
+    assert result.refused
     assert "identity or type" in result.refused[0].reason
     assert sentinel.read_text() == "keep"
 
@@ -358,7 +358,7 @@ def test_directory_removal_refuses_without_symlink_safe_rmtree(
         anchors=plan.aged_anchors,
     )
 
-    assert result.path_refusals
+    assert result.refused
     assert "fd-safe directory removal is unavailable" in result.refused[0].reason
     assert sentinel.read_text() == "keep"
 
@@ -383,7 +383,7 @@ def test_removal_refuses_when_dir_fd_capability_cannot_be_proven(
         anchors=plan.aged_anchors,
     )
 
-    assert result.path_refusals
+    assert result.refused
     assert "fd-safe removal unavailable" in result.refused[0].reason
     assert target.read_text() == "keep"
 
@@ -391,7 +391,11 @@ def test_removal_refuses_when_dir_fd_capability_cannot_be_proven(
 def test_cleanup_plan_pins_every_cleanup_category(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
     monkeypatch.setattr(cfg, "cleanup_age_days", 14)
-    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_current_ancestors",
+        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+    )
     now = time.time()
     transcript = cfg.projects_root / "project" / "session-sid.jsonl"
     transcript.parent.mkdir(parents=True)
@@ -425,7 +429,11 @@ def test_orphan_execution_refuses_replaced_base_and_preserves_external(
     monkeypatch,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_current_ancestors",
+        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+    )
     base = cfg.session_env_dir
     (base / "orphan").mkdir(parents=True)
     plan = cleanup.build_plan(
@@ -457,7 +465,7 @@ def test_orphan_execution_refuses_replaced_base_and_preserves_external(
         anchors=plan.orphan_anchors,
     )
 
-    assert result.path_refusals
+    assert result.refused
     assert sentinel.read_text() == "keep"
     assert (saved / "orphan").exists()
 
@@ -467,7 +475,11 @@ def test_zombie_execution_refuses_root_inode_replacement(
     monkeypatch,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_current_ancestors",
+        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+    )
     proc = SessionProc(pid=77, sid="dead", proc_alive=False)
     target = cfg.sessions_dir / "77.json"
     target.parent.mkdir(parents=True)
@@ -493,7 +505,7 @@ def test_zombie_execution_refuses_root_inode_replacement(
         anchors=plan.zombie_anchors,
     )
 
-    assert result.path_refusals
+    assert result.refused
     assert replacement.read_text() == "keep"
     assert (saved / "77.json").exists()
 
@@ -517,7 +529,7 @@ def test_refused_fd_walk_closes_every_descriptor(tmp_path, monkeypatch):
             now=now,
             anchors=plan.aged_anchors,
         )
-        assert result.path_refusals
+        assert result.refused
     after = len(os.listdir("/proc/self/fd"))
 
     assert after == before
@@ -528,7 +540,11 @@ def test_remove_agent_pins_before_fresh_liveness_and_refuses_base_swap(
     monkeypatch,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    monkeypatch.setattr(agent_ops.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        agent_ops.proc,
+        "probe_current_ancestors",
+        lambda: agent_ops.proc.AncestorProbe(frozenset({999})),
+    )
     job = AgentJob(
         short="jobshort",
         sid="session-sid",
@@ -550,7 +566,7 @@ def test_remove_agent_pins_before_fresh_liveness_and_refuses_base_swap(
     monkeypatch.setattr(agent_ops.liveness, "liveness_inputs", fresh_after_swap)
     result = agent_ops.remove_job(job)
 
-    assert result.path_refusals
+    assert result.refused
     assert sentinel.read_text() == "keep"
     assert (saved / job.short).exists()
 
@@ -560,7 +576,11 @@ def test_remove_session_pins_before_fresh_liveness_and_refuses_parent_swap(
     monkeypatch,
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    monkeypatch.setattr(cleanup.proc, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        cleanup.proc,
+        "probe_current_ancestors",
+        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+    )
     transcript = cfg.projects_root / "project" / "session-sid.jsonl"
     transcript.parent.mkdir(parents=True)
     transcript.write_text("{}")
@@ -583,6 +603,6 @@ def test_remove_session_pins_before_fresh_liveness_and_refuses_parent_swap(
     )
     result = cleanup.remove_session(target)
 
-    assert result.path_refusals
+    assert result.refused
     assert sentinel.read_text() == "keep"
     assert (saved / transcript.name).exists()

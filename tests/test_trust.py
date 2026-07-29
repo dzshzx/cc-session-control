@@ -163,7 +163,7 @@ def test_scan_includes_inherited_subdir(tmp_path, monkeypatch):
         },
     )
 
-    rows = {p.directory: p for p in rc.scan()}
+    rows = {p.directory: p for p in rc.scan_result().projects}
     assert str(sub) in rows and str(parent) in rows
     assert rows[str(sub)].trusted is True
     assert rows[str(sub)].name == "new-proj"
@@ -181,7 +181,7 @@ def test_scan_excludes_untrusted_entry(tmp_path, monkeypatch):
         },
     )
 
-    assert rc.scan() == []
+    assert rc.scan_result().projects == []
 
 
 def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
@@ -252,9 +252,9 @@ def test_scan_drops_temp_root_and_subtree(tmp_path, monkeypatch):
         temp_roots={str(troot)},
     )
 
-    assert rc.scan() == []
+    assert rc.scan_result().projects == []
     # Trust itself is NOT touched — the start gate still passes.
-    assert rc.is_trusted(str(sub)) is True
+    assert rc.trust_decision(str(sub)) is TrustDecision.TRUSTED
 
 
 def test_scan_keeps_enabled_temp_project(tmp_path, monkeypatch):
@@ -271,7 +271,7 @@ def test_scan_keeps_enabled_temp_project(tmp_path, monkeypatch):
         temp_roots={str(troot)},
     )
 
-    rows = {p.directory for p in rc.scan()}
+    rows = {p.directory for p in rc.scan_result().projects}
     assert rows == {str(sub)}
 
 
@@ -308,7 +308,7 @@ def test_scan_keeps_temp_project_with_rc_window(tmp_path, monkeypatch):
         ),
     )
 
-    rows = {p.directory: p for p in rc.scan()}
+    rows = {p.directory: p for p in rc.scan_result().projects}
     assert set(rows) == {str(sub)}
     assert rows[str(sub)].status == "running"
 
@@ -327,7 +327,7 @@ def test_scan_temp_root_does_not_cover_sibling(tmp_path, monkeypatch):
         temp_roots={str(troot)},
     )
 
-    assert {p.directory for p in rc.scan()} == {str(sibling)}
+    assert {p.directory for p in rc.scan_result().projects} == {str(sibling)}
 
 
 # --- rc-enabled migration (legacy short names → absolute paths) -------------
@@ -335,9 +335,12 @@ def test_scan_temp_root_does_not_cover_sibling(tmp_path, monkeypatch):
 
 def test_migrate_lines_resolves_against_legacy_root(monkeypatch):
     from cc_session_control.data import rc
+    from cc_session_control.data.rc_enabled import migrate_lines
 
     monkeypatch.setenv("CSCTL_WORKSPACE", "/srv/projects")
-    out, changed = rc._migrate_lines(["# comment", "", "foo", "/abs/path", "a/b"])
+    out, changed = migrate_lines(
+        ["# comment", "", "foo", "/abs/path", "a/b"], rc._legacy_workspace_root
+    )
     assert changed is True
     assert out == [
         "# comment",
@@ -350,9 +353,10 @@ def test_migrate_lines_resolves_against_legacy_root(monkeypatch):
 
 def test_migrate_lines_idempotent():
     from cc_session_control.data import rc
+    from cc_session_control.data.rc_enabled import migrate_lines
 
     lines = ["# c", "/abs/one", "", "/abs/two"]
-    out, changed = rc._migrate_lines(lines)
+    out, changed = migrate_lines(lines, rc._legacy_workspace_root)
     assert changed is False
     assert out == lines
 
@@ -366,10 +370,13 @@ def test_list_enabled_migrates_rewrites_once_and_keeps_comments(tmp_path, monkey
     (tmp_path / "rc-enabled").write_text("# keep me\nfoo\n/abs/bar\n")
 
     migrated_foo = str(tmp_path / "ws" / "foo")
-    assert rc.list_enabled() == [migrated_foo, "/abs/bar"]
+    assert list(rc.list_enabled_result().value) == [migrated_foo, "/abs/bar"]
     content = (tmp_path / "rc-enabled").read_text()
     assert content == f"# keep me\n{migrated_foo}\n/abs/bar\n"
-    assert rc.list_enabled() == [migrated_foo, "/abs/bar"]  # stable re-read
+    assert list(rc.list_enabled_result().value) == [
+        migrated_foo,
+        "/abs/bar",
+    ]  # stable re-read
 
 
 def test_list_rm_keeps_comments(tmp_path, monkeypatch):
@@ -379,5 +386,5 @@ def test_list_rm_keeps_comments(tmp_path, monkeypatch):
     monkeypatch.setattr(rc.cfg, "rc_list", tmp_path / "rc-enabled")
     (tmp_path / "rc-enabled").write_text("# note\n/a\n/b\n")
 
-    rc.list_rm("/a")
+    rc.list_rm_result("/a")
     assert (tmp_path / "rc-enabled").read_text() == "# note\n/b\n"

@@ -112,10 +112,6 @@ class CleanupExecution:
         return [item for item in self.removals if item.status is RemovalStatus.FAILED]
 
     @property
-    def path_refusals(self) -> list[PathRemoval]:
-        return [item for item in self.removals if item.status is RemovalStatus.REFUSED]
-
-    @property
     def incomplete(self) -> bool:
         """Whether a requested target was blocked, skipped, or failed."""
         return bool(self.failed or self.skipped or self.refused or self.issues)

@@ -27,7 +27,7 @@ from .project_settings import (
     read_rc_at_startup,
     write_rc_at_startup,
 )
-from .rc_enabled import EnabledListResult, EnabledListStore, migrate_lines
+from .rc_enabled import EnabledListResult, EnabledListStore
 from .rc_outcomes import (
     ProjectTrustResult,
     RCScanResult,
@@ -63,12 +63,6 @@ def _legacy_workspace_root() -> str:
     return os.getcwd()
 
 
-def _migrate_lines(lines: list[str]) -> tuple[list[str], bool]:
-    """Compatibility wrapper for legacy migration tests."""
-
-    return migrate_lines(lines, _legacy_workspace_root)
-
-
 def _enabled_store() -> EnabledListStore:
     return EnabledListStore(cfg.rc_list, _legacy_workspace_root)
 
@@ -77,37 +71,16 @@ def list_enabled_result() -> EnabledListResult[tuple[str, ...]]:
     return _enabled_store().list_result()
 
 
-def list_enabled() -> list[str]:
-    return _enabled_store().list()
-
-
-def list_has(path: str) -> bool:
-    return _enabled_store().contains(path)
-
-
 def list_add_result(path: str) -> EnabledListResult[bool]:
     return _enabled_store().add_result(path)
-
-
-def list_add(path: str) -> None:
-    _enabled_store().add(path)
 
 
 def list_rm_result(path: str) -> EnabledListResult[bool]:
     return _enabled_store().remove_result(path)
 
 
-def list_rm(path: str) -> bool:
-    return _enabled_store().remove(path)
-
-
 def toggle_autostart_result(path: str) -> EnabledListResult[bool]:
     return _enabled_store().toggle_result(path)
-
-
-def toggle_autostart(path: str) -> bool:
-    """Toggle project in the autostart list. Returns new state."""
-    return _enabled_store().toggle(path)
 
 
 def _load_projects() -> Mapping[str, Mapping[str, object]]:
@@ -155,14 +128,6 @@ def _is_temp_path(path: str) -> bool:
     return False
 
 
-def trusted_projects() -> list[str]:
-    """Absolute paths of every effectively-trusted claude.json project entry.
-
-    Membership base of the 项目 tab. Directory existence and residue handling
-    stay in `scan()` (unchanged split)."""
-    return sorted(_trusted_in(_load_projects()))
-
-
 def project_trust(path: str) -> ProjectTrustResult:
     """Effective trust plus typed settings evidence."""
 
@@ -177,12 +142,6 @@ def trust_decision(path: str) -> TrustDecision:
     return project_trust(path).decision
 
 
-def is_trusted(path: str) -> bool:
-    """Compatibility bool; unavailable evidence fails closed."""
-
-    return trust_decision(path) is TrustDecision.TRUSTED
-
-
 def _basename(path: str) -> str:
     """Display name derived from the path — NEVER an identity key."""
     return os.path.basename(path.rstrip("/")) or path
@@ -195,12 +154,6 @@ def _tmux_window_inventory() -> tmux.WindowInventory:
     """Typed RC-session window inventory used by production decisions."""
 
     return tmux.list_windows_inventory(cfg.rc_session)
-
-
-def _tmux_capture_pane(target: str) -> str:
-    """Compatibility text-only pane capture."""
-
-    return tmux.capture_pane(target)
 
 
 def _tmux_capture_pane_result(target: str) -> tmux.PaneCaptureResult:
@@ -305,23 +258,7 @@ def scan_result(
     )
 
 
-def scan() -> list[RCProject]:
-    """Compatibility list-only scan; new surfaces use ``scan_result``."""
-
-    return scan_result().projects
-
-
 order_by_activity = rc_outcomes.order_by_activity
-
-
-def _capture_env_id(target: str) -> str:
-    """Grep an `env_*` cloud id from a managed server's pane output, or "".
-
-    The project RC server leaves zero structured footprint; its cloud env id is
-    only printed to stdout (`environment=env_…`). This is the single local
-    observation that environment reconciliation can persist.
-    """
-    return rc_environment.extract_env_id(_tmux_capture_pane(target))
 
 
 def scan_servers_result(
@@ -521,13 +458,6 @@ def remove_one_result(path: str) -> RemoveResult:
     return RemoveResult(enabled_list, stop_one_result(path))
 
 
-def remove_one(path: str) -> bool:
-    """Remove one project from autostart and stop its managed RC window."""
-
-    result = remove_one_result(path)
-    return result.stop is not None and result.stop.success
-
-
 def stop_all_result() -> StopAllResult:
     """Stop the configured RC tmux session without conflating absence/failure."""
 
@@ -544,18 +474,6 @@ def stop_all_result() -> StopAllResult:
     return StopAllResult(StopState.FAILED, cfg.rc_session, kill_result.detail)
 
 
-def stop_all() -> bool:
-    """Compatibility bool view of :func:`stop_all_result`."""
-
-    return stop_all_result().success
-
-
-def start_many(projects: list[str]) -> int:
-    """Compatibility count-only view of ``start_many_result``."""
-
-    return start_many_result(projects).started
-
-
 def start_many_result(projects: list[str]) -> StartManyResult:
     """Start a batch while retaining trust-unavailable refusals."""
 
@@ -568,11 +486,6 @@ def start_many_result(projects: list[str]) -> StartManyResult:
         results.append(result)
         any_target_created = any_target_created or result.target is not None
     return rc_outcomes.summarize_starts(results)
-
-
-def start_all_listed() -> int:
-    """Start every project currently enabled in the autostart list."""
-    return start_all_listed_result().started
 
 
 def start_all_listed_result() -> StartManyResult:

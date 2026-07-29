@@ -299,17 +299,11 @@ class EnabledListStore:
         self._legacy_root = legacy_root
         self._lock_path = path.with_name(f".{path.name}.lock")
 
-    def list(self) -> list[str]:
-        return list(self._legacy_value(self.list_result()))
-
     def list_result(self) -> EnabledListResult[tuple[str, ...]]:
         return self._update_result(
             EnabledListOperation.LIST,
             lambda lines: (lines, tuple(_path_lines(lines))),
         )
-
-    def contains(self, path: str) -> bool:
-        return self._legacy_value(self.contains_result(path))
 
     def contains_result(self, path: str) -> EnabledListResult[bool]:
         canonical = _canonical(path)
@@ -317,9 +311,6 @@ class EnabledListStore:
             EnabledListOperation.CONTAINS,
             lambda lines: (lines, canonical in _path_lines(lines)),
         )
-
-    def add(self, path: str) -> bool:
-        return self._legacy_value(self.add_result(path))
 
     def add_result(self, path: str) -> EnabledListResult[bool]:
         canonical = _canonical(path)
@@ -331,9 +322,6 @@ class EnabledListStore:
 
         return self._update_result(EnabledListOperation.ADD, add_path)
 
-    def remove(self, path: str) -> bool:
-        return self._legacy_value(self.remove_result(path))
-
     def remove_result(self, path: str) -> EnabledListResult[bool]:
         canonical = _canonical(path)
 
@@ -342,9 +330,6 @@ class EnabledListStore:
             return updated, updated != lines
 
         return self._update_result(EnabledListOperation.REMOVE, remove_path)
-
-    def toggle(self, path: str) -> bool:
-        return self._legacy_value(self.toggle_result(path))
 
     def toggle_result(self, path: str) -> EnabledListResult[bool]:
         canonical = _canonical(path)
@@ -450,14 +435,6 @@ class EnabledListStore:
             stage,
             detail,
         )
-
-    @staticmethod
-    def _legacy_value(result: EnabledListResult[_T]) -> _T:
-        if not result.success:
-            raise OSError(result.detail)
-        if result.value is None:
-            raise RuntimeError("successful enabled-list result has no value")
-        return result.value
 
     def _ensure_file(self) -> None:
         try:

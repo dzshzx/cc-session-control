@@ -110,28 +110,6 @@ def has_proc() -> bool:
     return os.path.isdir(_PROC)
 
 
-def current_determinable() -> bool:
-    """Compatibility bool view of typed current-ancestor evidence.
-
-    Public safety decisions consume :func:`probe_current_ancestors` directly so
-    they retain paths and failure details instead of flattening them to False.
-    """
-    return probe_current_ancestors().complete
-
-
-def pid_exists(pid: int | None) -> bool:
-    """Bare `/proc/<pid>` existence — no starttime / pid-reuse defense.
-
-    For scrubbing externally-reported pids (e.g. `claude agents --json`) where
-    no recorded procStart exists to compare against. Deliberately does NOT
-    check comm/cmdline (a claude process may exec under another name). Always
-    False without `/proc`, so callers must skip scrubbing in degraded mode.
-    """
-    if not pid:
-        return False
-    return os.path.isdir(f"{_PROC}/{pid}")
-
-
 def _malformed_stat(pid: int, path: str, detail: str) -> ProcStatRead:
     return ProcStatRead(
         pid=pid,
@@ -209,11 +187,6 @@ def probe_pid(pid: int | None, proc_start: str | None) -> PidProbe:
     return PidProbe(pid=pid, alive=alive, stat=stat)
 
 
-def proc_starttime(pid: int) -> str | None:
-    """Compatibility value-only view of :func:`read_proc_stat`."""
-    return read_proc_stat(pid).starttime
-
-
 def pid_alive(pid: int | None, proc_start: str | None) -> bool:
     """Compatibility bool view; unknown evidence is conservatively False."""
     return probe_pid(pid, proc_start).alive is True
@@ -273,11 +246,6 @@ def probe_ancestors(start_pid: int) -> AncestorProbe:
 def probe_current_ancestors() -> AncestorProbe:
     """Typed ancestor evidence for the csctl process."""
     return probe_ancestors(os.getpid())
-
-
-def ancestors_of(start_pid: int) -> set[int]:
-    """Compatibility set-only view of :func:`probe_ancestors`."""
-    return set(probe_ancestors(start_pid).pids)
 
 
 def ancestor_pids() -> set[int]:
@@ -446,9 +414,3 @@ def scan_rc_server_inventory() -> ProcRCInventory:
             issues.append(issue)
         servers.append(ProcRC(pid=pid, name=match.name, cwd=cwd or match.cwd))
     return ProcRCInventory(tuple(servers), tuple(issues))
-
-
-def scan_rc_servers() -> list[ProcRC]:
-    """Compatibility records-only view of :func:`scan_rc_server_inventory`."""
-
-    return list(scan_rc_server_inventory().records)

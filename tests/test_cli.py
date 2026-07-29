@@ -507,7 +507,11 @@ def test_prune_sweep_zombies_apply_keeps_alive_and_current(
         with open(os.path.join(sessions_dir, f"{pid}.json"), "w") as fh:
             json.dump({"pid": pid, "sessionId": "A", "procStart": str(pid)}, fh)
 
-    monkeypatch.setattr(proc_mod, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        proc_mod,
+        "probe_current_ancestors",
+        lambda: proc_mod.AncestorProbe(frozenset({999})),
+    )
     monkeypatch.setattr(proc_mod, "ancestor_pids", lambda: set())
     monkeypatch.setattr(proc_mod, "pid_alive", lambda pid, ps: pid == 710575)
     monkeypatch.setattr(
@@ -614,7 +618,11 @@ def test_prune_apply_reports_incomplete_liveness_and_preserves_target(
     malformed.write_text("{bad json")
     completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
     monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
-    monkeypatch.setattr(proc_mod, "current_determinable", lambda: True)
+    monkeypatch.setattr(
+        proc_mod,
+        "probe_current_ancestors",
+        lambda: proc_mod.AncestorProbe(frozenset({999})),
+    )
     monkeypatch.setattr(proc_mod, "ancestor_pids", lambda: set())
     registry.invalidate_cache()
     liveness.invalidate_cache()

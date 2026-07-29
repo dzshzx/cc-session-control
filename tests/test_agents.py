@@ -523,8 +523,14 @@ def test_s_key_refuses_dead_worker(monkeypatch):
     stopped = {"n": 0}
     monkeypatch.setattr(
         av_mod.agent_ops,
-        "stop_job",
-        lambda job: stopped.__setitem__("n", stopped["n"] + 1) or True,
+        "stop_job_result",
+        lambda job: (
+            stopped.__setitem__("n", stopped["n"] + 1)
+            or av_mod.agent_ops.AgentStopResult(
+                av_mod.agent_ops.AgentStopState.STOPPED,
+                pid=job.host_pid,
+            )
+        ),
     )
     app, view = _make_view([_make_job(host_alive=False)])
     view.handle_key("s")

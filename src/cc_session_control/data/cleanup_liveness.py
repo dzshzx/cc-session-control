@@ -2,46 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from collections.abc import Set as AbstractSet
+from collections.abc import Sequence
 
-from ..models import AgentJob, SessionProc
-from . import liveness, proc
+from . import liveness
 from .removal import CleanupExecution, CleanupIssue
-
-
-def fill_liveness_inputs(
-    session_procs: Sequence[SessionProc] | None,
-    agent_jobs: Sequence[AgentJob] | None,
-    agents_map: Mapping[str, int | None] | None,
-    cur: AbstractSet[int] | None,
-) -> tuple[
-    Sequence[SessionProc],
-    Sequence[AgentJob],
-    Mapping[str, int | None],
-    AbstractSet[int],
-]:
-    """Fill omitted inputs, bypassing caches for confirmed execution."""
-    if session_procs is None or agent_jobs is None or agents_map is None or cur is None:
-        defaults: tuple[
-            Sequence[SessionProc],
-            Sequence[AgentJob],
-            Mapping[str, int | None],
-            AbstractSet[int],
-        ]
-        inputs = liveness.liveness_inputs()
-        defaults = (
-            inputs.session_procs,
-            inputs.agent_jobs,
-            inputs.agents_map,
-            inputs.cur,
-        )
-        d_procs, d_jobs, d_agents, d_cur = defaults
-        session_procs = d_procs if session_procs is None else session_procs
-        agent_jobs = d_jobs if agent_jobs is None else agent_jobs
-        agents_map = d_agents if agents_map is None else agents_map
-        cur = d_cur if cur is None else cur
-    return session_procs, agent_jobs, agents_map, cur
 
 
 def fresh_liveness_inputs() -> liveness.LivenessSnapshot:
@@ -61,23 +25,6 @@ def refuse_incomplete_liveness(
             error=issue.detail,
             path=issue.path,
         )
-        for issue in evidence.issues
-    )
-    result.refuse(
-        list(targets) or ["liveness evidence"],
-        "liveness evidence incomplete; nothing deleted",
-    )
-    return result
-
-
-def refuse_incomplete_ancestors(
-    result: CleanupExecution,
-    targets: Sequence[object],
-    evidence: proc.AncestorProbe,
-) -> CleanupExecution:
-    """Fail closed while retaining typed current-ancestor read failures."""
-    result.issues.extend(
-        CleanupIssue(issue.source, issue.detail, issue.path)
         for issue in evidence.issues
     )
     result.refuse(
