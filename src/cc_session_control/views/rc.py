@@ -273,7 +273,7 @@ class RCView(ListTabView):
         self._projects: list[RCProject] = []
         self._servers: list[RCServer] = []
         self._settings = ProjectSettingsResult(ProjectSettingsState.MISSING, {})
-        self._environment_warnings: tuple[str, ...] = ()
+        self._environment_issue_count = 0
         self._inventory_issues: tuple[InventoryIssue, ...] = ()
         self._help = False
 
@@ -295,7 +295,9 @@ class RCView(ListTabView):
         self._settings = batch.snapshot.rc_project_settings
         self._servers = list(batch.snapshot.rc_servers)
         reconciliation = batch.snapshot.environment_reconciliation
-        self._environment_warnings = reconciliation.warnings
+        self._environment_issue_count = len(reconciliation.ledger.warnings) + int(
+            reconciliation.ledger.failure is not None,
+        )
         self._inventory_issues = reconciliation.inventory_issues
         self._loaded = True
         if not self._help:
@@ -332,8 +334,8 @@ class RCView(ListTabView):
             else ""
         )
         ledger_text = (
-            f" · ⚠ 环境台账异常 {len(self._environment_warnings)}"
-            if self._environment_warnings
+            f" · ⚠ 环境台账异常 {self._environment_issue_count}"
+            if self._environment_issue_count
             else ""
         )
         inventory_text = (

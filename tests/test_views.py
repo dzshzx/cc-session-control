@@ -847,7 +847,8 @@ def test_rc_view_status_counts_per_project_setting_failures():
     assert "自动远控异常 1" in view.status.original_widget.get_text()[0]
 
 
-def test_rc_view_status_exposes_snapshot_ledger_warning():
+def test_rc_view_status_counts_typed_ledger_warning_and_failure():
+    from cc_session_control.data import environment_ledger as ledger
     from cc_session_control.data import environments
     from cc_session_control.data.snapshot import WorldSnapshot
 
@@ -858,13 +859,40 @@ def test_rc_view_status_exposes_snapshot_ledger_warning():
         rc_projects=[_make_project(name="p1")],
         environment_reconciliation=environments.Reconciliation(
             ledger_history_complete=False,
-            warnings=("环境台账操作失败（read）：permission denied",),
+            ledger=ledger.LedgerUpdate(
+                ledger.LedgerUpdateState.FAILED,
+                read=ledger.LedgerRead(
+                    ledger.LedgerReadState.PARTIAL,
+                    warnings=(ledger.LedgerWarning(3, "bad row"),),
+                ),
+                failure=ledger.LedgerFailure.READ,
+                detail="permission denied",
+            ),
         ),
     )
 
     view.apply_refresh(_refresh_batch(snap))
 
-    assert "⚠ 环境台账异常 1" in view.status.original_widget.get_text()[0]
+    assert "⚠ 环境台账异常 2" in view.status.original_widget.get_text()[0]
+
+
+def test_rc_view_status_does_not_count_missing_unchanged_ledger():
+    from cc_session_control.data import environments
+    from cc_session_control.data.snapshot import WorldSnapshot
+
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+
+    view.apply_refresh(
+        _refresh_batch(
+            WorldSnapshot(
+                environment_reconciliation=environments.Reconciliation(),
+            ),
+        ),
+    )
+
+    assert "环境台账异常" not in view.status.original_widget.get_text()[0]
 
 
 def test_rc_view_shows_unknown_inventory_status_and_warning():

@@ -180,10 +180,8 @@ def test_snapshot_keeps_current_environment_and_carries_ledger_failure(
         "session_LIVE",
     ]
     assert not snap.environment_reconciliation.ledger_history_complete
-    assert any(
-        "snapshot history denied" in warning
-        for warning in snap.environment_reconciliation.warnings
-    )
+    assert snap.environment_reconciliation.ledger.failure is ledger.LedgerFailure.READ
+    assert snap.environment_reconciliation.ledger.detail == "snapshot history denied"
 
 
 def test_incomplete_snapshot_fails_without_mutating_environment_ledger(
@@ -326,10 +324,8 @@ def test_snapshot_reconciliation_owns_single_rc_environment_ledger_update(
         ("env", "CAPTURED")
     ]
     assert snap.environment_reconciliation.ledger is failed
-    assert any(
-        "first write failed" in warning
-        for warning in snap.environment_reconciliation.warnings
-    )
+    assert snap.environment_reconciliation.ledger.failure is ledger.LedgerFailure.WRITE
+    assert snap.environment_reconciliation.ledger.detail == "first write failed"
 
 
 def test_pane_capture_failure_keeps_snapshot_rows_but_blocks_ledger_and_orphans(

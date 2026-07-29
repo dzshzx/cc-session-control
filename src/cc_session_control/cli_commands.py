@@ -423,8 +423,20 @@ def _cmd_env(args: Namespace) -> int:
             f"{inventory_issue.source}{where}: {inventory_issue.detail}",
             file=sys.stderr,
         )
-    for warning in recon.warnings:
-        print(f"Warning: {warning}", file=sys.stderr)
+    for warning in recon.ledger.warnings:
+        print(
+            f"Warning: environment ledger line {warning.line} is malformed: "
+            f"{warning.detail}; original ledger preserved and updates blocked; "
+            "orphan history is unavailable",
+            file=sys.stderr,
+        )
+    if recon.ledger.failure is not None:
+        print(
+            "Warning: environment ledger operation "
+            f"{recon.ledger.failure.value} failed: {recon.ledger.detail}; "
+            "current rows remain visible while orphan history is incomplete",
+            file=sys.stderr,
+        )
 
     print(
         "Note: csctl cannot deregister cloud environments; "

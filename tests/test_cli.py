@@ -731,8 +731,11 @@ def test_env_command_reports_ledger_failure_on_stderr_and_exits_nonzero(
     assert status == 1
     assert "Current bridge environments: 0" in captured.out
     assert "ledger history incomplete" in captured.out
-    assert "history denied" in captured.err
-    assert "Warning:" in captured.err
+    assert (
+        "Warning: environment ledger operation read failed: history denied; "
+        "current rows remain visible while orphan history is incomplete"
+    ) in captured.err
+    assert not any("\u4e00" <= char <= "\u9fff" for char in captured.err)
 
 
 def test_env_command_reports_partial_ledger_as_blocked_and_preserves_bytes(
@@ -754,9 +757,13 @@ def test_env_command_reports_partial_ledger_as_blocked_and_preserves_bytes(
     captured = capsys.readouterr()
     assert status == 1
     assert "ledger history incomplete" in captured.out
-    assert "第 1 行" in captured.err
-    assert "已保留原文件并停止更新，孤儿历史不可用" in captured.err
-    assert "Warning:" in captured.err
+    assert (
+        "Warning: environment ledger line 1 is malformed: "
+        "Expecting property name enclosed in double quotes: "
+        "line 1 column 2 (char 1); original ledger preserved and updates blocked; "
+        "orphan history is unavailable"
+    ) in captured.err
+    assert not any("\u4e00" <= char <= "\u9fff" for char in captured.err)
     assert cfg.environments_ledger.read_bytes() == original
 
 

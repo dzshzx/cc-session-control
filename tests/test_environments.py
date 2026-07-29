@@ -379,8 +379,8 @@ def test_reconcile_read_failure_keeps_current_and_marks_history_incomplete(
     assert recon.orphans == ()
     assert recon.ledger.state is ledger.LedgerUpdateState.FAILED
     assert recon.ledger.failure is ledger.LedgerFailure.READ
+    assert recon.ledger.detail == "history denied"
     assert not recon.ledger_history_complete
-    assert any("history denied" in warning for warning in recon.warnings)
     with original_open(path, "rb") as source:
         assert source.read() == original
 
@@ -421,9 +421,14 @@ def test_reconcile_partial_history_keeps_current_without_rewrite_or_orphans(
     assert recon.ledger.state is ledger.LedgerUpdateState.BLOCKED
     assert recon.ledger.read is not None
     assert recon.ledger.read.state is ledger.LedgerReadState.PARTIAL
+    assert recon.ledger.warnings == (
+        ledger.LedgerWarning(
+            1,
+            "Expecting property name enclosed in double quotes: "
+            "line 1 column 2 (char 1)",
+        ),
+    )
     assert not recon.ledger_history_complete
-    assert any("第 1 行" in warning for warning in recon.warnings)
-    assert any("保留原文件" in warning for warning in recon.warnings)
     assert path.read_bytes() == original
 
 
@@ -457,8 +462,8 @@ def test_reconcile_write_failure_keeps_readable_orphans_and_current(
     assert [item.env_id for item in recon.current] == ["session_LIVE"]
     assert [item.env_id for item in recon.orphans] == ["session_OLD"]
     assert recon.ledger.failure is ledger.LedgerFailure.REPLACE
+    assert recon.ledger.detail == "read-only ledger"
     assert not recon.ledger_history_complete
-    assert any("read-only ledger" in warning for warning in recon.warnings)
 
 
 # --- orphans as the manual-delete checklist ---------------------------------

@@ -75,7 +75,6 @@ class Reconciliation:
     ledger_history_complete: bool = True
     liveness_issues: tuple[liveness.LivenessIssue, ...] = ()
     inventory_issues: tuple[InventoryIssue, ...] = ()
-    warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "current", tuple(self.current))
@@ -96,7 +95,6 @@ class Reconciliation:
             "inventory_issues",
             tuple(self.inventory_issues),
         )
-        object.__setattr__(self, "warnings", tuple(self.warnings))
 
     @property
     def evidence_complete(self) -> bool:
@@ -282,7 +280,6 @@ def reconcile(
         ledger=update,
         ledger_history_complete=ledger_history_complete,
         liveness_issues=evidence.issues,
-        warnings=_ledger_warnings(update),
     )
 
 
@@ -380,17 +377,3 @@ def _orphan_envs(
         if k not in obs_keys:
             out.append(replace(env, status="orphan"))
     return sorted(out, key=lambda e: e.last_seen, reverse=True)
-
-
-def _ledger_warnings(update: LedgerUpdate) -> tuple[str, ...]:
-    warnings = [
-        f"环境台账第 {warning.line} 行损坏：{warning.detail}；"
-        "已保留原文件并停止更新，孤儿历史不可用"
-        for warning in update.warnings
-    ]
-    if update.failure is not None:
-        warnings.append(
-            f"环境台账操作失败（{update.failure.value}）：{update.detail}；"
-            "当前环境仍显示，孤儿历史不完整",
-        )
-    return tuple(warnings)
