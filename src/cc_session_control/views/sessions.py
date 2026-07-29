@@ -162,9 +162,11 @@ class SessionsView(CleanupMixin, ListTabView):
         self._classified: dict[str, int] = {}
         self._preview_action = None  # the previewed _CleanupAction record
         self._preview_targets: list = []
+        self._preview_plan: CleanupPlan | None = None
         self._show_hidden = True
         # The frozen cleanup plan (R11/D8 — built from the shared snapshot,
-        # never re-scanned per view): counts, preview, and confirm all read it.
+        # never re-scanned per view): counts and each new preview read it;
+        # confirmation uses the plan pinned when that preview was rendered.
         self._plan = CleanupPlan()
         self._cleanup_walker = urwid.SimpleFocusListWalker([])
 

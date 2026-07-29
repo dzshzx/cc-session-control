@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import urwid
 
-from cc_session_control.actions.runner import Accepted
+from cc_session_control.actions.runner import Accepted, Busy, Closed
 from cc_session_control.actions.session_ops import (
     AttachIntent,
     ResumeIntent,
@@ -1918,6 +1918,120 @@ def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
     assert any("过期项" in m for m in app._notifications)
 
 
+def test_successful_refresh_keeps_cleanup_preview_anchored_to_displayed_generation(
+    monkeypatch,
+    tmp_path,
+):
+    from cc_session_control.config import cfg
+    from cc_session_control.data.removal import anchor_path
+
+    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
+    target = cfg.shell_snapshots_dir / "old"
+    target.parent.mkdir(parents=True)
+    target.write_text("previewed")
+    os.utime(target, (1, 1))
+    entry = "shell-snapshots/old"
+    plan_a = CleanupPlan(
+        aged_entries=[entry],
+        aged_anchors={entry: anchor_path(cfg.shell_snapshots_dir, target)},
+    )
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view.apply_refresh(_refresh_batch(plan=plan_a))
+    view._enter_preview("aged")
+    overlay = view._body.original_widget
+
+    target.rename(target.with_name("previewed-away"))
+    target.write_text("replacement")
+    os.utime(target, (1, 1))
+    plan_b = CleanupPlan(
+        aged_entries=[entry],
+        aged_anchors={entry: anchor_path(cfg.shell_snapshots_dir, target)},
+    )
+
+    view.apply_refresh(_refresh_batch(plan=plan_b))
+
+    assert view._body.original_widget is overlay
+    assert view._plan is plan_b
+    assert view._preview_plan is plan_a
+
+    view._confirm_cleanup()
+
+    assert target.read_text() == "replacement"
+    assert "拒绝" in app._notifications[-1]
+
+
+def test_cleanup_preview_escape_clears_pinned_generation():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    plan = CleanupPlan(aged_entries=["plans/old"])
+    view.apply_refresh(_refresh_batch(plan=plan))
+    view._enter_preview("aged")
+
+    view.handle_key("esc")
+
+    assert view._mode == "cleanup"
+    assert view._preview_action is None
+    assert view._preview_targets == []
+    assert view._preview_plan is None
+
+
+@pytest.mark.parametrize("outcome", [Busy("other"), Closed()])
+def test_cleanup_preview_rejected_submission_keeps_pinned_generation(outcome):
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    plan = CleanupPlan(aged_entries=["plans/old"])
+    view.apply_refresh(_refresh_batch(plan=plan))
+    view._enter_preview("aged")
+    action = view._preview_action
+    targets = list(view._preview_targets)
+    app.submit_action = lambda *_args: outcome
+
+    view._confirm_cleanup()
+
+    assert view._mode == "preview"
+    assert view._preview_action is action
+    assert view._preview_targets == targets
+    assert view._preview_plan is plan
+
+
+def test_new_cleanup_preview_pins_current_generation():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    plan_a = CleanupPlan(aged_entries=["plans/old"])
+    plan_b = CleanupPlan(aged_entries=["plans/new"])
+    view.apply_refresh(_refresh_batch(plan=plan_a))
+    view._enter_preview("aged")
+    view.handle_key("esc")
+    view.apply_refresh(_refresh_batch(plan=plan_b))
+
+    view._enter_preview("aged")
+
+    assert view._preview_targets == ["plans/new"]
+    assert view._preview_plan is plan_b
+
+
+def test_cleanup_confirmation_without_pinned_plan_fails_closed():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._plan = CleanupPlan(aged_entries=["plans/old"])
+    view._enter_preview("aged")
+    view._preview_plan = None
+
+    view._confirm_cleanup()
+
+    assert app._submitted_actions == []
+    assert view._mode == "cleanup"
+    assert view._preview_action is None
+    assert view._preview_targets == []
+    assert "预览已失效" in app._notifications[-1]
+
+
 def test_refresh_failure_updates_open_cleanup_and_aged_preview_in_memory():
     app = FakeApp()
     view = SessionsView(app)
@@ -1949,6 +2063,7 @@ def test_refresh_failure_updates_open_cleanup_and_aged_preview_in_memory():
     view.apply_refresh_failure(newer)
     assert view._mode == "preview"
     assert view._preview_targets == ["plans/newer"]
+    assert view._preview_plan is newer.cleanup_plan
 
 
 def test_refresh_failure_closes_session_keyed_preview_fail_closed(monkeypatch):
