@@ -481,13 +481,6 @@ def test_env_reports_partial_rc_inventory_and_returns_nonzero(
         "scan_servers_result",
         lambda: rc.RCServerScanResult(issues=(issue,)),
     )
-    monkeypatch.setattr(
-        rc,
-        "scan_servers",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("records-only wrapper used by production CLI")
-        ),
-    )
 
     assert cli.main(["env"]) == 1
     captured = capsys.readouterr()
@@ -534,14 +527,6 @@ def test_env_pane_capture_failure_warns_without_ledger_write_or_orphans(
         ),
     )
     monkeypatch.setattr(rc, "_environment_ids", EnvironmentIdCache())
-    monkeypatch.setattr(
-        rc,
-        "scan_servers",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("records-only wrapper used by production CLI"),
-        ),
-    )
-
     assert cli.main(["env"]) == 1
     captured = capsys.readouterr()
     assert "Current bridge environments (partial): 0" in captured.out

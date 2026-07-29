@@ -35,7 +35,11 @@ def test_env_command_reports_ledger_failure_on_stderr_and_exits_nonzero(
         return original_open(target, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", deny_ledger)
-    monkeypatch.setattr(rc, "scan_servers", lambda: [])
+    monkeypatch.setattr(rc, "scan_servers_result", lambda: rc.RCServerScanResult())
+    # Hermetic liveness: CI runners have no `claude` binary, and a failed
+    # `claude agents --json` scan would make every result "(partial)".
+    monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
+    monkeypatch.setattr(liveness, "scan_agents", lambda *a, **k: liveness.AgentsScan())
     status = cli.main(["env"])
 
     captured = capsys.readouterr()
@@ -61,7 +65,9 @@ def test_env_command_reports_partial_ledger_as_blocked_and_preserves_bytes(
     cfg.config_dir.mkdir()
     cfg.environments_ledger.write_text("{broken\n")
     original = cfg.environments_ledger.read_bytes()
-    monkeypatch.setattr(rc, "scan_servers", lambda: [])
+    monkeypatch.setattr(rc, "scan_servers_result", lambda: rc.RCServerScanResult())
+    monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
+    monkeypatch.setattr(liveness, "scan_agents", lambda *a, **k: liveness.AgentsScan())
 
     status = cli_commands.handle_env(types.SimpleNamespace())
 

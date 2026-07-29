@@ -302,6 +302,11 @@ def test_live_background_session_uses_execution_time_session_generation(
     )
     request = tui_actions.SessionRequest.from_session(stale)
     _install_execution_session(monkeypatch, fresh)
+    monkeypatch.setattr(
+        tui_actions.session_ops.liveness,
+        "liveness_inputs",
+        lambda: tui_actions.session_ops.liveness.LivenessSnapshot(),
+    )
     takeovers: list[tuple[int, str]] = []
     spawns: list[tuple[str, str, str]] = []
     monkeypatch.setattr(

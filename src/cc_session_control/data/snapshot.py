@@ -95,7 +95,7 @@ def build_world_snapshot() -> WorldSnapshot:
 
     Heavy scans (typed transcript discovery via `sessions.scan_result`, the
     full `/proc` walk via
-    `rc.scan_servers`) run exactly once here instead of once per tab. Session
+    `rc.scan_servers_result`) run exactly once here instead of once per tab. Session
     liveness uses targeted per-pid `/proc` reads, not another full walk; those
     inputs are captured once and injected into `sessions.scan_result`. Each data
     owner handles its expected external failures.

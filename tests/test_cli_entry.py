@@ -565,7 +565,7 @@ def test_env_incomplete_liveness_is_partial_without_orphan_or_ledger_write(
         return evidence
 
     monkeypatch.setattr(liveness, "liveness_inputs", capture_evidence)
-    monkeypatch.setattr(rc, "scan_servers", lambda: [])
+    monkeypatch.setattr(rc, "scan_servers_result", lambda: rc.RCServerScanResult())
 
     assert cli.main(["env"]) == 1
     captured = capsys.readouterr()

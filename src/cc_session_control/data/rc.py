@@ -338,15 +338,6 @@ def scan_servers_result(
     return RCServerScanResult(tuple(servers), issues)
 
 
-def scan_servers(
-    *,
-    environment_cache: rc_environment.EnvironmentIdCache | None = None,
-) -> list[RCServer]:
-    """Compatibility records-only view of :func:`scan_servers_result`."""
-
-    return list(scan_servers_result(environment_cache=environment_cache).servers)
-
-
 def _start_one_with_trust(
     path: str,
     decision: TrustDecision,

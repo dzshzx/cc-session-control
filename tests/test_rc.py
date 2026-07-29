@@ -1,7 +1,7 @@
 """Tests for project RC server discovery (Phase 5 / R5).
 
 Covers the PURE cmdline matcher (`proc._match_rc_cmdline`, AC5), the
-managed-vs-external classification in `rc.scan_servers` (by injecting a fake
+managed-vs-external classification in `rc.scan_servers_result` (by injecting a fake
 managed-pid set and a fake `/proc` scan — no real `/proc` or tmux is stood up),
 read-only `env_*` capture, and the `remoteControlSpawnMode` read on `rc.scan`.
 """
@@ -335,9 +335,9 @@ def test_scan_servers_classifies_managed_and_external(monkeypatch):
         ),
     )
 
-    servers = rc.scan_servers(
+    servers = rc.scan_servers_result(
         environment_cache=rc_environment.EnvironmentIdCache(),
-    )
+    ).servers
     by_name = {s.name: s for s in servers}
 
     assert isinstance(servers[0], RCServer)
@@ -397,9 +397,9 @@ def test_scan_servers_managed_window_without_proc_match(monkeypatch):
         lambda: ProcRCInventory(),
     )
 
-    servers = rc.scan_servers(
+    servers = rc.scan_servers_result(
         environment_cache=rc_environment.EnvironmentIdCache(),
-    )
+    ).servers
     assert len(servers) == 1
     assert servers[0].managed is True
     assert servers[0].name == "foo"
@@ -439,8 +439,8 @@ def test_scan_servers_captures_env_id_without_ledger_side_effect(
     )
 
     cache = rc_environment.EnvironmentIdCache()
-    servers = rc.scan_servers(environment_cache=cache)
-    next_servers = rc.scan_servers(environment_cache=cache)
+    servers = rc.scan_servers_result(environment_cache=cache).servers
+    next_servers = rc.scan_servers_result(environment_cache=cache).servers
 
     assert servers[0].env_id == "env_abc123XYZ"
     assert next_servers[0].env_id == "env_abc123XYZ"
@@ -465,9 +465,9 @@ def test_scan_servers_returns_no_env_id_when_capture_has_none(monkeypatch):
         lambda: ProcRCInventory((ProcRC(111, "ws/foo", "/a"),)),
     )
 
-    servers = rc.scan_servers(
+    servers = rc.scan_servers_result(
         environment_cache=rc_environment.EnvironmentIdCache(),
-    )
+    ).servers
     assert servers[0].env_id is None
 
 
