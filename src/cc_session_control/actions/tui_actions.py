@@ -254,10 +254,17 @@ def stop_project(path: str, name: str) -> ActionResult:
 
 
 def toggle_autostart(path: str, name: str) -> ActionResult:
-    try:
-        enabled = rc.toggle_autostart(path)
-    except (OSError, UnicodeError) as exc:
-        return ActionResult.failure(f"开机自启写入失败: {exc}")
+    result = rc.toggle_autostart_result(path)
+    if not result.success:
+        stage = result.stage.value if result.stage is not None else "unknown"
+        committed = "；列表变更已提交，需刷新确认" if result.committed else ""
+        return ActionResult.failure(
+            f"开机自启写入失败（{stage}）：{result.detail}{committed}",
+            needs_refresh=result.committed,
+        )
+    if result.value is None:
+        raise AssertionError("successful enabled-list toggle must carry state")
+    enabled = result.value
     state = "开" if enabled else "关"
     return ActionResult.success(
         f"{name} 开机自启: {state}",
@@ -285,10 +292,17 @@ def write_auto_rc(
 
 
 def start_all_projects() -> ActionResult:
-    try:
-        result = rc.start_all_listed_result()
-    except (OSError, UnicodeError) as exc:
-        return ActionResult.failure(f"启动列表读取失败: {exc}")
+    result = rc.start_all_listed_result()
+    enabled_list = result.enabled_list
+    if enabled_list is not None and not enabled_list.success:
+        stage = (
+            enabled_list.stage.value if enabled_list.stage is not None else "unknown"
+        )
+        committed = "；列表变更已提交，需刷新确认" if enabled_list.committed else ""
+        return ActionResult.failure(
+            f"启动列表读取失败（{stage}）：{enabled_list.detail}{committed}",
+            needs_refresh=enabled_list.committed,
+        )
     parts = [f"已启动 {result.started} 个项目"] if result.started else []
     if result.unavailable:
         parts.append(f"项目设置不可用，拒绝 {result.unavailable} 个")

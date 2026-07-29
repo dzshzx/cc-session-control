@@ -8,11 +8,24 @@ read-only `env_*` capture, and the `remoteControlSpawnMode` read on `rc.scan`.
 
 from __future__ import annotations
 
+import inspect
 import json
 
+from cc_session_control import cli_rc
+from cc_session_control.actions import tui_actions
 from cc_session_control.config import cfg
 from cc_session_control.data import proc, rc, rc_environment
 from cc_session_control.data.proc import ProcIssue, ProcRC, ProcRCInventory
+from cc_session_control.data.project_settings import (
+    ProjectSettingsResult,
+    ProjectSettingsState,
+)
+from cc_session_control.data.rc_enabled import (
+    EnabledListOperation,
+    EnabledListResult,
+    EnabledListStage,
+    EnabledListState,
+)
 from cc_session_control.data.tmux import TmuxIssue, TmuxWindow, WindowInventory
 from cc_session_control.models import RCServer, RCStartupSettingState
 
@@ -38,6 +51,142 @@ def _metadata_written(target: str) -> rc.tmux.TmuxWriteResult:
         rc.tmux.TmuxWriteState.SUCCEEDED,
         target=target,
     )
+
+
+def _enabled_failure(
+    operation: EnabledListOperation,
+    stage: EnabledListStage,
+    *,
+    committed: bool = False,
+) -> EnabledListResult:
+    return EnabledListResult(
+        operation,
+        EnabledListState.FAILED,
+        None,
+        changed=committed,
+        committed=committed,
+        stage=stage,
+        detail="permission denied",
+    )
+
+
+def _enabled_success(
+    operation: EnabledListOperation,
+    value,
+    *,
+    changed: bool = False,
+) -> EnabledListResult:
+    return EnabledListResult(
+        operation,
+        EnabledListState.SUCCEEDED,
+        value,
+        changed=changed,
+        committed=changed,
+    )
+
+
+def test_enabled_list_failure_keeps_partial_scan_rows_and_stops_dependents(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    trusted = tmp_path / "trusted"
+    discovered = tmp_path / "discovered"
+    trusted.mkdir()
+    discovered.mkdir()
+    list_failure = _enabled_failure(
+        EnabledListOperation.LIST,
+        EnabledListStage.READ,
+    )
+    remove_failure = _enabled_failure(
+        EnabledListOperation.REMOVE,
+        EnabledListStage.UNLOCK,
+        committed=True,
+    )
+
+    class Store:
+        def list_result(self) -> EnabledListResult:
+            return list_failure
+
+        def remove_result(self, _path: str) -> EnabledListResult:
+            return remove_failure
+
+        def list(self) -> list[str]:
+            raise AssertionError("production used primitive list")
+
+        def remove(self, _path: str) -> bool:
+            raise AssertionError("production used primitive remove")
+
+    monkeypatch.setattr(rc, "_enabled_store", Store)
+    monkeypatch.setattr(
+        rc,
+        "_read_projects",
+        lambda: ProjectSettingsResult(
+            ProjectSettingsState.AVAILABLE,
+            {str(trusted): {"hasTrustDialogAccepted": True}},
+        ),
+    )
+    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
+    scan = rc.scan_result(
+        window_inventory=WindowInventory(
+            (TmuxWindow("@1", "discovered", False, 7, str(discovered)),)
+        )
+    )
+
+    assert scan.enabled_list is list_failure
+    assert scan.complete is False
+    assert {project.directory for project in scan.projects} == {
+        str(trusted),
+        str(discovered),
+    }
+    assert not any(project.in_list for project in scan.projects)
+
+    stops: list[str] = []
+    starts: list[str] = []
+    monkeypatch.setattr(
+        rc,
+        "stop_one_result",
+        lambda path: stops.append(path),
+    )
+    monkeypatch.setattr(
+        rc,
+        "start_one_result",
+        lambda path: starts.append(path),
+    )
+
+    removed = rc.remove_one_result(str(trusted))
+    assert removed.enabled_list is remove_failure
+    assert removed.stop is None
+    assert stops == []
+
+    started = rc.start_all_listed_result()
+    assert started.enabled_list is list_failure
+    assert started.results == ()
+    assert starts == []
+
+
+def test_production_enabled_list_paths_do_not_call_compatibility_primitives() -> None:
+    sources = {
+        "scan": inspect.getsource(rc.scan_result),
+        "remove": inspect.getsource(rc.remove_one_result),
+        "start-all": inspect.getsource(rc.start_all_listed_result),
+        "cli": inspect.getsource(cli_rc._run_rc),
+        "toggle-action": inspect.getsource(tui_actions.toggle_autostart),
+        "start-all-action": inspect.getsource(tui_actions.start_all_projects),
+    }
+    forbidden = {
+        "scan": ("list_enabled(",),
+        "remove": ("list_rm(",),
+        "start-all": ("list_enabled(",),
+        "cli": ("rc.list_enabled(", "rc.list_add(", "rc.list_rm("),
+        "toggle-action": ("rc.toggle_autostart(",),
+        "start-all-action": (),
+    }
+
+    for surface, needles in forbidden.items():
+        for needle in needles:
+            assert needle not in sources[surface], (surface, needle)
+    for surface in ("cli", "toggle-action", "start-all-action"):
+        assert "except (OSError, UnicodeError)" not in sources[surface]
 
 
 # --- AC5: pure cmdline matcher --------------------------------------------
@@ -273,7 +422,11 @@ def test_project_status_is_unknown_when_window_inventory_is_incomplete(
         {str(project): {"hasTrustDialogAccepted": True}},
     )
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(rc, "list_enabled", lambda: [])
+    monkeypatch.setattr(
+        rc,
+        "list_enabled_result",
+        lambda: _enabled_success(EnabledListOperation.LIST, ()),
+    )
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
     monkeypatch.setattr(
         rc,
@@ -585,7 +738,18 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
     assert cache.windows == ["@7"]
 
     removed: list[str] = []
-    monkeypatch.setattr(rc, "list_rm", lambda path: removed.append(path))
+    monkeypatch.setattr(
+        rc,
+        "list_rm_result",
+        lambda path: (
+            removed.append(path)
+            or _enabled_success(
+                EnabledListOperation.REMOVE,
+                True,
+                changed=True,
+            )
+        ),
+    )
     assert rc.remove_one(project)
     assert removed == [project]
     assert cache.windows == ["@7", "@7"]
@@ -706,11 +870,10 @@ def test_restart_continues_when_dead_window_vanishes_during_stop(
 ):
     project = str(tmp_path)
     dead = TmuxWindow("@7", "project", True, 707, project)
-    monkeypatch.setattr(rc, "_window_for", lambda path: dead)
     monkeypatch.setattr(
         rc,
         "stop_one_result",
-        lambda path: rc.StopResult(
+        lambda path, *, window_inventory=None: rc.StopResult(
             rc.StopState.NOT_RUNNING,
             path,
             "can't find window: @7",
@@ -727,7 +890,11 @@ def test_restart_continues_when_dead_window_vanishes_during_stop(
         lambda *_args: _metadata_written("rc:7"),
     )
 
-    result = rc._start_one_with_trust(project, rc.TrustDecision.TRUSTED)
+    result = rc._start_one_with_trust(
+        project,
+        rc.TrustDecision.TRUSTED,
+        window_inventory=WindowInventory((dead,)),
+    )
 
     assert result.state is rc.StartState.STARTED
 
@@ -757,8 +924,12 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
-    monkeypatch.setattr(rc, "list_enabled", lambda: [])
-    monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    monkeypatch.setattr(
+        rc,
+        "list_enabled_result",
+        lambda: _enabled_success(EnabledListOperation.LIST, ()),
+    )
+    monkeypatch.setattr(rc, "_tmux_window_inventory", lambda: WindowInventory())
     # tmp_path is under the real temp root — neutralize the membership filter.
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
 
@@ -784,8 +955,12 @@ def test_scan_preserves_per_project_setting_failure_without_fallback(
         {str(project): {"hasTrustDialogAccepted": True}},
     )
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(rc, "list_enabled", lambda: [])
-    monkeypatch.setattr(rc, "_tmux_windows", lambda: [])
+    monkeypatch.setattr(
+        rc,
+        "list_enabled_result",
+        lambda: _enabled_success(EnabledListOperation.LIST, ()),
+    )
+    monkeypatch.setattr(rc, "_tmux_window_inventory", lambda: WindowInventory())
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
 
     [row] = rc.scan_result().projects
@@ -852,7 +1027,11 @@ def test_scan_marks_missing_directory(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
-    monkeypatch.setattr(rc, "list_enabled", lambda: [gone_enabled])
+    monkeypatch.setattr(
+        rc,
+        "list_enabled_result",
+        lambda: _enabled_success(EnabledListOperation.LIST, (gone_enabled,)),
+    )
     monkeypatch.setattr(
         rc,
         "_tmux_window_inventory",

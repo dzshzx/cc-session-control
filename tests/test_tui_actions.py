@@ -23,6 +23,12 @@ from cc_session_control.data.project_settings import (
     SettingWriteState,
 )
 from cc_session_control.data.rc import StartManyResult, StartResult, StartState
+from cc_session_control.data.rc_enabled import (
+    EnabledListOperation,
+    EnabledListResult,
+    EnabledListStage,
+    EnabledListState,
+)
 from cc_session_control.data.removal import (
     CleanupExecution,
     CleanupIssue,
@@ -450,6 +456,83 @@ def test_project_batch_result_distinguishes_partial_refused_and_failure(
     assert tui_actions.start_all_projects().status is ActionStatus.FAILURE
 
 
+def test_successful_rc_actions_keep_exact_result_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Characterize public ActionResult fields before enabled-list migration."""
+
+    monkeypatch.setattr(tui_actions.rc.cfg, "rc_list", tmp_path / "rc-enabled")
+    assert tui_actions.toggle_autostart("/project", "project") == ActionResult(
+        ActionStatus.SUCCESS,
+        "project 开机自启: 开",
+        True,
+    )
+
+    monkeypatch.setattr(
+        tui_actions.rc,
+        "start_all_listed_result",
+        lambda: StartManyResult(started=2),
+    )
+    assert tui_actions.start_all_projects() == ActionResult(
+        ActionStatus.SUCCESS,
+        "已启动 2 个项目",
+        True,
+    )
+
+
+def test_toggle_autostart_reports_committed_unlock_failure_and_refreshes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = EnabledListResult(
+        EnabledListOperation.TOGGLE,
+        EnabledListState.FAILED,
+        None,
+        changed=True,
+        committed=True,
+        stage=EnabledListStage.UNLOCK,
+        detail="flock: permission denied",
+    )
+    monkeypatch.setattr(
+        tui_actions.rc,
+        "toggle_autostart_result",
+        lambda _path: failure,
+        raising=False,
+    )
+
+    assert tui_actions.toggle_autostart("/project", "project") == ActionResult(
+        ActionStatus.FAILURE,
+        "开机自启写入失败（unlock）：flock: permission denied；"
+        "列表变更已提交，需刷新确认",
+        True,
+    )
+
+
+def test_start_all_reports_typed_list_failure_without_starting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = EnabledListResult(
+        EnabledListOperation.LIST,
+        EnabledListState.FAILED,
+        None,
+        changed=False,
+        committed=False,
+        stage=EnabledListStage.READ,
+        detail="permission denied",
+    )
+    monkeypatch.setattr(
+        tui_actions.rc,
+        "start_all_listed_result",
+        lambda: StartManyResult(enabled_list=failure),
+    )
+
+    assert tui_actions.start_all_projects() == ActionResult(
+        ActionStatus.FAILURE,
+        "启动列表读取失败（read）：permission denied",
+        False,
+    )
+
+
 def test_project_batch_reports_metadata_failure_target_and_detail(monkeypatch) -> None:
     failure = StartResult(
         StartState.METADATA_FAILED,
@@ -563,13 +646,21 @@ def test_deleted_project_after_setting_submission_is_a_visible_failure(
 
 
 def test_expected_autostart_io_failure_becomes_typed_failure(monkeypatch) -> None:
-    def fail(_path: str) -> bool:
-        raise OSError("read only")
+    def fail(_path: str) -> EnabledListResult:
+        return EnabledListResult(
+            EnabledListOperation.TOGGLE,
+            EnabledListState.FAILED,
+            None,
+            changed=True,
+            committed=False,
+            stage=EnabledListStage.WRITE,
+            detail="read only",
+        )
 
-    monkeypatch.setattr(tui_actions.rc, "toggle_autostart", fail)
+    monkeypatch.setattr(tui_actions.rc, "toggle_autostart_result", fail)
     result = tui_actions.toggle_autostart("/project", "project")
     assert result.status is ActionStatus.FAILURE
-    assert result.message == "开机自启写入失败: read only"
+    assert result.message == "开机自启写入失败（write）：read only"
 
 
 def test_agent_respawn_does_not_claim_success_when_tmux_fails(monkeypatch) -> None:

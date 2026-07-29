@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -11,10 +12,12 @@ from ..models import (
     InventoryIssue,
     RCProject,
     RCServer,
+    Session,
     TrustDecision,
 )
 from . import proc, rc_environment, tmux
 from .project_settings import ProjectSettingsResult
+from .rc_enabled import EnabledListResult
 
 
 @dataclass(frozen=True)
@@ -24,10 +27,13 @@ class RCScanResult:
     projects: list[RCProject]
     settings: ProjectSettingsResult
     issues: tuple[InventoryIssue, ...] = ()
+    enabled_list: EnabledListResult[tuple[str, ...]] | None = None
 
     @property
     def complete(self) -> bool:
-        return not self.issues
+        return not self.issues and (
+            self.enabled_list is None or self.enabled_list.success
+        )
 
 
 @dataclass(frozen=True)
@@ -85,6 +91,7 @@ class StartManyResult:
     untrusted: int = 0
     failed: int = 0
     results: tuple[StartResult, ...] = ()
+    enabled_list: EnabledListResult[tuple[str, ...]] | None = None
 
 
 def start_from_tmux(
@@ -166,10 +173,38 @@ class StopAllResult:
 
 @dataclass(frozen=True)
 class RemoveResult:
-    """Enabled-list mutation plus the independent managed-window outcome."""
+    """Enabled-list authority plus the conditional managed-window outcome."""
 
-    list_removed: bool
-    stop: StopResult
+    enabled_list: EnabledListResult[bool]
+    stop: StopResult | None
+
+    @property
+    def list_removed(self) -> bool:
+        return bool(
+            self.enabled_list.success
+            and self.enabled_list.value is not None
+            and self.enabled_list.value
+        )
+
+
+def order_by_activity(
+    projects: Sequence[RCProject],
+    sessions: Sequence[Session],
+) -> list[RCProject]:
+    """Order projects by newest exact-cwd activity, then path."""
+
+    latest: dict[str, float] = {}
+    for session in sessions:
+        if session.cwd:
+            key = os.path.normpath(session.cwd)
+            latest[key] = max(session.mtime, latest.get(key, 0.0))
+    return sorted(
+        projects,
+        key=lambda project: (
+            -latest.get(os.path.normpath(project.directory), 0.0),
+            project.directory,
+        ),
+    )
 
 
 def window_inventory_issues(

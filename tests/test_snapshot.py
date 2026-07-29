@@ -19,6 +19,12 @@ from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
+from cc_session_control.data.rc_enabled import (
+    EnabledListOperation,
+    EnabledListResult,
+    EnabledListStage,
+    EnabledListState,
+)
 from cc_session_control.data.rc_environment import EnvironmentIdCache
 from cc_session_control.data.refresh import RefreshFailure, build_refresh_result
 from cc_session_control.data.tmux import TmuxWindow, WindowInventory
@@ -107,6 +113,45 @@ def test_snapshot_persists_file_referenced_keeps_active_alive_gated(
     assert obs == {("session", "ALIVE")}
     current = env.current_envs(snap.observed_envs)
     assert all(e.env_id != "session_ZOMBIE" for e in current)
+
+
+def test_snapshot_keeps_partial_enabled_list_result_without_blocking_reconcile(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    _stub_sources(monkeypatch, [])
+    failure = EnabledListResult(
+        EnabledListOperation.LIST,
+        EnabledListState.FAILED,
+        None,
+        changed=False,
+        committed=False,
+        stage=EnabledListStage.READ,
+        detail="permission denied",
+    )
+    monkeypatch.setattr(
+        snapshot.rc,
+        "scan_result",
+        lambda *, window_inventory: snapshot.rc.RCScanResult(
+            [],
+            ProjectSettingsResult(ProjectSettingsState.AVAILABLE, {}),
+            enabled_list=failure,
+        ),
+    )
+    reconciled: list[bool] = []
+    monkeypatch.setattr(
+        snapshot.environments,
+        "reconcile",
+        lambda *_args, **_kwargs: (
+            reconciled.append(True) or snapshot.environments.Reconciliation()
+        ),
+    )
+
+    snap = snapshot.build_world_snapshot()
+
+    assert snap.rc_enabled_list is failure
+    assert reconciled == [True]
 
 
 def test_snapshot_toggle_away_becomes_orphan(tmp_path, monkeypatch):

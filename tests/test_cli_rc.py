@@ -14,9 +14,254 @@ from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
+from cc_session_control.data.rc_enabled import (
+    EnabledListOperation,
+    EnabledListResult,
+    EnabledListStage,
+    EnabledListState,
+)
 from cc_session_control.data.rc_environment import EnvironmentIdCache
 from cc_session_control.data.tmux import TmuxWindow, WindowInventory
-from cc_session_control.models import EnvRecord, InventoryIssue, RCProject, Session
+from cc_session_control.models import (
+    EnvRecord,
+    InventoryIssue,
+    RCProject,
+    Session,
+    TrustDecision,
+)
+
+
+def test_successful_rc_cli_flows_keep_exact_stream_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Characterize byte-for-byte output before enabled-list migration."""
+
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(cfg, "rc_list", tmp_path / "rc-enabled")
+    monkeypatch.setattr(
+        rc,
+        "project_trust",
+        lambda _path: rc.ProjectTrustResult(
+            TrustDecision.TRUSTED,
+            ProjectSettingsResult(ProjectSettingsState.AVAILABLE, {}),
+        ),
+    )
+    monkeypatch.setattr(
+        rc,
+        "start_one_result",
+        lambda path: rc.StartResult(rc.StartState.STARTED, path),
+    )
+
+    assert cli.main(["rc", "add", str(project)]) == 0
+    assert capsys.readouterr() == (
+        f"Added to list: {project}\nStarted RC server for {project}\n",
+        "",
+    )
+
+    assert cli.main(["rc", "list"]) == 0
+    assert capsys.readouterr() == (f"{project}\n", "")
+
+    monkeypatch.setattr(
+        rc,
+        "start_many_result",
+        lambda paths: rc.StartManyResult(started=len(paths)),
+    )
+    assert cli.main(["rc", "up"]) == 0
+    assert capsys.readouterr() == ("Started 1 project(s)\n", "")
+
+    monkeypatch.setattr(
+        rc,
+        "stop_one_result",
+        lambda path: rc.StopResult(rc.StopState.NOT_RUNNING, path),
+    )
+    assert cli.main(["rc", "rm", str(project)]) == 0
+    assert capsys.readouterr() == (
+        f"Removed from the enabled list (not running): {project}\n",
+        "",
+    )
+
+    row = RCProject(
+        "project",
+        str(project),
+        True,
+        True,
+        "stopped",
+        True,
+    )
+    monkeypatch.setattr(
+        rc,
+        "scan_result",
+        lambda: rc.RCScanResult(
+            [row],
+            ProjectSettingsResult(ProjectSettingsState.AVAILABLE, {}),
+        ),
+    )
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda _inputs: sessions.SessionScanResult(),
+    )
+    assert cli.main(["rc", "status"]) == 0
+    assert capsys.readouterr() == (
+        f"  [stopped] auto  project  {project}\n",
+        "",
+    )
+
+
+def _enabled_failure(
+    operation: EnabledListOperation,
+    stage: EnabledListStage,
+    detail: str,
+    *,
+    committed: bool = False,
+) -> EnabledListResult:
+    return EnabledListResult(
+        operation,
+        EnabledListState.FAILED,
+        None,
+        changed=committed,
+        committed=committed,
+        stage=stage,
+        detail=detail,
+    )
+
+
+def test_rc_status_reports_exact_enabled_list_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    failure = _enabled_failure(
+        EnabledListOperation.LIST,
+        EnabledListStage.READ,
+        "permission denied",
+    )
+    monkeypatch.setattr(
+        rc,
+        "scan_result",
+        lambda: rc.RCScanResult(
+            [],
+            ProjectSettingsResult(ProjectSettingsState.AVAILABLE, {}),
+            enabled_list=failure,
+        ),
+    )
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda _inputs: sessions.SessionScanResult(),
+    )
+
+    assert cli.main(["rc", "status"]) == 1
+    assert capsys.readouterr() == (
+        "",
+        "Warning: enabled list inventory is partial: "
+        "stage=read; committed=false; detail=permission denied\n",
+    )
+
+
+def test_rc_add_reports_post_commit_unlock_failure_without_starting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    failure = _enabled_failure(
+        EnabledListOperation.ADD,
+        EnabledListStage.UNLOCK,
+        "flock: permission denied",
+        committed=True,
+    )
+    monkeypatch.setattr(
+        rc,
+        "project_trust",
+        lambda _path: rc.ProjectTrustResult(
+            TrustDecision.TRUSTED,
+            ProjectSettingsResult(ProjectSettingsState.AVAILABLE, {}),
+        ),
+    )
+    monkeypatch.setattr(rc, "list_add_result", lambda _path: failure, raising=False)
+    starts: list[str] = []
+    monkeypatch.setattr(
+        rc,
+        "start_one_result",
+        lambda path: starts.append(path),
+    )
+
+    assert cli.main(["rc", "add", str(project)]) == 1
+    assert capsys.readouterr() == (
+        "",
+        "Failed to add project to the enabled list: "
+        "stage=unlock; committed=true; detail=flock: permission denied; "
+        "list change committed before failure\n",
+    )
+    assert starts == []
+
+
+def test_rc_rm_does_not_stop_after_enabled_list_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    failure = _enabled_failure(
+        EnabledListOperation.REMOVE,
+        EnabledListStage.WRITE,
+        "read-only filesystem",
+    )
+    monkeypatch.setattr(
+        rc,
+        "remove_one_result",
+        lambda _path: rc.RemoveResult(failure, None),
+    )
+
+    assert cli.main(["rc", "rm", "/project"]) == 1
+    assert capsys.readouterr() == (
+        "",
+        "Failed to remove project from the enabled list: "
+        "stage=write; committed=false; detail=read-only filesystem\n",
+    )
+
+
+def test_rc_up_and_list_report_typed_enabled_list_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    failure = _enabled_failure(
+        EnabledListOperation.LIST,
+        EnabledListStage.LOCK,
+        "lock unavailable",
+    )
+    monkeypatch.setattr(
+        rc,
+        "start_all_listed_result",
+        lambda: rc.StartManyResult(enabled_list=failure),
+    )
+    monkeypatch.setattr(rc, "list_enabled_result", lambda: failure, raising=False)
+
+    assert cli.main(["rc", "up"]) == 1
+    assert capsys.readouterr() == (
+        "",
+        "Failed to read the enabled list: "
+        "stage=lock; committed=false; detail=lock unavailable\n",
+    )
+
+    assert cli.main(["rc", "list"]) == 1
+    assert capsys.readouterr() == (
+        "",
+        "Failed to read the enabled list: "
+        "stage=lock; committed=false; detail=lock unavailable\n",
+    )
 
 
 @pytest.mark.parametrize(

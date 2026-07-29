@@ -30,6 +30,7 @@ from ..data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
+from ..data.rc_enabled import EnabledListResult
 from ..models import InventoryIssue, RCProject, RCServer, TrustDecision
 from ._base import ListTabView
 from ._colspec import ColSpec, header_columns, row_columns
@@ -273,6 +274,7 @@ class RCView(ListTabView):
         self._projects: list[RCProject] = []
         self._servers: list[RCServer] = []
         self._settings = ProjectSettingsResult(ProjectSettingsState.MISSING, {})
+        self._enabled_list: EnabledListResult[tuple[str, ...]] | None = None
         self._environment_issue_count = 0
         self._inventory_issues: tuple[InventoryIssue, ...] = ()
         self._help = False
@@ -293,6 +295,7 @@ class RCView(ListTabView):
         """Apply one complete generation on the urwid main loop."""
         self._projects = list(batch.ordered_projects)
         self._settings = batch.snapshot.rc_project_settings
+        self._enabled_list = batch.snapshot.rc_enabled_list
         self._servers = list(batch.snapshot.rc_servers)
         reconciliation = batch.snapshot.environment_reconciliation
         self._environment_issue_count = len(reconciliation.ledger.warnings) + int(
@@ -338,9 +341,24 @@ class RCView(ListTabView):
             if self._environment_issue_count
             else ""
         )
+        enabled_issue = (
+            self._enabled_list is not None and not self._enabled_list.success
+        )
+        inventory_count = len(self._inventory_issues) + int(enabled_issue)
+        enabled_detail = ""
+        if enabled_issue and self._enabled_list is not None:
+            stage = (
+                self._enabled_list.stage.value
+                if self._enabled_list.stage is not None
+                else "unknown"
+            )
+            committed = "；变更已提交，需刷新" if self._enabled_list.committed else ""
+            enabled_detail = (
+                f"（自启列表 {stage}：{self._enabled_list.detail}{committed}）"
+            )
         inventory_text = (
-            f" · ⚠ RC 清单不完整 {len(self._inventory_issues)}"
-            if self._inventory_issues
+            f" · ⚠ RC 清单不完整 {inventory_count}{enabled_detail}"
+            if inventory_count
             else ""
         )
         return (

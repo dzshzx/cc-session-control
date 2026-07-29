@@ -25,6 +25,11 @@ from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
+from cc_session_control.data.rc_enabled import (
+    EnabledListOperation,
+    EnabledListResult,
+    EnabledListState,
+)
 from cc_session_control.models import (
     AgentJob,
     BridgeEnv,
@@ -44,6 +49,16 @@ def _settings(
     detail: str = "",
 ) -> ProjectSettingsResult:
     return ProjectSettingsResult(state, {}, detail)
+
+
+def _enabled_list(paths: tuple[str, ...]) -> EnabledListResult:
+    return EnabledListResult(
+        EnabledListOperation.LIST,
+        EnabledListState.SUCCEEDED,
+        paths,
+        changed=False,
+        committed=False,
+    )
 
 
 def _project(
@@ -136,7 +151,11 @@ def test_rc_handler_rejects_unknown_leaf(
 def test_handler_streams_are_injected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(rc, "list_enabled", lambda: ["/one", "/two"])
+    monkeypatch.setattr(
+        rc,
+        "list_enabled_result",
+        lambda: _enabled_list(("/one", "/two")),
+    )
     stdout = io.StringIO()
     stderr = io.StringIO()
     args = cli.build_parser().parse_args(["rc", "list"])
@@ -479,19 +498,23 @@ def test_rc_up_empty_success_and_partial_failure(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(rc, "list_enabled", lambda: [])
+    monkeypatch.setattr(
+        rc,
+        "start_all_listed_result",
+        lambda: rc.StartManyResult(enabled_list=_enabled_list(())),
+    )
     assert cli.main(["rc", "up"]) == 0
     assert capsys.readouterr().out == "List is empty\n"
 
-    monkeypatch.setattr(rc, "list_enabled", lambda: ["/one", "/two"])
     monkeypatch.setattr(
         rc,
-        "start_many_result",
-        lambda _paths: rc.StartManyResult(
+        "start_all_listed_result",
+        lambda: rc.StartManyResult(
             started=1,
             unavailable=1,
             untrusted=1,
             failed=1,
+            enabled_list=_enabled_list(("/one", "/two")),
         ),
     )
     assert cli.main(["rc", "up"]) == 1
@@ -503,8 +526,11 @@ def test_rc_up_empty_success_and_partial_failure(
 
     monkeypatch.setattr(
         rc,
-        "start_many_result",
-        lambda _paths: rc.StartManyResult(started=2),
+        "start_all_listed_result",
+        lambda: rc.StartManyResult(
+            started=2,
+            enabled_list=_enabled_list(("/one", "/two")),
+        ),
     )
     assert cli.main(["rc", "up"]) == 0
     assert capsys.readouterr().out == "Started 2 project(s)\n"
@@ -519,11 +545,14 @@ def test_rc_up_reports_each_typed_tmux_start_failure(
         "/project",
         "new-window: lost server connection",
     )
-    monkeypatch.setattr(rc, "list_enabled", lambda: ["/project"])
     monkeypatch.setattr(
         rc,
-        "start_many_result",
-        lambda _paths: rc.StartManyResult(failed=1, results=(failure,)),
+        "start_all_listed_result",
+        lambda: rc.StartManyResult(
+            failed=1,
+            results=(failure,),
+            enabled_list=_enabled_list(("/project",)),
+        ),
     )
 
     assert cli.main(["rc", "up"]) == 1
@@ -544,11 +573,14 @@ def test_rc_up_acknowledges_created_target_on_metadata_failure(
         "window-option: permission denied",
         target="rc:7",
     )
-    monkeypatch.setattr(rc, "list_enabled", lambda: ["/project"])
     monkeypatch.setattr(
         rc,
-        "start_many_result",
-        lambda _paths: rc.StartManyResult(failed=1, results=(failure,)),
+        "start_all_listed_result",
+        lambda: rc.StartManyResult(
+            failed=1,
+            results=(failure,),
+            enabled_list=_enabled_list(("/project",)),
+        ),
     )
 
     assert cli.main(["rc", "up"]) == 1

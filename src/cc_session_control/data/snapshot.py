@@ -21,6 +21,7 @@ from types import MappingProxyType
 from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
 from . import environments, liveness, rc, sessions
 from .project_settings import ProjectSettingsResult, ProjectSettingsState
+from .rc_enabled import EnabledListResult
 from .sessions import SessionScanResult
 
 
@@ -56,6 +57,7 @@ class WorldSnapshot:
             {},
         ),
     )
+    rc_enabled_list: EnabledListResult[tuple[str, ...]] | None = None
     rc_servers: tuple[RCServer, ...] = ()
     observed_envs: tuple[EnvRecord, ...] = ()
     file_referenced_envs: tuple[EnvRecord, ...] = ()
@@ -132,6 +134,7 @@ def build_world_snapshot() -> WorldSnapshot:
         agent_jobs=inputs.agent_jobs,
         rc_projects=tuple(rc_scan.projects),
         rc_project_settings=rc_scan.settings,
+        rc_enabled_list=rc_scan.enabled_list,
         rc_servers=tuple(rc_servers),
         observed_envs=tuple(recon.observed),
         file_referenced_envs=tuple(recon.file_referenced),

@@ -22,6 +22,12 @@ from cc_session_control.data.project_settings import (
     SettingWriteResult,
     SettingWriteState,
 )
+from cc_session_control.data.rc_enabled import (
+    EnabledListOperation,
+    EnabledListResult,
+    EnabledListStage,
+    EnabledListState,
+)
 from cc_session_control.data.refresh import RefreshBatch, RefreshFailure
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import (
@@ -729,7 +735,17 @@ def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
             writes.append((directory, value)) or _updated_setting(directory)
         ),
     )
-    monkeypatch.setattr(rc_mod, "toggle_autostart", lambda name: False)
+    monkeypatch.setattr(
+        rc_mod,
+        "toggle_autostart_result",
+        lambda _name: EnabledListResult(
+            EnabledListOperation.TOGGLE,
+            EnabledListState.SUCCEEDED,
+            False,
+            changed=True,
+            committed=True,
+        ),
+    )
 
     app = FakeApp()
     view = RCView(app)
@@ -874,6 +890,32 @@ def test_rc_view_status_counts_typed_ledger_warning_and_failure():
     view.apply_refresh(_refresh_batch(snap))
 
     assert "⚠ 环境台账异常 2" in view.status.original_widget.get_text()[0]
+
+
+def test_rc_view_status_exposes_exact_enabled_list_failure() -> None:
+    failure = EnabledListResult(
+        EnabledListOperation.LIST,
+        EnabledListState.FAILED,
+        None,
+        changed=False,
+        committed=False,
+        stage=EnabledListStage.READ,
+        detail="permission denied",
+    )
+    snap = WorldSnapshot(
+        rc_projects=[_make_project(name="trusted")],
+        rc_enabled_list=failure,
+    )
+    app = FakeApp()
+    view = RCView(app)
+    app.views = [view]
+
+    view.apply_refresh(_refresh_batch(snap))
+
+    status = view.status.original_widget.get_text()[0]
+    assert "⚠ RC 清单不完整 1" in status
+    assert "自启列表 read：permission denied" in status
+    assert "trusted" in _row_text(view.walker[0])
 
 
 def test_rc_view_status_does_not_count_missing_unchanged_ledger():
@@ -1073,7 +1115,17 @@ def test_rc_view_reports_typed_settings_write_failure(monkeypatch):
 def test_rc_view_a_key_notifies_with_new_label(monkeypatch):
     from cc_session_control.data import rc as rc_mod
 
-    monkeypatch.setattr(rc_mod, "toggle_autostart", lambda name: True)
+    monkeypatch.setattr(
+        rc_mod,
+        "toggle_autostart_result",
+        lambda _name: EnabledListResult(
+            EnabledListOperation.TOGGLE,
+            EnabledListState.SUCCEEDED,
+            True,
+            changed=True,
+            committed=True,
+        ),
+    )
 
     app = FakeApp()
     view = RCView(app)

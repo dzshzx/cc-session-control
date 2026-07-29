@@ -8,6 +8,14 @@ from argparse import Namespace
 from typing import TextIO
 
 from .cli_streams import run_with_streams
+from .data.rc_enabled import EnabledListResult
+
+
+def _enabled_list_failure[Value](result: EnabledListResult[Value]) -> str:
+    stage = result.stage.value if result.stage is not None else "unknown"
+    committed = str(result.committed).lower()
+    suffix = "; list change committed before failure" if result.committed else ""
+    return f"stage={stage}; committed={committed}; detail={result.detail}{suffix}"
 
 
 def _run_rc(args: Namespace) -> int:
@@ -38,6 +46,13 @@ def _run_rc(args: Namespace) -> int:
                 "Project settings unavailable: "
                 f"{rc_scan_result.settings.state.value}"
                 f"{': ' + rc_scan_result.settings.detail if rc_scan_result.settings.detail else ''}",
+                file=sys.stderr,
+            )
+        scan_enabled_list = rc_scan_result.enabled_list
+        if scan_enabled_list is not None and not scan_enabled_list.success:
+            print(
+                "Warning: enabled list inventory is partial: "
+                f"{_enabled_list_failure(scan_enabled_list)}",
                 file=sys.stderr,
             )
         for liveness_issue in liveness_snapshot.issues:
@@ -117,11 +132,11 @@ def _run_rc(args: Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        try:
-            rc.list_add(path)
-        except (OSError, UnicodeError) as exc:
+        add_enabled_list = rc.list_add_result(path)
+        if not add_enabled_list.success:
             print(
-                f"Failed to add project to the enabled list: {exc}",
+                "Failed to add project to the enabled list: "
+                f"{_enabled_list_failure(add_enabled_list)}",
                 file=sys.stderr,
             )
             return 1
@@ -158,24 +173,31 @@ def _run_rc(args: Namespace) -> int:
 
     if sub == "rm":
         path = os.path.abspath(args.project)
-        try:
-            remove_result = rc.remove_one_result(path)
-        except (OSError, UnicodeError) as exc:
-            print(f"Failed to remove {path}: {exc}", file=sys.stderr)
+        remove_result = rc.remove_one_result(path)
+        remove_enabled_list = remove_result.enabled_list
+        if not remove_enabled_list.success:
+            print(
+                "Failed to remove project from the enabled list: "
+                f"{_enabled_list_failure(remove_enabled_list)}",
+                file=sys.stderr,
+            )
             return 1
-        if remove_result.stop.state is rc.StopState.FAILED:
+        stop_result = remove_result.stop
+        if stop_result is None:
+            raise AssertionError("successful enabled-list removal must attempt stop")
+        if stop_result.state is rc.StopState.FAILED:
             prefix = (
                 "Removed from the enabled list, but "
                 if remove_result.list_removed
                 else ""
             )
-            detail = remove_result.stop.detail or "tmux operation failed"
+            detail = stop_result.detail or "tmux operation failed"
             print(
                 f"{prefix}failed to stop the RC window: {path}: {detail}",
                 file=sys.stderr,
             )
             return 1
-        if remove_result.stop.state is rc.StopState.STOPPED:
+        if stop_result.state is rc.StopState.STOPPED:
             print(f"Removed and stopped: {path}")
             return 0
         if remove_result.list_removed:
@@ -185,15 +207,22 @@ def _run_rc(args: Namespace) -> int:
         return 1
 
     if sub == "up":
-        try:
-            enabled = rc.list_enabled()
-        except (OSError, UnicodeError) as exc:
-            print(f"Failed to read the enabled list: {exc}", file=sys.stderr)
+        batch_result = rc.start_all_listed_result()
+        batch_enabled_list = batch_result.enabled_list
+        if batch_enabled_list is not None and not batch_enabled_list.success:
+            print(
+                "Failed to read the enabled list: "
+                f"{_enabled_list_failure(batch_enabled_list)}",
+                file=sys.stderr,
+            )
             return 1
-        if not enabled:
+        if (
+            batch_enabled_list is not None
+            and batch_enabled_list.success
+            and batch_enabled_list.value == ()
+        ):
             print("List is empty")
             return 0
-        batch_result = rc.start_many_result(enabled)
         print(f"Started {batch_result.started} project(s)")
         if batch_result.unavailable:
             print(
@@ -265,12 +294,17 @@ def _run_rc(args: Namespace) -> int:
         return 1
 
     if sub == "list":
-        try:
-            enabled = rc.list_enabled()
-        except (OSError, UnicodeError) as exc:
-            print(f"Failed to read the enabled list: {exc}", file=sys.stderr)
+        listed_enabled = rc.list_enabled_result()
+        if not listed_enabled.success:
+            print(
+                "Failed to read the enabled list: "
+                f"{_enabled_list_failure(listed_enabled)}",
+                file=sys.stderr,
+            )
             return 1
-        for name in enabled:
+        if listed_enabled.value is None:
+            raise AssertionError("successful enabled-list read must carry paths")
+        for name in listed_enabled.value:
             print(name)
         return 0
 

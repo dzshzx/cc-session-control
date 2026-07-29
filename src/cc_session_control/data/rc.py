@@ -8,13 +8,13 @@ from __future__ import annotations
 import os
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from dataclasses import replace
 
 from ..config import cfg
 from ..models import (
     RCProject,
     RCServer,
-    Session,
     Status,
     TrustDecision,
     effective_trust_decision,
@@ -27,7 +27,7 @@ from .project_settings import (
     read_rc_at_startup,
     write_rc_at_startup,
 )
-from .rc_enabled import EnabledListStore, migrate_lines
+from .rc_enabled import EnabledListResult, EnabledListStore, migrate_lines
 from .rc_outcomes import (
     ProjectTrustResult,
     RCScanResult,
@@ -73,6 +73,10 @@ def _enabled_store() -> EnabledListStore:
     return EnabledListStore(cfg.rc_list, _legacy_workspace_root)
 
 
+def list_enabled_result() -> EnabledListResult[tuple[str, ...]]:
+    return _enabled_store().list_result()
+
+
 def list_enabled() -> list[str]:
     return _enabled_store().list()
 
@@ -81,12 +85,24 @@ def list_has(path: str) -> bool:
     return _enabled_store().contains(path)
 
 
+def list_add_result(path: str) -> EnabledListResult[bool]:
+    return _enabled_store().add_result(path)
+
+
 def list_add(path: str) -> None:
     _enabled_store().add(path)
 
 
+def list_rm_result(path: str) -> EnabledListResult[bool]:
+    return _enabled_store().remove_result(path)
+
+
 def list_rm(path: str) -> bool:
     return _enabled_store().remove(path)
+
+
+def toggle_autostart_result(path: str) -> EnabledListResult[bool]:
+    return _enabled_store().toggle_result(path)
 
 
 def toggle_autostart(path: str) -> bool:
@@ -181,12 +197,6 @@ def _tmux_window_inventory() -> tmux.WindowInventory:
     return tmux.list_windows_inventory(cfg.rc_session)
 
 
-def _tmux_windows() -> list[tmux.TmuxWindow]:
-    """Compatibility records-only window view."""
-
-    return list(_tmux_window_inventory().records)
-
-
 def _tmux_capture_pane(target: str) -> str:
     """Compatibility text-only pane capture."""
 
@@ -197,16 +207,6 @@ def _tmux_capture_pane_result(target: str) -> tmux.PaneCaptureResult:
     """Typed pane capture used by production RC inventory."""
 
     return tmux.capture_pane_result(target)
-
-
-def _window_for(path: str) -> tmux.TmuxWindow | None:
-    """The managed window belonging to `path`, or None (normpath equality on
-    the window's declared/adopted `path` metadata — never by window name)."""
-    norm = os.path.normpath(path)
-    for w in _tmux_windows():
-        if w.path and os.path.normpath(w.path) == norm:
-            return w
-    return None
 
 
 def _window_for_inventory(
@@ -242,14 +242,18 @@ def scan_result(
     settings = _read_projects()
     projects_map = settings.projects
     trusted = _trusted_in(projects_map)
-    enabled = set(list_enabled())
+    enabled_result = list_enabled_result()
+    enabled = set(enabled_result.value or ())
     inventory = (
         _tmux_window_inventory() if window_inventory is None else window_inventory
     )
     by_path = {os.path.normpath(w.path): w for w in inventory.records if w.path}
+    candidates = trusted | enabled
+    if not enabled_result.success:
+        candidates |= {window.path for window in inventory.records if window.path}
 
     result: list[RCProject] = []
-    for path in sorted(trusted | enabled):
+    for path in sorted(candidates):
         win = by_path.get(os.path.normpath(path))
         dir_exists = os.path.isdir(path)
         if not dir_exists and path not in enabled and win is None:
@@ -297,6 +301,7 @@ def scan_result(
         result,
         settings,
         rc_outcomes.window_inventory_issues(inventory),
+        enabled_result,
     )
 
 
@@ -306,24 +311,7 @@ def scan() -> list[RCProject]:
     return scan_result().projects
 
 
-def order_by_activity(
-    projects: Sequence[RCProject],
-    sessions: Sequence[Session],
-) -> list[RCProject]:
-    """Order projects by newest exact-cwd activity, then path."""
-
-    latest: dict[str, float] = {}
-    for session in sessions:
-        if session.cwd:
-            key = os.path.normpath(session.cwd)
-            latest[key] = max(session.mtime, latest.get(key, 0.0))
-    return sorted(
-        projects,
-        key=lambda project: (
-            -latest.get(os.path.normpath(project.directory), 0.0),
-            project.directory,
-        ),
-    )
+order_by_activity = rc_outcomes.order_by_activity
 
 
 def _capture_env_id(target: str) -> str:
@@ -527,14 +515,17 @@ def stop_one(path: str) -> bool:
 def remove_one_result(path: str) -> RemoveResult:
     """Remove from autostart and retain whether stopping the window failed."""
 
-    list_removed = list_rm(path)
-    return RemoveResult(list_removed, stop_one_result(path))
+    enabled_list = list_rm_result(path)
+    if not enabled_list.success:
+        return RemoveResult(enabled_list, None)
+    return RemoveResult(enabled_list, stop_one_result(path))
 
 
 def remove_one(path: str) -> bool:
     """Remove one project from autostart and stop its managed RC window."""
 
-    return remove_one_result(path).stop.success
+    result = remove_one_result(path)
+    return result.stop is not None and result.stop.success
 
 
 def stop_all_result() -> StopAllResult:
@@ -581,10 +572,18 @@ def start_many_result(projects: list[str]) -> StartManyResult:
 
 def start_all_listed() -> int:
     """Start every project currently enabled in the autostart list."""
-    return start_many(list_enabled())
+    return start_all_listed_result().started
 
 
 def start_all_listed_result() -> StartManyResult:
     """Typed batch result for operator-facing callers."""
 
-    return start_many_result(list_enabled())
+    enabled_list = list_enabled_result()
+    if not enabled_list.success:
+        return StartManyResult(enabled_list=enabled_list)
+    if enabled_list.value is None:
+        raise AssertionError("successful enabled-list result must carry paths")
+    return replace(
+        start_many_result(list(enabled_list.value)),
+        enabled_list=enabled_list,
+    )

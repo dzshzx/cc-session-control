@@ -10,6 +10,11 @@ veto, and ancestor matching must respect path-segment boundaries.
 
 from __future__ import annotations
 
+from cc_session_control.data.rc_enabled import (
+    EnabledListOperation,
+    EnabledListResult,
+    EnabledListState,
+)
 from cc_session_control.models import (
     TrustDecision,
     effective_trust,
@@ -17,6 +22,16 @@ from cc_session_control.models import (
 )
 
 WS = "/home/u/workspace"
+
+
+def _enabled_list(paths=()) -> EnabledListResult:
+    return EnabledListResult(
+        EnabledListOperation.LIST,
+        EnabledListState.SUCCEEDED,
+        tuple(paths),
+        changed=False,
+        committed=False,
+    )
 
 
 def test_own_true_flag_is_trusted():
@@ -119,7 +134,7 @@ def _wire_scan(tmp_path, monkeypatch, projects, enabled=(), temp_roots=()):
     cj = tmp_path / ".claude.json"
     cj.write_text(json.dumps({"projects": projects}))
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
-    monkeypatch.setattr(rc, "list_enabled", lambda: list(enabled))
+    monkeypatch.setattr(rc, "list_enabled_result", lambda: _enabled_list(enabled))
     monkeypatch.setattr(
         rc,
         "_tmux_window_inventory",
@@ -180,7 +195,11 @@ def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
     claude_json = tmp_path / ".claude.json"
     claude_json.write_text("{broken")
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(rc, "list_enabled", lambda: [str(project)])
+    monkeypatch.setattr(
+        rc,
+        "list_enabled_result",
+        lambda: _enabled_list((str(project),)),
+    )
     monkeypatch.setattr(
         rc,
         "_tmux_window_inventory",
