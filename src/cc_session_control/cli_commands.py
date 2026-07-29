@@ -267,6 +267,9 @@ def _cmd_prune_aged(
 
 
 def _cmd_resume(args: Namespace) -> int:
+    import os
+
+    from .actions import session_ops
     from .actions.resume_list import render
     from .data import liveness
     from .data.sessions import scan_result
@@ -292,6 +295,73 @@ def _cmd_resume(args: Namespace) -> int:
                 file=sys.stderr,
             )
         return 1
+
+    take_over_sid: str | None = getattr(args, "take_over", None)
+    if take_over_sid is not None:
+        matches = [
+            session
+            for session in transcript_scan.sessions
+            if session.sid == take_over_sid
+        ]
+        if not matches:
+            print(
+                f"Refused: missing session id {take_over_sid!r}.",
+                file=sys.stderr,
+            )
+            return 1
+        if len(matches) != 1:
+            print(
+                f"Refused: ambiguous session id {take_over_sid!r}; "
+                f"found {len(matches)} exact matches.",
+                file=sys.stderr,
+            )
+            return 1
+
+        target = matches[0]
+        if target.current:
+            print(
+                f"Refused: session {take_over_sid!r} is the current session.",
+                file=sys.stderr,
+            )
+            return 1
+        if not target.cwd or not os.path.isdir(target.cwd):
+            print(
+                f"Refused: session {take_over_sid!r} has no usable "
+                f"execution-time cwd: {target.cwd!r}.",
+                file=sys.stderr,
+            )
+            return 1
+        if target.alive:
+            missing = []
+            if target.pid is None:
+                missing.append("pid")
+            if not target.proc_start:
+                missing.append("proc_start")
+            if missing:
+                print(
+                    f"Refused: live session {take_over_sid!r} has incomplete "
+                    f"execution-time identity ({', '.join(missing)}).",
+                    file=sys.stderr,
+                )
+                return 1
+
+        try:
+            outcome = session_ops.do_resume_result(target)
+        except OSError as exc:
+            print(
+                f"Failed to take over session {take_over_sid}: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        if not outcome.success:
+            detail = f": {outcome.detail}" if outcome.detail else ""
+            print(
+                f"Refused: take over did not occur for session "
+                f"{take_over_sid!r}{detail}.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
 
     render_result = render(
         list(transcript_scan.sessions),

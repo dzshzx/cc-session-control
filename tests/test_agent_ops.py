@@ -254,12 +254,9 @@ def test_resume_takeover_builds_session_for_existing_resume_path(monkeypatch):
     assert s.tmux_target == "proj:4"  # resident worker -> tmux Enter attaches in place
     assert calls["snapshot"] == 1
 
-    # The adapter feeds the EXISTING resume machinery unchanged: a live,
-    # non-current session is taken over (old pid killed first).
-    assert (
-        resume_cmd(s)
-        == "kill 4242 && sleep 1 && cd /tmp/proj && claude --resume sid-take"
-    )
+    # A copied live command carries only the durable sid. Runtime pid/start/cwd
+    # are reacquired when the operator executes the command.
+    assert resume_cmd(s) == "csctl resume --take-over sid-take"
 
 
 def test_resume_takeover_dead_worker_no_kill(monkeypatch):

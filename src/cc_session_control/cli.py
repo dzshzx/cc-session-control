@@ -142,6 +142,14 @@ def build_parser() -> argparse.ArgumentParser:
         dest="all_pages",
         help="List everything, no paging",
     )
+    resume.add_argument(
+        "--take-over",
+        metavar="SID",
+        help=(
+            "Re-resolve one exact session id and resume it through the "
+            "execution-time takeover safety gates"
+        ),
+    )
     resume.set_defaults(handler=cli_commands.handle_resume)
 
     skill = commands.add_parser(

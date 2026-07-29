@@ -118,7 +118,9 @@ def test_resume_cmd_dead():
 def test_resume_cmd_alive_non_current():
     s = _make_session(sid="sid1", cwd="/tmp/proj", alive=True, current=False, pid=4242)
     cmd = resume_cmd(s)
-    assert cmd == "kill 4242 && sleep 1 && cd /tmp/proj && claude --resume sid1"
+    assert cmd == "csctl resume --take-over sid1"
+    assert "4242" not in cmd
+    assert "kill" not in cmd
 
 
 def test_resume_cmd_fork():
@@ -138,14 +140,16 @@ def test_resume_cmd_fork_while_alive_drops_kill_prefix():
 def test_resume_cmd_current_no_kill():
     s = _make_session(sid="sid1", cwd="/tmp/proj", alive=True, current=True, pid=4242)
     cmd = resume_cmd(s)
-    assert cmd == "cd /tmp/proj && claude --resume sid1"
+    assert cmd == "csctl resume --take-over sid1"
+    assert "4242" not in cmd
+    assert "kill" not in cmd
 
 
 def test_resume_cmd_alive_no_pid_omits_kill():
-    # L7: should_kill is True (alive, non-current, not fork) but pid is unknown ->
-    # the kill segment must be omitted (never emit a bare `kill None`).
+    # A live row never serializes its incomplete execution evidence into a
+    # direct resume command. The execution-time resolver will fail closed.
     s = _make_session(sid="sid1", cwd="/tmp/proj", alive=True, current=False, pid=None)
-    assert resume_cmd(s) == "cd /tmp/proj && claude --resume sid1"
+    assert resume_cmd(s) == "csctl resume --take-over sid1"
 
 
 def test_resume_cmd_quotes_cwd_with_spaces():

@@ -1,7 +1,7 @@
 """Headless resume listing (`csctl resume`).
 
 Filters, paginates, and renders scanned sessions as ready-to-copy resume
-commands. Command synthesis and kill semantics stay in
+commands. Command synthesis and takeover routing stay in
 `session_ops.resume_cmd` / `_resume_plan` — this module only selects and
 formats; it must not re-derive takeover decisions.
 """
@@ -82,9 +82,9 @@ def format_session(s: Session) -> list[str]:
         lines.append(f"    {resume_cmd(s)}")
         if s.alive:
             lines.append(
-                "    ^ live session: the kill stops its running process first "
-                "(single timeline, no fork); to attach without interrupting, "
-                "use the fleet view instead"
+                "    ^ live session: this command re-checks the live process "
+                "and safety evidence at execution time, then uses the guarded "
+                "takeover path (single timeline, no fork)"
             )
     return lines
 

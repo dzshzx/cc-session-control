@@ -90,8 +90,10 @@ def test_format_live_session_gives_takeover_command(tmp_path):
     s = _session(tmp_path, alive=True, pid=4242)
     text = "\n".join(resume_list.format_session(s))
     assert "[live]" in text
-    assert "kill 4242 && sleep 1" in text
-    assert "claude --resume aaaa1111" in text
+    assert "csctl resume --take-over aaaa1111" in text
+    assert "4242" not in text
+    assert "kill" not in text
+    assert "re-checks the live process" in text
 
 
 def test_format_current_session_never_prints_kill(tmp_path):

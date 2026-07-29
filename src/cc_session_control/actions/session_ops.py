@@ -123,8 +123,9 @@ def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
     Returns (cwd, args, should_kill). Unified kill semantics: a fork is a copy
     and leaves the original running, while a plain resume takes the session
     over — so we kill only when it is alive, not the current session, and we
-    are NOT forking. `resume_cmd` and `do_resume_result` both obey this single
-    decision; they must not re-derive it.
+    are NOT forking. Runtime resume operations and `would_take_over` obey this
+    single decision; copied live commands defer the whole decision to the
+    execution-time `csctl resume --take-over` scan.
     """
     args = ["claude", "--resume", s.sid]
     if fork:
@@ -146,10 +147,19 @@ def would_take_over(s: Session, fork: bool = False) -> bool:
 
 
 def resume_cmd(s: Session, fork: bool = False) -> str:
-    cwd, args, should_kill = _resume_plan(s, fork)
+    """Return a ready-to-copy command without serializing destructive state.
+
+    A live session can change pid, process generation, cwd, or current-session
+    status while a copied command waits in a clipboard. Carry only its durable
+    sid and make ``csctl resume --take-over`` reacquire that evidence at
+    execution time. Dead resumes and forks are non-destructive, so their
+    direct commands remain useful.
+    """
+    if s.alive and not fork:
+        return shlex.join(["csctl", "resume", "--take-over", s.sid])
+
+    cwd, args, _ = _resume_plan(s, fork)
     parts: list[str] = []
-    if should_kill and s.pid:  # never emit a bare `kill None` (L7)
-        parts.append(f"kill {s.pid} && sleep 1")
     if cwd:
         parts.append(f"cd {shlex.quote(cwd)}")
     parts.append(shlex.join(args))

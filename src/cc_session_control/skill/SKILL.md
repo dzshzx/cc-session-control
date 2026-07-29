@@ -23,7 +23,7 @@ description: >-
 csctl          # 三个 tab（tmux-first，启动落在项目 tab）：项目（Enter 新建 tmux 会话 / o 启动远控）/ 会话 / 后台 agent；清理在会话 tab 的子菜单
 ```
 
-会话 tab 键位：方向键移动 · `/` 过滤 · `Enter` tmux 接回（主操作：恢复进 per-project tmux 窗口并进入，断线不死；已驻留 ⧉ 会话就地进入；接活会话先确认）· `t` 终端接回（裸终端兜底，真接续自动 cd+kill）· `f` 分叉进 tmux · `s` 停止活会话(确认) · `R` 转后台（进 tmux 不进入、不开远控，留在 csctl）· `d` 删除已结束会话 · `y` 复制命令到剪贴板 · `h` 桥接/SDK 显隐 · `c` 清理子菜单 · `r` 刷新 · `q` 退出。接回 = 离开 csctl（attach 进 tmux 或 exec 成 claude）。
+会话 tab 键位：方向键移动 · `/` 过滤 · `Enter` tmux 接回（主操作：恢复进 per-project tmux 窗口并进入，断线不死；已驻留 ⧉ 会话就地进入；接活会话先确认）· `t` 终端接回（裸终端兜底，真接续自动重新判活并安全接管）· `f` 分叉进 tmux · `s` 停止活会话(确认) · `R` 转后台（进 tmux 不进入、不开远控，留在 csctl）· `d` 删除已结束会话 · `y` 复制命令到剪贴板 · `h` 桥接/SDK 显隐 · `c` 清理子菜单 · `r` 刷新 · `q` 退出。接回 = 离开 csctl（attach 进 tmux 或 exec 成 claude）。
 
 ## 心智模型：会话形态
 
@@ -69,9 +69,9 @@ csctl resume [关键词] --all      # 不分页全列
 **接回规则**（`csctl resume` 已按死活自动给对应命令，手动时记住）：
 
 - 会话**已死**（不在 `claude agents`）→ `cd <dir> && claude --resume <id>`，全历史真接续。
-- 会话**还活着** → 直接 `--resume` 会被拒。**真接续**（单时间线、无 fork）要先把它的后台进程停掉再接：`kill <pid> && sleep 1 && cd <dir> && claude --resume <id>`（代价是中断它正在跑的活）。**不想中断**就用 fleet 页 TUI 接管：空输入框按 `←` → 选中那行 → 按 `→`/Enter。
+- 会话**还活着** → 直接 `--resume` 会被拒。使用列表打印的 `csctl resume --take-over <id>`：它只保存稳定的 session id，真正执行时重新扫描 pid、`procStart`、cwd 与 current 状态，证据完整且目标唯一时才经统一安全接管路径终止旧进程并接续。不要手写或保存针对快照 PID 的终止命令；PID 复用或会话状态变化可能伤及无关进程。**不想中断**就用 TUI 查看并选择合适操作。
 - 只有**想要一份分叉副本**（保留原会话另起一条）时才用 `claude --resume <id> --fork-session`。
-- `csctl resume` 不会对**你当前所在的会话**给 kill 命令（防自杀），只标注你在这。
+- `csctl resume` 对**你当前所在的会话**只做标注，不给可执行接回命令；`--take-over` 执行时也会重新识别并拒绝当前会话。
 
 ## 接管远程控制 / 网页会话到本地
 
