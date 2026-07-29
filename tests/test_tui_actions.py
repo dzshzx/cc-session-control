@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
 
 from cc_session_control.actions import tui_actions
-from cc_session_control.actions.runner import ActionStatus
+from cc_session_control.actions.runner import (
+    Accepted,
+    ActionResult,
+    ActionRunner,
+    ActionStatus,
+)
 from cc_session_control.data import proc
 from cc_session_control.data.project_settings import (
     SettingWriteFailure,
@@ -395,6 +401,35 @@ def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
     setting = tui_actions.write_auto_rc("/project", "project", True)
     assert setting.status is ActionStatus.FAILURE
     assert setting.message == "配置写入失败（write）: read only"
+
+
+def test_deleted_project_after_setting_submission_is_a_visible_failure(
+    tmp_path,
+) -> None:
+    project = tmp_path / "deleted-project"
+    project.mkdir()
+    worker_started = threading.Event()
+    run_setting = threading.Event()
+    ready = threading.Event()
+
+    def delayed_write() -> ActionResult:
+        worker_started.set()
+        assert run_setting.wait(1)
+        return tui_actions.write_auto_rc(str(project), "project", True)
+
+    runner = ActionRunner(ready.set)
+    submitted = runner.submit("project.write-settings", delayed_write)
+    assert isinstance(submitted, Accepted)
+    assert worker_started.wait(1)
+    project.rmdir()
+    run_setting.set()
+    assert ready.wait(1)
+
+    result = runner.consume_result()
+    assert result is not None
+    assert result.status is ActionStatus.FAILURE
+    assert result.message.startswith("配置写入失败（create-directory）:")
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_expected_autostart_io_failure_becomes_typed_failure(monkeypatch) -> None:

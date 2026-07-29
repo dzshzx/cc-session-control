@@ -352,7 +352,7 @@ def write_rc_at_startup(
     settings_dir = Path(directory) / ".claude"
     path = settings_dir / "settings.local.json"
     try:
-        settings_dir.mkdir(parents=True, exist_ok=True)
+        settings_dir.mkdir(exist_ok=True)
     except OSError as exc:
         return _write_failure(
             path,

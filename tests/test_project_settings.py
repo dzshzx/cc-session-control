@@ -261,6 +261,7 @@ def test_rc_setting_write_creates_file_preserves_keys_and_reports_unchanged(
 
 def test_rc_setting_write_creates_missing_settings_file(tmp_path):
     project = tmp_path / "new-app"
+    project.mkdir()
 
     result = write_rc_at_startup(project, False)
 
@@ -268,6 +269,33 @@ def test_rc_setting_write_creates_missing_settings_file(tmp_path):
     assert json.loads(result.path.read_text()) == {
         "remoteControlAtStartup": False,
     }
+
+
+def test_rc_setting_write_does_not_recreate_deleted_project(tmp_path):
+    project = tmp_path / "deleted-app"
+    project.mkdir()
+    project.rmdir()
+
+    result = write_rc_at_startup(project, True)
+
+    assert result.state is SettingWriteState.FAILED
+    assert result.failure is SettingWriteFailure.CREATE_DIRECTORY
+    assert result.detail
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_rc_setting_write_refuses_non_directory_project(tmp_path):
+    project = tmp_path / "not-a-directory"
+    original = b"project marker"
+    project.write_bytes(original)
+
+    result = write_rc_at_startup(project, True)
+
+    assert result.state is SettingWriteState.FAILED
+    assert result.failure is SettingWriteFailure.CREATE_DIRECTORY
+    assert result.detail
+    assert project.read_bytes() == original
+    assert list(tmp_path.iterdir()) == [project]
 
 
 def test_rc_setting_write_can_remove_override_without_losing_other_keys(
