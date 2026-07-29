@@ -445,9 +445,9 @@ def test_orphan_execution_refuses_replaced_base_and_preserves_external(
         lambda: liveness.LivenessSnapshot(),
     )
     monkeypatch.setattr(
-        cleanup.session_data,
-        "scan_result",
-        lambda inputs: cleanup.session_data.SessionScanResult(),
+        cleanup.transcripts,
+        "load_inventory",
+        lambda _root: cleanup.transcripts.TranscriptInventory(),
     )
     result = cleanup.execute_orphan_removals(
         plan.orphan_entries,

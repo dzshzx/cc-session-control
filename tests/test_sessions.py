@@ -476,6 +476,23 @@ def test_scan_result_ignores_malformed_lines_in_readable_transcript(
     assert CLI_SID in {row.sid for row in result.sessions}
 
 
+def test_scan_result_retains_relevant_json_failure_as_incomplete_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    _setup_world(tmp_path, monkeypatch)
+    broken = tmp_path / "projects" / "proj1" / f"{CLI_SID}.jsonl"
+    broken.write_text('{"cwd":"/work/proj1"\n', encoding="utf-8")
+
+    result = sessions_mod.scan_result()
+
+    assert result.complete is False
+    assert {row.sid for row in result.sessions} == {VSC_SID, SDK_SID, BG_SID}
+    assert result.issues[0].source == "session transcript"
+    assert result.issues[0].path == str(broken)
+    assert "line 1: invalid JSON" in result.issues[0].detail
+
+
 def test_scan_result_missing_projects_root_is_complete_empty_state(
     tmp_path,
     monkeypatch,

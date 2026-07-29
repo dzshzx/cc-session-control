@@ -19,7 +19,14 @@ import pytest
 from cc_session_control import cli, cli_commands, cli_rc
 from cc_session_control.actions import session_ops
 from cc_session_control.config import cfg
-from cc_session_control.data import age_cleanup, cleanup, liveness, registry, sessions
+from cc_session_control.data import (
+    age_cleanup,
+    cleanup,
+    liveness,
+    registry,
+    sessions,
+    transcripts,
+)
 from cc_session_control.data import proc as proc_mod
 from cc_session_control.data.liveness import LivenessSnapshot
 from cc_session_control.models import Session, SessionProc
@@ -129,18 +136,21 @@ def test_prune_orphan_apply_reports_fresh_incomplete_transcript_and_preserves_ta
         "probe_current_ancestors",
         lambda: proc_mod.AncestorProbe(frozenset()),
     )
-    issue = sessions.TranscriptIssue(
+    issue = transcripts.TranscriptIssue(
         "session transcript",
         "/runtime/projects/project/ghost.jsonl",
         "permission denied",
     )
-    scans = iter(
-        (
-            sessions.SessionScanResult(),
-            sessions.SessionScanResult(issues=(issue,)),
-        )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda inputs=None: sessions.SessionScanResult(),
     )
-    monkeypatch.setattr(sessions, "scan_result", lambda inputs=None: next(scans))
+    monkeypatch.setattr(
+        transcripts,
+        "load_inventory",
+        lambda _root: transcripts.TranscriptInventory(issues=(issue,)),
+    )
 
     assert cli.main(["prune", "--sweep-orphans", "--apply"]) == 1
     captured = capsys.readouterr()

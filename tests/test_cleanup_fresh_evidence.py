@@ -10,7 +10,14 @@ import pytest
 from cc_session_control import cli_commands
 from cc_session_control.actions import agent_ops
 from cc_session_control.config import cfg
-from cc_session_control.data import cleanup, cleanup_liveness, liveness, proc, sessions
+from cc_session_control.data import (
+    cleanup,
+    cleanup_liveness,
+    liveness,
+    proc,
+    sessions,
+    transcripts,
+)
 from cc_session_control.data.removal import CleanupExecution, CleanupPlan
 from cc_session_control.models import AgentJob, Session, SessionProc
 from cc_session_control.views import _sessions_cleanup as cleanup_view
@@ -87,9 +94,9 @@ def test_orphan_executor_ignores_stale_known_set_and_keeps_fresh_known_sid(
         lambda: evidence,
     )
     monkeypatch.setattr(
-        sessions,
-        "scan_result",
-        lambda inputs=None: sessions.SessionScanResult(),
+        cleanup.transcripts,
+        "load_inventory",
+        lambda _root: transcripts.TranscriptInventory(),
     )
 
     result = cleanup.execute_orphan_removals(
@@ -119,10 +126,17 @@ def test_orphan_executor_keeps_transcript_created_after_preview(
         lambda: evidence,
     )
     monkeypatch.setattr(
-        sessions,
-        "scan_result",
-        lambda inputs=None: sessions.SessionScanResult(
-            (_session(tmp_path / f"{sid}.jsonl", sid),)
+        cleanup.transcripts,
+        "load_inventory",
+        lambda _root: transcripts.TranscriptInventory(
+            (
+                transcripts.TranscriptRecord(
+                    sid=sid,
+                    cwd="/tmp/project",
+                    path=str(tmp_path / f"{sid}.jsonl"),
+                    mtime=0.0,
+                ),
+            )
         ),
     )
 
@@ -155,15 +169,15 @@ def test_orphan_executor_refuses_all_targets_when_transcripts_are_incomplete(
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(),
     )
-    issue = sessions.TranscriptIssue(
+    issue = transcripts.TranscriptIssue(
         "session transcript",
         "/runtime/projects/project/unreadable-sid.jsonl",
         "permission denied",
     )
     monkeypatch.setattr(
-        sessions,
-        "scan_result",
-        lambda inputs=None: sessions.SessionScanResult(issues=(issue,)),
+        cleanup.transcripts,
+        "load_inventory",
+        lambda _root: transcripts.TranscriptInventory(issues=(issue,)),
     )
     _bomb_removal(monkeypatch)
 
@@ -182,6 +196,32 @@ def test_orphan_executor_refuses_all_targets_when_transcripts_are_incomplete(
         )
     ]
     assert all((tmp_path / entry).is_dir() for entry in targets)
+
+
+def test_orphan_executor_refuses_deletion_on_malformed_transcript_json(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    target = "uploads/malformed-transcript-sid"
+    (tmp_path / target).mkdir(parents=True)
+    transcript = tmp_path / "projects" / "project" / "malformed-transcript-sid.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('{"cwd":"/work/project"\n', encoding="utf-8")
+    monkeypatch.setattr(
+        cleanup_liveness.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    _bomb_removal(monkeypatch)
+
+    result = cleanup.execute_orphan_removals([target])
+
+    assert [notice.target for notice in result.refused] == [target]
+    assert result.issues[0].source == "session transcript"
+    assert result.issues[0].path == str(transcript)
+    assert "invalid JSON" in result.issues[0].error
+    assert (tmp_path / target).is_dir()
 
 
 def test_zombie_executor_ignores_stale_dead_row_and_keeps_fresh_live_pid(
@@ -276,9 +316,9 @@ def test_public_executors_refuse_incomplete_typed_liveness(
         lambda: liveness.LivenessSnapshot(issues=(issue,)),
     )
     monkeypatch.setattr(
-        sessions,
-        "scan_result",
-        lambda inputs=None: (_ for _ in ()).throw(
+        cleanup.transcripts,
+        "load_inventory",
+        lambda _root: (_ for _ in ()).throw(
             AssertionError("incomplete evidence must refuse before transcript scan")
         ),
     )

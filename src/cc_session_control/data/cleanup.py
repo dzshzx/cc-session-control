@@ -12,8 +12,7 @@ from pathlib import Path
 
 from ..config import cfg
 from ..models import AgentJob, Session, SessionProc
-from . import liveness, proc, registry
-from . import sessions as session_data
+from . import liveness, proc, registry, transcripts
 from .age_cleanup import (
     AgeCleanupPlan,
     build_age_plan,
@@ -42,7 +41,7 @@ from .cleanup_liveness import (
     fresh_liveness_inputs,
     refuse_incomplete_liveness,
 )
-from .cleanup_selection import known_sids
+from .cleanup_selection import known_sids, known_sids_from_transcripts
 from .cleanup_selection import select_prunable_sessions as _select_prunable_sessions
 from .removal import (
     CleanupExecution,
@@ -219,14 +218,14 @@ def execute_orphan_removals(
     evidence = fresh_liveness_inputs()
     if not evidence.complete:
         return refuse_incomplete_liveness(result, entries, evidence)
-    transcript_scan = session_data.scan_result(evidence)
-    if not transcript_scan.complete:
-        for issue in transcript_scan.issues:
+    transcript_inventory = transcripts.load_inventory(str(cfg.projects_root))
+    if not transcript_inventory.complete:
+        for issue in transcript_inventory.issues:
             result.issues.append(CleanupIssue(issue.source, issue.detail, issue.path))
         result.refuse(entries, "transcript evidence incomplete; nothing deleted")
         return result
-    known = known_sids(
-        transcript_scan.sessions,
+    known = known_sids_from_transcripts(
+        transcript_inventory.sids,
         evidence.session_procs,
         evidence.agent_jobs,
         evidence.agents_map,

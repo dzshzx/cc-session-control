@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
@@ -10,7 +9,7 @@ from dataclasses import dataclass, replace
 
 from ..config import cfg
 from ..models import LiveInfo, Session, SessionProc
-from . import registry, tmux
+from . import registry, tmux, transcripts
 from .liveness import (
     LivenessSnapshot,
     alive_map,
@@ -20,25 +19,7 @@ from .liveness import (
 )
 from .proc import ancestor_pids as _ancestor_pids  # /proc walk moved to proc.py
 
-_NOISE = (
-    "<command-message>",
-    "<command-name>",
-    "<command-args>",
-    "<local-command-caveat>",
-    "<local-command-stdout>",
-    "<local-command-stderr>",
-    "<system-reminder>",
-    "caveat:",
-)
-
-
-@dataclass(frozen=True)
-class TranscriptIssue:
-    """One expected transcript source failure."""
-
-    source: str
-    path: str
-    detail: str
+TranscriptIssue = transcripts.TranscriptIssue
 
 
 @dataclass(frozen=True)
@@ -57,174 +38,14 @@ class SessionScanResult:
         return not self.issues
 
 
-def _directory_entries(
-    path: str,
-    *,
-    missing_ok: bool,
-) -> tuple[list[os.DirEntry[str]], TranscriptIssue | None]:
-    try:
-        entries = os.scandir(path)
-    except FileNotFoundError:
-        if missing_ok:
-            return [], None
-        return (
-            [],
-            TranscriptIssue(
-                "session transcript inventory",
-                path,
-                "directory disappeared during transcript discovery",
-            ),
-        )
-    except OSError as exc:
-        return (
-            [],
-            TranscriptIssue("session transcript inventory", path, str(exc)),
-        )
-    try:
-        with entries:
-            return list(entries), None
-    except OSError as exc:
-        return (
-            [],
-            TranscriptIssue("session transcript inventory", path, str(exc)),
-        )
-
-
-def _transcript_paths(root: str) -> tuple[list[str], list[TranscriptIssue]]:
-    """Enumerate ``projects/*/*.jsonl`` without hiding source-tree failures."""
-    project_entries, root_issue = _directory_entries(root, missing_ok=True)
-    issues = [root_issue] if root_issue is not None else []
-    project_paths: list[str] = []
-    for entry in project_entries:
-        try:
-            if entry.is_dir():
-                project_paths.append(entry.path)
-        except OSError as exc:
-            issues.append(
-                TranscriptIssue(
-                    "session transcript inventory",
-                    entry.path,
-                    str(exc),
-                )
-            )
-
-    paths: list[str] = []
-    for project_path in project_paths:
-        entries, issue = _directory_entries(project_path, missing_ok=False)
-        if issue is not None:
-            issues.append(issue)
-            continue
-        paths.extend(entry.path for entry in entries if entry.name.endswith(".jsonl"))
-    return paths, issues
-
-
-def _is_noise(t: str) -> bool:
-    t = t.strip().lower()
-    return (not t) or any(t.startswith(n) for n in _NOISE)
-
-
-def _clean_text(t: str) -> str:
-    t = " ".join(t.split())
-    for marker in (
-        "<system-reminder",
-        "<command-message",
-        "<command-name",
-        "<command-args",
-        "<local-command-",
-    ):
-        i = t.find(marker)
-        if i != -1:
-            t = t[:i]
-    return t.strip()
-
-
-def _json_object(line: str) -> dict[str, object] | None:
-    try:
-        document = json.loads(line)
-    except json.JSONDecodeError:
-        return None
-    return document if isinstance(document, dict) else None
-
-
-def _parse_transcript(
-    path: str,
+def _project_transcript(
+    transcript: transcripts.TranscriptRecord,
     idx: dict[str, LiveInfo],
     cur: AbstractSet[int],
     job_shorts: set[str],
-) -> Session | None:
-    """Parse one transcript .jsonl into a Session, or None if it has no cwd.
-
-    `idx` is the joined live index (sid -> LiveInfo from `live_index()`), `cur`
-    the ancestor-pid set, and `job_shorts` the set of background-agent short ids
-    (`sid[:8]`); all injected so this stays unit-testable. The substring
-    pre-check before json.loads is kept intact for performance.
-    """
-    sid = os.path.basename(path)[:-6]
-    st = os.stat(path)
-
-    cwd = title = last_prompt = first_prompt = ""
-    hidden: set[str] = set()
-    prompts = 0
-
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            if '"sdk-ts"' in line:
-                hidden.add("sdk")
-            if '"bridge-session"' in line:
-                hidden.add("bridge")
-            if not cwd and '"cwd"' in line:
-                document = _json_object(line)
-                candidate = document.get("cwd") if document is not None else None
-                if isinstance(candidate, str) and candidate:
-                    cwd = candidate
-            if '"aiTitle"' in line:
-                document = _json_object(line)
-                candidate = document.get("aiTitle") if document is not None else None
-                if isinstance(candidate, str) and candidate:
-                    title = candidate
-            if '"lastPrompt"' in line:
-                document = _json_object(line)
-                candidate = document.get("lastPrompt") if document is not None else None
-                if isinstance(candidate, str) and candidate:
-                    last_prompt = candidate
-            if '"type":"user"' in line:
-                document = _json_object(line)
-                if document is None:
-                    continue
-                if document.get("type") != "user":
-                    continue
-                message = document.get("message")
-                c = message.get("content") if isinstance(message, dict) else None
-                if isinstance(c, str):
-                    texts = [c]
-                elif isinstance(c, list):
-                    texts = []
-                    for block in c:
-                        if not isinstance(block, dict):
-                            continue
-                        text = block.get("text")
-                        if block.get("type") == "text" and isinstance(text, str):
-                            texts.append(text)
-                else:
-                    texts = []
-                texts = [t for t in texts if t.strip()]
-                if texts:
-                    prompts += 1
-                    if not first_prompt:
-                        for t in texts:
-                            if _is_noise(t):
-                                continue
-                            ct = _clean_text(t)
-                            if ct:
-                                first_prompt = ct
-                                break
-
-    if not cwd:
-        return None
-
-    lp = "" if _is_noise(last_prompt) else last_prompt
-    label = title or first_prompt or lp or "(untitled)"
-
+) -> Session:
+    """Project one parsed transcript through the captured liveness generation."""
+    sid = transcript.sid
     # Join the merged liveness/identity for this sid. Missing => dead, no
     # registry data (transcript-only): liveness stays False and the registry-
     # derived fields stay empty.
@@ -258,16 +79,21 @@ def _parse_transcript(
 
     return Session(
         sid=sid,
-        cwd=cwd,
-        label=label,
-        mtime=st.st_mtime,
-        prompts=prompts,
+        cwd=transcript.cwd,
+        label=(
+            transcript.title
+            or transcript.first_prompt
+            or transcript.last_prompt
+            or "(untitled)"
+        ),
+        mtime=transcript.mtime,
+        prompts=transcript.prompts,
         pid=pid,
         alive=alive,
         current=current,
         proc_start=proc_start,
-        hidden=frozenset(hidden),
-        file=path,
+        hidden=transcript.hidden,
+        file=transcript.path,
         kind=kind,
         entrypoint=entrypoint,
         source=source,
@@ -276,6 +102,19 @@ def _parse_transcript(
         agent_short=sid[:8] if sid[:8] in job_shorts else None,
         status=status,
     )
+
+
+def _parse_transcript(
+    path: str,
+    idx: dict[str, LiveInfo],
+    cur: AbstractSet[int],
+    job_shorts: set[str],
+) -> Session | None:
+    """Compatibility projection for focused parser tests."""
+    transcript = transcripts._parse_transcript(path)
+    if transcript is None:
+        return None
+    return _project_transcript(transcript, idx, cur, job_shorts)
 
 
 def _candidate_pids(info: LiveInfo | None) -> tuple[int, ...]:
@@ -351,7 +190,7 @@ def scan_result(inputs: LivenessSnapshot | None = None) -> SessionScanResult:
     fast path: no registry or targeted `/proc` liveness read is repeated. With
     no injection, the standalone CLI-compatible path self-fetches as before.
     """
-    root = str(cfg.projects_root)
+    root = os.fspath(cfg.projects_root)
     session_procs: Sequence[SessionProc]
     agents: Mapping[str, int | None]
     cur: AbstractSet[int]
@@ -368,19 +207,15 @@ def scan_result(inputs: LivenessSnapshot | None = None) -> SessionScanResult:
     idx = live_index(session_procs, agents)
     rows: list[Session] = []
 
-    transcript_paths, issues = _transcript_paths(root)
-    for f in transcript_paths:
-        try:
-            row = _parse_transcript(f, idx, cur, job_shorts)
-        except (OSError, UnicodeError) as exc:
-            issues.append(TranscriptIssue("session transcript", f, str(exc)))
-            continue
-        if row is not None:
-            rows.append(row)
+    inventory = transcripts.load_inventory(root)
+    rows.extend(
+        _project_transcript(transcript, idx, cur, job_shorts)
+        for transcript in inventory.records
+    )
 
     rows = _inject_tmux_residency(rows, idx)
     rows.sort(key=lambda r: r.mtime, reverse=True)
-    return SessionScanResult(tuple(rows), tuple(issues))
+    return SessionScanResult(tuple(rows), inventory.issues)
 
 
 def scan(inputs: LivenessSnapshot | None = None) -> list[Session]:

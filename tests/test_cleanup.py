@@ -13,7 +13,13 @@ from pathlib import Path
 import pytest
 
 from cc_session_control.config import cfg
-from cc_session_control.data import age_cleanup, cleanup, liveness, registry
+from cc_session_control.data import (
+    age_cleanup,
+    cleanup,
+    liveness,
+    registry,
+    transcripts,
+)
 from cc_session_control.data import proc as proc_mod
 from cc_session_control.data.removal import CleanupIssue, CleanupPlan, RemovalAnchor
 from cc_session_control.models import AgentJob, Session, SessionProc
@@ -72,10 +78,19 @@ def _fresh_execution(
         cur=frozenset(cur),
     )
     monkeypatch.setattr(cleanup, "fresh_liveness_inputs", lambda: evidence)
+    records = tuple(
+        transcripts.TranscriptRecord(
+            sid=session.sid,
+            cwd=session.cwd,
+            path=session.file,
+            mtime=session.mtime,
+        )
+        for session in sessions
+    )
     monkeypatch.setattr(
-        cleanup.session_data,
-        "scan_result",
-        lambda inputs: cleanup.session_data.SessionScanResult(tuple(sessions)),
+        cleanup.transcripts,
+        "load_inventory",
+        lambda _root: transcripts.TranscriptInventory(records),
     )
 
 
