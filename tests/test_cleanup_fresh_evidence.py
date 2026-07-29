@@ -151,6 +151,29 @@ def test_orphan_executor_keeps_transcript_created_after_preview(
     assert [notice.target for notice in result.skipped] == [f"uploads/{sid}"]
 
 
+def test_orphan_executor_keeps_sid_discovered_from_empty_transcript_path(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    sid = "empty-transcript-sid"
+    target = tmp_path / "session-env" / sid
+    target.mkdir(parents=True)
+    transcript = tmp_path / "projects" / "project" / f"{sid}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        cleanup_liveness.liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+
+    result = cleanup.execute_orphan_removals([f"session-env/{sid}"])
+
+    assert [notice.target for notice in result.skipped] == [f"session-env/{sid}"]
+    assert target.is_dir()
+
+
 def test_orphan_executor_refuses_all_targets_when_transcripts_are_incomplete(
     tmp_path,
     monkeypatch,

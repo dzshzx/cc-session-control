@@ -47,14 +47,16 @@ class TranscriptRecord:
 
 @dataclass(frozen=True)
 class TranscriptInventory:
-    """Transcript records plus complete source evidence for one fresh scan."""
+    """Transcript records, pathname sids, and source evidence for one fresh scan."""
 
     records: tuple[TranscriptRecord, ...] = ()
     issues: tuple[TranscriptIssue, ...] = ()
+    path_sids: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "records", tuple(self.records))
         object.__setattr__(self, "issues", tuple(self.issues))
+        object.__setattr__(self, "path_sids", frozenset(self.path_sids))
 
     @property
     def complete(self) -> bool:
@@ -62,7 +64,7 @@ class TranscriptInventory:
 
     @property
     def sids(self) -> frozenset[str]:
-        return frozenset(record.sid for record in self.records)
+        return self.path_sids | frozenset(record.sid for record in self.records)
 
 
 class _TranscriptJSONError(ValueError):
@@ -239,6 +241,7 @@ def _parse_transcript(path: str) -> TranscriptRecord | None:
 def load_inventory(root: str) -> TranscriptInventory:
     """Load all transcript records while retaining every source issue."""
     paths, issues = _transcript_paths(root)
+    path_sids = frozenset(os.path.basename(path)[:-6] for path in paths)
     records: list[TranscriptRecord] = []
     for path in paths:
         try:
@@ -248,4 +251,4 @@ def load_inventory(root: str) -> TranscriptInventory:
             continue
         if record is not None:
             records.append(record)
-    return TranscriptInventory(tuple(records), tuple(issues))
+    return TranscriptInventory(tuple(records), tuple(issues), path_sids)
