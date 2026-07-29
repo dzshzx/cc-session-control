@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import MappingProxyType
@@ -89,6 +90,7 @@ class CleanupBuilder(Protocol):
         sessions: Sequence[Session],
         evidence: LivenessSnapshot,
         *,
+        transcript_sids: AbstractSet[str],
         age_plan: AgeCleanupPlan,
     ) -> CleanupPlan: ...
 
@@ -142,6 +144,7 @@ def build_refresh_result(
         plan = cleanup_builder(
             snapshot.sessions,
             evidence,
+            transcript_sids=transcript_scan.sids,
             age_plan=age_plan,
         )
     except OSError as exc:

@@ -504,3 +504,16 @@ def test_scan_result_missing_projects_root_is_complete_empty_state(
     assert result.complete is True
     assert result.sessions == ()
     assert result.issues == ()
+
+
+def test_scan_result_exposes_pathname_only_sids(tmp_path, monkeypatch):
+    """F47: an empty transcript yields no session row but its sid stays discoverable."""
+    _setup_world(tmp_path, monkeypatch)
+    (tmp_path / "projects" / "proj1" / "path-only-sid.jsonl").write_text("")
+
+    result = sessions_mod.scan_result()
+
+    assert "path-only-sid" not in {row.sid for row in result.sessions}
+    assert "path-only-sid" in result.path_sids
+    assert "path-only-sid" in result.sids
+    assert {row.sid for row in result.sessions} <= result.sids

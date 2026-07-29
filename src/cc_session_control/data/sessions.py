@@ -28,14 +28,21 @@ class SessionScanResult:
 
     sessions: tuple[Session, ...] = ()
     issues: tuple[TranscriptIssue, ...] = ()
+    path_sids: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sessions", tuple(self.sessions))
         object.__setattr__(self, "issues", tuple(self.issues))
+        object.__setattr__(self, "path_sids", frozenset(self.path_sids))
 
     @property
     def complete(self) -> bool:
         return not self.issues
+
+    @property
+    def sids(self) -> frozenset[str]:
+        """Every discovered transcript sid — pathname-only ones included (F47)."""
+        return self.path_sids | frozenset(row.sid for row in self.sessions)
 
 
 def _project_transcript(
@@ -215,7 +222,7 @@ def scan_result(inputs: LivenessSnapshot | None = None) -> SessionScanResult:
 
     rows = _inject_tmux_residency(rows, idx)
     rows.sort(key=lambda r: r.mtime, reverse=True)
-    return SessionScanResult(tuple(rows), inventory.issues)
+    return SessionScanResult(tuple(rows), inventory.issues, inventory.path_sids)
 
 
 def scan(inputs: LivenessSnapshot | None = None) -> list[Session]:

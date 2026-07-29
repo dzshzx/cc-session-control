@@ -456,6 +456,7 @@ def build_plan(
     evidence: liveness.LivenessSnapshot,
     now: float | None = None,
     *,
+    transcript_sids: AbstractSet[str],
     age_plan: AgeCleanupPlan | None = None,
 ) -> CleanupPlan:
     """Build one cleanup plan solely from verified generation evidence."""
@@ -472,13 +473,15 @@ def build_plan(
         if s.prompts > 0
     ]
     candidates = list({s.sid: s for s in [*empty, *short]}.values())
+    # F47: pathname-only sids (empty/no-cwd transcripts) protect the preview
+    # exactly like the execute side — plan truthfulness, 删除 ⊆ 预览.
     protected_sids = known_sids(
         sessions,
         evidence.session_procs,
         evidence.agent_jobs,
         evidence.agents_map,
         evidence.cur,
-    )
+    ) | set(transcript_sids)
     orphan_entries: list[str] = _plan_source(
         "orphan_dirs",
         lambda: _list_orphan_dirs_for_known(protected_sids),

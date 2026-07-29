@@ -440,12 +440,14 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
         sessions,
         generation_evidence,
         *,
+        transcript_sids,
         age_plan: AgeCleanupPlan,
     ) -> CleanupPlan:
         nonlocal plan_calls
         plan_calls += 1
         assert sessions is snapshot.sessions
         assert generation_evidence is evidence
+        assert transcript_sids == snapshot.transcript_scan.sids
         assert age_plan is captured_age
         return plan
 
@@ -691,6 +693,7 @@ def test_incomplete_liveness_is_failed_before_cleanup_plan_build() -> None:
         _sessions,
         _evidence,
         *,
+        transcript_sids,
         age_plan: AgeCleanupPlan,
     ) -> CleanupPlan:
         nonlocal cleanup_calls
@@ -752,7 +755,7 @@ def test_incomplete_liveness_failure_keeps_worker_built_age_plan(
 def test_missing_liveness_evidence_is_failed_before_cleanup_plan_build() -> None:
     cleanup_calls = 0
 
-    def make_plan(*_args) -> CleanupPlan:
+    def make_plan(*_args, **_kwargs) -> CleanupPlan:
         nonlocal cleanup_calls
         cleanup_calls += 1
         return CleanupPlan()
@@ -798,6 +801,7 @@ def test_each_generation_invokes_each_normal_source_once() -> None:
         _sessions,
         _evidence,
         *,
+        transcript_sids,
         age_plan: AgeCleanupPlan,
     ) -> CleanupPlan:
         nonlocal cleanup_calls

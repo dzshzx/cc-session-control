@@ -29,6 +29,7 @@ def _aged_plan(now: float):
         [],
         liveness.LivenessSnapshot(),
         now=now,
+        transcript_sids=frozenset(),
     )
 
 
@@ -410,6 +411,7 @@ def test_cleanup_plan_pins_every_cleanup_category(tmp_path, monkeypatch):
             session_procs=(SessionProc(pid=77, sid="dead", proc_alive=False),),
         ),
         now=now,
+        transcript_sids=frozenset(),
     )
 
     assert set(plan.session_anchors) == {"session-sid"}
@@ -429,6 +431,7 @@ def test_orphan_execution_refuses_replaced_base_and_preserves_external(
     plan = cleanup.build_plan(
         [],
         liveness.LivenessSnapshot(),
+        transcript_sids=frozenset(),
     )
 
     saved = tmp_path / "saved-orphans"
@@ -472,6 +475,7 @@ def test_zombie_execution_refuses_root_inode_replacement(
     plan = cleanup.build_plan(
         [],
         liveness.LivenessSnapshot(session_procs=(proc,)),
+        transcript_sids=frozenset(),
     )
 
     saved = tmp_path / "saved-sessions"

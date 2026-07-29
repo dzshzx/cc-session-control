@@ -390,12 +390,30 @@ def test_plan_counts_break_down_categories(tmp_path, monkeypatch):
     procs = [_sp(700772, "A", proc_alive=False)]  # one zombie
 
     evidence = liveness.LivenessSnapshot(session_procs=procs)
-    counts = cleanup.build_plan(sessions, evidence, 1_000.0).counts()
+    counts = cleanup.build_plan(
+        sessions, evidence, 1_000.0, transcript_sids=frozenset()
+    ).counts()
     assert counts["empty"] == 1
     assert counts["short"] == 1
     assert counts["orphan_dirs"] == 1
     assert counts["zombie_procs"] == 1
     assert counts["aged_entries"] == 0
+
+
+def test_build_plan_protects_pathname_only_transcript_sids(tmp_path, monkeypatch):
+    """F47: a sid known only from a transcript pathname is not previewed as orphan."""
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    _mkdir(tmp_path, "session-env", "path-only")
+    _mkdir(tmp_path, "session-env", "true-orphan")
+
+    plan = cleanup.build_plan(
+        [],
+        liveness.LivenessSnapshot(),
+        now=1_000.0,
+        transcript_sids=frozenset({"path-only"}),
+    )
+
+    assert plan.orphan_entries == ("session-env/true-orphan",)
 
 
 def test_build_plan_uses_only_injected_generation_evidence(tmp_path, monkeypatch):
@@ -410,7 +428,12 @@ def test_build_plan_uses_only_injected_generation_evidence(tmp_path, monkeypatch
     monkeypatch.setattr(cleanup.proc, "probe_current_ancestors", unexpected_acquisition)
     monkeypatch.setattr(cleanup, "fill_liveness_inputs", unexpected_acquisition)
 
-    plan = cleanup.build_plan([session], evidence=evidence, now=1_000_000_000.0)
+    plan = cleanup.build_plan(
+        [session],
+        evidence=evidence,
+        now=1_000_000_000.0,
+        transcript_sids=frozenset(),
+    )
 
     assert [candidate.sid for candidate in plan.empty] == ["empty"]
     assert plan.orphan_entries == ("session-env/ghost",)
@@ -428,7 +451,7 @@ def test_build_plan_rejects_incomplete_generation_evidence():
     )
 
     with pytest.raises(ValueError, match="requires complete liveness evidence"):
-        cleanup.build_plan([], evidence)
+        cleanup.build_plan([], evidence, transcript_sids=frozenset())
 
 
 # --- AC10: degraded (no /proc) refuses destructive ops ---------------------

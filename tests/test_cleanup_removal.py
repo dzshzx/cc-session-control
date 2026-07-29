@@ -163,6 +163,7 @@ def test_build_plan_keeps_partial_results_and_reports_source_issue(
         liveness.LivenessSnapshot(
             session_procs=(SessionProc(pid=7, sid="dead", proc_alive=False),),
         ),
+        transcript_sids=frozenset(),
     )
 
     assert plan.aged_entries == ("shell-snapshots/old.txt",)
@@ -185,7 +186,7 @@ def test_build_plan_does_not_swallow_programming_error(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "listdir", broken_invariant)
 
     try:
-        cleanup.build_plan([], liveness.LivenessSnapshot())
+        cleanup.build_plan([], liveness.LivenessSnapshot(), transcript_sids=frozenset())
     except RuntimeError as exc:
         assert str(exc) == "broken invariant"
     else:

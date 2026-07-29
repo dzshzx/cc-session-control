@@ -139,7 +139,7 @@ def _cmd_prune(args: Namespace) -> int:
             )
         return 1
     sessions = list(transcript_scan.sessions)
-    plan = build_plan(sessions, inputs)
+    plan = build_plan(sessions, inputs, transcript_sids=transcript_scan.sids)
     counts = plan.counts()
     print(
         f"Total: {len(sessions)}  Prunable empty: {counts['empty']}  "
