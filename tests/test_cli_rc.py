@@ -19,6 +19,115 @@ from cc_session_control.data.tmux import TmuxWindow, WindowInventory
 from cc_session_control.models import EnvRecord, InventoryIssue, RCProject, Session
 
 
+@pytest.mark.parametrize(
+    ("issue", "expected_warning"),
+    (
+        (
+            liveness.LivenessIssue(
+                "session registry",
+                "/runtime/sessions/4242.json",
+                "permission denied",
+            ),
+            "session registry (/runtime/sessions/4242.json): permission denied",
+        ),
+        (
+            liveness.LivenessIssue(
+                "claude agents --json",
+                None,
+                "timed out after 10 seconds",
+            ),
+            "claude agents --json: timed out after 10 seconds",
+        ),
+        (
+            liveness.LivenessIssue(
+                "process ancestors",
+                "/proc/4242/stat",
+                "permission denied",
+            ),
+            "process ancestors (/proc/4242/stat): permission denied",
+        ),
+    ),
+    ids=("registry", "claude-agents", "proc-ancestors"),
+)
+def test_rc_status_reports_incomplete_liveness_and_keeps_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    issue: liveness.LivenessIssue,
+    expected_warning: str,
+) -> None:
+    evidence = liveness.LivenessSnapshot(issues=(issue,))
+    acquisitions: list[liveness.LivenessSnapshot] = []
+    scan_inputs: list[liveness.LivenessSnapshot] = []
+    older = RCProject("older", "/older", True, True, "dead", False)
+    newer = RCProject("newer", "/newer", True, True, "running", False)
+    rows = (
+        Session("old", "/older", "old", 1, 1, None, False, False),
+        Session("new", "/newer", "new", 2, 1, None, False, False),
+    )
+
+    def acquire_liveness() -> liveness.LivenessSnapshot:
+        acquisitions.append(evidence)
+        return evidence
+
+    def scan_sessions(
+        inputs: liveness.LivenessSnapshot,
+    ) -> sessions.SessionScanResult:
+        scan_inputs.append(inputs)
+        return sessions.SessionScanResult(rows)
+
+    monkeypatch.setattr(liveness, "liveness_inputs", acquire_liveness)
+    monkeypatch.setattr(
+        rc,
+        "scan_result",
+        lambda: rc.RCScanResult(
+            [older, newer],
+            ProjectSettingsResult(ProjectSettingsState.AVAILABLE, {}),
+        ),
+    )
+    monkeypatch.setattr(sessions, "scan_result", scan_sessions)
+
+    assert cli.main(["rc", "status"]) == 1
+    captured = capsys.readouterr()
+    assert len(acquisitions) == 1
+    assert len(scan_inputs) == 1
+    assert scan_inputs[0] is evidence
+    assert captured.out.index("newer") < captured.out.index("older")
+    assert captured.err == (
+        f"Warning: liveness inventory is partial: {expected_warning}\n"
+    )
+
+
+def test_rc_status_complete_liveness_avoids_records_only_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    evidence = liveness.LivenessSnapshot()
+
+    def reject_records_only(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("records-only liveness reader used by rc status")
+
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(liveness, "liveness_inputs", lambda: evidence)
+    monkeypatch.setattr(
+        rc,
+        "scan_result",
+        lambda: rc.RCScanResult(
+            [],
+            ProjectSettingsResult(ProjectSettingsState.AVAILABLE, {}),
+        ),
+    )
+    monkeypatch.setattr(sessions, "live_session_procs", reject_records_only)
+    monkeypatch.setattr(sessions, "alive_map", reject_records_only)
+    monkeypatch.setattr(sessions.registry, "read_agent_jobs", reject_records_only)
+    monkeypatch.setattr(sessions, "_ancestor_pids", reject_records_only)
+
+    assert cli.main(["rc", "status"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_rc_status_reports_unknown_inventory_and_returns_nonzero(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -48,7 +157,12 @@ def test_rc_status_reports_unknown_inventory_and_returns_nonzero(
     monkeypatch.setattr(
         sessions,
         "scan_result",
-        lambda: sessions.SessionScanResult(),
+        lambda _inputs: sessions.SessionScanResult(),
+    )
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
     )
 
     assert cli.main(["rc", "status"]) == 1
@@ -84,7 +198,12 @@ def test_rc_status_orders_known_rows_but_reports_partial_transcripts(
     monkeypatch.setattr(
         sessions,
         "scan_result",
-        lambda: sessions.SessionScanResult(rows, (issue,)),
+        lambda _inputs: sessions.SessionScanResult(rows, (issue,)),
+    )
+    monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
     )
 
     assert cli.main(["rc", "status"]) == 1

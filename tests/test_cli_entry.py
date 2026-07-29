@@ -161,6 +161,11 @@ def test_rc_status_orders_by_activity_and_marks_missing(
     older = replace(_project(tmp_path / "older", status="dead"), dir_exists=False)
     newer = _project(tmp_path / "newer", status="running")
     monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
         rc,
         "scan_result",
         lambda: rc.RCScanResult([older, newer], _settings()),
@@ -168,7 +173,7 @@ def test_rc_status_orders_by_activity_and_marks_missing(
     monkeypatch.setattr(
         sessions,
         "scan_result",
-        lambda: sessions.SessionScanResult(
+        lambda _inputs: sessions.SessionScanResult(
             (
                 Session(
                     sid="old",
@@ -207,6 +212,11 @@ def test_rc_status_empty_and_unavailable_are_distinct(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
         rc,
         "scan_result",
         lambda: rc.RCScanResult([], _settings()),
@@ -214,7 +224,7 @@ def test_rc_status_empty_and_unavailable_are_distinct(
     monkeypatch.setattr(
         sessions,
         "scan_result",
-        lambda: sessions.SessionScanResult(),
+        lambda _inputs: sessions.SessionScanResult(),
     )
 
     assert cli.main(["rc", "status"]) == 0
@@ -250,6 +260,11 @@ def test_rc_status_reports_project_setting_failure_and_keeps_rows(
         ),
     )
     monkeypatch.setattr(
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(
         rc,
         "scan_result",
         lambda: rc.RCScanResult([broken, valid], _settings()),
@@ -257,7 +272,7 @@ def test_rc_status_reports_project_setting_failure_and_keeps_rows(
     monkeypatch.setattr(
         sessions,
         "scan_result",
-        lambda: sessions.SessionScanResult(),
+        lambda _inputs: sessions.SessionScanResult(),
     )
 
     assert cli.main(["rc", "status"]) == 1

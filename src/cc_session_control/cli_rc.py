@@ -23,10 +23,12 @@ def _run_rc(args: Namespace) -> int:
 
     sub = args.rc_command
     if sub == "status":
+        from .data import liveness
         from .data.sessions import scan_result as scan_sessions_result
 
+        liveness_snapshot = liveness.liveness_inputs()
         rc_scan_result = rc.scan_result()
-        transcript_scan_result = scan_sessions_result()
+        transcript_scan_result = scan_sessions_result(liveness_snapshot)
         projects = rc.order_by_activity(
             rc_scan_result.projects,
             list(transcript_scan_result.sessions),
@@ -36,6 +38,13 @@ def _run_rc(args: Namespace) -> int:
                 "Project settings unavailable: "
                 f"{rc_scan_result.settings.state.value}"
                 f"{': ' + rc_scan_result.settings.detail if rc_scan_result.settings.detail else ''}",
+                file=sys.stderr,
+            )
+        for liveness_issue in liveness_snapshot.issues:
+            where = f" ({liveness_issue.path})" if liveness_issue.path else ""
+            print(
+                "Warning: liveness inventory is partial: "
+                f"{liveness_issue.source}{where}: {liveness_issue.detail}",
                 file=sys.stderr,
             )
         for rc_issue in rc_scan_result.issues:
@@ -80,6 +89,7 @@ def _run_rc(args: Namespace) -> int:
             0
             if rc_scan_result.settings.available
             and rc_scan_result.complete
+            and liveness_snapshot.complete
             and transcript_scan_result.complete
             and not setting_failure
             else 1
