@@ -9,7 +9,6 @@ from cc_session_control.actions.runner import (
     ActionCompletion,
     ActionResult,
     ActionRunner,
-    ActionStatus,
     Busy,
     Closed,
 )
@@ -25,27 +24,27 @@ def test_single_flight_rejects_same_and_cross_action_until_consumed() -> None:
         calls.append("first")
         started.set()
         assert release.wait(1)
-        return ActionResult.success("done", needs_refresh=True)
+        return ActionResult("done", needs_refresh=True)
 
     runner = ActionRunner(ready.set)
     assert isinstance(runner.submit("session.stop", blocking), Accepted)
     assert started.wait(1)
     assert isinstance(
-        runner.submit("session.stop", lambda: ActionResult.success("duplicate")),
+        runner.submit("session.stop", lambda: ActionResult("duplicate")),
         Busy,
     )
     assert isinstance(
-        runner.submit("project.start", lambda: ActionResult.success("other")),
+        runner.submit("project.start", lambda: ActionResult("other")),
         Busy,
     )
 
     release.set()
     assert ready.wait(1)
     assert isinstance(
-        runner.submit("agent.remove", lambda: ActionResult.success("too soon")),
+        runner.submit("agent.remove", lambda: ActionResult("too soon")),
         Busy,
     )
-    assert runner.consume_result() == ActionResult.success(
+    assert runner.consume_result() == ActionResult(
         "done",
         needs_refresh=True,
     )
@@ -53,16 +52,9 @@ def test_single_flight_rejects_same_and_cross_action_until_consumed() -> None:
 
     accepted_again = runner.submit(
         "agent.remove",
-        lambda: ActionResult.refused("not allowed"),
+        lambda: ActionResult("not allowed"),
     )
     assert isinstance(accepted_again, Accepted)
-
-
-def test_result_variants_are_typed() -> None:
-    assert ActionResult.success("ok").status is ActionStatus.SUCCESS
-    assert ActionResult.partial("some").status is ActionStatus.PARTIAL
-    assert ActionResult.refused("no").status is ActionStatus.REFUSED
-    assert ActionResult.failure("bad").status is ActionStatus.FAILURE
 
 
 def test_typed_completion_survives_rejected_second_submission() -> None:
@@ -99,7 +91,7 @@ def test_close_does_not_join_and_drops_late_completion() -> None:
     def blocking() -> ActionResult:
         started.set()
         assert release.wait(1)
-        return ActionResult.success("late", needs_refresh=True)
+        return ActionResult("late", needs_refresh=True)
 
     runner = ActionRunner(ready.set)
     runner.submit("session.delete", blocking)
@@ -107,7 +99,7 @@ def test_close_does_not_join_and_drops_late_completion() -> None:
 
     runner.close()
     assert isinstance(
-        runner.submit("project.start", lambda: ActionResult.success("never")),
+        runner.submit("project.start", lambda: ActionResult("never")),
         Closed,
     )
     release.set()
@@ -135,7 +127,7 @@ def test_unexpected_exception_reaches_excepthook_and_runner_recovers(
     assert hooked.wait(1)
     assert ready.wait(1)
     assert isinstance(
-        runner.submit("too-early", lambda: ActionResult.success("bad")),
+        runner.submit("too-early", lambda: ActionResult("bad")),
         Busy,
     )
     assert runner.consume_result() is None
@@ -144,8 +136,8 @@ def test_unexpected_exception_reaches_excepthook_and_runner_recovers(
 
     ready.clear()
     assert isinstance(
-        runner.submit("recovered", lambda: ActionResult.success("ok")),
+        runner.submit("recovered", lambda: ActionResult("ok")),
         Accepted,
     )
     assert ready.wait(1)
-    assert runner.consume_result() == ActionResult.success("ok")
+    assert runner.consume_result() == ActionResult("ok")

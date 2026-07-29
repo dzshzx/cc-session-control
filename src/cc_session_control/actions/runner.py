@@ -10,41 +10,19 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum, StrEnum
-
-
-class ActionStatus(StrEnum):
-    """Operator-visible outcome of one TUI mutation."""
-
-    SUCCESS = "success"
-    PARTIAL = "partial"
-    REFUSED = "refused"
-    FAILURE = "failure"
+from enum import Enum
 
 
 @dataclass(frozen=True)
 class ActionResult:
-    """Data published by a worker and applied later on the main loop."""
+    """Data published by a worker and applied later on the main loop.
 
-    status: ActionStatus
+    The operator-facing outcome lives entirely in ``message`` (Chinese UI
+    text); the App reads nothing else besides ``needs_refresh``.
+    """
+
     message: str
     needs_refresh: bool = False
-
-    @classmethod
-    def success(cls, message: str, *, needs_refresh: bool = False) -> ActionResult:
-        return cls(ActionStatus.SUCCESS, message, needs_refresh)
-
-    @classmethod
-    def partial(cls, message: str, *, needs_refresh: bool = False) -> ActionResult:
-        return cls(ActionStatus.PARTIAL, message, needs_refresh)
-
-    @classmethod
-    def refused(cls, message: str, *, needs_refresh: bool = False) -> ActionResult:
-        return cls(ActionStatus.REFUSED, message, needs_refresh)
-
-    @classmethod
-    def failure(cls, message: str, *, needs_refresh: bool = False) -> ActionResult:
-        return cls(ActionStatus.FAILURE, message, needs_refresh)
 
 
 @dataclass(frozen=True)

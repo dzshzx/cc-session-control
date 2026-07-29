@@ -130,26 +130,26 @@ type CleanupExecutor = Callable[[list], CleanupExecution]
 
 def stop_session(request: SessionRequest) -> ActionResult:
     if request.pid is None:
-        return ActionResult.failure("停止失败", needs_refresh=True)
+        return ActionResult("停止失败", needs_refresh=True)
     outcome = session_ops.take_over_result(request.pid, request.proc_start)
     if outcome.success:
-        return ActionResult.success("已停止", needs_refresh=True)
+        return ActionResult("已停止", needs_refresh=True)
     if outcome.state is session_ops.TakeOverState.REFUSED:
         detail = f"：{outcome.detail}" if outcome.detail else ""
-        return ActionResult.refused(
+        return ActionResult(
             f"liveness 降级：破坏性操作已禁用{detail}",
             needs_refresh=True,
         )
     detail = f"：{outcome.detail}" if outcome.detail else ""
-    return ActionResult.failure(f"停止失败{detail}", needs_refresh=True)
+    return ActionResult(f"停止失败{detail}", needs_refresh=True)
 
 
 def background_session(request: SessionRequest) -> ActionResult:
     outcome = session_ops.do_tmux_resume_result(request.to_session())
     if outcome.target is None:
         detail = f"：{outcome.detail}" if outcome.detail else ""
-        return ActionResult.failure(f"转入后台失败{detail}", needs_refresh=True)
-    return ActionResult.success(
+        return ActionResult(f"转入后台失败{detail}", needs_refresh=True)
+    return ActionResult(
         f"已转入后台（tmux {outcome.target}）",
         needs_refresh=True,
     )
@@ -163,19 +163,19 @@ def delete_session(request: SessionRequest) -> ActionResult:
 def copy_resume_command(request: SessionRequest) -> ActionResult:
     command = session_ops.resume_cmd(request.to_session())
     if session_ops.to_clipboard(command):
-        return ActionResult.success("已复制")
-    return ActionResult.failure(f"复制失败: {command}")
+        return ActionResult("已复制")
+    return ActionResult(f"复制失败: {command}")
 
 
 def respawn_agent(request: AgentRequest) -> ActionResult:
     result = agent_ops.respawn_result(request.to_job())
     if not result.success:
         detail = result.detail or "无法创建 tmux 窗口"
-        return ActionResult.failure(
+        return ActionResult(
             f"重启失败：{detail}",
             needs_refresh=True,
         )
-    return ActionResult.success(
+    return ActionResult(
         f"已重启：{result.command}",
         needs_refresh=True,
     )
@@ -188,23 +188,23 @@ def remove_agent(request: AgentRequest) -> ActionResult:
 def stop_agent(request: AgentRequest) -> ActionResult:
     result = agent_ops.stop_job_result(request.to_job())
     if result.state is agent_ops.AgentStopState.STOPPED:
-        return ActionResult.success(
+        return ActionResult(
             "已发送停止信号（可能残留孤儿进程，请手动确认）",
             needs_refresh=True,
         )
     if result.state is agent_ops.AgentStopState.NOT_RUNNING:
-        return ActionResult.refused(
+        return ActionResult(
             "该后台 agent 未在运行",
             needs_refresh=True,
         )
     if result.state is agent_ops.AgentStopState.REFUSED:
         detail = result.detail or "安全判定不可用"
-        return ActionResult.refused(
+        return ActionResult(
             f"已拒绝停止：{detail}",
             needs_refresh=True,
         )
     detail = result.detail or "无法发送停止信号"
-    return ActionResult.failure(
+    return ActionResult(
         f"停止失败：{detail}",
         needs_refresh=True,
     )
@@ -213,44 +213,44 @@ def stop_agent(request: AgentRequest) -> ActionResult:
 def start_project(path: str, name: str) -> ActionResult:
     result = rc.start_one_result(path)
     if result.state is rc.StartState.STARTED:
-        return ActionResult.success(f"已启动 {name}", needs_refresh=True)
+        return ActionResult(f"已启动 {name}", needs_refresh=True)
     if result.state is rc.StartState.TRUST_UNAVAILABLE:
         message = "项目设置不可用 — 已拒绝启动"
-        return ActionResult.refused(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
     if result.state is rc.StartState.UNTRUSTED:
-        return ActionResult.refused("未信任 — 已拒绝启动", needs_refresh=True)
+        return ActionResult("未信任 — 已拒绝启动", needs_refresh=True)
     if result.state is rc.StartState.INVENTORY_UNAVAILABLE:
         detail = f"：{result.detail}" if result.detail else ""
-        return ActionResult.refused(
+        return ActionResult(
             f"RC 清单不可用 — 已拒绝启动{detail}",
             needs_refresh=True,
         )
     if result.state is rc.StartState.ALREADY_RUNNING:
-        return ActionResult.refused("已在运行", needs_refresh=True)
+        return ActionResult("已在运行", needs_refresh=True)
     if result.state is rc.StartState.NOT_DIRECTORY:
-        return ActionResult.refused(
+        return ActionResult(
             "目录缺失 — 无法启动（可用 a 键移出自启列表）",
             needs_refresh=True,
         )
     if result.state is rc.StartState.METADATA_FAILED:
         target = result.target or "unknown"
         detail = result.detail or "tmux 元数据写入失败"
-        return ActionResult.failure(
+        return ActionResult(
             f"启动不完整：tmux 窗口 {target} 已创建，但元数据写入失败：{detail}",
             needs_refresh=True,
         )
     detail = f"：{result.detail}" if result.detail else ""
-    return ActionResult.failure(f"启动失败{detail}", needs_refresh=True)
+    return ActionResult(f"启动失败{detail}", needs_refresh=True)
 
 
 def stop_project(path: str, name: str) -> ActionResult:
     result = rc.stop_one_result(path)
     if result.state is rc.StopState.STOPPED:
-        return ActionResult.success(f"已停止 {name}", needs_refresh=True)
+        return ActionResult(f"已停止 {name}", needs_refresh=True)
     if result.state is rc.StopState.NOT_RUNNING:
-        return ActionResult.refused("未在运行", needs_refresh=True)
+        return ActionResult("未在运行", needs_refresh=True)
     detail = result.detail or "tmux 操作失败"
-    return ActionResult.failure(f"停止失败：{detail}", needs_refresh=True)
+    return ActionResult(f"停止失败：{detail}", needs_refresh=True)
 
 
 def toggle_autostart(path: str, name: str) -> ActionResult:
@@ -258,7 +258,7 @@ def toggle_autostart(path: str, name: str) -> ActionResult:
     if not result.success:
         stage = result.stage.value if result.stage is not None else "unknown"
         committed = "；列表变更已提交，需刷新确认" if result.committed else ""
-        return ActionResult.failure(
+        return ActionResult(
             f"开机自启写入失败（{stage}）：{result.detail}{committed}",
             needs_refresh=result.committed,
         )
@@ -266,7 +266,7 @@ def toggle_autostart(path: str, name: str) -> ActionResult:
         raise AssertionError("successful enabled-list toggle must carry state")
     enabled = result.value
     state = "开" if enabled else "关"
-    return ActionResult.success(
+    return ActionResult(
         f"{name} 开机自启: {state}",
         needs_refresh=True,
     )
@@ -280,12 +280,12 @@ def write_auto_rc(
     result = rc.set_rc_at_startup(path, value)
     if result.state is SettingWriteState.FAILED:
         reason = result.failure.value if result.failure is not None else "unknown"
-        return ActionResult.failure(
+        return ActionResult(
             f"配置写入失败（{reason}）: {result.detail}",
         )
     shown = {True: "开", False: "关", None: "未设置"}[value]
     suffix = "（无变化）" if result.state is SettingWriteState.UNCHANGED else ""
-    return ActionResult.success(
+    return ActionResult(
         f"{name} 自动远控: {shown}{suffix}",
         needs_refresh=True,
     )
@@ -299,7 +299,7 @@ def start_all_projects() -> ActionResult:
             enabled_list.stage.value if enabled_list.stage is not None else "unknown"
         )
         committed = "；列表变更已提交，需刷新确认" if enabled_list.committed else ""
-        return ActionResult.failure(
+        return ActionResult(
             f"启动列表读取失败（{stage}）：{enabled_list.detail}{committed}",
             needs_refresh=enabled_list.committed,
         )
@@ -328,24 +328,24 @@ def start_all_projects() -> ActionResult:
         parts.append("已启动 0 个项目")
     message = "；".join(parts)
     if result.started and (result.unavailable or result.untrusted or result.failed):
-        return ActionResult.partial(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
     if result.started:
-        return ActionResult.success(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
     if result.failed:
-        return ActionResult.failure(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
     if result.unavailable or result.untrusted:
-        return ActionResult.refused(message, needs_refresh=True)
-    return ActionResult.success(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
+    return ActionResult(message, needs_refresh=True)
 
 
 def stop_all_projects() -> ActionResult:
     result = rc.stop_all_result()
     if result.state is rc.StopState.STOPPED:
-        return ActionResult.success("已停止全部", needs_refresh=True)
+        return ActionResult("已停止全部", needs_refresh=True)
     if result.state is rc.StopState.NOT_RUNNING:
-        return ActionResult.refused("本来就没在跑", needs_refresh=True)
+        return ActionResult("本来就没在跑", needs_refresh=True)
     detail = result.detail or "tmux 操作失败"
-    return ActionResult.failure(f"停止全部失败：{detail}", needs_refresh=True)
+    return ActionResult(f"停止全部失败：{detail}", needs_refresh=True)
 
 
 def run_cleanup(
@@ -360,24 +360,24 @@ def run_cleanup(
     result = execute(mutable_targets)
     message = format_cleanup_notice(result, done_template)
     if result.completed and not result.incomplete:
-        return ActionResult.success(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
     if result.completed or (result.removed and result.incomplete):
-        return ActionResult.partial(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
     if result.refused or result.skipped:
-        return ActionResult.refused(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
     if result.failed:
-        return ActionResult.failure(message, needs_refresh=True)
-    return ActionResult.success(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
+    return ActionResult(message, needs_refresh=True)
 
 
 def _delete_result(result: CleanupExecution) -> ActionResult:
     message = format_delete_notice(result)
     if result.completed and not result.incomplete:
-        return ActionResult.success(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
     if result.removed and result.incomplete:
-        return ActionResult.partial(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
     if result.refused or result.skipped:
-        return ActionResult.refused(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
     if result.failed:
-        return ActionResult.failure(message, needs_refresh=True)
-    return ActionResult.success(message, needs_refresh=True)
+        return ActionResult(message, needs_refresh=True)
+    return ActionResult(message, needs_refresh=True)

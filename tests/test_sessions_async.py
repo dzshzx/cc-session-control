@@ -211,7 +211,7 @@ def test_dead_delete_prepares_off_loop_before_worker_mutation(
     def delete(_request: object) -> ActionResult:
         delete_threads.append(threading.get_ident())
         delete_started.set()
-        return ActionResult.success("已删除")
+        return ActionResult("已删除")
 
     monkeypatch.setattr(sessions_mod.proc, "probe_current_ancestors", probe)
     monkeypatch.setattr(sessions_mod.tui_actions, "delete_session", delete)

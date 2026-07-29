@@ -14,7 +14,6 @@ from cc_session_control.actions.runner import (
     Accepted,
     ActionResult,
     ActionRunner,
-    ActionStatus,
 )
 from cc_session_control.data import proc
 from cc_session_control.data.project_settings import (
@@ -110,7 +109,6 @@ def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
         ),
     )
     refused = tui_actions.stop_session(request)
-    assert refused.status is ActionStatus.REFUSED
     assert "liveness 降级" in refused.message
 
     monkeypatch.setattr(
@@ -121,7 +119,6 @@ def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
         ),
     )
     failed = tui_actions.stop_session(request)
-    assert failed.status is ActionStatus.FAILURE
     assert failed.message == "停止失败"
 
 
@@ -150,7 +147,6 @@ def test_stop_session_refuses_unknown_proc_probe_without_signal(monkeypatch) -> 
 
     result = tui_actions.stop_session(request)
 
-    assert result.status is ActionStatus.REFUSED
     assert "/proc/42/stat" in result.message
     assert "permission denied" in result.message
 
@@ -180,7 +176,6 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
 
     result = tui_actions.background_session(request)
 
-    assert result.status is ActionStatus.SUCCESS
     assert result.message == "已转入后台（tmux project:4）"
     assert result.needs_refresh is True
     assert spawn_calls == [
@@ -189,14 +184,14 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
 
 
 @pytest.mark.parametrize(
-    ("takeover", "expected_status", "expected_spawns"),
+    ("takeover", "expected_message", "expected_spawns"),
     [
         (
             tui_actions.session_ops.TakeOverOutcome(
                 tui_actions.session_ops.TakeOverState.REFUSED,
                 "ancestor chain indeterminate",
             ),
-            ActionStatus.FAILURE,
+            "转入后台失败：ancestor chain indeterminate",
             [],
         ),
         (
@@ -204,28 +199,28 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
                 tui_actions.session_ops.TakeOverState.FAILED,
                 "permission denied",
             ),
-            ActionStatus.FAILURE,
+            "转入后台失败：permission denied",
             [],
         ),
         (
             tui_actions.session_ops.TakeOverOutcome(
                 tui_actions.session_ops.TakeOverState.KILLED,
             ),
-            ActionStatus.SUCCESS,
+            "已转入后台（tmux project:4）",
             [("project", "sid-1", "cd /tmp/project && claude --resume sid-1")],
         ),
         (
             tui_actions.session_ops.TakeOverOutcome(
                 tui_actions.session_ops.TakeOverState.GONE,
             ),
-            ActionStatus.SUCCESS,
+            "已转入后台（tmux project:4）",
             [("project", "sid-1", "cd /tmp/project && claude --resume sid-1")],
         ),
     ],
 )
 def test_live_background_session_requires_successful_takeover_before_spawn(
     takeover: tui_actions.session_ops.TakeOverOutcome,
-    expected_status: ActionStatus,
+    expected_message: str,
     expected_spawns: list[tuple[str, str, str]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -259,12 +254,8 @@ def test_live_background_session_requires_successful_takeover_before_spawn(
 
     result = tui_actions.background_session(request)
 
-    assert result.status is expected_status
+    assert result.message == expected_message
     assert spawn_calls == expected_spawns
-    if takeover.success:
-        assert result.message == "已转入后台（tmux project:4）"
-    else:
-        assert takeover.detail in result.message
 
 
 def test_live_background_session_without_pid_fails_closed_before_spawn(
@@ -296,7 +287,6 @@ def test_live_background_session_without_pid_fails_closed_before_spawn(
 
     result = tui_actions.background_session(request)
 
-    assert result.status is ActionStatus.FAILURE
     assert "incomplete execution-time identity (pid)" in result.message
 
 
@@ -340,7 +330,7 @@ def test_live_background_session_uses_execution_time_session_generation(
 
     result = tui_actions.background_session(request)
 
-    assert result.status is ActionStatus.SUCCESS
+    assert result.message == "已转入后台（tmux fresh-project:4）"
     assert takeovers == [(9002, "fresh-start")]
     assert spawns == [
         (
@@ -364,7 +354,6 @@ def test_cleanup_adapter_reports_partial_and_refused() -> None:
         ("one",),
         "已清理 {n} 项",
     )
-    assert partial_result.status is ActionStatus.PARTIAL
     assert partial_result.message.startswith("部分完成：")
 
     refused = CleanupExecution()
@@ -374,7 +363,6 @@ def test_cleanup_adapter_reports_partial_and_refused() -> None:
         ("one",),
         "已清理 {n} 项",
     )
-    assert refused_result.status is ActionStatus.REFUSED
     assert refused_result.message.startswith("已拒绝清理：")
 
 
@@ -396,7 +384,6 @@ def test_delete_adapter_reports_removed_plus_anchor_refusal_as_partial(
         tui_actions.SessionRequest.from_session(_session())
     )
 
-    assert result.status is ActionStatus.PARTIAL
     assert result.message.startswith("删除部分完成：")
     assert "anchored root identity changed" in result.message
 
@@ -419,7 +406,6 @@ def test_cleanup_adapter_reports_incomplete_liveness_in_chinese() -> None:
         "已清理 {n} 项",
     )
 
-    assert result.status is ActionStatus.REFUSED
     assert "保护证据不完整，未删除" in result.message
     assert "session registry" in result.message
     assert "/runtime/sessions/broken.json" in result.message
@@ -435,7 +421,6 @@ def test_project_batch_result_distinguishes_partial_refused_and_failure(
         lambda: StartManyResult(started=2, unavailable=1, failed=1),
     )
     partial = tui_actions.start_all_projects()
-    assert partial.status is ActionStatus.PARTIAL
     assert "已启动 2 个项目" in partial.message
     assert "启动失败 1 个" in partial.message
 
@@ -445,7 +430,6 @@ def test_project_batch_result_distinguishes_partial_refused_and_failure(
         lambda: StartManyResult(untrusted=2),
     )
     refused = tui_actions.start_all_projects()
-    assert refused.status is ActionStatus.REFUSED
     assert "未信任，拒绝 2 个" in refused.message
 
     monkeypatch.setattr(
@@ -453,7 +437,7 @@ def test_project_batch_result_distinguishes_partial_refused_and_failure(
         "start_all_listed_result",
         lambda: StartManyResult(failed=2),
     )
-    assert tui_actions.start_all_projects().status is ActionStatus.FAILURE
+    assert tui_actions.start_all_projects().message == "启动失败 2 个"
 
 
 def test_successful_rc_actions_keep_exact_result_contract(
@@ -464,7 +448,6 @@ def test_successful_rc_actions_keep_exact_result_contract(
 
     monkeypatch.setattr(tui_actions.rc.cfg, "rc_list", tmp_path / "rc-enabled")
     assert tui_actions.toggle_autostart("/project", "project") == ActionResult(
-        ActionStatus.SUCCESS,
         "project 开机自启: 开",
         True,
     )
@@ -475,7 +458,6 @@ def test_successful_rc_actions_keep_exact_result_contract(
         lambda: StartManyResult(started=2),
     )
     assert tui_actions.start_all_projects() == ActionResult(
-        ActionStatus.SUCCESS,
         "已启动 2 个项目",
         True,
     )
@@ -501,7 +483,6 @@ def test_toggle_autostart_reports_committed_unlock_failure_and_refreshes(
     )
 
     assert tui_actions.toggle_autostart("/project", "project") == ActionResult(
-        ActionStatus.FAILURE,
         "开机自启写入失败（unlock）：flock: permission denied；"
         "列表变更已提交，需刷新确认",
         True,
@@ -527,7 +508,6 @@ def test_start_all_reports_typed_list_failure_without_starting(
     )
 
     assert tui_actions.start_all_projects() == ActionResult(
-        ActionStatus.FAILURE,
         "启动列表读取失败（read）：permission denied",
         False,
     )
@@ -548,7 +528,6 @@ def test_project_batch_reports_metadata_failure_target_and_detail(monkeypatch) -
 
     result = tui_actions.start_all_projects()
 
-    assert result.status is ActionStatus.FAILURE
     assert result.message == (
         "启动失败 1 个；/project 的 tmux 窗口 rc:7 已创建但元数据写入失败："
         "window-option: lost server connection"
@@ -562,7 +541,6 @@ def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
         lambda _path: StartResult(StartState.TRUST_UNAVAILABLE, "/project"),
     )
     start = tui_actions.start_project("/project", "project")
-    assert start.status is ActionStatus.REFUSED
     assert start.message == "项目设置不可用 — 已拒绝启动"
 
     monkeypatch.setattr(
@@ -575,7 +553,6 @@ def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
         ),
     )
     inventory = tui_actions.start_project("/project", "project")
-    assert inventory.status is ActionStatus.REFUSED
     assert inventory.message == (
         "RC 清单不可用 — 已拒绝启动：tmux list-windows: lost server connection"
     )
@@ -591,7 +568,6 @@ def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
         ),
     )
     setting = tui_actions.write_auto_rc("/project", "project", True)
-    assert setting.status is ActionStatus.FAILURE
     assert setting.message == "配置写入失败（write）: read only"
 
 
@@ -609,7 +585,6 @@ def test_project_start_reports_partial_metadata_failure(monkeypatch) -> None:
 
     result = tui_actions.start_project("/project", "project")
 
-    assert result.status is ActionStatus.FAILURE
     assert result.message == (
         "启动不完整：tmux 窗口 rc:7 已创建，但元数据写入失败："
         "window-option: lost server connection"
@@ -640,7 +615,6 @@ def test_deleted_project_after_setting_submission_is_a_visible_failure(
 
     result = runner.consume_result()
     assert result is not None
-    assert result.status is ActionStatus.FAILURE
     assert result.message.startswith("配置写入失败（create-directory）:")
     assert list(tmp_path.iterdir()) == []
 
@@ -659,7 +633,6 @@ def test_expected_autostart_io_failure_becomes_typed_failure(monkeypatch) -> Non
 
     monkeypatch.setattr(tui_actions.rc, "toggle_autostart_result", fail)
     result = tui_actions.toggle_autostart("/project", "project")
-    assert result.status is ActionStatus.FAILURE
     assert result.message == "开机自启写入失败（write）：read only"
 
 
@@ -677,7 +650,6 @@ def test_agent_respawn_does_not_claim_success_when_tmux_fails(monkeypatch) -> No
         tui_actions.AgentRequest.from_job(_job()),
     )
 
-    assert result.status is ActionStatus.FAILURE
     assert result.message == "重启失败：无法创建 tmux 窗口"
 
 
@@ -694,7 +666,6 @@ def test_agent_respawn_reports_typed_tmux_failure_detail(monkeypatch) -> None:
         tui_actions.AgentRequest.from_job(_job()),
     )
 
-    assert result.status is ActionStatus.FAILURE
     assert result.message == ("重启失败：session-probe: tmux timed out after 5 seconds")
 
 
@@ -706,7 +677,6 @@ def test_agent_stop_preserves_all_domain_states(monkeypatch) -> None:
                 tui_actions.agent_ops.AgentStopState.STOPPED,
                 pid=42,
             ),
-            ActionStatus.SUCCESS,
             "已发送停止信号（可能残留孤儿进程，请手动确认）",
         ),
         (
@@ -714,7 +684,6 @@ def test_agent_stop_preserves_all_domain_states(monkeypatch) -> None:
                 tui_actions.agent_ops.AgentStopState.NOT_RUNNING,
                 detail="no live host",
             ),
-            ActionStatus.REFUSED,
             "该后台 agent 未在运行",
         ),
         (
@@ -722,7 +691,6 @@ def test_agent_stop_preserves_all_domain_states(monkeypatch) -> None:
                 tui_actions.agent_ops.AgentStopState.REFUSED,
                 detail="判活证据不完整",
             ),
-            ActionStatus.REFUSED,
             "已拒绝停止：判活证据不完整",
         ),
         (
@@ -731,19 +699,17 @@ def test_agent_stop_preserves_all_domain_states(monkeypatch) -> None:
                 pid=42,
                 detail="permission denied",
             ),
-            ActionStatus.FAILURE,
             "停止失败：permission denied",
         ),
     ]
 
-    for domain_result, status, message in cases:
+    for domain_result, message in cases:
         monkeypatch.setattr(
             tui_actions.agent_ops,
             "stop_job_result",
             lambda _job, result=domain_result: result,
         )
         action = tui_actions.stop_agent(request)
-        assert action.status is status
         assert action.message == message
         assert action.needs_refresh is True
 
@@ -755,7 +721,6 @@ def test_project_stop_preserves_all_domain_states(monkeypatch) -> None:
                 tui_actions.rc.StopState.STOPPED,
                 "/project",
             ),
-            ActionStatus.SUCCESS,
             "已停止 project",
         ),
         (
@@ -763,7 +728,6 @@ def test_project_stop_preserves_all_domain_states(monkeypatch) -> None:
                 tui_actions.rc.StopState.NOT_RUNNING,
                 "/project",
             ),
-            ActionStatus.REFUSED,
             "未在运行",
         ),
         (
@@ -772,19 +736,17 @@ def test_project_stop_preserves_all_domain_states(monkeypatch) -> None:
                 "/project",
                 "lost server connection",
             ),
-            ActionStatus.FAILURE,
             "停止失败：lost server connection",
         ),
     ]
 
-    for domain_result, status, message in cases:
+    for domain_result, message in cases:
         monkeypatch.setattr(
             tui_actions.rc,
             "stop_one_result",
             lambda _path, result=domain_result: result,
         )
         action = tui_actions.stop_project("/project", "project")
-        assert action.status is status
         assert action.message == message
         assert action.needs_refresh is True
 
@@ -796,7 +758,6 @@ def test_stop_all_projects_preserves_all_domain_states(monkeypatch) -> None:
                 tui_actions.rc.StopState.STOPPED,
                 "rc",
             ),
-            ActionStatus.SUCCESS,
             "已停止全部",
         ),
         (
@@ -804,7 +765,6 @@ def test_stop_all_projects_preserves_all_domain_states(monkeypatch) -> None:
                 tui_actions.rc.StopState.NOT_RUNNING,
                 "rc",
             ),
-            ActionStatus.REFUSED,
             "本来就没在跑",
         ),
         (
@@ -813,18 +773,16 @@ def test_stop_all_projects_preserves_all_domain_states(monkeypatch) -> None:
                 "rc",
                 "timed out",
             ),
-            ActionStatus.FAILURE,
             "停止全部失败：timed out",
         ),
     ]
 
-    for domain_result, status, message in cases:
+    for domain_result, message in cases:
         monkeypatch.setattr(
             tui_actions.rc,
             "stop_all_result",
             lambda result=domain_result: result,
         )
         action = tui_actions.stop_all_projects()
-        assert action.status is status
         assert action.message == message
         assert action.needs_refresh is True

@@ -540,7 +540,7 @@ def test_action_worker_never_updates_widgets_and_completion_refreshes_once():
         worker_threads.append(threading.get_ident())
         started.set()
         assert release.wait(1)
-        return ActionResult.success("已完成", needs_refresh=True)
+        return ActionResult("已完成", needs_refresh=True)
 
     app = App()
     app._action_pipe_fd = 99
@@ -582,7 +582,7 @@ def test_blocking_action_keeps_navigation_refresh_and_quit_responsive():
         started.set()
         assert release.wait(1)
         finished.set()
-        return ActionResult.success("late", needs_refresh=True)
+        return ActionResult("late", needs_refresh=True)
 
     app = App()
     app.notify = lambda message, seconds=3: notifications.append(message)
@@ -615,7 +615,7 @@ def test_second_app_submission_reports_busy_without_running():
         calls.append("first")
         started.set()
         assert release.wait(1)
-        return ActionResult.success("done")
+        return ActionResult("done")
 
     app = App()
     app.notify = lambda message, seconds=3: notifications.append(message)
@@ -623,7 +623,7 @@ def test_second_app_submission_reports_busy_without_running():
     assert started.wait(1)
     outcome = app.submit_action(
         "second",
-        lambda: calls.append("second") or ActionResult.success("bad"),
+        lambda: calls.append("second") or ActionResult("bad"),
     )
     assert isinstance(outcome, Busy)
     assert calls == ["first"]
