@@ -24,10 +24,14 @@ freeze navigation and could let worker threads mutate widgets.
 - Refresh requests are coalesced. While a generation is running or waiting to
   be consumed, any number of requests reserve at most one follow-up
   generation. Refreshes therefore do not overlap or build an unbounded queue.
-- An expected source `OSError` becomes a typed `RefreshFailure`. The main loop
-  displays its source and detail but applies none of that generation, leaving
-  the last good generation visible. Parser, invariant, and programming errors
-  are not converted into an apparently successful empty world.
+- An expected source `OSError` or incomplete required evidence becomes a typed
+  `RefreshFailure`. The worker captures the session-agnostic age cleanup plan
+  before deciding whether liveness or transcript evidence is complete. The
+  main loop displays the failure, keeps every tab's complete world/session rows
+  on the last good generation, and replaces cleanup state with that safe age
+  projection. Session-keyed cleanup targets and anchors are cleared and its
+  actions explicitly refuse as unavailable. Parser, invariant, and programming
+  errors are not converted into an apparently successful empty world.
 - Closing the coordinator rejects new requests and discards unpublished or
   late results. Coordinator state shared by requester, worker, and consumer is
   lock-protected; widgets and the last-applied generation counter are
@@ -54,7 +58,8 @@ freeze navigation and could let worker threads mutate widgets.
 ## Consequences
 
 - A rendered screen is one coherent generation, or the previous known-good
-  generation with an explicit failure notice.
+  tab data plus a worker-built age-only cleanup projection whose session-keyed
+  actions refuse, together with an explicit failure notice.
 - Refresh I/O and stay-in-TUI mutations keep keyboard navigation responsive,
   while destructive mutations cannot race each other through the UI.
 - A slow mutation and a refresh may overlap because they have different

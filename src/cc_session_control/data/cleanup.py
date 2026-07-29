@@ -14,6 +14,16 @@ from ..config import cfg
 from ..models import AgentJob, Session, SessionProc
 from . import liveness, proc, registry
 from . import sessions as session_data
+from .age_cleanup import (
+    AgeCleanupPlan,
+    build_age_plan,
+)
+from .age_cleanup import (
+    execute_aged_removals as execute_aged_removals,
+)
+from .age_cleanup import (
+    list_aged_entries as list_aged_entries,
+)
 from .cleanup_anchors import (
     PlanAnchors,
     pin_plan_targets,
@@ -38,20 +48,14 @@ from .removal import (
     CleanupExecution,
     CleanupIssue,
     CleanupPlan,
-    PathRemoval,
     RemovalAnchor,
     RemovalStatus,
     anchor_path,
-    inspect_anchored,
     remove_anchored,
 )
 
 # Dirs keyed by full sessionId — orphan = name not in the known sid set.
 _SID_DIRS = ("session_env", "file_history", "tasks", "uploads")
-# Dirs swept purely by mtime (not session-keyed).
-_AGE_DIRS = ("shell_snapshots", "telemetry", "plans", "backups", "paste_cache")
-
-_SECONDS_PER_DAY = 86400
 
 
 def _is_child_name(name: str) -> bool:
@@ -76,13 +80,6 @@ def _sid_dir_paths() -> list[tuple[str, str]]:
     """(label, path) for each sid-keyed directory, via cfg props only."""
     return [
         (name.replace("_", "-"), str(getattr(cfg, f"{name}_dir"))) for name in _SID_DIRS
-    ]
-
-
-def _age_dir_paths() -> list[tuple[str, str]]:
-    """(label, path) for each age-swept directory, via cfg props only."""
-    return [
-        (name.replace("_", "-"), str(getattr(cfg, f"{name}_dir"))) for name in _AGE_DIRS
     ]
 
 
@@ -315,72 +312,6 @@ def execute_zombie_removals(
     return result
 
 
-# --- Strategy B: age sweep -------------------------------------------------
-
-
-def _age_cutoff(now: float) -> float:
-    return now - cfg.cleanup_age_days * _SECONDS_PER_DAY
-
-
-def list_aged_entries(now: float | None = None) -> list[str]:
-    """Age-swept entries (`<dir>/<name>`) older than `cfg.cleanup_age_days`."""
-    cutoff = _age_cutoff(time.time() if now is None else now)
-    out: list[str] = []
-    for label, path in _age_dir_paths():
-        try:
-            names = os.listdir(path)
-        except FileNotFoundError:
-            continue
-        for name in names:
-            full = os.path.join(path, name)
-            try:
-                if os.lstat(full).st_mtime < cutoff:
-                    out.append(os.path.join(label, name))
-            except FileNotFoundError:
-                continue
-    return sorted(out)
-
-
-def execute_aged_removals(
-    entries: list[str],
-    now: float | None = None,
-    *,
-    anchors: Mapping[str, RemovalAnchor] | None = None,
-) -> CleanupExecution:
-    """Remove anchored preview entries still older than the cutoff."""
-    cutoff = _age_cutoff(time.time() if now is None else now)
-    base_by_label = dict(_age_dir_paths())
-    result = CleanupExecution()
-    if anchors is None:
-        anchors = _entry_anchors(entries, base_by_label, result)
-    for entry in entries:
-        label, _, name = entry.partition("/")
-        base = base_by_label.get(label)
-        if not base or not _is_child_name(name):
-            result.skip(entry, "not a previewable aged-entry path")
-            continue
-        anchor = anchors.get(entry)
-        if anchor is None:
-            result.refuse([entry], "removal anchor is missing from preview")
-            continue
-        inspection = inspect_anchored(anchor)
-        if isinstance(inspection, PathRemoval):
-            result.add_removal(inspection)
-            if inspection.status is RemovalStatus.MISSING:
-                result.mark_missing(entry)
-            continue
-        if inspection.st_mtime >= cutoff:
-            result.skip(entry, "entry is no longer old enough")
-            continue
-        removal = remove_anchored(anchor)
-        result.add_removal(removal)
-        if removal.status is RemovalStatus.REMOVED:
-            result.complete(entry)
-        elif removal.status is RemovalStatus.MISSING:
-            result.mark_missing(entry)
-    return result
-
-
 # --- Session prune + full delete -------------------------------------------
 
 
@@ -525,12 +456,15 @@ def build_plan(
     sessions: Sequence[Session],
     evidence: liveness.LivenessSnapshot,
     now: float | None = None,
+    *,
+    age_plan: AgeCleanupPlan | None = None,
 ) -> CleanupPlan:
     """Build one cleanup plan solely from verified generation evidence."""
     if not evidence.complete:
         raise ValueError("cleanup plan requires complete liveness evidence")
 
     plan_now = time.time() if now is None else now
+    captured_age = build_age_plan(plan_now) if age_plan is None else age_plan
     issues: list[CleanupIssue] = []
     empty = _select_prunable_sessions(sessions, max_prompts=0, now=plan_now)
     short = [
@@ -556,9 +490,6 @@ def build_plan(
         evidence.session_procs,
         evidence.cur,
     )
-    aged_entries: list[str] = _plan_source(
-        "aged_entries", lambda: list_aged_entries(plan_now), issues, []
-    )
     pinned: PlanAnchors = _plan_source(
         "removal_anchors",
         lambda: pin_plan_targets(
@@ -567,25 +498,22 @@ def build_plan(
             dict(_sid_dir_paths()),
             zombie_pids,
             str(cfg.sessions_dir),
-            aged_entries,
-            dict(_age_dir_paths()),
             [base for _, base in _sid_dir_paths()],
             str(cfg.jobs_dir),
         ),
         issues,
-        PlanAnchors({}, {}, {}, {}),
+        PlanAnchors({}, {}, {}),
     )
-    return CleanupPlan(
+    session_plan = CleanupPlan(
         empty=tuple(s for s in empty if s.sid in pinned.sessions),
         short=tuple(s for s in short if s.sid in pinned.sessions),
         orphan_entries=tuple(
             entry for entry in orphan_entries if entry in pinned.orphans
         ),
         zombie_pids=tuple(pid for pid in zombie_pids if pid in pinned.zombies),
-        aged_entries=tuple(entry for entry in aged_entries if entry in pinned.aged),
         issues=tuple(issues),
         session_anchors=pinned.sessions,
         orphan_anchors=pinned.orphans,
         zombie_anchors=pinned.zombies,
-        aged_anchors=pinned.aged,
     )
+    return captured_age.to_cleanup_plan(session_plan)

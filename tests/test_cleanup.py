@@ -349,7 +349,7 @@ def test_plan_counts_break_down_categories(tmp_path, monkeypatch):
     procs = [_sp(700772, "A", proc_alive=False)]  # one zombie
 
     evidence = liveness.LivenessSnapshot(session_procs=procs)
-    counts = cleanup.build_plan(sessions, evidence, now=1_000.0).counts()
+    counts = cleanup.build_plan(sessions, evidence, 1_000.0).counts()
     assert counts["empty"] == 1
     assert counts["short"] == 1
     assert counts["orphan_dirs"] == 1

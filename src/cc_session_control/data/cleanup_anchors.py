@@ -17,7 +17,6 @@ class PlanAnchors:
     sessions: Mapping[str, tuple[RemovalAnchor, ...]]
     orphans: Mapping[str, RemovalAnchor]
     zombies: Mapping[int, RemovalAnchor]
-    aged: Mapping[str, RemovalAnchor]
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -36,11 +35,6 @@ class PlanAnchors:
             self,
             "zombies",
             MappingProxyType(dict(self.zombies)),
-        )
-        object.__setattr__(
-            self,
-            "aged",
-            MappingProxyType(dict(self.aged)),
         )
 
 
@@ -108,8 +102,6 @@ def pin_plan_targets(
     orphan_bases: Mapping[str, str],
     zombie_pids: Sequence[int],
     sessions_root: str,
-    aged_entries: Sequence[str],
-    aged_bases: Mapping[str, str],
     sid_roots: Sequence[str],
     jobs_root: str,
 ) -> PlanAnchors:
@@ -120,7 +112,6 @@ def pin_plan_targets(
             pid: anchor_path(sessions_root, os.path.join(sessions_root, f"{pid}.json"))
             for pid in zombie_pids
         },
-        aged=entry_anchors(aged_entries, aged_bases),
     )
 
 

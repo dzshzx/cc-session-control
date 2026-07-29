@@ -5,14 +5,17 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import MappingProxyType
+from typing import Protocol
 
 from ..models import RCProject, Session
 from . import rc
+from .age_cleanup import AgeCleanupPlan, build_age_plan
 from .cleanup import CleanupPlan, build_plan
 from .liveness import LivenessSnapshot
+from .removal import CleanupIssue
 from .snapshot import WorldSnapshot, build_world_snapshot
 
 
@@ -52,24 +55,49 @@ class RefreshFailure:
     generation: int
     source: str
     detail: str
+    cleanup_plan: CleanupPlan = field(default_factory=CleanupPlan)
+
+    def __post_init__(self) -> None:
+        issue = CleanupIssue(source=self.source, error=self.detail)
+        object.__setattr__(
+            self,
+            "cleanup_plan",
+            replace(self.cleanup_plan, session_keyed_issue=issue),
+        )
+
+    @classmethod
+    def with_age_plan(
+        cls,
+        generation: int,
+        source: str,
+        detail: str,
+        age_plan: AgeCleanupPlan,
+    ) -> RefreshFailure:
+        """Map one failed generation to its only safe cleanup projection."""
+        return cls(generation, source, detail, age_plan.to_cleanup_plan())
 
 
 type RefreshResult = RefreshBatch | RefreshFailure
 type RefreshBuilder = Callable[[int], RefreshResult]
 type SnapshotBuilder = Callable[[], WorldSnapshot]
-type CleanupBuilder = Callable[
-    [
-        Sequence[Session],
-        LivenessSnapshot,
-    ],
-    CleanupPlan,
-]
+type AgeCleanupBuilder = Callable[[], AgeCleanupPlan]
+
+
+class CleanupBuilder(Protocol):
+    def __call__(
+        self,
+        sessions: Sequence[Session],
+        evidence: LivenessSnapshot,
+        *,
+        age_plan: AgeCleanupPlan,
+    ) -> CleanupPlan: ...
 
 
 def build_refresh_result(
     generation: int,
     *,
     snapshot_builder: SnapshotBuilder = build_world_snapshot,
+    age_builder: AgeCleanupBuilder = build_age_plan,
     cleanup_builder: CleanupBuilder = build_plan,
 ) -> RefreshResult:
     """Build every view projection from one world snapshot.
@@ -77,12 +105,16 @@ def build_refresh_result(
     Expected local-source I/O failures become an explicit failed generation.
     Parser, invariant, and programming errors deliberately escape this boundary.
     """
+    age_plan = age_builder()
+
+    def failure(source: str, detail: str) -> RefreshFailure:
+        return RefreshFailure.with_age_plan(generation, source, detail, age_plan)
+
     try:
         snapshot = snapshot_builder()
         evidence = snapshot.liveness_snapshot
         if evidence is None:
-            return RefreshFailure(
-                generation,
+            return failure(
                 "liveness snapshot",
                 "missing generation liveness evidence",
             )
@@ -97,7 +129,7 @@ def build_refresh_result(
                 + f": {issue.detail}"
                 for issue in evidence.issues
             )
-            return RefreshFailure(generation, source, detail)
+            return failure(source, detail)
         transcript_scan = snapshot.transcript_scan
         if not transcript_scan.complete:
             transcript_issue = transcript_scan.issues[0]
@@ -106,14 +138,15 @@ def build_refresh_result(
                 f"{issue.source} ({issue.path}): {issue.detail}"
                 for issue in transcript_scan.issues
             )
-            return RefreshFailure(generation, source, detail)
+            return failure(source, detail)
         plan = cleanup_builder(
             snapshot.sessions,
             evidence,
+            age_plan=age_plan,
         )
     except OSError as exc:
         source = os.fspath(exc.filename) if exc.filename else "refresh sources"
-        return RefreshFailure(generation, source, str(exc))
+        return failure(source, str(exc))
 
     counts = plan.counts()
     return RefreshBatch(

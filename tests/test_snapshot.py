@@ -7,6 +7,7 @@ tests monkeypatch the data sources and point the ledger at a tmp dir.
 """
 
 import json
+import os
 from pathlib import Path
 
 from cc_session_control.config import cfg
@@ -190,6 +191,7 @@ def test_incomplete_snapshot_fails_without_mutating_environment_ledger(
     monkeypatch,
 ):
     monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
     env.upsert([env.EnvRecord("session", "OLD", "sid-old")], now=1.0)
     original = cfg.environments_ledger.read_bytes()
     _stub_sources(monkeypatch, [])
@@ -227,6 +229,11 @@ def test_incomplete_transcript_snapshot_fails_before_cleanup_plan(
     monkeypatch,
 ):
     monkeypatch.setattr(cfg, "config_dir", tmp_path)
+    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
+    aged = cfg.shell_snapshots_dir / "old.sh"
+    aged.parent.mkdir(parents=True)
+    aged.touch()
+    os.utime(aged, (0.0, 0.0))
     _stub_sources(monkeypatch, [])
     issue = snapshot.sessions.TranscriptIssue(
         "session transcript",
@@ -247,12 +254,21 @@ def test_incomplete_transcript_snapshot_fails_before_cleanup_plan(
         ),
     )
 
-    assert result == RefreshFailure(
-        9,
-        "session transcript (/runtime/projects/project/session.jsonl)",
-        "session transcript (/runtime/projects/project/session.jsonl): "
-        "permission denied",
+    assert isinstance(result, RefreshFailure)
+    assert result.generation == 9
+    assert result.source == (
+        "session transcript (/runtime/projects/project/session.jsonl)"
     )
+    assert result.detail == (
+        "session transcript (/runtime/projects/project/session.jsonl): "
+        "permission denied"
+    )
+    assert result.cleanup_plan.aged_entries == ("shell-snapshots/old.sh",)
+    assert set(result.cleanup_plan.aged_anchors) == {"shell-snapshots/old.sh"}
+    assert result.cleanup_plan.empty == ()
+    assert result.cleanup_plan.short == ()
+    assert result.cleanup_plan.orphan_entries == ()
+    assert result.cleanup_plan.zombie_pids == ()
 
 
 def test_snapshot_reconciliation_owns_single_rc_environment_ledger_update(

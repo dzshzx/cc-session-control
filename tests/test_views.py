@@ -22,7 +22,7 @@ from cc_session_control.data.project_settings import (
     SettingWriteResult,
     SettingWriteState,
 )
-from cc_session_control.data.refresh import RefreshBatch
+from cc_session_control.data.refresh import RefreshBatch, RefreshFailure
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import (
     InventoryIssue,
@@ -1918,6 +1918,116 @@ def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
     assert any("过期项" in m for m in app._notifications)
 
 
+def test_refresh_failure_updates_open_cleanup_and_aged_preview_in_memory():
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._classified = {"aged_entries": 1}
+    view._enter_cleanup()
+    failure = RefreshFailure(
+        2,
+        "process stat",
+        "unavailable",
+        CleanupPlan(
+            aged_entries=["plans/new"],
+        ),
+    )
+
+    view.apply_refresh_failure(failure)
+
+    aged_row = next(row for row in view._cleanup_walker if row.action_key == "aged")
+    assert "1" in _row_text(aged_row)
+    view._enter_preview("aged")
+    assert view._preview_targets == ["plans/new"]
+
+    newer = RefreshFailure(
+        3,
+        "process stat",
+        "still unavailable",
+        CleanupPlan(aged_entries=["plans/newer"]),
+    )
+    view.apply_refresh_failure(newer)
+    assert view._mode == "preview"
+    assert view._preview_targets == ["plans/newer"]
+
+
+def test_refresh_failure_closes_session_keyed_preview_fail_closed(monkeypatch):
+    import cc_session_control.views._sessions_cleanup as cl_mod
+
+    _set_proc_complete(monkeypatch, cl_mod.proc, True)
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._plan = CleanupPlan(short=[_make_session(sid="short", prompts=1)])
+    view._enter_preview("short")
+    assert view._mode == "preview"
+
+    view.apply_refresh_failure(
+        RefreshFailure(
+            2,
+            "process stat",
+            "unavailable",
+            CleanupPlan(aged_entries=["plans/old"]),
+        )
+    )
+
+    assert view._mode == "cleanup"
+    assert view._preview_action is None
+    assert view._preview_targets == []
+    assert view._plan.short == ()
+    assert view._plan.aged_entries == ("plans/old",)
+
+
+def test_refresh_failure_refuses_session_preview_before_proc_and_keeps_aged(
+    monkeypatch,
+):
+    import cc_session_control.views._sessions_cleanup as cl_mod
+
+    proc_probes = []
+
+    def probe_current_ancestors():
+        proc_probes.append("called")
+        return cl_mod.proc.AncestorProbe(frozenset({999}))
+
+    monkeypatch.setattr(
+        cl_mod.proc,
+        "probe_current_ancestors",
+        probe_current_ancestors,
+    )
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view.apply_refresh_failure(
+        RefreshFailure(
+            2,
+            "process stat (/proc/7/stat)",
+            "process stat (/proc/7/stat): permission denied",
+            CleanupPlan(aged_entries=["plans/old"]),
+        )
+    )
+
+    view._enter_cleanup()
+
+    menu_warning = app._notifications[-1]
+    assert "清理预览不完整" in menu_warning
+    assert "process stat (/proc/7/stat)" in menu_warning
+    assert "permission denied" in menu_warning
+
+    view._enter_preview("short")
+
+    assert proc_probes == []
+    refusal = app._notifications[-1]
+    assert "预览不可用" in refusal
+    assert "process stat (/proc/7/stat)" in refusal
+    assert "permission denied" in refusal
+    assert "无短会话(≤2提问)需要清理" not in refusal
+
+    view._enter_preview("aged")
+
+    assert view._mode == "preview"
+    assert view._preview_targets == ["plans/old"]
+
+
 def test_cleanup_confirmation_reports_partial_failure(monkeypatch, tmp_path):
     import dataclasses
 
@@ -1968,3 +2078,18 @@ def test_cleanup_menu_surfaces_partial_plan_warning():
 
     assert "预览不完整" in app._notifications[-1]
     assert "permission denied" in app._notifications[-1]
+
+
+def test_aged_preview_does_not_claim_empty_when_age_source_is_unavailable():
+    from cc_session_control.data.cleanup import CleanupIssue, CleanupPlan
+
+    app = FakeApp()
+    view = SessionsView(app)
+    app.views = [view]
+    view._plan = CleanupPlan(issues=[CleanupIssue("aged_entries", "permission denied")])
+
+    view._enter_preview("aged")
+
+    assert "预览不可用" in app._notifications[-1]
+    assert "permission denied" in app._notifications[-1]
+    assert "无过期文件需要清理" not in app._notifications[-1]

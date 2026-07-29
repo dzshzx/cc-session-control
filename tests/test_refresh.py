@@ -1,5 +1,6 @@
 """Atomic refresh generations at the coordinator's public seam."""
 
+import os
 import threading
 from dataclasses import FrozenInstanceError
 from queue import Empty, Queue
@@ -8,7 +9,8 @@ from threading import Event, ExceptHookArgs, Thread
 import pytest
 
 from cc_session_control.config import cfg
-from cc_session_control.data import cleanup
+from cc_session_control.data import age_cleanup, cleanup
+from cc_session_control.data.age_cleanup import AgeCleanupPlan
 from cc_session_control.data.cleanup import CleanupPlan
 from cc_session_control.data.environment_ledger import (
     LedgerRead,
@@ -419,6 +421,7 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
     )
     plan = CleanupPlan(short=[session], orphan_entries=["gone"])
     snapshot_calls = 0
+    age_calls = 0
     plan_calls = 0
 
     def read_snapshot() -> WorldSnapshot:
@@ -426,16 +429,30 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
         snapshot_calls += 1
         return snapshot
 
-    def make_plan(sessions, generation_evidence) -> CleanupPlan:
+    captured_age = AgeCleanupPlan()
+
+    def read_age() -> AgeCleanupPlan:
+        nonlocal age_calls
+        age_calls += 1
+        return captured_age
+
+    def make_plan(
+        sessions,
+        generation_evidence,
+        *,
+        age_plan: AgeCleanupPlan,
+    ) -> CleanupPlan:
         nonlocal plan_calls
         plan_calls += 1
         assert sessions is snapshot.sessions
         assert generation_evidence is evidence
+        assert age_plan is captured_age
         return plan
 
     result = build_refresh_result(
         7,
         snapshot_builder=read_snapshot,
+        age_builder=read_age,
         cleanup_builder=make_plan,
     )
 
@@ -460,7 +477,7 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
         "active",
         "older",
     ]
-    assert snapshot_calls == plan_calls == 1
+    assert snapshot_calls == age_calls == plan_calls == 1
 
 
 def test_refresh_plan_uses_generation_evidence_without_second_probe(
@@ -499,11 +516,135 @@ def test_refresh_plan_uses_generation_evidence_without_second_probe(
     ]
 
 
+def test_successful_refresh_scans_and_anchors_age_targets_once(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
+    aged = cfg.shell_snapshots_dir / "old.sh"
+    aged.parent.mkdir(parents=True)
+    aged.touch()
+    os.utime(aged, (0.0, 0.0))
+    list_calls: list[str] = []
+    anchor_calls = 0
+    original_listdir = os.listdir
+    original_entry_anchors = age_cleanup.entry_anchors
+
+    def counted_listdir(path):
+        if os.fspath(path) in {
+            os.fspath(cfg.shell_snapshots_dir),
+            os.fspath(cfg.telemetry_dir),
+            os.fspath(cfg.plans_dir),
+            os.fspath(cfg.backups_dir),
+            os.fspath(cfg.paste_cache_dir),
+        }:
+            list_calls.append(os.fspath(path))
+        return original_listdir(path)
+
+    def counted_entry_anchors(entries, bases):
+        nonlocal anchor_calls
+        anchor_calls += 1
+        return original_entry_anchors(entries, bases)
+
+    monkeypatch.setattr(age_cleanup.os, "listdir", counted_listdir)
+    monkeypatch.setattr(age_cleanup, "entry_anchors", counted_entry_anchors)
+
+    result = build_refresh_result(
+        8,
+        snapshot_builder=lambda: WorldSnapshot(liveness_snapshot=LivenessSnapshot()),
+    )
+
+    assert isinstance(result, RefreshBatch)
+    assert result.cleanup_plan.aged_entries == ("shell-snapshots/old.sh",)
+    assert set(result.cleanup_plan.aged_anchors) == {"shell-snapshots/old.sh"}
+    assert sorted(list_calls) == sorted(
+        [
+            os.fspath(cfg.shell_snapshots_dir),
+            os.fspath(cfg.telemetry_dir),
+            os.fspath(cfg.plans_dir),
+            os.fspath(cfg.backups_dir),
+            os.fspath(cfg.paste_cache_dir),
+        ]
+    )
+    assert anchor_calls == 1
+
+
+def test_age_source_failure_is_typed_in_failed_generation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    cfg.shell_snapshots_dir.mkdir(parents=True)
+    original_listdir = os.listdir
+
+    def denied_age_source(path):
+        if os.fspath(path) == os.fspath(cfg.shell_snapshots_dir):
+            raise PermissionError(13, "age inventory denied", os.fspath(path))
+        return original_listdir(path)
+
+    monkeypatch.setattr(age_cleanup.os, "listdir", denied_age_source)
+    result = build_refresh_result(
+        8,
+        snapshot_builder=lambda: WorldSnapshot(
+            liveness_snapshot=LivenessSnapshot(
+                issues=(
+                    LivenessIssue(
+                        "process stat",
+                        "/proc/7/stat",
+                        "permission denied",
+                    ),
+                )
+            )
+        ),
+    )
+
+    assert isinstance(result, RefreshFailure)
+    assert result.cleanup_plan.aged_entries == ()
+    assert not result.cleanup_plan.aged_anchors
+    assert len(result.cleanup_plan.issues) == 1
+    issue = result.cleanup_plan.issues[0]
+    assert issue.source == "aged_entries"
+    assert issue.path == os.fspath(cfg.shell_snapshots_dir)
+    assert "age inventory denied" in issue.error
+
+
+def test_age_anchor_failure_is_typed_and_drops_unanchored_inventory(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
+    aged = cfg.shell_snapshots_dir / "old.sh"
+    aged.parent.mkdir(parents=True)
+    aged.touch()
+    os.utime(aged, (0.0, 0.0))
+
+    def denied_anchors(_entries, _bases):
+        raise PermissionError(13, "anchor denied", os.fspath(aged))
+
+    monkeypatch.setattr(age_cleanup, "entry_anchors", denied_anchors)
+
+    plan = age_cleanup.build_age_plan()
+
+    assert plan.entries == ()
+    assert not plan.anchors
+    assert len(plan.issues) == 1
+    issue = plan.issues[0]
+    assert issue.source == "aged_removal_anchors"
+    assert issue.path == os.fspath(aged)
+    assert "anchor denied" in issue.error
+
+
 def test_expected_source_error_is_an_explicit_failure() -> None:
     def fail() -> WorldSnapshot:
         raise PermissionError(13, "denied", "/tmp/runtime")
 
-    result = build_refresh_result(4, snapshot_builder=fail)
+    result = build_refresh_result(
+        4,
+        snapshot_builder=fail,
+        age_builder=AgeCleanupPlan,
+    )
 
     assert result == RefreshFailure(
         generation=4,
@@ -512,6 +653,19 @@ def test_expected_source_error_is_an_explicit_failure() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         result.detail = "hidden"
+
+
+def test_direct_refresh_failure_marks_session_cleanup_unavailable() -> None:
+    failure = RefreshFailure(
+        generation=4,
+        source="session registry",
+        detail="invalid generation evidence",
+    )
+
+    issue = failure.cleanup_plan.session_keyed_issue
+    assert issue is not None
+    assert issue.source == "session registry"
+    assert issue.error == "invalid generation evidence"
 
 
 def test_incomplete_liveness_is_failed_before_cleanup_plan_build() -> None:
@@ -533,14 +687,21 @@ def test_incomplete_liveness_is_failed_before_cleanup_plan_build() -> None:
     )
     cleanup_calls = 0
 
-    def make_plan(*args) -> CleanupPlan:
+    def make_plan(
+        _sessions,
+        _evidence,
+        *,
+        age_plan: AgeCleanupPlan,
+    ) -> CleanupPlan:
         nonlocal cleanup_calls
         cleanup_calls += 1
+        assert isinstance(age_plan, AgeCleanupPlan)
         return CleanupPlan()
 
     result = build_refresh_result(
         8,
         snapshot_builder=lambda: snapshot,
+        age_builder=AgeCleanupPlan,
         cleanup_builder=make_plan,
     )
 
@@ -550,6 +711,42 @@ def test_incomplete_liveness_is_failed_before_cleanup_plan_build() -> None:
     assert "invalid JSON" in result.detail
     assert "claude agents --json: exit status 7" in result.detail
     assert cleanup_calls == 0
+
+
+def test_incomplete_liveness_failure_keeps_worker_built_age_plan(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
+    aged = cfg.shell_snapshots_dir / "old.sh"
+    aged.parent.mkdir(parents=True)
+    aged.touch()
+    os.utime(aged, (0.0, 0.0))
+    snapshot = WorldSnapshot(
+        liveness_snapshot=LivenessSnapshot(
+            issues=(
+                LivenessIssue(
+                    "session registry",
+                    "/runtime/sessions/broken.json",
+                    "invalid JSON",
+                ),
+            )
+        )
+    )
+
+    result = build_refresh_result(8, snapshot_builder=lambda: snapshot)
+
+    assert isinstance(result, RefreshFailure)
+    assert result.cleanup_plan.aged_entries == ("shell-snapshots/old.sh",)
+    assert set(result.cleanup_plan.aged_anchors) == {"shell-snapshots/old.sh"}
+    assert result.cleanup_plan.empty == ()
+    assert result.cleanup_plan.short == ()
+    assert result.cleanup_plan.orphan_entries == ()
+    assert result.cleanup_plan.zombie_pids == ()
+    assert not result.cleanup_plan.session_anchors
+    assert not result.cleanup_plan.orphan_anchors
+    assert not result.cleanup_plan.zombie_anchors
 
 
 def test_missing_liveness_evidence_is_failed_before_cleanup_plan_build() -> None:
@@ -563,6 +760,7 @@ def test_missing_liveness_evidence_is_failed_before_cleanup_plan_build() -> None
     result = build_refresh_result(
         9,
         snapshot_builder=WorldSnapshot,
+        age_builder=AgeCleanupPlan,
         cleanup_builder=make_plan,
     )
 
@@ -579,7 +777,11 @@ def test_programming_error_is_not_converted_to_refresh_failure() -> None:
         raise ValueError("broken invariant")
 
     with pytest.raises(ValueError, match="broken invariant"):
-        build_refresh_result(9, snapshot_builder=fail)
+        build_refresh_result(
+            9,
+            snapshot_builder=fail,
+            age_builder=AgeCleanupPlan,
+        )
 
 
 def test_each_generation_invokes_each_normal_source_once() -> None:
@@ -592,15 +794,22 @@ def test_each_generation_invokes_each_normal_source_once() -> None:
         snapshot_calls += 1
         return WorldSnapshot(liveness_snapshot=LivenessSnapshot())
 
-    def make_plan(*args) -> CleanupPlan:
+    def make_plan(
+        _sessions,
+        _evidence,
+        *,
+        age_plan: AgeCleanupPlan,
+    ) -> CleanupPlan:
         nonlocal cleanup_calls
         cleanup_calls += 1
+        assert isinstance(age_plan, AgeCleanupPlan)
         return CleanupPlan()
 
     coordinator = RefreshCoordinator(
         lambda generation: build_refresh_result(
             generation,
             snapshot_builder=read_snapshot,
+            age_builder=AgeCleanupPlan,
             cleanup_builder=make_plan,
         ),
         lambda: signals.put(None),

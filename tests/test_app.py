@@ -1,5 +1,6 @@
 """App orchestration tests without a real MainLoop or live data sources."""
 
+import os
 import threading
 from queue import Queue
 
@@ -9,8 +10,15 @@ import urwid
 import cc_session_control.app as app_mod
 from cc_session_control.actions.runner import Accepted, ActionResult, Busy
 from cc_session_control.app import App
+from cc_session_control.config import cfg
+from cc_session_control.data import age_cleanup
 from cc_session_control.data.cleanup import CleanupPlan
-from cc_session_control.data.refresh import RefreshBatch, RefreshFailure
+from cc_session_control.data.liveness import LivenessIssue, LivenessSnapshot
+from cc_session_control.data.refresh import (
+    RefreshBatch,
+    RefreshFailure,
+    build_refresh_result,
+)
 from cc_session_control.data.snapshot import WorldSnapshot
 
 
@@ -27,6 +35,9 @@ class _RecorderView:
         self.applied.append(batch)
         self.apply_threads.append(threading.get_ident())
         self._loaded = True
+
+    def apply_refresh_failure(self, failure):
+        pass
 
     def keyhints(self):
         return ""
@@ -135,6 +146,133 @@ def test_first_failed_generation_stays_explicit_instead_of_empty_success():
     assert notifications == [
         "刷新失败（claude agents --json）：exit status 7",
     ]
+
+
+def test_cold_start_failure_exposes_worker_built_age_preview_without_main_loop_io(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
+    aged = cfg.shell_snapshots_dir / "old.sh"
+    aged.parent.mkdir(parents=True)
+    aged.touch()
+    os.utime(aged, (0.0, 0.0))
+    failure = build_refresh_result(
+        1,
+        snapshot_builder=lambda: WorldSnapshot(
+            liveness_snapshot=LivenessSnapshot(
+                issues=(
+                    LivenessIssue(
+                        "process stat",
+                        "/proc/7/stat",
+                        "permission denied",
+                    ),
+                )
+            )
+        ),
+    )
+    assert isinstance(failure, RefreshFailure)
+
+    def unexpected_io(*_args, **_kwargs):
+        raise AssertionError("main-loop failure application must stay I/O-free")
+
+    monkeypatch.setattr(age_cleanup, "build_age_plan", unexpected_io)
+    monkeypatch.setattr(age_cleanup, "list_aged_entries", unexpected_io)
+    monkeypatch.setattr(age_cleanup, "entry_anchors", unexpected_io)
+    completed = Queue()
+
+    def build(_generation):
+        completed.put(None)
+        return failure
+
+    app = App(refresh_builder=build)
+    notifications = []
+    app.notify = notifications.append
+    app.trigger_async_refresh()
+    completed.get(timeout=1)
+
+    assert app._on_pipe(b"1") is True
+    sessions_view = app.views[1]
+    assert all(not view._loaded for view in app.views)
+    assert sessions_view._plan is failure.cleanup_plan
+    assert sessions_view._classified["aged_entries"] == 1
+    assert notifications == [
+        "刷新失败（process stat (/proc/7/stat)）："
+        "process stat (/proc/7/stat): permission denied"
+    ]
+
+    sessions_view._enter_cleanup()
+    sessions_view._enter_preview("aged")
+    assert sessions_view._mode == "preview"
+    assert sessions_view._preview_targets == ["shell-snapshots/old.sh"]
+    assert "无过期文件需要清理" not in notifications
+
+
+def test_later_failure_keeps_prior_session_rows_but_replaces_cleanup_with_age_only(
+    tmp_path,
+    monkeypatch,
+):
+    from cc_session_control.models import Session
+
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
+    aged = cfg.shell_snapshots_dir / "old.sh"
+    aged.parent.mkdir(parents=True)
+    aged.touch()
+    os.utime(aged, (0.0, 0.0))
+    session = Session(
+        sid="last-good",
+        cwd="/project",
+        label="last good",
+        mtime=1.0,
+        prompts=3,
+        pid=None,
+        alive=False,
+        current=False,
+    )
+    good = _batch(1, WorldSnapshot(sessions=(session,)))
+    failure = build_refresh_result(
+        2,
+        snapshot_builder=lambda: WorldSnapshot(
+            liveness_snapshot=LivenessSnapshot(
+                issues=(
+                    LivenessIssue(
+                        "process stat",
+                        "/proc/7/stat",
+                        "permission denied",
+                    ),
+                )
+            )
+        ),
+    )
+    assert isinstance(failure, RefreshFailure)
+    completed = Queue()
+    results = [good, failure]
+
+    def build(generation):
+        completed.put(generation)
+        return results[generation - 1]
+
+    app = App(refresh_builder=build)
+    app.notify = lambda _message: None
+    for generation in (1, 2):
+        app.trigger_async_refresh()
+        assert completed.get(timeout=1) == generation
+        app._on_pipe(b"1")
+
+    sessions_view = app.views[1]
+    assert sessions_view._loaded is True
+    assert sessions_view._all_sessions == [session]
+    assert sessions_view._plan is failure.cleanup_plan
+    assert sessions_view._plan.aged_entries == ("shell-snapshots/old.sh",)
+    assert sessions_view._plan.empty == ()
+    assert sessions_view._plan.short == ()
+    assert sessions_view._plan.orphan_entries == ()
+    assert sessions_view._plan.zombie_pids == ()
+    assert not sessions_view._plan.session_anchors
+    assert not sessions_view._plan.orphan_anchors
+    assert not sessions_view._plan.zombie_anchors
 
 
 def test_on_pipe_noop_while_exiting():

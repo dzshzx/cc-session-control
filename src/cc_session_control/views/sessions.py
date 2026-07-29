@@ -27,7 +27,7 @@ from ._sessions_cleanup import CleanupMixin
 
 if TYPE_CHECKING:
     from ..app import App
-    from ..data.refresh import RefreshBatch
+    from ..data.refresh import RefreshBatch, RefreshFailure
 
 
 class SessionsView(CleanupMixin, ListTabView):
@@ -195,6 +195,10 @@ class SessionsView(CleanupMixin, ListTabView):
             self._rebuild()
         elif self._mode == "cleanup":
             self._rebuild_cleanup()
+
+    def apply_refresh_failure(self, failure: RefreshFailure) -> None:
+        """Apply only the worker-built, session-agnostic cleanup projection."""
+        self._apply_failure_cleanup_plan(failure.cleanup_plan)
 
     def _build_rows(self) -> None:
         for s in self._sessions:

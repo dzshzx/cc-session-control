@@ -183,13 +183,32 @@ class CleanupMixin:
         for a in _CLEANUP_ACTIONS:
             self._cleanup_walker.append(_ActionRow(a.key, a.label, c.get(a.stat, 0)))
 
+    def _apply_failure_cleanup_plan(self, plan: CleanupPlan) -> None:
+        """Replace destructive preview state with one safe failed-generation plan."""
+        self._plan = plan
+        self._classified = plan.counts()
+        if self._mode == "cleanup":
+            self._rebuild_cleanup()
+            return
+        if self._mode != "preview":
+            return
+        action = self._preview_action
+        targets = action.targets(plan) if action is not None else ()
+        if action is not None and action.key == "aged" and targets:
+            self._show_action_preview(action, targets)
+            return
+        self._preview_action = None
+        self._preview_targets = []
+        self._enter_cleanup(show_issues=False)
+
     def _enter_cleanup(self, *, show_issues: bool = True) -> None:
         self._mode = "cleanup"
         self._rebuild_cleanup()
-        if show_issues and self._plan.issues:
-            issue = self._plan.issues[0]
+        preview_issues = self._plan.preview_issues
+        if show_issues and preview_issues:
+            issue = preview_issues[0]
             self.app.notify(
-                f"清理预览不完整（{len(self._plan.issues)} 个来源）："
+                f"清理预览不完整（{len(preview_issues)} 个来源）："
                 f"{issue.source}: {issue.error}"
             )
         cleanup_list = urwid.ListBox(self._cleanup_walker)
@@ -225,13 +244,32 @@ class CleanupMixin:
         # (without /proc every pid looks dead, so they'd nuke the live session).
         # Refuse HONESTLY — never let the refusal read as "nothing to clean".
         action = _ACTION_BY_KEY[action_key]
+        if action.gated and self._plan.session_keyed_issue is not None:
+            issue = self._plan.session_keyed_issue
+            self.app.notify(f"{action.label}预览不可用：{issue.source}: {issue.error}")
+            return
         if action.gated and not proc.probe_current_ancestors().complete:
             self.app.notify(_DEGRADED)
+            return
+        if action.key == "aged" and self._plan.age_issues:
+            issue = self._plan.age_issues[0]
+            self.app.notify(
+                f"过期文件预览不可用（{len(self._plan.age_issues)} 个来源）："
+                f"{issue.source}: {issue.error}"
+            )
             return
         targets = action.targets(self._plan)
         if not targets:
             self.app.notify(action.none_notice)
             return
+        self._show_action_preview(action, targets)
+
+    def _show_action_preview(
+        self,
+        action: _CleanupAction,
+        targets: Sequence[Session | str | int],
+    ) -> None:
+        """Render one already-selected frozen target set without acquiring data."""
         self._mode = "preview"
         self._preview_action = action
         self._preview_targets = list(targets)

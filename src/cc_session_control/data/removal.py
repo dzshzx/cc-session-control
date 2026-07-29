@@ -140,7 +140,7 @@ class CleanupExecution:
 
 @dataclass(frozen=True)
 class CleanupIssue:
-    """Expected source I/O problem that made a plan partial."""
+    """Expected source problem that made a plan partial or unavailable."""
 
     source: str
     error: str
@@ -163,6 +163,7 @@ class CleanupPlan:
     orphan_anchors: Mapping[str, RemovalAnchor] = field(default_factory=dict)
     zombie_anchors: Mapping[int, RemovalAnchor] = field(default_factory=dict)
     aged_anchors: Mapping[str, RemovalAnchor] = field(default_factory=dict)
+    session_keyed_issue: CleanupIssue | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "empty", tuple(self.empty))
@@ -193,6 +194,18 @@ class CleanupPlan:
             "aged_anchors",
             MappingProxyType(dict(self.aged_anchors)),
         )
+        if self.session_keyed_issue is not None and (
+            self.empty
+            or self.short
+            or self.orphan_entries
+            or self.zombie_pids
+            or self.session_anchors
+            or self.orphan_anchors
+            or self.zombie_anchors
+        ):
+            raise ValueError(
+                "unavailable session-keyed cleanup cannot retain targets or anchors"
+            )
 
     def counts(self) -> dict[str, int]:
         return {
@@ -202,6 +215,23 @@ class CleanupPlan:
             "zombie_procs": len(self.zombie_pids),
             "aged_entries": len(self.aged_entries),
         }
+
+    @property
+    def age_issues(self) -> tuple[CleanupIssue, ...]:
+        """Expected failures that make the age inventory non-authoritative."""
+        return tuple(
+            issue
+            for issue in self.issues
+            if issue.source in {"aged_entries", "aged_removal_anchors"}
+        )
+
+    @property
+    def preview_issues(self) -> tuple[CleanupIssue, ...]:
+        """Every typed issue that makes some cleanup preview unavailable."""
+        session_issues = (
+            (self.session_keyed_issue,) if self.session_keyed_issue is not None else ()
+        )
+        return (*session_issues, *self.issues)
 
 
 class RemovalSafetyError(OSError):

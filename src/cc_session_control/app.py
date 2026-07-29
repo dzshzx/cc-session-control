@@ -45,7 +45,9 @@ class TabView(Protocol):
     A tab satisfies this structurally — App never special-cases a concrete
     view. `apply_refresh(batch)` runs only on the main loop and receives one
     complete generation built by `RefreshCoordinator`; views never perform
-    refresh I/O or hold worker-written pending fields. Adding a tab means
+    refresh I/O or hold worker-written pending fields.
+    `apply_refresh_failure(failure)` is the main-loop-only hook for safe,
+    worker-built failure projections and defaults to no-op. Adding a tab means
     honoring every member below; subclass `views/_base.py::ListTabView` for the
     shared walker/overlay/footer plumbing instead of re-writing it.
     """
@@ -54,6 +56,7 @@ class TabView(Protocol):
     _loaded: bool
 
     def apply_refresh(self, batch: RefreshBatch) -> None: ...
+    def apply_refresh_failure(self, failure: RefreshFailure) -> None: ...
     def keyhints(self) -> str: ...
     def handle_key(self, key: str) -> None: ...
     def captures_text(
@@ -370,6 +373,8 @@ class App:
             return True
         self._last_refresh_generation = result.generation
         if isinstance(result, RefreshFailure):
+            for view in self.views:
+                view.apply_refresh_failure(result)
             self.notify(f"刷新失败（{result.source}）：{result.detail}")
             return True
         for view in self.views:

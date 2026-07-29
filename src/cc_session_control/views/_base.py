@@ -16,7 +16,7 @@ import urwid
 
 if TYPE_CHECKING:
     from ..app import App
-    from ..data.refresh import RefreshBatch
+    from ..data.refresh import RefreshBatch, RefreshFailure
     from ._keytable import Key
 
 
@@ -48,6 +48,9 @@ class ListTabView:
     def apply_refresh(self, batch: RefreshBatch) -> None:
         """Apply one complete refresh generation on the main loop."""
         raise NotImplementedError
+
+    def apply_refresh_failure(self, failure: RefreshFailure) -> None:
+        """Keep the last complete view data unless a tab owns a safe projection."""
 
     def keyhints(self) -> str:
         """Return view-specific footer hints."""
