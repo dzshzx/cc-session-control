@@ -4,11 +4,23 @@ from __future__ import annotations
 
 import sys
 from argparse import Namespace
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TextIO
 
 from .cli_streams import run_with_streams
-from .data.removal import CleanupExecution, RemovalAnchor
+from .data.removal import CleanupExecution, CleanupIssue, RemovalAnchor
+
+
+def _print_cleanup_issues(issues: Sequence[CleanupIssue]) -> int:
+    """Surface partial preview evidence and return its process status."""
+    for issue in issues:
+        where = f" ({issue.path})" if issue.path else ""
+        print(
+            f"Warning: cleanup preview is partial: {issue.source}{where}: "
+            f"{issue.error}",
+            file=sys.stderr,
+        )
+    return int(bool(issues))
 
 
 def _print_cleanup_execution(
@@ -80,7 +92,18 @@ def _cmd_prune(args: Namespace) -> int:
     # Age-only cleanup is session-agnostic. Keep orphan/zombie precedence for
     # multi-flag invocations by routing early only when neither is requested.
     if args.sweep_aged and not (args.sweep_orphans or args.sweep_zombies):
-        return _cmd_prune_aged(args)
+        from .data.age_cleanup import build_age_plan
+
+        age_plan = build_age_plan()
+        plan_status = _print_cleanup_issues(age_plan.issues)
+        return max(
+            _cmd_prune_aged(
+                args,
+                list(age_plan.entries),
+                age_plan.anchors,
+            ),
+            plan_status,
+        )
 
     from .data import liveness
     from .data.cleanup import (
@@ -124,14 +147,7 @@ def _cmd_prune(args: Namespace) -> int:
         f"short(<=2): {counts['short']}  Orphan dirs: {counts['orphan_dirs']}  "
         f"Zombie files: {counts['zombie_procs']}  Aged: {counts['aged_entries']}"
     )
-    for plan_issue in plan.issues:
-        where = f" ({plan_issue.path})" if plan_issue.path else ""
-        print(
-            f"Warning: cleanup preview is partial: {plan_issue.source}{where}: "
-            f"{plan_issue.error}",
-            file=sys.stderr,
-        )
-    plan_status = int(bool(plan.issues))
+    plan_status = _print_cleanup_issues(plan.issues)
 
     if args.sweep_orphans:
         orphans = plan.orphan_entries
@@ -225,8 +241,8 @@ def _cmd_prune_zombies(
 
 def _cmd_prune_aged(
     args: Namespace,
-    aged: list[str] | None = None,
-    anchors: Mapping[str, RemovalAnchor] | None = None,
+    aged: list[str],
+    anchors: Mapping[str, RemovalAnchor],
 ) -> int:
     """Strategy B age sweep of time/global-keyed dirs (R7.2) via the CLI.
 
@@ -234,10 +250,8 @@ def _cmd_prune_aged(
     sweep) it is not gated on `/proc`.
     """
     from .config import cfg
-    from .data.cleanup import execute_aged_removals, list_aged_entries
+    from .data.cleanup import execute_aged_removals
 
-    if aged is None:
-        aged = list_aged_entries()
     print(
         f"Would sweep {len(aged)} aged entr(y/ies) older than {cfg.cleanup_age_days}d"
     )

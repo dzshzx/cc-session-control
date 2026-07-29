@@ -5,6 +5,7 @@ tests verify the CLI surfaces those already-gated strategies (dry-run + apply +
 the R10 refusal) so they are reachable by a user, not just by the library.
 """
 
+import io
 import json
 import os
 import subprocess
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from cc_session_control import cli, cli_commands, cli_rc
 from cc_session_control.config import cfg
-from cc_session_control.data import cleanup, liveness, registry, sessions
+from cc_session_control.data import age_cleanup, cleanup, liveness, registry, sessions
 from cc_session_control.data import proc as proc_mod
 from cc_session_control.data.liveness import LivenessSnapshot
 from cc_session_control.models import Session, SessionProc
@@ -361,6 +362,81 @@ def test_prune_age_only_dry_run_and_apply_skip_session_protection(
     assert captured.err == ""
     assert not old.exists()
     assert recent.exists()
+
+
+def test_prune_age_only_apply_refuses_source_root_replaced_after_preview(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
+    root = tmp_path / "shell-snapshots"
+    root.mkdir()
+    old = root / "old.sh"
+    old.write_text("preview object")
+    stamp = time.time() - 40 * 86400
+    os.utime(old, (stamp, stamp))
+    saved_root = tmp_path / "saved-shell-snapshots"
+    replacement = root / "old.sh"
+
+    class ReplaceRootOnPreview(io.StringIO):
+        replaced = False
+
+        def write(self, text):
+            if not self.replaced and "Would sweep 1 aged" in text:
+                root.rename(saved_root)
+                root.mkdir()
+                replacement.write_text("replacement object")
+                os.utime(replacement, (stamp, stamp))
+                self.replaced = True
+            return super().write(text)
+
+    stdout = ReplaceRootOnPreview()
+    stderr = io.StringIO()
+
+    status = cli_commands.handle_prune(
+        _args(sweep_aged=True, apply=True),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert stdout.replaced
+    assert status == 1
+    assert "Refused" in stderr.getvalue()
+    assert "root" in stderr.getvalue()
+    assert replacement.read_text() == "replacement object"
+    assert (saved_root / "old.sh").read_text() == "preview object"
+
+
+def test_prune_age_only_surfaces_inventory_failure_for_dry_run_and_apply(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    source = tmp_path / "shell-snapshots"
+    source.mkdir()
+    original_listdir = os.listdir
+
+    def deny_source(path):
+        if os.fspath(path) == os.fspath(source):
+            raise PermissionError(13, "permission denied", os.fspath(path))
+        return original_listdir(path)
+
+    monkeypatch.setattr(age_cleanup.os, "listdir", deny_source)
+
+    for apply in (False, True):
+        status = cli_commands.handle_prune(
+            _args(sweep_aged=True, apply=apply),
+        )
+        captured = capsys.readouterr()
+
+        assert status == 1
+        assert "Warning: cleanup preview is partial: aged_entries" in captured.err
+        assert os.fspath(source) in captured.err
+        assert "permission denied" in captured.err
+        assert "Traceback" not in captured.err
+        assert "Would sweep 0 aged" in captured.out
 
 
 def test_prune_orphan_and_aged_flags_keep_orphan_evidence_precedence(
