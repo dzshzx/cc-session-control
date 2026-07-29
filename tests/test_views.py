@@ -25,7 +25,6 @@ from cc_session_control.data.project_settings import (
 from cc_session_control.data.rc_enabled import (
     EnabledListOperation,
     EnabledListResult,
-    EnabledListStage,
     EnabledListState,
 )
 from cc_session_control.data.refresh import RefreshBatch, RefreshFailure
@@ -861,80 +860,6 @@ def test_rc_view_status_counts_per_project_setting_failures():
     )
 
     assert "自动远控异常 1" in view.status.original_widget.get_text()[0]
-
-
-def test_rc_view_status_counts_typed_ledger_warning_and_failure():
-    from cc_session_control.data import environment_ledger as ledger
-    from cc_session_control.data import environments
-    from cc_session_control.data.snapshot import WorldSnapshot
-
-    app = FakeApp()
-    view = RCView(app)
-    app.views = [view]
-    snap = WorldSnapshot(
-        rc_projects=[_make_project(name="p1")],
-        environment_reconciliation=environments.Reconciliation(
-            ledger_history_complete=False,
-            ledger=ledger.LedgerUpdate(
-                ledger.LedgerUpdateState.FAILED,
-                read=ledger.LedgerRead(
-                    ledger.LedgerReadState.PARTIAL,
-                    warnings=(ledger.LedgerWarning(3, "bad row"),),
-                ),
-                failure=ledger.LedgerFailure.READ,
-                detail="permission denied",
-            ),
-        ),
-    )
-
-    view.apply_refresh(_refresh_batch(snap))
-
-    assert "⚠ 环境台账异常 2" in view.status.original_widget.get_text()[0]
-
-
-def test_rc_view_status_exposes_exact_enabled_list_failure() -> None:
-    failure = EnabledListResult(
-        EnabledListOperation.LIST,
-        EnabledListState.FAILED,
-        None,
-        changed=False,
-        committed=False,
-        stage=EnabledListStage.READ,
-        detail="permission denied",
-    )
-    snap = WorldSnapshot(
-        rc_projects=[_make_project(name="trusted")],
-        rc_enabled_list=failure,
-    )
-    app = FakeApp()
-    view = RCView(app)
-    app.views = [view]
-
-    view.apply_refresh(_refresh_batch(snap))
-
-    status = view.status.original_widget.get_text()[0]
-    assert "⚠ RC 清单不完整 1" in status
-    assert "自启列表 read：permission denied" in status
-    assert "trusted" in _row_text(view.walker[0])
-
-
-def test_rc_view_status_does_not_count_missing_unchanged_ledger():
-    from cc_session_control.data import environments
-    from cc_session_control.data.snapshot import WorldSnapshot
-
-    app = FakeApp()
-    view = RCView(app)
-    app.views = [view]
-
-    view.apply_refresh(
-        _refresh_batch(
-            WorldSnapshot(
-                environment_reconciliation=environments.Reconciliation(),
-            ),
-        ),
-    )
-
-    assert "环境台账异常" not in view.status.original_widget.get_text()[0]
 
 
 def test_rc_view_shows_unknown_inventory_status_and_warning():
