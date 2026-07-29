@@ -77,7 +77,7 @@ def test_app_instantiation():
     [
         ("CSCTL_RC_STAGGER", "not-a-number"),
         ("CSCTL_RC_STAGGER", "-1"),
-        ("CSCTL_CLEANUP_AGE_DAYS", "0"),
+        ("CSCTL_CLEANUP_AGE_DAYS", "-1"),
     ],
 )
 def test_invalid_integer_environment_exits_two_without_traceback(name, raw):

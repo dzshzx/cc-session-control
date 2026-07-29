@@ -37,10 +37,12 @@ class Config:
             minimum=0,
         )
         # Age threshold (days) for the time/global-keyed cleanup strategy.
+        # 0 is a valid operator value (sweep every aged entry) — pre-0.8
+        # releases accepted it, so validation only rejects negatives/garbage.
         self.cleanup_age_days: int = _integer_environment(
             "CSCTL_CLEANUP_AGE_DAYS",
             14,
-            minimum=1,
+            minimum=0,
         )
         # TUI palette: "auto" (detect the terminal background) | "dark" | "light".
         self.theme: str = os.environ.get("CSCTL_THEME", "auto")
