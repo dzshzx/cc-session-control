@@ -22,8 +22,8 @@ constants the (Phase 7) background view reads are Simplified Chinese.
 
 from __future__ import annotations
 
-import os
 import shlex
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 
@@ -131,15 +131,38 @@ def remove_job(job: AgentJob) -> CleanupExecution:
 
 # --- watch (read-only) --------------------------------------------------------
 
+_TIMELINE_LINE_LIMIT = 200
 
-def watch(job: AgentJob) -> str | None:
-    """Path to the job's read-only `jobs/<short>/timeline.jsonl`, or None.
 
-    Pure lookup, no mutation — returns the path only when the file exists so the
-    view can fall back gracefully (R4.4 read-only watch).
-    """
-    path = os.path.join(str(cfg.jobs_dir), job.short, "timeline.jsonl")
-    return path if os.path.isfile(path) else None
+class TimelineReadState(Enum):
+    READY = "ready"
+    MISSING = "missing"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class TimelineReadResult:
+    """Bounded timeline data for a main-loop read-only overlay."""
+
+    state: TimelineReadState
+    lines: tuple[str, ...] = ()
+    detail: str = ""
+
+
+def watch(job: AgentJob) -> TimelineReadResult:
+    """Stream the last 200 timeline lines without loading the whole file."""
+    path = cfg.jobs_dir / job.short / "timeline.jsonl"
+    try:
+        with open(path, errors="ignore") as fh:
+            lines = deque(
+                (line.rstrip("\r\n") for line in fh),
+                maxlen=_TIMELINE_LINE_LIMIT,
+            )
+    except FileNotFoundError:
+        return TimelineReadResult(TimelineReadState.MISSING)
+    except OSError as exc:
+        return TimelineReadResult(TimelineReadState.FAILED, detail=str(exc))
+    return TimelineReadResult(TimelineReadState.READY, tuple(lines))
 
 
 # --- resume takeover (reuses the existing foreground resume path) -------------

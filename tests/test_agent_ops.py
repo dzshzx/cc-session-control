@@ -186,22 +186,59 @@ def test_remove_job_refuses_real_agents_failure_before_deleting(
     assert state.exists()
 
 
-# --- watch: read-only path lookup ---
+# --- watch: bounded read-only timeline data ---
 
 
-def test_watch_returns_path_when_present(tmp_path, monkeypatch):
+def test_watch_streams_only_last_200_lines_in_order(tmp_path, monkeypatch):
     monkeypatch.setattr(ao.cfg, "claude_home", tmp_path)
     job = _make_job(short="abcdef01")
-    job_dir = tmp_path / "jobs" / job.short
-    job_dir.mkdir(parents=True)
-    timeline = job_dir / "timeline.jsonl"
-    timeline.write_text("{}\n")
-    assert ao.watch(job) == str(timeline)
+    lines = [f"line-{index}\n" for index in range(205)]
+
+    class TimelineStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def __iter__(self):
+            return iter(lines)
+
+        def read(self):
+            raise AssertionError("timeline must not be read into memory at once")
+
+    monkeypatch.setattr(
+        ao, "open", lambda *_args, **_kwargs: TimelineStream(), raising=False
+    )
+
+    result = ao.watch(job)
+
+    assert result.state is ao.TimelineReadState.READY
+    assert result.lines == tuple(f"line-{index}" for index in range(5, 205))
+    assert result.detail == ""
 
 
-def test_watch_none_when_absent(tmp_path, monkeypatch):
+def test_watch_reports_typed_missing_timeline(tmp_path, monkeypatch):
     monkeypatch.setattr(ao.cfg, "claude_home", tmp_path)
-    assert ao.watch(_make_job()) is None
+    result = ao.watch(_make_job())
+    assert result.state is ao.TimelineReadState.MISSING
+    assert result.lines == ()
+
+
+def test_watch_reports_typed_read_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(ao.cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(
+        ao,
+        "open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+        raising=False,
+    )
+
+    result = ao.watch(_make_job())
+
+    assert result.state is ao.TimelineReadState.FAILED
+    assert result.lines == ()
+    assert result.detail == "denied"
 
 
 # --- resume_takeover: routes through the existing resume path ---

@@ -6,6 +6,7 @@ import threading
 
 from cc_session_control.actions.runner import (
     Accepted,
+    ActionCompletion,
     ActionResult,
     ActionRunner,
     ActionStatus,
@@ -62,6 +63,32 @@ def test_result_variants_are_typed() -> None:
     assert ActionResult.partial("some").status is ActionStatus.PARTIAL
     assert ActionResult.refused("no").status is ActionStatus.REFUSED
     assert ActionResult.failure("bad").status is ActionStatus.FAILURE
+
+
+def test_typed_completion_survives_rejected_second_submission() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    ready = threading.Event()
+
+    def prepare() -> ActionCompletion[str]:
+        started.set()
+        assert release.wait(1)
+        return ActionCompletion("first preparation")
+
+    runner = ActionRunner(ready.set)
+    assert isinstance(runner.submit("agent.prepare", prepare), Accepted)
+    assert started.wait(1)
+    assert isinstance(
+        runner.submit(
+            "agent.watch",
+            lambda: ActionCompletion("replacement"),
+        ),
+        Busy,
+    )
+
+    release.set()
+    assert ready.wait(1)
+    assert runner.consume_result() == ActionCompletion("first preparation")
 
 
 def test_close_does_not_join_and_drops_late_completion() -> None:

@@ -47,13 +47,21 @@ freeze navigation and could let worker threads mutate widgets.
   It publishes an `ActionResult` (`success`, `partial`, `refused`, or
   `failure`); only the main-loop pipe callback updates notices or requests one
   follow-up refresh.
+- Key-triggered external reads and preparations use that same runner and publish
+  an `ActionCompletion[T]`. `App.submit_completion` associates its typed
+  callback only after `Accepted`; Busy/Closed submissions cannot replace the
+  active callback. The main-loop pipe callback clears the association before it
+  applies confirm, overlay, notification, or exit-intent effects. Worker
+  exceptions and App close discard the association.
 - Expected operation failures are mapped to typed, operator-visible results.
   Unexpected exceptions remain visible through `threading.excepthook`; the
   runner still releases its single-flight state after the completion signal.
 - Actions that must leave the TUI are not submitted to `ActionRunner`.
-  Resume/attach/new-session variants remain `ExitIntent` values: the view asks
-  `App` to exit, then the CLI runs the intent after urwid has stopped. This is
-  the boundary for `exec` replacement and tmux client switching.
+  A resume preparation may run there as a read, but its main-loop completion
+  constructs the `ExitIntent`. Resume/attach/new-session variants remain
+  `ExitIntent` values: the view asks `App` to exit, then the CLI runs the intent
+  after urwid has stopped. This is the boundary for `exec` replacement and tmux
+  client switching.
 
 ## Consequences
 

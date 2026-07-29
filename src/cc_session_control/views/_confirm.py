@@ -50,9 +50,9 @@ def confirm_stop(
     current(self-protect) → confirm, with the 文案 derived from one `noun`
     (停止{noun} / {noun}未在运行 / 不能停止当前{noun}).
 
-    `gated=False` skips the R10 degrade gate for stops that don't signal a
-    pid — the RC tab's stop kills a tmux window, not a process, so refusing
-    it off `/proc` would be a gate it never needed.
+    `gated=False` skips this main-loop probe when the submitted worker owns
+    fresh typed process validation, or when the stop does not signal a pid.
+    Agent stop uses the former; the RC tab's tmux-window stop uses the latter.
     """
     if gated and not proc.probe_current_ancestors().complete:
         app.notify(DEGRADED)

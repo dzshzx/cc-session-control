@@ -1,8 +1,8 @@
-"""Single-flight background execution for stay-in-TUI mutations.
+"""Single-flight background execution for TUI actions and preparations.
 
-The worker owns no urwid objects.  It publishes one typed result before
-signalling the App's pipe; only the main-loop pipe callback consumes that
-result and applies notification/refresh effects.
+The worker owns no urwid objects. It publishes a typed mutation result or
+preparation value before signalling the App's pipe; only the main-loop pipe
+callback consumes that output and applies UI effects.
 """
 
 from __future__ import annotations
@@ -48,6 +48,13 @@ class ActionResult:
 
 
 @dataclass(frozen=True)
+class ActionCompletion[T]:
+    """Typed worker data to be applied by a main-loop completion callback."""
+
+    value: T
+
+
+@dataclass(frozen=True)
 class Accepted:
     action_key: str
 
@@ -63,7 +70,8 @@ class Closed:
 
 
 type SubmitResult = Accepted | Busy | Closed
-type Action = Callable[[], ActionResult]
+type ActionOutput = ActionResult | ActionCompletion[object]
+type Action = Callable[[], ActionOutput]
 
 
 class _State(Enum):
@@ -74,7 +82,7 @@ class _State(Enum):
 
 
 class ActionRunner:
-    """Run at most one mutation until its result is consumed.
+    """Run at most one action or preparation until its output is consumed.
 
     Threads are daemonized, and ``close`` never joins: shutdown rejects new
     work immediately while an in-flight action may finish in the background.
@@ -90,7 +98,7 @@ class ActionRunner:
         self._lock = threading.Lock()
         self._state = _State.IDLE
         self._active_key = ""
-        self._result: ActionResult | None = None
+        self._result: ActionOutput | None = None
 
     def submit(self, action_key: str, action: Action) -> SubmitResult:
         """Accept one action, or report the current busy/closed state."""
@@ -128,7 +136,7 @@ class ActionRunner:
                         self._state = _State.READY
             self._signal_ready()
 
-    def consume_result(self) -> ActionResult | None:
+    def consume_result(self) -> ActionOutput | None:
         """Consume the completed result once and release single-flight."""
         with self._lock:
             if self._state is not _State.READY:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import curses
 import os
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast, runtime_checkable
 
 import urwid
 
@@ -13,6 +13,7 @@ from . import theme
 from .actions.runner import (
     Accepted,
     Action,
+    ActionCompletion,
     ActionRunner,
     Busy,
     SubmitResult,
@@ -32,6 +33,8 @@ from .views.sessions import SessionsView
 
 if TYPE_CHECKING:
     from .actions.session_ops import ExitIntent
+
+_T = TypeVar("_T")
 
 # D7/R10: shown across all tabs when `/proc` is unavailable (e.g. macOS), where
 # the "current" session can't be determined and destructive ops are refused.
@@ -104,6 +107,7 @@ class App:
         self._pipe_fd: int | None = None
         self._action_pipe_fd: int | None = None
         self._action_in_progress = False
+        self._action_completion: Callable[[object], None] | None = None
         self._last_refresh_generation = 0
         self._refresh = RefreshCoordinator(
             refresh_builder,
@@ -239,6 +243,8 @@ class App:
 
     def _exit(self, result: ExitIntent | None = None) -> None:
         self._exiting = True
+        self._action_completion = None
+        self._action_in_progress = False
         self._actions.close()
         self._refresh.close()
         if self._alarm_handle:
@@ -289,8 +295,36 @@ class App:
 
     def submit_action(self, action_key: str, action: Action) -> SubmitResult:
         """Run one stay-in-TUI mutation without blocking the urwid main loop."""
+        return self._submit_action(action_key, action, None)
+
+    def submit_completion(
+        self,
+        action_key: str,
+        action: Callable[[], _T],
+        on_complete: Callable[[_T], None],
+    ) -> SubmitResult:
+        """Run a typed read off-loop and apply its data on the main loop.
+
+        The callback is associated only after the runner accepts the action.
+        Rejected Busy/Closed submissions therefore cannot replace the callback
+        for the active single-flight operation.
+        """
+
+        return self._submit_action(
+            action_key,
+            lambda: ActionCompletion(action()),
+            cast(Callable[[object], None], on_complete),
+        )
+
+    def _submit_action(
+        self,
+        action_key: str,
+        action: Action,
+        on_complete: Callable[[object], None] | None,
+    ) -> SubmitResult:
         outcome = self._actions.submit(action_key, action)
         if isinstance(outcome, Accepted):
+            self._action_completion = on_complete
             self._action_in_progress = True
             self.notify("处理中…", seconds=3600)
         elif isinstance(outcome, Busy):
@@ -346,10 +380,18 @@ class App:
         if not self._action_in_progress:
             return True
         self._action_in_progress = False
+        on_complete = self._action_completion
+        self._action_completion = None
         if result is None:
             # Unknown exceptions remain visible through threading.excepthook;
             # only clear the stale busy marker here.
             self._clear_notification()
+            return True
+        if isinstance(result, ActionCompletion):
+            self._clear_notification()
+            if on_complete is None:
+                raise RuntimeError("typed action completion has no main-loop handler")
+            on_complete(result.value)
             return True
         self.notify(result.message)
         if result.needs_refresh:

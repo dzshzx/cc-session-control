@@ -17,11 +17,9 @@ import urwid
 
 from ..actions import agent_ops, tui_actions
 from ..actions.session_ops import ResumeIntent
-from ..data import proc
-from ..models import AgentJob, Session
+from ..models import AgentJob
 from ._base import ListTabView
 from ._colspec import ColSpec, header_columns, row_columns
-from ._confirm import DEGRADED as _DEGRADED
 from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
@@ -213,23 +211,44 @@ class AgentsView(ListTabView):
             lambda: tui_actions.respawn_agent(request),
         )
 
-    def _prepare_takeover(self, job: AgentJob) -> Session | None:
-        prepared = agent_ops.prepare_takeover(job)
+    def _submit_takeover(self, job: AgentJob, *, terminal: bool) -> None:
+        request = tui_actions.AgentRequest.from_job(job)
+        name = job.name or job.short
+        self.app.submit_completion(
+            "agent.takeover.prepare",
+            lambda: agent_ops.prepare_takeover(request.to_job()),
+            lambda prepared: self._complete_takeover(
+                prepared,
+                name=name,
+                terminal=terminal,
+            ),
+        )
+
+    def _complete_takeover(
+        self,
+        prepared: agent_ops.TakeoverPreparationResult,
+        *,
+        name: str,
+        terminal: bool,
+    ) -> None:
         if prepared.state is agent_ops.TakeoverPreparationState.REFUSED:
             self.app.notify(f"已拒绝接回：{prepared.detail}")
-            return None
+            return
         if prepared.session is None:
             raise RuntimeError("ready takeover preparation has no session")
-        return prepared.session
-
-    def _takeover(self, job: AgentJob) -> None:
-        """Enter — tmux 接回: a tmux-resident worker is entered in place;
-        otherwise resume it inside its per-project tmux window (ADR-0001)."""
-        s = self._prepare_takeover(job)
-        if s is None:
-            return
+        s = prepared.session
         if s.current:
             self.app.notify("不能接回当前会话")
+            return
+        if terminal:
+            confirm_takeover(
+                self.app,
+                s,
+                "终端接回后台 agent",
+                lambda: self.app.exit_with(ResumeIntent(s)),
+                name=name,
+                gated=False,
+            )
             return
         # B1: takeover of a RUNNING worker kills its host pid (should_kill) — same
         # as Sessions Enter-live. A dead worker resumes directly, unconfirmed.
@@ -237,50 +256,48 @@ class AgentsView(ListTabView):
             self.app,
             s,
             "接回后台 agent",
-            name=job.name or job.short,
+            name=name,
             gated=False,
         )
+
+    def _takeover(self, job: AgentJob) -> None:
+        """Enter — prepare off-loop, then apply the tmux-first resume on main."""
+        self._submit_takeover(job, terminal=False)
 
     def _terminal(self, job: AgentJob) -> None:
-        """t — 终端接回 (fallback): bare-terminal resume via the existing path."""
-        s = self._prepare_takeover(job)
-        if s is None:
-            return
-        if s.current:
-            self.app.notify("不能接回当前会话")
-            return
-        confirm_takeover(
-            self.app,
-            s,
-            "终端接回后台 agent",
-            lambda: self.app.exit_with(ResumeIntent(s)),
-            name=job.name or job.short,
-            gated=False,
-        )
+        """t — prepare off-loop, then apply terminal resume on main."""
+        self._submit_takeover(job, terminal=True)
 
     def _watch(self, job: AgentJob) -> None:
-        path = agent_ops.watch(job)
-        if not path:
+        request = tui_actions.AgentRequest.from_job(job)
+        name = job.name or job.short
+        self.app.submit_completion(
+            "agent.watch",
+            lambda: agent_ops.watch(request.to_job()),
+            lambda result: self._complete_watch(result, name=name),
+        )
+
+    def _complete_watch(
+        self,
+        result: agent_ops.TimelineReadResult,
+        *,
+        name: str,
+    ) -> None:
+        if result.state is agent_ops.TimelineReadState.MISSING:
             self.app.notify("无 timeline 可查看")
             return
-        lines: list[str] = []
-        try:
-            with open(path, errors="ignore") as fh:
-                lines = fh.read().splitlines()[-200:]
-        except OSError:
-            self.app.notify("读取 timeline 失败")
+        if result.state is agent_ops.TimelineReadState.FAILED:
+            detail = f"：{result.detail}" if result.detail else ""
+            self.app.notify(f"读取 timeline 失败{detail}")
             return
-        rows = [TextRow(line) for line in lines] or [TextRow("(空)")]
+        rows = [TextRow(line) for line in result.lines] or [TextRow("(空)")]
         self._mode = "watch"
-        self._show_overlay(f"timeline（只读）· {job.name or job.short}", rows)
+        self._show_overlay(f"timeline（只读）· {name}", rows)
         self._update_footer()
 
     def _remove(self, job: AgentJob) -> None:
         if job.host_alive:
             self.app.notify("运行中的后台 agent 不能删除，先停止")
-            return
-        if not proc.probe_current_ancestors().complete:
-            self.app.notify(_DEGRADED)
             return
         request = tui_actions.AgentRequest.from_job(job)
         self.app.submit_action(
@@ -295,6 +312,7 @@ class AgentsView(ListTabView):
             job.name or job.short,
             lambda: self._do_stop(job),
             alive=job.host_alive,
+            gated=False,
         )
 
     def _do_stop(self, job: AgentJob) -> None:

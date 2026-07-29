@@ -8,7 +8,7 @@ import pytest
 import urwid
 
 import cc_session_control.app as app_mod
-from cc_session_control.actions.runner import Accepted, ActionResult, Busy
+from cc_session_control.actions.runner import Accepted, ActionResult, Busy, Closed
 from cc_session_control.app import App
 from cc_session_control.config import cfg
 from cc_session_control.data import age_cleanup
@@ -628,3 +628,111 @@ def test_second_app_submission_reports_busy_without_running():
     assert calls == ["first"]
     assert notifications == ["处理中…", "已有操作处理中"]
     release.set()
+
+
+def test_typed_completion_applies_on_main_and_busy_cannot_replace_handler():
+    started = threading.Event()
+    release = threading.Event()
+    ready = threading.Event()
+    worker_threads = []
+    completion_threads = []
+    completions = []
+    main_thread = threading.get_ident()
+
+    def prepare():
+        worker_threads.append(threading.get_ident())
+        started.set()
+        assert release.wait(1)
+        return "prepared"
+
+    app = App()
+    app._actions = app_mod.ActionRunner(ready.set)
+    app.notify = lambda *_args, **_kwargs: None
+
+    assert isinstance(
+        app.submit_completion(
+            "agent.prepare",
+            prepare,
+            lambda value: (
+                completions.append(value),
+                completion_threads.append(threading.get_ident()),
+            ),
+        ),
+        Accepted,
+    )
+    assert started.wait(1)
+    assert worker_threads and worker_threads[0] != main_thread
+
+    outcome = app.submit_completion(
+        "agent.watch",
+        lambda: "replacement",
+        lambda value: completions.append(value),
+    )
+    assert isinstance(outcome, Busy)
+
+    release.set()
+    assert ready.wait(1)
+    assert completions == []
+    assert app._on_action_pipe(b"1") is True
+    assert completions == ["prepared"]
+    assert completion_threads == [main_thread]
+
+
+def test_typed_completion_exception_and_close_clear_handlers(monkeypatch):
+    ready = threading.Event()
+    hooked = threading.Event()
+    callbacks = []
+    late_started = threading.Event()
+    release_late = threading.Event()
+
+    def hook(_args):
+        hooked.set()
+
+    def broken():
+        raise RuntimeError("broken completion")
+
+    monkeypatch.setattr(threading, "excepthook", hook)
+    app = App()
+    app._actions = app_mod.ActionRunner(ready.set)
+    app.notify = lambda *_args, **_kwargs: None
+    app._clear_notification = lambda: None
+
+    assert isinstance(
+        app.submit_completion("broken", broken, callbacks.append),
+        Accepted,
+    )
+    assert hooked.wait(1)
+    assert ready.wait(1)
+    assert app._on_action_pipe(b"1") is True
+    assert callbacks == []
+
+    ready.clear()
+    assert isinstance(
+        app.submit_completion("recovered", lambda: "ok", callbacks.append),
+        Accepted,
+    )
+    assert ready.wait(1)
+    app._on_action_pipe(b"1")
+    assert callbacks == ["ok"]
+
+    def late():
+        late_started.set()
+        assert release_late.wait(1)
+        return "late"
+
+    ready.clear()
+    assert isinstance(
+        app.submit_completion("late", late, callbacks.append),
+        Accepted,
+    )
+    assert late_started.wait(1)
+    with pytest.raises(urwid.ExitMainLoop):
+        app._exit()
+    assert isinstance(
+        app.submit_completion("closed", lambda: "bad", callbacks.append),
+        Closed,
+    )
+    release_late.set()
+    assert ready.wait(1)
+    app._on_action_pipe(b"late")
+    assert callbacks == ["ok"]

@@ -8,7 +8,7 @@ from cc_session_control.actions.session_ops import (
     ResumeIntent,
     TmuxResumeIntent,
 )
-from cc_session_control.data import liveness
+from cc_session_control.data import liveness, proc
 from cc_session_control.models import AgentJob, SessionProc
 from cc_session_control.views.agents import AgentsView
 
@@ -29,6 +29,9 @@ class TakeoverApp:
 
     def exit_with(self, intent: ExitIntent) -> None:
         self.result = intent
+
+    def submit_completion(self, _action_key, action, on_complete):
+        on_complete(action())
 
 
 def _job(*, alive: bool = False) -> AgentJob:
@@ -163,7 +166,7 @@ def test_enter_live_takeover_uses_one_complete_generation(monkeypatch):
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
     monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
     monkeypatch.setattr(av_mod.agent_ops.liveness, "live_session_procs", unexpected)
-    monkeypatch.setattr(av_mod.proc, "probe_current_ancestors", unexpected)
+    monkeypatch.setattr(proc, "probe_current_ancestors", unexpected)
     monkeypatch.setattr(
         av_mod.agent_ops.tmux,
         "find_session_window_result",
@@ -199,7 +202,7 @@ def test_enter_live_host_gone_in_fresh_generation_resumes_without_takeover(
         raise AssertionError("gone host must not query tmux or confirm takeover")
 
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
-    monkeypatch.setattr(av_mod.proc, "probe_current_ancestors", unexpected)
+    monkeypatch.setattr(proc, "probe_current_ancestors", unexpected)
     monkeypatch.setattr(
         av_mod.agent_ops.tmux,
         "find_session_window_result",
@@ -241,7 +244,7 @@ def test_enter_and_terminal_refuse_current_from_snapshot(monkeypatch):
         raise AssertionError("current takeover must not confirm or exit")
 
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
-    monkeypatch.setattr(av_mod.proc, "probe_current_ancestors", unexpected)
+    monkeypatch.setattr(proc, "probe_current_ancestors", unexpected)
     monkeypatch.setattr(
         av_mod.agent_ops.tmux,
         "find_session_window_result",
@@ -280,7 +283,7 @@ def test_enter_dead_without_host_skips_incomplete_liveness(monkeypatch):
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
     monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
     monkeypatch.setattr(av_mod.agent_ops.liveness, "live_session_procs", unexpected)
-    monkeypatch.setattr(av_mod.proc, "probe_current_ancestors", unexpected)
+    monkeypatch.setattr(proc, "probe_current_ancestors", unexpected)
     monkeypatch.setattr(
         av_mod.agent_ops.tmux,
         "find_session_window_result",
@@ -327,7 +330,7 @@ def test_terminal_dead_without_host_skips_incomplete_liveness(monkeypatch):
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
     monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
     monkeypatch.setattr(av_mod.agent_ops.liveness, "live_session_procs", unexpected)
-    monkeypatch.setattr(av_mod.proc, "probe_current_ancestors", unexpected)
+    monkeypatch.setattr(proc, "probe_current_ancestors", unexpected)
     monkeypatch.setattr(
         av_mod.agent_ops.tmux,
         "find_session_window_result",

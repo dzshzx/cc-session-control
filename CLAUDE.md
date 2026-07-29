@@ -71,7 +71,7 @@ UI 工具库是 **urwid**（唯一的运行时依赖是 `urwid>=2.0.0`）。`src
 
 ### view contract（`app.py` 如何通用地驱动 tab）
 
-`App` 持有 `self.views: list[TabView]`，通过 `TabView` `Protocol`（定义在 `app.py`，`@runtime_checkable`）驱动每一个。Protocol 背后共享的*实现*是 `views/_base.py::ListTabView`——walker/listbox/status frame、保持焦点的 `_rebuild`（子类提供 `_build_rows`/`_status_text`）、居中的 `_show_overlay`、`_update_footer`、默认的 `handle_key`（overlay 模式经 `_overlay_active` hook，否则从 `KEY_TABLE` 走 `_dispatch_key`），以及 overlay 模式的按键 dispatch（`_handle_overlay_key`/`_exit_overlay`/`_close_overlay_mode`）都只在那里存在一次；新 tab 继承它，只添加行 + 按键语义（有额外模式的 view，如 Sessions filter/cleanup/preview，覆盖 `handle_key` 并回落到 `super()`）。反方向上，view 只通过 App 面向 view 的门面与其通信——`notify`/`confirm`/`submit_action`/`set_hints`/`trigger_async_refresh`/`refresh_with_notice`/`exit_with(intent)` 加 `is_active(view)`——绝不直接碰 `app.frame`/`app._active`/`app.views`。要添加/修改一个 tab，在结构上满足 Protocol——这些成员：
+`App` 持有 `self.views: list[TabView]`，通过 `TabView` `Protocol`（定义在 `app.py`，`@runtime_checkable`）驱动每一个。Protocol 背后共享的*实现*是 `views/_base.py::ListTabView`——walker/listbox/status frame、保持焦点的 `_rebuild`（子类提供 `_build_rows`/`_status_text`）、居中的 `_show_overlay`、`_update_footer`、默认的 `handle_key`（overlay 模式经 `_overlay_active` hook，否则从 `KEY_TABLE` 走 `_dispatch_key`），以及 overlay 模式的按键 dispatch（`_handle_overlay_key`/`_exit_overlay`/`_close_overlay_mode`）都只在那里存在一次；新 tab 继承它，只添加行 + 按键语义（有额外模式的 view，如 Sessions filter/cleanup/preview，覆盖 `handle_key` 并回落到 `super()`）。反方向上，view 只通过 App 面向 view 的门面与其通信——`notify`/`confirm`/`submit_action`/`submit_completion`/`set_hints`/`trigger_async_refresh`/`refresh_with_notice`/`exit_with(intent)` 加 `is_active(view)`——绝不直接碰 `app.frame`/`app._active`/`app.views`。要添加/修改一个 tab，在结构上满足 Protocol——这些成员：
 
 - `.widget`——tab body 的 urwid widget
 - `._loaded`——bool；是否已在 main loop 应用过一个完整 generation
@@ -90,7 +90,7 @@ UI 工具库是 **urwid**（唯一的运行时依赖是 `urwid>=2.0.0`）。`src
 2. 该线程向经 `loop.watch_pipe(self._on_pipe)` 注册的管道写入一个字节。
 3. `_on_pipe` 在 main loop 上运行，对每个 view 调用 `apply_refresh(batch)`；三个 tab 同时切换到同一 generation。
 
-`RefreshCoordinator` 让同一时刻至多有一个 generation 在构建/待消费，并把期间任意次数的刷新请求合并为至多一个 follow-up generation。`RefreshFailure` 只显示来源与详情，不应用半成品，画面保留 last-good generation。自动刷新每 10s 经 `set_alarm_in` 重新武装。**绝不从 worker 线程改动 urwid widget。** Stay-in-TUI 的写操作同样经 `actions/runner.py::ActionRunner` 单飞：view 先冻结请求，worker 只返回 `ActionResult`，main loop 再通知/触发刷新；需要 `exec`/tmux client 切换的动作仍走下文 `ExitIntent` 边界。完整决策见 ADR-0002。
+`RefreshCoordinator` 让同一时刻至多有一个 generation 在构建/待消费，并把期间任意次数的刷新请求合并为至多一个 follow-up generation。`RefreshFailure` 只显示来源与详情，不应用半成品，画面保留 last-good generation。自动刷新每 10s 经 `set_alarm_in` 重新武装。**绝不从 worker 线程改动 urwid widget。** TUI action 同样经 `actions/runner.py::ActionRunner` 单飞：view 先冻结请求；写操作的 worker 返回 `ActionResult`，key 触发的外部读取/准备返回 `ActionCompletion[T]`，`App` 只在 Accepted 后关联 main-loop completion（Busy/Closed/异常/关闭都不能偷换或残留它）；main loop 再通知/刷新或应用 confirm/overlay/`ExitIntent`。需要 `exec`/tmux client 切换的动作本身仍走下文 `ExitIntent` 边界。完整决策见 ADR-0002。
 
 ### Resume 发生在 UI loop *之外*（进程替换）
 

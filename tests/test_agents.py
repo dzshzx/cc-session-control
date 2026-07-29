@@ -1,5 +1,6 @@
 """AgentsView (后台 tab) unit tests — view logic only, no MainLoop/TTY."""
 
+import pytest
 import urwid
 
 import cc_session_control.views.agents as av_mod
@@ -50,6 +51,11 @@ class FakeApp:
         self.notify(result.message)
         if result.needs_refresh:
             self.trigger_async_refresh()
+        return Accepted(action_key)
+
+    def submit_completion(self, action_key, action, on_complete):
+        self._submitted_actions.append(action_key)
+        on_complete(action())
         return Accepted(action_key)
 
     def refresh_with_notice(self):
@@ -341,6 +347,8 @@ def test_enter_key_live_takeover_gated_when_degraded(monkeypatch):
 
 
 def test_enter_key_prepared_dead_worker_does_not_recheck_liveness(monkeypatch):
+    from cc_session_control.data import proc
+
     # Preparation already proved complete evidence; a dead worker kills nothing.
     monkeypatch.setattr(
         av_mod.agent_ops,
@@ -348,7 +356,7 @@ def test_enter_key_prepared_dead_worker_does_not_recheck_liveness(monkeypatch):
         lambda job: _takeover_ready(current=False, alive=False),
     )
     monkeypatch.setattr(
-        av_mod.proc,
+        proc,
         "probe_current_ancestors",
         lambda: (_ for _ in ()).throw(AssertionError("must not rescan")),
     )
@@ -367,6 +375,34 @@ def test_enter_key_dead_worker_takes_over_directly(monkeypatch):
     view.handle_key("enter")
     assert app._confirm_messages == []  # dead worker: no takeover, no confirm
     assert isinstance(app.result, TmuxResumeIntent)
+
+
+@pytest.mark.parametrize(
+    ("result", "message"),
+    [
+        (
+            av_mod.agent_ops.TimelineReadResult(
+                av_mod.agent_ops.TimelineReadState.MISSING,
+            ),
+            "无 timeline 可查看",
+        ),
+        (
+            av_mod.agent_ops.TimelineReadResult(
+                av_mod.agent_ops.TimelineReadState.FAILED,
+                detail="permission denied",
+            ),
+            "读取 timeline 失败：permission denied",
+        ),
+    ],
+)
+def test_timeline_missing_and_read_failure_are_visible(monkeypatch, result, message):
+    monkeypatch.setattr(av_mod.agent_ops, "watch", lambda _job: result)
+    app, view = _make_view([_make_job()])
+
+    view.handle_key("w")
+
+    assert app._notifications[-1] == message
+    assert view._mode == "list"
 
 
 def test_d_key_refuses_live_job(monkeypatch):
@@ -396,6 +432,27 @@ def test_d_key_removes_settled_job(monkeypatch):
     assert any("已删除" in m for m in app._notifications)
 
 
+def test_d_key_uses_worker_safety_without_main_loop_proc_probe(monkeypatch):
+    from cc_session_control.data import proc
+    from cc_session_control.data.removal import CleanupExecution
+
+    monkeypatch.setattr(
+        proc,
+        "probe_current_ancestors",
+        lambda: (_ for _ in ()).throw(AssertionError("main loop must not probe")),
+    )
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "remove_job",
+        lambda job: CleanupExecution(completed=[job.short]),
+    )
+    app, view = _make_view([_make_job(host_alive=False)])
+
+    view.handle_key("d")
+
+    assert app._submitted_actions == ["agent.remove"]
+
+
 def test_d_key_does_not_claim_success_when_artifact_removal_fails(
     monkeypatch,
     tmp_path,
@@ -421,7 +478,6 @@ def test_d_key_does_not_claim_success_when_artifact_removal_fails(
 def test_s_key_stops_live_with_orphan_warning(monkeypatch):
     # Unified confirm: `s` on a live worker confirms first, then `_last_confirm()`
     # runs the stop body whose notify carries the orphan-risk warning.
-    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: True)
     monkeypatch.setattr(
         av_mod.agent_ops,
         "stop_job_result",
@@ -438,8 +494,32 @@ def test_s_key_stops_live_with_orphan_warning(monkeypatch):
     assert any("孤儿" in m for m in app._notifications)
 
 
+def test_s_key_confirms_without_main_loop_proc_probe(monkeypatch):
+    from cc_session_control.data import proc
+
+    monkeypatch.setattr(
+        proc,
+        "probe_current_ancestors",
+        lambda: (_ for _ in ()).throw(AssertionError("main loop must not probe")),
+    )
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "stop_job_result",
+        lambda job: av_mod.agent_ops.AgentStopResult(
+            av_mod.agent_ops.AgentStopState.STOPPED,
+            pid=job.host_pid,
+        ),
+    )
+    app, view = _make_view([_make_job(host_pid=42, host_alive=True)])
+
+    view.handle_key("s")
+
+    assert app._confirm_messages
+    app._last_confirm()
+    assert app._submitted_actions == ["agent.stop"]
+
+
 def test_s_key_refuses_dead_worker(monkeypatch):
-    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: True)
     stopped = {"n": 0}
     monkeypatch.setattr(
         av_mod.agent_ops,
