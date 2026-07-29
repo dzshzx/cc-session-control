@@ -1,14 +1,17 @@
 """AgentsView (后台 tab) unit tests — view logic only, no MainLoop/TTY."""
 
+import pytest
 import urwid
 
 import cc_session_control.views.agents as av_mod
-from cc_session_control.actions import agent_ops
+from cc_session_control.actions.runner import Accepted
 from cc_session_control.actions.session_ops import (
     AttachIntent,
     ResumeIntent,
     TmuxResumeIntent,
 )
+from cc_session_control.data.cleanup import CleanupPlan
+from cc_session_control.data.refresh import RefreshBatch
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import AgentJob
 from cc_session_control.views.agents import AgentRow, AgentsView
@@ -20,6 +23,7 @@ class FakeApp:
         self._notifications = []
         self._confirm_messages = []
         self._last_confirm = None
+        self._submitted_actions = []
         self.footer_text = urwid.Text("")
         self.footer = urwid.AttrMap(self.footer_text, "footer")
         self.frame = urwid.Frame(urwid.Text("body"), footer=self.footer)
@@ -41,6 +45,19 @@ class FakeApp:
     def trigger_async_refresh(self):
         pass
 
+    def submit_action(self, action_key, action):
+        self._submitted_actions.append(action_key)
+        result = action()
+        self.notify(result.message)
+        if result.needs_refresh:
+            self.trigger_async_refresh()
+        return Accepted(action_key)
+
+    def submit_completion(self, action_key, action, on_complete):
+        self._submitted_actions.append(action_key)
+        on_complete(action())
+        return Accepted(action_key)
+
     def refresh_with_notice(self):
         self.trigger_async_refresh()
         self.notify("刷新中…")
@@ -55,12 +72,19 @@ class FakeApp:
         return not self.views or self.views[self._active] is view
 
 
-
 def _make_job(**overrides):
     defaults = dict(
-        short="abcdef01", sid="abcdef0123456789", resume_sid="abcdef0123456789",
-        state="idle", tempo="fast", cwd="/tmp/proj", name="worker",
-        env_suffix="XYZ", respawn_flags=[], host_pid=None, host_alive=False,
+        short="abcdef01",
+        sid="abcdef0123456789",
+        resume_sid="abcdef0123456789",
+        state="idle",
+        tempo="fast",
+        cwd="/tmp/proj",
+        name="worker",
+        env_suffix="XYZ",
+        respawn_flags=[],
+        host_pid=None,
+        host_alive=False,
     )
     defaults.update(overrides)
     return AgentJob(**defaults)
@@ -75,10 +99,24 @@ def _make_view(jobs):
     return app, view
 
 
+def _refresh_batch(jobs):
+    snapshot = WorldSnapshot(agent_jobs=jobs)
+    return RefreshBatch(
+        generation=1,
+        snapshot=snapshot,
+        cleanup_plan=CleanupPlan(),
+        cleanup_counts={},
+        session_stats={},
+        ordered_projects=(),
+    )
+
+
 # --- TabView protocol + basic widgets ---
+
 
 def test_agents_view_satisfies_tabview_protocol():
     from cc_session_control.app import TabView
+
     assert isinstance(AgentsView(FakeApp()), TabView)
 
 
@@ -96,55 +134,36 @@ def test_agent_row_alive_marker():
     assert "worker" in text
 
 
-# --- fetch_pending: snapshot projection vs self-fetch ---
+# --- atomic refresh application ---
 
-def test_fetch_pending_uses_snapshot_agent_jobs():
+
+def test_apply_refresh_uses_snapshot_agent_jobs():
     app = FakeApp()
     view = AgentsView(app)
     app.views = [view]
     jobs = [_make_job(short="s1")]
-    snap = WorldSnapshot(agent_jobs=jobs)
-    view.fetch_pending(snap)
-    assert view._pending == jobs
+    view.apply_refresh(_refresh_batch(jobs))
+    assert view._jobs == tuple(jobs)
 
 
-def test_fetch_pending_self_fetch_enriches(monkeypatch):
-    jobs = [_make_job(short="s2", host_alive=False)]
-    monkeypatch.setattr(av_mod.registry, "read_agent_jobs", lambda *a, **k: jobs)
-    # The self-fetch path goes through the ONE liveness.enrich_jobs loop.
-    monkeypatch.setattr(av_mod.liveness, "live_session_procs", lambda *a, **k: [])
-    monkeypatch.setattr(av_mod.liveness.registry, "host_pid_for_sid",
-                        lambda sid, procs: (4242, True))
-
-    app = FakeApp()
-    view = AgentsView(app)
-    app.views = [view]
-    view.fetch_pending()  # no snapshot -> self fetch + enrich
-
-    assert view._pending[0].host_pid == 4242
-    assert view._pending[0].host_alive is True
-
-
-def test_apply_data_swaps_pending_into_walker():
+def test_apply_refresh_rebuilds_walker():
     app, view = _make_view([])
-    view._pending = [_make_job(short="j1"), _make_job(short="j2")]
-    view.apply_data()
+    view.apply_refresh(_refresh_batch([_make_job(short="j1"), _make_job(short="j2")]))
     assert len(view.walker) == 2
     assert view._loaded is True
 
 
-def test_load_enriches_and_renders(monkeypatch):
-    monkeypatch.setattr(av_mod.registry, "read_agent_jobs", lambda *a, **k: [_make_job()])
-    monkeypatch.setattr(av_mod.agent_ops, "job_host", lambda job: (None, False))
+def test_apply_refresh_renders_one_job():
     app = FakeApp()
     view = AgentsView(app)
     app.views = [view]
-    view.load()
+    view.apply_refresh(_refresh_batch([_make_job()]))
     assert view._loaded is True
     assert len(view.walker) == 1
 
 
 # --- keyhints are generated from the view's KEY_TABLE ---
+
 
 def test_keyhints_generated_from_key_table():
     view = AgentsView(FakeApp())
@@ -156,22 +175,36 @@ def test_keyhints_generated_from_key_table():
 
 # --- key dispatch: respawn / takeover / watch / remove / stop ---
 
+
 def test_R_key_respawns(monkeypatch):
     # Unified verb table: respawn moved off `r` (now refresh) onto `R`.
     called = {}
-    monkeypatch.setattr(av_mod.agent_ops, "respawn",
-                        lambda job: called.setdefault("job", job) or "claude --resume x --bg")
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "respawn_result",
+        lambda job: (
+            called.setdefault("job", job)
+            and av_mod.agent_ops.RespawnResult("claude --resume x --bg", "p:1")
+        ),
+    )
     app, view = _make_view([_make_job()])
     view.handle_key("R")
     assert "job" in called
+    assert app._submitted_actions == ["agent.respawn"]
     assert any("已重启" in m for m in app._notifications)
 
 
 def test_r_key_refreshes_not_respawn(monkeypatch):
     # `r` is refresh on EVERY tab now; it must NOT respawn.
     respawned = {"n": 0}
-    monkeypatch.setattr(av_mod.agent_ops, "respawn",
-                        lambda job: respawned.__setitem__("n", respawned["n"] + 1) or "x")
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "respawn_result",
+        lambda job: (
+            respawned.__setitem__("n", respawned["n"] + 1)
+            or av_mod.agent_ops.RespawnResult("x", "p:1")
+        ),
+    )
     app, view = _make_view([_make_job()])
     view.handle_key("r")
     assert respawned["n"] == 0
@@ -181,8 +214,11 @@ def test_r_key_refreshes_not_respawn(monkeypatch):
 def test_enter_key_tmux_takeover(monkeypatch):
     # Enter is the unified primary action; tmux-first (ADR-0001): a dead,
     # non-resident worker resumes inside tmux + enters.
-    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
-                        lambda job: _takeover_session(current=False))
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False),
+    )
     app, view = _make_view([_make_job()])
     view.handle_key("enter")
     assert app.result is not None
@@ -192,8 +228,14 @@ def test_enter_key_tmux_takeover(monkeypatch):
 def test_enter_key_resident_worker_attaches_in_place(monkeypatch):
     # A tmux-resident live worker is entered in place — no kill, no confirm.
     monkeypatch.setattr(
-        av_mod.agent_ops, "resume_takeover",
-        lambda job: _takeover_session(current=False, alive=True, tmux_target="proj:5"))
+        av_mod.agent_ops,
+        "prepare_takeover",
+        lambda job: _takeover_ready(
+            current=False,
+            alive=True,
+            tmux_target="proj:5",
+        ),
+    )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("enter")
     assert app.result == AttachIntent("proj:5")
@@ -202,8 +244,11 @@ def test_enter_key_resident_worker_attaches_in_place(monkeypatch):
 
 def test_t_key_terminal_takeover_routes_to_resume_intent(monkeypatch):
     # t = 终端接回 (fallback): bare-terminal resume via the existing path.
-    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
-                        lambda job: _takeover_session(current=False))
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False),
+    )
     app, view = _make_view([_make_job()])
     view.handle_key("t")
     assert app.result is not None
@@ -211,8 +256,11 @@ def test_t_key_terminal_takeover_routes_to_resume_intent(monkeypatch):
 
 
 def test_enter_and_t_refuse_current(monkeypatch):
-    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
-                        lambda job: _takeover_session(current=True))
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=True),
+    )
     app, view = _make_view([_make_job()])
     view.handle_key("enter")
     view.handle_key("t")
@@ -222,16 +270,40 @@ def test_enter_and_t_refuse_current(monkeypatch):
 
 def _takeover_session(current, alive=False, tmux_target=None):
     from cc_session_control.models import Session
-    return Session(sid="x", cwd="/tmp", label="x", mtime=0.0, prompts=0,
-                   pid=999 if alive else None, alive=alive, current=current,
-                   source="bg", tmux_target=tmux_target)
+
+    return Session(
+        sid="x",
+        cwd="/tmp",
+        label="x",
+        mtime=0.0,
+        prompts=0,
+        pid=999 if alive else None,
+        alive=alive,
+        current=current,
+        source="bg",
+        tmux_target=tmux_target,
+    )
+
+
+def _takeover_ready(current, alive=False, tmux_target=None):
+    return av_mod.agent_ops.TakeoverPreparationResult(
+        av_mod.agent_ops.TakeoverPreparationState.READY,
+        session=_takeover_session(
+            current=current,
+            alive=alive,
+            tmux_target=tmux_target,
+        ),
+    )
 
 
 def test_enter_key_live_worker_confirms_takeover(monkeypatch):
     # B1: takeover of a RUNNING (non-resident) worker kills its host pid →
     # must confirm first, then resume inside tmux.
-    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
-                        lambda job: _takeover_session(current=False, alive=True))
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False, alive=True),
+    )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("enter")
     assert app.result is None  # not resumed yet
@@ -242,8 +314,11 @@ def test_enter_key_live_worker_confirms_takeover(monkeypatch):
 
 
 def test_t_key_live_worker_confirms_terminal_takeover(monkeypatch):
-    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
-                        lambda job: _takeover_session(current=False, alive=True))
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False, alive=True),
+    )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("t")
     assert app.result is None
@@ -253,41 +328,90 @@ def test_t_key_live_worker_confirms_terminal_takeover(monkeypatch):
 
 
 def test_enter_key_live_takeover_gated_when_degraded(monkeypatch):
-    # R10: off /proc a live takeover can't safely kill the old pid — the view
-    # must refuse BEFORE the confirm (not exit the TUI into do_resume's refusal).
-    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
-                        lambda job: _takeover_session(current=False, alive=True))
-    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: False)
+    # Typed preparation refuses incomplete evidence before the confirm.
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "prepare_takeover",
+        lambda job: av_mod.agent_ops.TakeoverPreparationResult(
+            av_mod.agent_ops.TakeoverPreparationState.REFUSED,
+            detail=(
+                "liveness evidence incomplete: process ancestors at /proc: unavailable"
+            ),
+        ),
+    )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("enter")
     assert app.result is None
-    assert app._confirm_messages == []          # refused before any confirm
-    assert app._notifications[-1] == av_mod._DEGRADED
+    assert app._confirm_messages == []  # refused before any confirm
+    assert "process ancestors at /proc: unavailable" in app._notifications[-1]
 
 
-def test_enter_key_dead_worker_not_gated_when_degraded(monkeypatch):
-    # A dead worker kills nothing — it stays resumable in degraded mode (B3).
-    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
-                        lambda job: _takeover_session(current=False, alive=False))
-    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: False)
+def test_enter_key_prepared_dead_worker_does_not_recheck_liveness(monkeypatch):
+    from cc_session_control.data import proc
+
+    # Preparation already proved complete evidence; a dead worker kills nothing.
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False, alive=False),
+    )
+    monkeypatch.setattr(
+        proc,
+        "probe_current_ancestors",
+        lambda: (_ for _ in ()).throw(AssertionError("must not rescan")),
+    )
     app, view = _make_view([_make_job()])
     view.handle_key("enter")
     assert isinstance(app.result, TmuxResumeIntent)
 
 
 def test_enter_key_dead_worker_takes_over_directly(monkeypatch):
-    monkeypatch.setattr(av_mod.agent_ops, "resume_takeover",
-                        lambda job: _takeover_session(current=False, alive=False))
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "prepare_takeover",
+        lambda job: _takeover_ready(current=False, alive=False),
+    )
     app, view = _make_view([_make_job(host_alive=False)])
     view.handle_key("enter")
     assert app._confirm_messages == []  # dead worker: no takeover, no confirm
     assert isinstance(app.result, TmuxResumeIntent)
 
 
+@pytest.mark.parametrize(
+    ("result", "message"),
+    [
+        (
+            av_mod.agent_ops.TimelineReadResult(
+                av_mod.agent_ops.TimelineReadState.MISSING,
+            ),
+            "无 timeline 可查看",
+        ),
+        (
+            av_mod.agent_ops.TimelineReadResult(
+                av_mod.agent_ops.TimelineReadState.FAILED,
+                detail="permission denied",
+            ),
+            "读取 timeline 失败：permission denied",
+        ),
+    ],
+)
+def test_timeline_missing_and_read_failure_are_visible(monkeypatch, result, message):
+    monkeypatch.setattr(av_mod.agent_ops, "watch", lambda _job: result)
+    app, view = _make_view([_make_job()])
+
+    view.handle_key("w")
+
+    assert app._notifications[-1] == message
+    assert view._mode == "list"
+
+
 def test_d_key_refuses_live_job(monkeypatch):
     removed = {"n": 0}
-    monkeypatch.setattr(av_mod.agent_ops, "remove_job",
-                        lambda job: removed.__setitem__("n", removed["n"] + 1) or True)
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "remove_job",
+        lambda job: removed.__setitem__("n", removed["n"] + 1) or True,
+    )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("d")
     assert removed["n"] == 0
@@ -295,29 +419,119 @@ def test_d_key_refuses_live_job(monkeypatch):
 
 
 def test_d_key_removes_settled_job(monkeypatch):
-    monkeypatch.setattr(av_mod.agent_ops, "remove_job", lambda job: True)
+    from cc_session_control.data.removal import CleanupExecution
+
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "remove_job",
+        lambda job: CleanupExecution(completed=[job.short]),
+    )
     app, view = _make_view([_make_job(host_alive=False)])
     view.handle_key("d")
+    assert app._submitted_actions == ["agent.remove"]
     assert any("已删除" in m for m in app._notifications)
+
+
+def test_d_key_uses_worker_safety_without_main_loop_proc_probe(monkeypatch):
+    from cc_session_control.data import proc
+    from cc_session_control.data.removal import CleanupExecution
+
+    monkeypatch.setattr(
+        proc,
+        "probe_current_ancestors",
+        lambda: (_ for _ in ()).throw(AssertionError("main loop must not probe")),
+    )
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "remove_job",
+        lambda job: CleanupExecution(completed=[job.short]),
+    )
+    app, view = _make_view([_make_job(host_alive=False)])
+
+    view.handle_key("d")
+
+    assert app._submitted_actions == ["agent.remove"]
+
+
+def test_d_key_does_not_claim_success_when_artifact_removal_fails(
+    monkeypatch,
+    tmp_path,
+):
+    from cc_session_control.data.removal import (
+        CleanupExecution,
+        PathRemoval,
+        RemovalStatus,
+    )
+
+    failed = CleanupExecution(
+        removals=[PathRemoval(tmp_path / "job", RemovalStatus.FAILED, "denied")]
+    )
+    monkeypatch.setattr(av_mod.agent_ops, "remove_job", lambda job: failed)
+    app, view = _make_view([_make_job(host_alive=False)])
+
+    view.handle_key("d")
+
+    assert "删除失败" in app._notifications[-1]
+    assert "已删除" not in app._notifications[-1]
 
 
 def test_s_key_stops_live_with_orphan_warning(monkeypatch):
     # Unified confirm: `s` on a live worker confirms first, then `_last_confirm()`
     # runs the stop body whose notify carries the orphan-risk warning.
-    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: True)
-    monkeypatch.setattr(av_mod.agent_ops, "stop_job", lambda job: True)
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "stop_job_result",
+        lambda job: av_mod.agent_ops.AgentStopResult(
+            av_mod.agent_ops.AgentStopState.STOPPED,
+            pid=job.host_pid,
+        ),
+    )
     app, view = _make_view([_make_job(host_alive=True)])
     view.handle_key("s")
     assert app._confirm_messages  # a confirm is requested first
-    app._last_confirm()           # simulate pressing y
+    app._last_confirm()  # simulate pressing y
+    assert app._submitted_actions == ["agent.stop"]
     assert any("孤儿" in m for m in app._notifications)
 
 
+def test_s_key_confirms_without_main_loop_proc_probe(monkeypatch):
+    from cc_session_control.data import proc
+
+    monkeypatch.setattr(
+        proc,
+        "probe_current_ancestors",
+        lambda: (_ for _ in ()).throw(AssertionError("main loop must not probe")),
+    )
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "stop_job_result",
+        lambda job: av_mod.agent_ops.AgentStopResult(
+            av_mod.agent_ops.AgentStopState.STOPPED,
+            pid=job.host_pid,
+        ),
+    )
+    app, view = _make_view([_make_job(host_pid=42, host_alive=True)])
+
+    view.handle_key("s")
+
+    assert app._confirm_messages
+    app._last_confirm()
+    assert app._submitted_actions == ["agent.stop"]
+
+
 def test_s_key_refuses_dead_worker(monkeypatch):
-    monkeypatch.setattr(av_mod.proc, "current_determinable", lambda: True)
     stopped = {"n": 0}
-    monkeypatch.setattr(av_mod.agent_ops, "stop_job",
-                        lambda job: stopped.__setitem__("n", stopped["n"] + 1) or True)
+    monkeypatch.setattr(
+        av_mod.agent_ops,
+        "stop_job_result",
+        lambda job: (
+            stopped.__setitem__("n", stopped["n"] + 1)
+            or av_mod.agent_ops.AgentStopResult(
+                av_mod.agent_ops.AgentStopState.STOPPED,
+                pid=job.host_pid,
+            )
+        ),
+    )
     app, view = _make_view([_make_job(host_alive=False)])
     view.handle_key("s")
     assert stopped["n"] == 0

@@ -10,31 +10,29 @@ warning surfaced on `stop` is a capability red line (R4.5 / AC4).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import urwid
 
-from ..actions import agent_ops
+from ..actions import agent_ops, tui_actions
 from ..actions.session_ops import ResumeIntent
-from ..data import liveness, proc, registry
 from ..models import AgentJob
 from ._base import ListTabView
-from ._colspec import header_columns, row_columns
-from ._confirm import DEGRADED as _DEGRADED
+from ._colspec import ColSpec, header_columns, row_columns
 from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 
 if TYPE_CHECKING:
-    from ..data.snapshot import WorldSnapshot
-
     from ..app import App
+    from ..data.refresh import RefreshBatch
 
 
 # One spec drives header + rows (_colspec.py). The 状态 text column already
 # carries the state in words, so the mark column only needs the ●/○ shape —
 # state never rides on color alone here either.
-_AGENT_COLS = [
+_AGENT_COLS: list[ColSpec] = [
     (2, "left", ""),
     (("weight", 2), "left", "名称"),
     (8, "left", "状态"),
@@ -51,16 +49,23 @@ class AgentRow(urwid.WidgetWrap):
         self.job = job
         mark = "●" if job.host_alive else "○"
         cwd = job.cwd.rstrip("/").rsplit("/", 1)[-1] if job.cwd else ""
-        cols = row_columns(_AGENT_COLS, [
-            mark,
-            job.name or job.short,
-            job.state or "-",
-            job.tempo or "-",
-            cwd,
-            job.env_suffix or "-",
-        ])
+        cols = row_columns(
+            _AGENT_COLS,
+            [
+                mark,
+                job.name or job.short,
+                job.state or "-",
+                job.tempo or "-",
+                cwd,
+                job.env_suffix or "-",
+            ],
+        )
         attr = "alive" if job.host_alive else "dead"
-        mapped = urwid.AttrMap(cols, attr, focus_map={"alive": "selected", "dead": "selected", None: "selected"})
+        mapped = urwid.AttrMap(
+            cols,
+            attr,
+            focus_map={"alive": "selected", "dead": "selected", None: "selected"},
+        )
         super().__init__(mapped)
 
     def selectable(self) -> bool:
@@ -77,32 +82,62 @@ class AgentsView(ListTabView):
     # help, and dispatch are generated from this table. `r 刷新` stays in the
     # App-level FOOTER_PREFIX, so its entry is hint-less.
     KEY_TABLE = (
-        Key(("enter",), "Enter 接回", "_takeover",
-            section="后台 agent 生命周期:", help_lines=(
+        Key(
+            ("enter",),
+            "Enter 接回",
+            "_takeover",
+            section="后台 agent 生命周期:",
+            help_lines=(
                 "  Enter   tmux 接回（恢复进 tmux 窗口并接入前台，断线不死；",
                 "          已驻留 tmux 的 agent 就地进入；接运行中的会先确认接管）",
-            )),
-        Key(("t",), "t 终端接回", "_terminal",
-            section="后台 agent 生命周期:", help_lines=(
+            ),
+        ),
+        Key(
+            ("t",),
+            "t 终端接回",
+            "_terminal",
+            section="后台 agent 生命周期:",
+            help_lines=(
                 "  t       终端接回（在当前终端恢复，随终端关闭而结束——兜底；",
                 "          接运行中的会先确认接管）",
-            )),
-        Key(("s",), "s 停止", "_stop", section="后台 agent 生命周期:", help_lines=(
-            "  s       停止（仅运行中，需确认）",
-        )),
-        Key(("d",), "d 删除", "_remove", section="后台 agent 生命周期:", help_lines=(
-            "  d       删除（仅已结束）",
-        )),
-        Key(("w",), "w 查看", "_watch", section="后台 agent 生命周期:", help_lines=(
-            "  w       查看 timeline（只读）",
-        )),
-        Key(("R",), "R 重启", "_key_respawn", section="后台 agent 生命周期:", help_lines=(
-            "  R       重启（respawn）",
-        )),
-        Key(("r",), None, "_key_refresh", needs_selection=False,
-            section="后台 agent 生命周期:", help_lines=(
-                "  r       刷新",
-            )),
+            ),
+        ),
+        Key(
+            ("s",),
+            "s 停止",
+            "_stop",
+            section="后台 agent 生命周期:",
+            help_lines=("  s       停止（仅运行中，需确认）",),
+        ),
+        Key(
+            ("d",),
+            "d 删除",
+            "_remove",
+            section="后台 agent 生命周期:",
+            help_lines=("  d       删除（仅已结束）",),
+        ),
+        Key(
+            ("w",),
+            "w 查看",
+            "_watch",
+            section="后台 agent 生命周期:",
+            help_lines=("  w       查看 timeline（只读）",),
+        ),
+        Key(
+            ("R",),
+            "R 重启",
+            "_key_respawn",
+            section="后台 agent 生命周期:",
+            help_lines=("  R       重启（respawn）",),
+        ),
+        Key(
+            ("r",),
+            None,
+            "_key_refresh",
+            needs_selection=False,
+            section="后台 agent 生命周期:",
+            help_lines=("  r       刷新",),
+        ),
         Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
     )
 
@@ -124,8 +159,7 @@ class AgentsView(ListTabView):
 
     def __init__(self, app: App) -> None:
         super().__init__(app, _AGENTS_HEADER)
-        self._jobs: list[AgentJob] = []
-        self._pending: list[AgentJob] | None = None
+        self._jobs: Sequence[AgentJob] = ()
         self._mode = "list"
 
     # --- TabView contract ---
@@ -140,29 +174,12 @@ class AgentsView(ListTabView):
     def _overlay_active(self) -> bool:
         return self._mode in ("help", "watch")
 
-    def load(self) -> None:
-        self._jobs = liveness.enrich_jobs(registry.read_agent_jobs())
+    def apply_refresh(self, batch: RefreshBatch) -> None:
+        """Apply one complete generation on the urwid main loop."""
+        self._jobs = batch.snapshot.agent_jobs
         self._loaded = True
-        self._rebuild()
-
-    def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
-        """Worker-thread data fetch. Only sets pending fields — no widgets.
-
-        The self-fetch path uses the same `liveness.enrich_jobs` loop as the
-        snapshot (self-fetching the registry ONCE), so the two can't drift.
-        """
-        if snapshot is not None:
-            self._pending = snapshot.agent_jobs
-        else:
-            self._pending = liveness.enrich_jobs(registry.read_agent_jobs())
-
-    def apply_data(self) -> None:
-        if self._pending is not None:
-            self._jobs = self._pending
-            self._pending = None
-            self._loaded = True
-            if self._mode == "list":
-                self._rebuild()
+        if self._mode == "list":
+            self._rebuild()
 
     # --- rendering ---
 
@@ -188,82 +205,128 @@ class AgentsView(ListTabView):
     # --- key handlers (bound by name in KEY_TABLE; dispatch lives in the base) ---
 
     def _key_respawn(self, job: AgentJob) -> None:
-        cmd = agent_ops.respawn(job)
-        self.app.notify(f"已重启：{cmd}")
-        self.app.trigger_async_refresh()
+        request = tui_actions.AgentRequest.from_job(job)
+        self.app.submit_action(
+            "agent.respawn",
+            lambda: tui_actions.respawn_agent(request),
+        )
 
-    def _takeover(self, job: AgentJob) -> None:
-        """Enter — tmux 接回: a tmux-resident worker is entered in place;
-        otherwise resume it inside its per-project tmux window (ADR-0001)."""
-        s = agent_ops.resume_takeover(job)
+    def _submit_takeover(self, job: AgentJob, *, terminal: bool) -> None:
+        request = tui_actions.AgentRequest.from_job(job)
+        name = job.name or job.short
+        self.app.submit_completion(
+            "agent.takeover.prepare",
+            lambda: agent_ops.prepare_takeover(request.to_job()),
+            lambda prepared: self._complete_takeover(
+                prepared,
+                name=name,
+                terminal=terminal,
+            ),
+        )
+
+    def _complete_takeover(
+        self,
+        prepared: agent_ops.TakeoverPreparationResult,
+        *,
+        name: str,
+        terminal: bool,
+    ) -> None:
+        if prepared.state is agent_ops.TakeoverPreparationState.REFUSED:
+            self.app.notify(f"已拒绝接回：{prepared.detail}")
+            return
+        if prepared.session is None:
+            raise RuntimeError("ready takeover preparation has no session")
+        s = prepared.session
         if s.current:
             self.app.notify("不能接回当前会话")
+            return
+        if terminal:
+            confirm_takeover(
+                self.app,
+                s,
+                "终端接回后台 agent",
+                lambda: self.app.exit_with(ResumeIntent(s)),
+                name=name,
+                gated=False,
+            )
             return
         # B1: takeover of a RUNNING worker kills its host pid (should_kill) — same
         # as Sessions Enter-live. A dead worker resumes directly, unconfirmed.
         confirm_tmux_takeover(
-            self.app, s, "接回后台 agent", name=job.name or job.short,
+            self.app,
+            s,
+            "接回后台 agent",
+            name=name,
+            gated=False,
         )
+
+    def _takeover(self, job: AgentJob) -> None:
+        """Enter — prepare off-loop, then apply the tmux-first resume on main."""
+        self._submit_takeover(job, terminal=False)
 
     def _terminal(self, job: AgentJob) -> None:
-        """t — 终端接回 (fallback): bare-terminal resume via the existing path."""
-        s = agent_ops.resume_takeover(job)
-        if s.current:
-            self.app.notify("不能接回当前会话")
-            return
-        confirm_takeover(
-            self.app, s, "终端接回后台 agent",
-            lambda: self.app.exit_with(ResumeIntent(s)),
-            name=job.name or job.short,
-        )
+        """t — prepare off-loop, then apply terminal resume on main."""
+        self._submit_takeover(job, terminal=True)
 
     def _watch(self, job: AgentJob) -> None:
-        path = agent_ops.watch(job)
-        if not path:
+        request = tui_actions.AgentRequest.from_job(job)
+        name = job.name or job.short
+        self.app.submit_completion(
+            "agent.watch",
+            lambda: agent_ops.watch(request.to_job()),
+            lambda result: self._complete_watch(result, name=name),
+        )
+
+    def _complete_watch(
+        self,
+        result: agent_ops.TimelineReadResult,
+        *,
+        name: str,
+    ) -> None:
+        if result.state is agent_ops.TimelineReadState.MISSING:
             self.app.notify("无 timeline 可查看")
             return
-        lines: list[str] = []
-        try:
-            with open(path, errors="ignore") as fh:
-                lines = fh.read().splitlines()[-200:]
-        except Exception:
-            self.app.notify("读取 timeline 失败")
+        if result.state is agent_ops.TimelineReadState.FAILED:
+            detail = f"：{result.detail}" if result.detail else ""
+            self.app.notify(f"读取 timeline 失败{detail}")
             return
-        rows = [TextRow(line) for line in lines] or [TextRow("(空)")]
+        rows = [TextRow(line) for line in result.lines] or [TextRow("(空)")]
         self._mode = "watch"
-        self._show_overlay(f"timeline（只读）· {job.name or job.short}", rows)
+        self._show_overlay(f"timeline（只读）· {name}", rows)
         self._update_footer()
 
     def _remove(self, job: AgentJob) -> None:
         if job.host_alive:
             self.app.notify("运行中的后台 agent 不能删除，先停止")
             return
-        if not proc.current_determinable():
-            self.app.notify(_DEGRADED)
-            return
-        ok = agent_ops.remove_job(job)
-        self.app.notify("已删除" if ok else "删除失败")
-        self.app.trigger_async_refresh()
+        request = tui_actions.AgentRequest.from_job(job)
+        self.app.submit_action(
+            "agent.remove",
+            lambda: tui_actions.remove_agent(request),
+        )
 
     def _stop(self, job: AgentJob) -> None:
         confirm_stop(
-            self.app, "后台 agent", job.name or job.short,
-            lambda: self._do_stop(job), alive=job.host_alive,
+            self.app,
+            "后台 agent",
+            job.name or job.short,
+            lambda: self._do_stop(job),
+            alive=job.host_alive,
+            gated=False,
         )
 
     def _do_stop(self, job: AgentJob) -> None:
         """Stop body, run only after the y/n confirm accepts.
 
-        Reached only when "current" is determinable, so a False from `stop_job`
-        means no joined host pid (an unstoppable orphan) — surfaced honestly,
-        separate from the degrade refusal above (R2 split).
+        The worker captures fresh typed liveness evidence again, so a state
+        change after confirmation remains distinguishable as not-running,
+        refused, or failed instead of being flattened into "process missing".
         """
-        ok = agent_ops.stop_job(job)
-        if ok:
-            self.app.notify("已发送停止信号（可能残留孤儿进程，请手动确认）")
-        else:
-            self.app.notify("找不到该后台 agent 的进程，无法停止")
-        self.app.trigger_async_refresh()
+        request = tui_actions.AgentRequest.from_job(job)
+        self.app.submit_action(
+            "agent.stop",
+            lambda: tui_actions.stop_agent(request),
+        )
 
     def _show_help(self) -> None:
         rows = [TextRow(line) for line in help_lines(self.KEY_TABLE, self.HELP_LAYOUT)]

@@ -1,8 +1,9 @@
 """Kill-confirm policy — ONE home for the gate order and the confirm 文案.
 
 Every op that terminates a live process confirms via the app-level modal
-(`App.confirm`); a takeover additionally refuses off `/proc` (R10) BEFORE
-confirming. The 文案 follows the one template `{动词}{对象}「name」？{后果}`
+(`App.confirm`); a takeover additionally consumes a prepared `/proc` probe and
+refuses incomplete evidence (R10) BEFORE confirming. The 文案 follows the one
+template `{动词}{对象}「name」？{后果}`
 (接管类 "将先终止原进程。" / 停止类 "将终止其进程。"). Views call these
 helpers instead of re-inlining the degrade-gate → confirm → act sequence.
 """
@@ -36,6 +37,14 @@ def stop_message(verb: str, name: str) -> str:
     return f"{verb}「{truncate_cells(name, CONFIRM_NAME_CELLS)}」？将终止其进程。"
 
 
+def accept_ancestor_probe(app: App, evidence: proc.AncestorProbe) -> bool:
+    """Consume prepared current-session protection evidence on the main loop."""
+    if evidence.complete:
+        return True
+    app.notify(DEGRADED)
+    return False
+
+
 def confirm_stop(
     app: App,
     noun: str,
@@ -45,18 +54,22 @@ def confirm_stop(
     alive: bool,
     current: bool = False,
     gated: bool = True,
+    evidence: proc.AncestorProbe | None = None,
 ) -> None:
     """The plain-stop twin of `confirm_takeover`: degrade-gate → alive →
     current(self-protect) → confirm, with the 文案 derived from one `noun`
     (停止{noun} / {noun}未在运行 / 不能停止当前{noun}).
 
-    `gated=False` skips the R10 degrade gate for stops that don't signal a
-    pid — the RC tab's stop kills a tmux window, not a process, so refusing
-    it off `/proc` would be a gate it never needed.
+    `gated=False` is reserved for a submitted mutation whose worker owns fresh
+    typed process validation, or for a stop that does not signal a pid. Agent
+    stop uses the former; the RC tab's tmux-window stop uses the latter.
+    Otherwise the caller must supply the probe prepared off-loop.
     """
-    if gated and not proc.current_determinable():
-        app.notify(DEGRADED)
-        return
+    if gated:
+        if evidence is None:
+            raise RuntimeError("protected stop confirmation requires prepared evidence")
+        if not accept_ancestor_probe(app, evidence):
+            return
     if not alive:
         # 中西文混排: a latin-ending noun ("后台 agent") gets a space before 未.
         sep = " " if noun and noun[-1].isascii() else ""
@@ -76,6 +89,8 @@ def confirm_takeover(
     *,
     name: str | None = None,
     fork: bool = False,
+    gated: bool = True,
+    evidence: proc.AncestorProbe | None = None,
 ) -> None:
     """Run `on_yes` now, or degrade-gate + confirm first on a live takeover.
 
@@ -84,14 +99,21 @@ def confirm_takeover(
     degrade refusal fires BEFORE the confirm modal — off `/proc` a live
     takeover cannot safely kill the old pid, and refusing here beats exiting
     the TUI only to have `do_resume` print its refusal. Resuming/relaunching a
-    DEAD session kills nothing: no gate, no confirm (B3).
+    DEAD session kills nothing: no gate, no confirm (B3). ``gated=False`` is
+    reserved for callers carrying a complete typed liveness preparation, so
+    confirmation does not mix generations. Otherwise the caller supplies the
+    current-ancestor probe prepared off-loop.
     """
     if not would_take_over(s, fork):
         on_yes()
         return
-    if not proc.current_determinable():
-        app.notify(DEGRADED)
-        return
+    if gated:
+        if evidence is None:
+            raise RuntimeError(
+                "protected takeover confirmation requires prepared evidence"
+            )
+        if not accept_ancestor_probe(app, evidence):
+            return
     shown = truncate_cells(s.label if name is None else name, CONFIRM_NAME_CELLS)
     app.confirm(f"{verb}「{shown}」？将先终止原进程。", on_yes)
 
@@ -103,6 +125,8 @@ def confirm_tmux_takeover(
     *,
     fork: bool = False,
     name: str | None = None,
+    gated: bool = True,
+    evidence: proc.AncestorProbe | None = None,
 ) -> None:
     """The tmux-first Enter/f body, shared by the 会话/后台 tabs (ADR-0001).
 
@@ -112,7 +136,8 @@ def confirm_tmux_takeover(
     `TmuxResumeIntent` — resume (or fork) inside its per-project tmux window,
     then enter. A fork is a copy: it never enters the original's window in
     place, it always spawns its own (and never kills, so the confirm path
-    falls straight through).
+    falls straight through). ``gated`` has the same typed-preparation contract
+    as :func:`confirm_takeover`.
     """
     if not fork:
         target = attach_target(s)
@@ -120,7 +145,12 @@ def confirm_tmux_takeover(
             app.exit_with(AttachIntent(target))
             return
     confirm_takeover(
-        app, s, verb,
+        app,
+        s,
+        verb,
         lambda: app.exit_with(TmuxResumeIntent(s, fork=fork)),
-        name=name, fork=fork,
+        name=name,
+        fork=fork,
+        gated=gated,
+        evidence=evidence,
     )

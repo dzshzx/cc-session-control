@@ -1,28 +1,60 @@
-"""Read Claude Code's session/agent registries — pure parse, ~5s TTL cache.
+"""Read Claude Code's session/agent registries with typed scan diagnostics.
 
 Two on-disk registers Claude Code maintains itself:
   - `sessions/<pid>.json`  → one per local runtime (a sid can have several)
   - `jobs/<short>/state.json` → one per background agent (NO pid inside)
 
-Both readers swallow errors and return `[]` so the TUI never crashes on a
-malformed/absent register. Results are cached for ~5s (mirrors
-`liveness.alive_map`) so the shared world snapshot can reuse them; pass
-`max_age=0.0` to force a fresh read (used by tests that swap `cfg` paths).
+The typed scanners retain partial records and every expected source issue.
+Compatibility readers return only the records for non-safety callers. Results
+are cached for ~5s; pass `max_age=0.0` for fresh protection evidence.
 """
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import time
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from enum import StrEnum
 
 from ..config import cfg
 from ..models import AgentJob, SessionProc, split_env_id
 
-_sessions_cache: list[SessionProc] | None = None
+
+class RegistryAvailability(StrEnum):
+    """How much of one registry source was available to a scan."""
+
+    AVAILABLE = "available"
+    PARTIAL = "partial"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class RegistryIssue:
+    """One expected registry source failure."""
+
+    source: str
+    path: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class RegistryScan[Record]:
+    """Records plus the completeness of their registry source."""
+
+    records: tuple[Record, ...] = ()
+    issues: tuple[RegistryIssue, ...] = ()
+    availability: RegistryAvailability = RegistryAvailability.AVAILABLE
+
+    @property
+    def complete(self) -> bool:
+        return self.availability is RegistryAvailability.AVAILABLE and not self.issues
+
+
+_sessions_cache: RegistryScan[SessionProc] | None = None
 _sessions_time: float = 0.0
-_jobs_cache: list[AgentJob] | None = None
+_jobs_cache: RegistryScan[AgentJob] | None = None
 _jobs_time: float = 0.0
 
 
@@ -33,99 +65,215 @@ def invalidate_cache() -> None:
     _jobs_cache = None
 
 
-def _parse_session_proc(path: str) -> SessionProc | None:
-    try:
-        with open(path, errors="ignore") as fh:
-            d = json.load(fh)
-    except Exception:
-        return None
+def _read_document(path: str) -> object:
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _parse_session_proc(document: object) -> tuple[SessionProc | None, str | None]:
+    d = document
+    if not isinstance(d, dict):
+        return None, "invalid schema: expected a JSON object"
     sid = d.get("sessionId")
     pid = d.get("pid")
     if not sid or not pid:
-        return None
+        return None, "invalid schema: sessionId and pid are required"
     try:
         pid_int = int(pid)
     except (TypeError, ValueError):
-        return None
-    return SessionProc(
-        pid=pid_int,
-        sid=str(sid),
-        cwd=d.get("cwd", "") or "",
-        kind=d.get("kind", "") or "",
-        entrypoint=d.get("entrypoint", "") or "",
-        status=d.get("status", "") or "",
-        proc_start=str(d.get("procStart", "") or ""),
-        bridge=d.get("bridgeSessionId"),
+        return None, "invalid schema: pid must be an integer"
+    bridge = d.get("bridgeSessionId")
+    if bridge is not None and not isinstance(bridge, str):
+        return None, "invalid schema: bridgeSessionId must be a string or null"
+    return (
+        SessionProc(
+            pid=pid_int,
+            sid=str(sid),
+            cwd=d.get("cwd", "") or "",
+            kind=d.get("kind", "") or "",
+            entrypoint=d.get("entrypoint", "") or "",
+            status=d.get("status", "") or "",
+            proc_start=str(d.get("procStart", "") or ""),
+            bridge=bridge,
+        ),
+        None,
     )
 
 
-def read_session_procs(max_age: float = 5.0) -> list[SessionProc]:
-    """All parseable `sessions/<pid>.json` entries. Cached for `max_age` secs."""
+def _availability(issues: list[RegistryIssue]) -> RegistryAvailability:
+    if issues:
+        return RegistryAvailability.PARTIAL
+    return RegistryAvailability.AVAILABLE
+
+
+def _root_paths(
+    root: str,
+    source: str,
+    select: Callable[[os.DirEntry[str]], bool],
+) -> tuple[list[str], RegistryIssue | None]:
+    try:
+        with os.scandir(root) as entries:
+            paths = [entry.path for entry in entries if select(entry)]
+    except FileNotFoundError:
+        return [], None
+    except OSError as exc:
+        return [], RegistryIssue(source, root, str(exc))
+    return sorted(paths), None
+
+
+def _scan_records[Record](
+    paths: Sequence[str],
+    source: str,
+    parse: Callable[[object], tuple[Record | None, str | None]],
+) -> tuple[list[Record], list[RegistryIssue]]:
+    rows: list[Record] = []
+    issues: list[RegistryIssue] = []
+    for path in paths:
+        try:
+            document = _read_document(path)
+        except FileNotFoundError:
+            # State files are replaced asynchronously; disappearance after
+            # directory enumeration is an expected race, not evidence loss.
+            continue
+        except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+            issues.append(RegistryIssue(source, path, str(exc)))
+            continue
+        row, schema_error = parse(document)
+        if schema_error is not None:
+            issues.append(RegistryIssue(source, path, schema_error))
+        elif row is not None:
+            rows.append(row)
+    return rows, issues
+
+
+def scan_session_procs(max_age: float = 5.0) -> RegistryScan[SessionProc]:
+    """Scan `sessions/*.json`, retaining partial records and source issues."""
     global _sessions_cache, _sessions_time
     now = time.monotonic()
     if _sessions_cache is not None and (now - _sessions_time) < max_age:
         return _sessions_cache
-    rows: list[SessionProc] = []
-    try:
-        for path in glob.glob(os.path.join(str(cfg.sessions_dir), "*.json")):
-            row = _parse_session_proc(path)
-            if row is not None:
-                rows.append(row)
-    except Exception:
-        rows = []
-    _sessions_cache = rows
+    root = os.fspath(cfg.sessions_dir)
+    paths, root_issue = _root_paths(
+        root,
+        "session registry",
+        lambda entry: entry.name.endswith(".json") and entry.is_file(),
+    )
+    if root_issue is not None:
+        result = RegistryScan[SessionProc](
+            issues=(root_issue,),
+            availability=RegistryAvailability.UNAVAILABLE,
+        )
+    else:
+        rows, issues = _scan_records(
+            paths,
+            "session registry",
+            _parse_session_proc,
+        )
+        result = RegistryScan(
+            records=tuple(rows),
+            issues=tuple(issues),
+            availability=_availability(issues),
+        )
+    _sessions_cache = result
     _sessions_time = now
-    return rows
+    return result
 
 
-def _parse_agent_job(state_path: str) -> AgentJob | None:
-    short = os.path.basename(os.path.dirname(state_path))
+def read_session_procs(max_age: float = 5.0) -> list[SessionProc]:
+    """Compatibility records-only view of :func:`scan_session_procs`."""
+    return list(scan_session_procs(max_age=max_age).records)
+
+
+def _parse_agent_job(
+    document: object,
+    *,
+    short: str,
+) -> tuple[AgentJob | None, str | None]:
     if not short:
-        return None
-    try:
-        with open(state_path, errors="ignore") as fh:
-            d = json.load(fh)
-    except Exception:
-        return None
-    sid = str(d.get("sessionId") or "")
+        return None, "invalid schema: job directory name is empty"
+    d = document
+    if not isinstance(d, dict):
+        return None, "invalid schema: expected a JSON object"
+    sid_value = d.get("sessionId")
+    if not isinstance(sid_value, str) or not sid_value:
+        return None, "invalid schema: sessionId is required"
+    sid = sid_value
     flags = d.get("respawnFlags")
     if not isinstance(flags, list):
         flags = []
-    return AgentJob(
-        short=short,
-        sid=sid,
-        resume_sid=str(d.get("resumeSessionId") or sid or ""),
-        state=d.get("state", "") or "",
-        tempo=d.get("tempo", "") or "",
-        cwd=d.get("cwd", "") or "",
-        name=d.get("name", "") or "",
-        env_suffix=split_env_id(d.get("bridgeSessionId"))[1],
-        respawn_flags=[str(x) for x in flags],
+    bridge = d.get("bridgeSessionId")
+    if bridge is not None and not isinstance(bridge, str):
+        return None, "invalid schema: bridgeSessionId must be a string or null"
+    return (
+        AgentJob(
+            short=short,
+            sid=sid,
+            resume_sid=str(d.get("resumeSessionId") or sid),
+            state=d.get("state", "") or "",
+            tempo=d.get("tempo", "") or "",
+            cwd=d.get("cwd", "") or "",
+            name=d.get("name", "") or "",
+            env_suffix=split_env_id(bridge)[1],
+            respawn_flags=tuple(str(x) for x in flags),
+        ),
+        None,
     )
 
 
-def read_agent_jobs(max_age: float = 5.0) -> list[AgentJob]:
-    """All parseable `jobs/<short>/state.json` records. Cached for `max_age`."""
+def scan_agent_jobs(max_age: float = 5.0) -> RegistryScan[AgentJob]:
+    """Scan `jobs/*/state.json`, retaining partial records and source issues."""
     global _jobs_cache, _jobs_time
     now = time.monotonic()
     if _jobs_cache is not None and (now - _jobs_time) < max_age:
         return _jobs_cache
-    rows: list[AgentJob] = []
-    try:
-        pattern = os.path.join(str(cfg.jobs_dir), "*", "state.json")
-        for state_path in glob.glob(pattern):
-            row = _parse_agent_job(state_path)
-            if row is not None:
+    root = os.fspath(cfg.jobs_dir)
+    job_dirs, root_issue = _root_paths(
+        root,
+        "job registry",
+        lambda entry: entry.is_dir(),
+    )
+    if root_issue is not None:
+        result = RegistryScan[AgentJob](
+            issues=(root_issue,),
+            availability=RegistryAvailability.UNAVAILABLE,
+        )
+    else:
+        rows: list[AgentJob] = []
+        issues: list[RegistryIssue] = []
+        for job_dir in job_dirs:
+            state_path = os.path.join(job_dir, "state.json")
+            try:
+                document = _read_document(state_path)
+            except FileNotFoundError:
+                continue
+            except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+                issues.append(RegistryIssue("job registry", state_path, str(exc)))
+                continue
+            row, schema_error = _parse_agent_job(
+                document,
+                short=os.path.basename(job_dir),
+            )
+            if schema_error is not None:
+                issues.append(RegistryIssue("job registry", state_path, schema_error))
+            elif row is not None:
                 rows.append(row)
-    except Exception:
-        rows = []
-    _jobs_cache = rows
+        result = RegistryScan(
+            records=tuple(rows),
+            issues=tuple(issues),
+            availability=_availability(issues),
+        )
+    _jobs_cache = result
     _jobs_time = now
-    return rows
+    return result
+
+
+def read_agent_jobs(max_age: float = 5.0) -> list[AgentJob]:
+    """Compatibility records-only view of :func:`scan_agent_jobs`."""
+    return list(scan_agent_jobs(max_age=max_age).records)
 
 
 def host_pid_for_sid(
-    sid: str, session_procs: list[SessionProc]
+    sid: str, session_procs: Sequence[SessionProc]
 ) -> tuple[int | None, bool]:
     """Join a sid to its host pid via the registry session files — PURE.
 

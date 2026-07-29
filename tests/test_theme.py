@@ -13,8 +13,19 @@ from cc_session_control.config import cfg
 
 # The ONE semantic attr set views reference (see views/*).
 EXPECTED_NAMES = {
-    "header", "footer", "tab_on", "tab_off", "alive", "status_busy",
-    "status_err", "dead", "selected", "notify", "status", "body", "col_header",
+    "header",
+    "footer",
+    "tab_on",
+    "tab_off",
+    "alive",
+    "status_busy",
+    "status_err",
+    "dead",
+    "selected",
+    "notify",
+    "status",
+    "body",
+    "col_header",
 }
 
 
@@ -40,10 +51,10 @@ def test_unknown_mode_falls_back_to_dark() -> None:
 @pytest.mark.parametrize(
     ("rgb", "expected"),
     [
-        ((1.0, 1.0, 1.0), "light"),   # white
-        ((0.0, 0.0, 0.0), "dark"),    # black
+        ((1.0, 1.0, 1.0), "light"),  # white
+        ((0.0, 0.0, 0.0), "dark"),  # black
         ((0.99, 0.96, 0.89), "light"),  # solarized light #fdf6e3
-        ((0.0, 0.17, 0.21), "dark"),    # solarized dark #002b36
+        ((0.0, 0.17, 0.21), "dark"),  # solarized dark #002b36
     ],
 )
 def test_mode_from_rgb(rgb: tuple[float, float, float], expected: str) -> None:
@@ -58,7 +69,7 @@ def test_mode_from_rgb(rgb: tuple[float, float, float], expected: str) -> None:
         ("\x1b]11;rgb:ff/00/00\x07", (1.0, 0.0, 0.0)),  # 2-digit channels
         ("\x1b]11;rgba:ffff/ffff/ffff/ffff\x07", (1.0, 1.0, 1.0)),
         ("", None),
-        ("\x1b]11;?\x07", None),          # our own query echoed back
+        ("\x1b]11;?\x07", None),  # our own query echoed back
         ("garbage without rgb", None),
     ],
 )
@@ -79,7 +90,7 @@ def test_parse_osc11_reply(reply: str, expected: tuple | None) -> None:
         ("0;default;15", "light"),  # 3-field rxvt form: bg is the LAST field
         ("0;7", "light"),
         ("", None),
-        ("15", None),          # single field — no bg
+        ("15", None),  # single field — no bg
         ("15;default", None),  # non-numeric bg
     ],
 )
@@ -87,7 +98,9 @@ def test_parse_colorfgbg(value: str, expected: str | None) -> None:
     assert theme._parse_colorfgbg(value) == expected
 
 
-def test_detect_mode_env_override_skips_probing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_detect_mode_env_override_skips_probing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(cfg, "theme", "LIGHT")
 
     def boom() -> None:

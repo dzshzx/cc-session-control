@@ -14,7 +14,8 @@ import time
 import urwid
 
 from ..models import Session
-from ._colspec import header_columns, row_columns
+from ._colspec import ColSpec, header_columns, row_columns
+from ._rows import truncate_cells
 
 # Transcript-derived hidden tags -> compact Chinese row marker.
 _HIDDEN_MARKERS = {
@@ -33,7 +34,7 @@ _SOURCE_BADGES = {
 # One spec drives both the header and every row (see _colspec.py). Text columns
 # left; the numeric 提问 and the ragged relative 时间 right-align so their line-
 # to-line anchor is stable.
-SESSION_COLS = [
+SESSION_COLS: list[ColSpec] = [
     (8, "left", "状态"),
     (4, "left", "来源"),
     (4, "left", "远控"),
@@ -79,12 +80,18 @@ def _status_parts(session: Session) -> tuple[str, str]:
     A live tmux-resident session (ADR-0001) additionally shows the ⧉ badge —
     U+29C9 is East_Asian_Width=Neutral (width-stable 1 cell, verified against
     wcwidth + urwid.calc_width, the P5 check), unlike the ambiguous glyphs the
-    P5 lesson banned. Data comes from the snapshot's `tmux_target`; the resume
-    actions read the SAME field."""
+    P5 lesson banned. A live session whose inventory is incomplete shows the
+    width-stable ASCII `?`, visibly distinct from confirmed bare residency.
+    Data comes from the snapshot's tmux fields; the resume actions read the
+    SAME evidence."""
     cur = "▸" if session.current else " "
     if session.alive:
         word = "忙" if session.status == "busy" else "闲"
-        badge = " ⧉" if session.tmux_target else ""
+        badge = ""
+        if session.tmux_target:
+            badge = " ⧉"
+        elif not session.tmux_inventory_complete:
+            badge = " ?"
         return f"{cur}● {word}{badge}", ("status_busy" if word == "忙" else "alive")
     return f"{cur}○ 停", "dead"
 
@@ -115,22 +122,30 @@ class SessionRow(urwid.WidgetWrap):
         when = _rel_time(session.mtime)
         hidden = _hidden_marker(session)
         label = f"[{hidden}] {session.label}" if hidden else session.label
-        if len(label) > 80:
-            label = label[:79] + "…"
+        label = truncate_cells(label, 80)
         cwd = session.cwd.rstrip("/").rsplit("/", 1)[-1] if session.cwd else ""
 
-        cols = row_columns(SESSION_COLS, [
-            status_cell,
-            _source_badge(session),
-            _flags(session),
-            when,
-            f"p{session.prompts}",
-            label,
-            cwd,
-        ])
+        cols = row_columns(
+            SESSION_COLS,
+            [
+                status_cell,
+                _source_badge(session),
+                _flags(session),
+                when,
+                f"p{session.prompts}",
+                label,
+                cwd,
+            ],
+        )
         mapped = urwid.AttrMap(
-            cols, attr,
-            focus_map={"status_busy": "selected", "alive": "selected", "dead": "selected", None: "selected"},
+            cols,
+            attr,
+            focus_map={
+                "status_busy": "selected",
+                "alive": "selected",
+                "dead": "selected",
+                None: "selected",
+            },
         )
         super().__init__(mapped)
 
@@ -144,11 +159,16 @@ class SessionRow(urwid.WidgetWrap):
 class _ActionRow(urwid.WidgetWrap):
     def __init__(self, action_key: str, label: str, count: int) -> None:
         self.action_key = action_key
-        cols = urwid.Columns([
-            ("weight", 1, urwid.Text(label)),
-            (8, urwid.Text(str(count), align="right")),
-        ], dividechars=2)
-        mapped = urwid.AttrMap(cols, "dead", focus_map={"dead": "selected", None: "selected"})
+        cols = urwid.Columns(
+            [
+                ("weight", 1, urwid.Text(label)),
+                (8, urwid.Text(str(count), align="right")),
+            ],
+            dividechars=2,
+        )
+        mapped = urwid.AttrMap(
+            cols, "dead", focus_map={"dead": "selected", None: "selected"}
+        )
         super().__init__(mapped)
 
     def selectable(self) -> bool:

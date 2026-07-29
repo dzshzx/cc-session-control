@@ -2,118 +2,57 @@
 
 from __future__ import annotations
 
-import glob
-import json
 import os
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, replace
 
 from ..config import cfg
-from ..models import LiveInfo, Session
-from . import registry, tmux
-from .liveness import alive_map, is_rc_exposed, live_index, live_session_procs
+from ..models import LiveInfo, Session, SessionProc
+from . import registry, tmux, transcripts
+from .liveness import (
+    LivenessSnapshot,
+    alive_map,
+    is_rc_exposed,
+    live_index,
+    live_session_procs,
+)
 from .proc import ancestor_pids as _ancestor_pids  # /proc walk moved to proc.py
 
-_NOISE = (
-    "<command-message>", "<command-name>", "<command-args>",
-    "<local-command-caveat>", "<local-command-stdout>", "<local-command-stderr>",
-    "<system-reminder>", "caveat:",
-)
+TranscriptIssue = transcripts.TranscriptIssue
 
 
-def _is_noise(t: str) -> bool:
-    t = t.strip().lower()
-    return (not t) or any(t.startswith(n) for n in _NOISE)
+@dataclass(frozen=True)
+class SessionScanResult:
+    """Transcript-driven session rows plus source completeness."""
+
+    sessions: tuple[Session, ...] = ()
+    issues: tuple[TranscriptIssue, ...] = ()
+    path_sids: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sessions", tuple(self.sessions))
+        object.__setattr__(self, "issues", tuple(self.issues))
+        object.__setattr__(self, "path_sids", frozenset(self.path_sids))
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
+
+    @property
+    def sids(self) -> frozenset[str]:
+        """Every discovered transcript sid — pathname-only ones included (F47)."""
+        return self.path_sids | frozenset(row.sid for row in self.sessions)
 
 
-def _clean_text(t: str) -> str:
-    t = " ".join(t.split())
-    for marker in ("<system-reminder", "<command-message", "<command-name",
-                   "<command-args", "<local-command-"):
-        i = t.find(marker)
-        if i != -1:
-            t = t[:i]
-    return t.strip()
-
-
-def _parse_transcript(
-    path: str,
+def _project_transcript(
+    transcript: transcripts.TranscriptRecord,
     idx: dict[str, LiveInfo],
-    cur: set[int],
+    cur: AbstractSet[int],
     job_shorts: set[str],
-) -> Session | None:
-    """Parse one transcript .jsonl into a Session, or None if it has no cwd.
-
-    `idx` is the joined live index (sid -> LiveInfo from `live_index()`), `cur`
-    the ancestor-pid set, and `job_shorts` the set of background-agent short ids
-    (`sid[:8]`); all injected so this stays unit-testable. The substring
-    pre-check before json.loads is kept intact for performance.
-    """
-    sid = os.path.basename(path)[:-6]
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-
-    cwd = title = last_prompt = first_prompt = ""
-    hidden: set[str] = set()
-    prompts = 0
-
-    try:
-        with open(path, "r", errors="ignore") as fh:
-            for line in fh:
-                if '"sdk-ts"' in line:
-                    hidden.add("sdk")
-                if '"bridge-session"' in line:
-                    hidden.add("bridge")
-                if not cwd and '"cwd"' in line:
-                    try:
-                        cwd = json.loads(line).get("cwd", "") or cwd
-                    except Exception:
-                        pass
-                if '"aiTitle"' in line:
-                    try:
-                        title = json.loads(line).get("aiTitle", title) or title
-                    except Exception:
-                        pass
-                if '"lastPrompt"' in line:
-                    try:
-                        last_prompt = json.loads(line).get("lastPrompt", last_prompt) or last_prompt
-                    except Exception:
-                        pass
-                if '"type":"user"' in line:
-                    try:
-                        o = json.loads(line)
-                    except Exception:
-                        continue
-                    if o.get("type") != "user":
-                        continue
-                    c = (o.get("message") or {}).get("content")
-                    if isinstance(c, str):
-                        texts = [c]
-                    elif isinstance(c, list):
-                        texts = [b.get("text", "") for b in c
-                                 if isinstance(b, dict) and b.get("type") == "text"]
-                    else:
-                        texts = []
-                    texts = [t for t in texts if t.strip()]
-                    if texts:
-                        prompts += 1
-                        if not first_prompt:
-                            for t in texts:
-                                if _is_noise(t):
-                                    continue
-                                ct = _clean_text(t)
-                                if ct:
-                                    first_prompt = ct
-                                    break
-    except Exception:
-        pass
-
-    if not cwd:
-        return None
-
-    lp = "" if _is_noise(last_prompt) else last_prompt
-    label = title or first_prompt or lp or "(untitled)"
-
+) -> Session:
+    """Project one parsed transcript through the captured liveness generation."""
+    sid = transcript.sid
     # Join the merged liveness/identity for this sid. Missing => dead, no
     # registry data (transcript-only): liveness stays False and the registry-
     # derived fields stay empty.
@@ -146,13 +85,25 @@ def _parse_transcript(
     rc_exposed = is_rc_exposed(bridge, proc_alive)
 
     return Session(
-        sid=sid, cwd=cwd, label=label, mtime=st.st_mtime,
-        prompts=prompts, pid=pid,
+        sid=sid,
+        cwd=transcript.cwd,
+        label=(
+            transcript.title
+            or transcript.first_prompt
+            or transcript.last_prompt
+            or "(untitled)"
+        ),
+        mtime=transcript.mtime,
+        prompts=transcript.prompts,
+        pid=pid,
         alive=alive,
         current=current,
         proc_start=proc_start,
-        hidden=hidden, file=path,
-        kind=kind, entrypoint=entrypoint, source=source,
+        hidden=transcript.hidden,
+        file=transcript.path,
+        kind=kind,
+        entrypoint=entrypoint,
+        source=source,
         rc_exposed=rc_exposed,
         env_id=bridge if rc_exposed else None,
         agent_short=sid[:8] if sid[:8] in job_shorts else None,
@@ -160,42 +111,80 @@ def _parse_transcript(
     )
 
 
-def _candidate_pids(info: LiveInfo | None) -> list[int]:
+def _parse_transcript(
+    path: str,
+    idx: dict[str, LiveInfo],
+    cur: AbstractSet[int],
+    job_shorts: set[str],
+) -> Session | None:
+    """Compatibility projection for focused parser tests."""
+    transcript = transcripts._parse_transcript(path)
+    if transcript is None:
+        return None
+    return _project_transcript(transcript, idx, cur, job_shorts)
+
+
+def _candidate_pids(info: LiveInfo | None) -> tuple[int, ...]:
     """A LiveInfo's pid candidate set — `pids` when filled, else the chosen pid
     (same fallback rule the `current` check in `_parse_transcript` uses)."""
     if info is None:
-        return []
+        return ()
     if info.pids:
         return info.pids
-    return [info.pid] if info.pid else []
+    return (info.pid,) if info.pid else ()
 
 
-def _inject_tmux_residency(rows: list[Session], idx: dict[str, LiveInfo]) -> None:
+def _inject_tmux_residency(
+    rows: list[Session],
+    idx: dict[str, LiveInfo],
+) -> list[Session]:
     """Fill `Session.tmux_target` for every ALIVE session, in ONE batch.
 
     Collects all alive sessions' candidate pids, calls
-    `tmux.residency_targets` once (one `list-panes -a` per scan cycle), and
-    backfills each session with its first hit — any alive pid inside a tmux
-    pane makes the session resident (ADR-0001). Dead sessions stay None; the
-    badge and the resume/backgrounding actions read this SAME field, so there
-    is no per-action re-detection (no second source of truth)."""
+    `tmux.residency_inventory` once (one `list-panes -a` per scan cycle), and
+    returns a replaced session carrying its first hit — any alive pid inside a
+    tmux pane makes the session resident (ADR-0001). Dead sessions stay None;
+    the badge and the resume/backgrounding actions read this SAME field, so
+    there is no per-action re-detection (no second source of truth)."""
     alive_pids = {
         pid for row in rows if row.alive for pid in _candidate_pids(idx.get(row.sid))
     }
-    targets = tmux.residency_targets(alive_pids)
-    if not targets:
-        return
+    inventory = tmux.residency_inventory(alive_pids)
+    targets = inventory.targets
+    if not targets and inventory.complete:
+        return rows
+    detail = "; ".join(
+        f"{issue.source}"
+        + (f" ({issue.path})" if issue.path else "")
+        + f": {issue.detail}"
+        for issue in inventory.issues
+    )
+    resident: list[Session] = []
     for row in rows:
-        if not row.alive:
-            continue
-        for pid in _candidate_pids(idx.get(row.sid)):
-            if pid in targets:
-                row.tmux_target = targets[pid]
-                break
+        target = next(
+            (
+                targets[pid]
+                for pid in _candidate_pids(idx.get(row.sid))
+                if row.alive and pid in targets
+            ),
+            None,
+        )
+        if row.alive:
+            resident.append(
+                replace(
+                    row,
+                    tmux_target=target,
+                    tmux_inventory_complete=inventory.complete,
+                    tmux_inventory_detail=detail,
+                )
+            )
+        else:
+            resident.append(row)
+    return resident
 
 
-def scan() -> list[Session]:
-    """Unified transcript-driven session scan.
+def scan_result(inputs: LivenessSnapshot | None = None) -> SessionScanResult:
+    """Unified typed transcript-driven session scan.
 
     Merges the three liveness/identity sources once per scan — registry
     `sessions/<pid>.json`, `claude agents --json`, and `jobs/*/state.json` — then
@@ -203,20 +192,34 @@ def scan() -> list[Session]:
     rc-exposure, and batch-injects tmux residency (`tmux_target`). Scan stays
     transcript-driven: an agent-only sid (present in the live index but with no
     transcript) is surfaced by the Agents tab, not here.
+
+    When `inputs` is supplied by `build_world_snapshot`, this is an injected
+    fast path: no registry or targeted `/proc` liveness read is repeated. With
+    no injection, the standalone CLI-compatible path self-fetches as before.
     """
-    root = str(cfg.projects_root)
-    session_procs = live_session_procs()
-    agents = alive_map()
+    root = os.fspath(cfg.projects_root)
+    session_procs: Sequence[SessionProc]
+    agents: Mapping[str, int | None]
+    cur: AbstractSet[int]
+    if inputs is None:
+        session_procs = live_session_procs()
+        agents = alive_map()
+        job_shorts = {j.short for j in registry.read_agent_jobs()}
+        cur = _ancestor_pids()
+    else:
+        session_procs = inputs.session_procs
+        agents = inputs.agents_map
+        job_shorts = {j.short for j in inputs.agent_jobs}
+        cur = inputs.cur
     idx = live_index(session_procs, agents)
-    job_shorts = {j.short for j in registry.read_agent_jobs()}
-    cur = _ancestor_pids()
     rows: list[Session] = []
 
-    for f in glob.glob(os.path.join(root, "*", "*.jsonl")):
-        row = _parse_transcript(f, idx, cur, job_shorts)
-        if row is not None:
-            rows.append(row)
+    inventory = transcripts.load_inventory(root)
+    rows.extend(
+        _project_transcript(transcript, idx, cur, job_shorts)
+        for transcript in inventory.records
+    )
 
-    _inject_tmux_residency(rows, idx)
+    rows = _inject_tmux_residency(rows, idx)
     rows.sort(key=lambda r: r.mtime, reverse=True)
-    return rows
+    return SessionScanResult(tuple(rows), inventory.issues, inventory.path_sids)

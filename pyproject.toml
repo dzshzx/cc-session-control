@@ -17,6 +17,8 @@ classifiers = [
     "Environment :: Console",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: User Interfaces",
 ]
 
@@ -29,7 +31,14 @@ Issues = "https://github.com/dzshzx/cc-session-control/issues"
 csctl = "cc_session_control.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = [
+    "coverage>=7.6",
+    "mypy>=1.15",
+    "pytest>=7.0",
+    "pytest-cov>=6.0",
+    "pyyaml>=6.0",
+    "ruff>=0.12",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "cc_session_control.__version__" }
@@ -39,3 +48,34 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 cc_session_control = ["skill/SKILL.md"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "BLE"]
+# Ruff's formatter deliberately leaves some long strings and comments intact,
+# so format output, rather than E501, is the single line-wrapping authority.
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+check_untyped_defs = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["urwid"]
+# Keep the third-party widget boundary dynamic while checking every
+# cc_session_control module and every project-owned type contract.
+ignore_missing_imports = true
+follow_imports = "skip"
+
+[tool.coverage.run]
+branch = true
+relative_files = true
+source = ["cc_session_control"]
+
+[tool.coverage.report]
+show_missing = true

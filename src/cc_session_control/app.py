@@ -4,21 +4,37 @@ from __future__ import annotations
 
 import curses
 import os
-import threading
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast, runtime_checkable
 
 import urwid
 
 from . import theme
+from .actions.runner import (
+    Accepted,
+    Action,
+    ActionCompletion,
+    ActionRunner,
+    Busy,
+    SubmitResult,
+)
 from .data import proc
-from .data.snapshot import WorldSnapshot, build_world_snapshot
+from .data.refresh import (
+    RefreshBatch,
+    RefreshBuilder,
+    RefreshCoordinator,
+    RefreshFailure,
+    RequestResult,
+    build_refresh_result,
+)
 from .views.agents import AgentsView
 from .views.rc import RCView
 from .views.sessions import SessionsView
 
 if TYPE_CHECKING:
     from .actions.session_ops import ExitIntent
+
+_T = TypeVar("_T")
 
 # D7/R10: shown across all tabs when `/proc` is unavailable (e.g. macOS), where
 # the "current" session can't be determined and destructive ops are refused.
@@ -30,23 +46,26 @@ class TabView(Protocol):
     """The contract App uses to drive each tab generically.
 
     A tab satisfies this structurally — App never special-cases a concrete
-    view. `fetch_pending(snapshot)` runs on the worker thread and must not touch
-    widgets; `apply_data()` runs on the main loop and swaps `_pending` into the
-    walker. The `snapshot` is the shared per-cycle world (R11/D8); it is OPTIONAL
-    — a view called with `None` self-fetches (back-compat / tests). Adding a tab
-    means honoring every member below; subclass `views/_base.py::ListTabView`
-    for the shared walker/overlay/footer plumbing instead of re-writing it.
+    view. `apply_refresh(batch)` runs only on the main loop and receives one
+    complete generation built by `RefreshCoordinator`; views never perform
+    refresh I/O or hold worker-written pending fields.
+    `apply_refresh_failure(failure)` is the main-loop-only hook for safe,
+    worker-built failure projections and defaults to no-op. Adding a tab means
+    honoring every member below; subclass `views/_base.py::ListTabView` for the
+    shared walker/overlay/footer plumbing instead of re-writing it.
     """
 
     widget: urwid.Widget
     _loaded: bool
 
-    def load(self) -> None: ...
-    def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None: ...
-    def apply_data(self) -> None: ...
+    def apply_refresh(self, batch: RefreshBatch) -> None: ...
+    def apply_refresh_failure(self, failure: RefreshFailure) -> None: ...
     def keyhints(self) -> str: ...
     def handle_key(self, key: str) -> None: ...
-    def captures_text(self) -> bool: ...  # True while a text mode owns EVERY key (incl. tab/q)
+    def captures_text(
+        self,
+    ) -> bool: ...  # True while a text mode owns EVERY key (incl. tab/q)
+
 
 # Launcher-first order (ADR-0001): startup lands on 项目 (the tmux-first
 # dispatch entry), then 会话 / 后台. In lockstep with `self.views` below.
@@ -69,20 +88,32 @@ def _make_screen() -> urwid.raw_display.Screen:
         term_colors = curses.tigetnum("colors")
         if term_colors >= 256:
             screen.set_terminal_properties(colors=256)
-    except Exception:
+    except (curses.error, OSError):
         pass
     screen.register_palette(theme.palette(mode))
     return screen
 
 
 class App:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        refresh_builder: RefreshBuilder = build_refresh_result,
+    ) -> None:
         self.result: ExitIntent | None = None
         self._exiting = False
         self._alarm_handle: object | None = None
         self._notify_alarm: object | None = None
         self._pipe_fd: int | None = None
-        self._refreshing = False
+        self._action_pipe_fd: int | None = None
+        self._action_in_progress = False
+        self._action_completion: Callable[[object], None] | None = None
+        self._last_refresh_generation = 0
+        self._refresh = RefreshCoordinator(
+            refresh_builder,
+            self._signal_refresh_ready,
+        )
+        self._actions = ActionRunner(self._signal_action_ready)
         # When set, a confirm modal is up: `_input` routes Enter/y/n/esc here and
         # swallows every other key (App-level so all tabs share it — D8 view files
         # stay small). `_confirm_base` is the widget restored on close.
@@ -97,12 +128,16 @@ class App:
         self.body = urwid.WidgetPlaceholder(self.views[0].widget)
         self._tab_texts: list[urwid.Text] = []
         tab_bar = self._build_tab_bar()
-        title = urwid.AttrMap(urwid.Text("Claude Code 会话管理器", align="center"), "header")
+        title = urwid.AttrMap(
+            urwid.Text("Claude Code 会话管理器", align="center"), "header"
+        )
         # Title at 0 and tab_bar at 1 are positional (see `_update_tab_bar`); the
         # degraded banner, if any, is appended LAST so those indices are stable.
         header_rows: list[urwid.Widget] = [title, tab_bar]
         if not proc.has_proc():
-            header_rows.append(urwid.AttrMap(urwid.Text(f" {_DEGRADED_BANNER}"), "notify"))
+            header_rows.append(
+                urwid.AttrMap(urwid.Text(f" {_DEGRADED_BANNER}"), "notify")
+            )
         self.header = urwid.Pile(header_rows)
 
         self.footer_text = urwid.Text(FOOTER_PREFIX)
@@ -185,14 +220,17 @@ class App:
         # the screen); height = wrapped text rows + the LineBox border.
         try:
             cols, rows = self._screen.get_cols_rows()
-        except Exception:
+        except (OSError, RuntimeError):
             cols, rows = 80, 24
         width = min(max(cols // 2, 46), cols)
         height = min(text.rows((max(width - 2, 1),)) + 2, max(rows - 2, 3))
         self.body.original_widget = urwid.Overlay(
-            box, self._confirm_base,
-            align="center", width=width,
-            valign="middle", height=height,
+            box,
+            self._confirm_base,
+            align="center",
+            width=width,
+            valign="middle",
+            height=height,
         )
         self.footer_text.set_text(" Enter/y 确认 · n/Esc 取消")
 
@@ -205,18 +243,37 @@ class App:
 
     def _exit(self, result: ExitIntent | None = None) -> None:
         self._exiting = True
+        self._action_completion = None
+        self._action_in_progress = False
+        self._actions.close()
+        self._refresh.close()
         if self._alarm_handle:
             self.loop.remove_alarm(self._alarm_handle)
+        refresh_pipe = self._pipe_fd
+        action_pipe = self._action_pipe_fd
+        self._pipe_fd = None
+        self._action_pipe_fd = None
+        self._remove_pipe_watch(refresh_pipe)
+        self._remove_pipe_watch(action_pipe)
         self.result = result
         raise urwid.ExitMainLoop()
+
+    def _remove_pipe_watch(self, pipe_fd: int | None) -> None:
+        if pipe_fd is None:
+            return
+        self.loop.remove_watch_pipe(pipe_fd)
+        try:
+            os.close(pipe_fd)
+        except OSError:
+            pass
 
     def exit_with(self, intent: ExitIntent) -> None:
         """Exit the MainLoop carrying a `session_ops.ExitIntent`.
 
-        Views construct the intent (they know the verb); `cli._cmd_tui` calls
-        `intent.run()` after the loop ends — resume must exec OUTSIDE urwid, so
-        the finalizer cannot run here. App stays variant-agnostic: adding a
-        resume variant touches only the intent class + the view key handler.
+        Views construct the intent (they know the verb); the CLI TUI handler
+        calls `intent.run()` after the loop ends — resume must exec OUTSIDE
+        urwid, so the finalizer cannot run here. App stays variant-agnostic:
+        adding a resume variant touches only the intent class + view key handler.
         """
         self._exit(intent)
 
@@ -236,34 +293,65 @@ class App:
         may ask about tab state (no peeking at `views`/`_active`)."""
         return self.views[self._active] is view
 
+    def submit_action(self, action_key: str, action: Action) -> SubmitResult:
+        """Run one stay-in-TUI mutation without blocking the urwid main loop."""
+        return self._submit_action(action_key, action, None)
+
+    def submit_completion(
+        self,
+        action_key: str,
+        action: Callable[[], _T],
+        on_complete: Callable[[_T], None],
+    ) -> SubmitResult:
+        """Run a typed read off-loop and apply its data on the main loop.
+
+        The callback is associated only after the runner accepts the action.
+        Rejected Busy/Closed submissions therefore cannot replace the callback
+        for the active single-flight operation.
+        """
+
+        return self._submit_action(
+            action_key,
+            lambda: ActionCompletion(action()),
+            cast(Callable[[object], None], on_complete),
+        )
+
+    def _submit_action(
+        self,
+        action_key: str,
+        action: Action,
+        on_complete: Callable[[object], None] | None,
+    ) -> SubmitResult:
+        outcome = self._actions.submit(action_key, action)
+        if isinstance(outcome, Accepted):
+            self._action_completion = on_complete
+            self._action_in_progress = True
+            self.notify("处理中…", seconds=3600)
+        elif isinstance(outcome, Busy):
+            self.notify("已有操作处理中")
+        else:
+            self.notify("应用正在退出")
+        return outcome
+
     def notify(self, msg: str, seconds: float = 3) -> None:
         # The newest notification owns the footer: cancel the previous restore
         # alarm so an older timer can't clear this message early.
         if self._notify_alarm is not None:
             self.loop.remove_alarm(self._notify_alarm)
         self.frame.footer = urwid.AttrMap(urwid.Text(f" {msg}"), "notify")
-        self._notify_alarm = self.loop.set_alarm_in(seconds, lambda *_: self._restore_footer())
+        self._notify_alarm = self.loop.set_alarm_in(
+            seconds, lambda *_: self._restore_footer()
+        )
 
     def _restore_footer(self) -> None:
         self._notify_alarm = None
         self.frame.footer = self.footer
 
-    def _run_fetch_cycle(self) -> None:
-        """Worker-phase of a refresh — the synchronous, testable seam (R11/D8).
-
-        Computes ONE shared world snapshot per cycle so the three tabs don't each
-        re-scan /proc + transcripts, then projects it into every view's `_pending`
-        via `fetch_pending(snapshot)`. A failed build degrades to per-view
-        self-fetch (`snapshot=None`). Pure data side: it only sets `_pending`
-        fields and NEVER touches widgets, so it is safe on the worker thread and
-        can be driven directly in tests without a MainLoop.
-        """
-        try:
-            snapshot: WorldSnapshot | None = build_world_snapshot()
-        except Exception:
-            snapshot = None
-        for v in self.views:
-            v.fetch_pending(snapshot)
+    def _clear_notification(self) -> None:
+        if self._notify_alarm is not None:
+            self.loop.remove_alarm(self._notify_alarm)
+            self._notify_alarm = None
+        self.frame.footer = self.footer
 
     def refresh_with_notice(self) -> None:
         """Refresh + the standard footer notice — the single body of the
@@ -271,23 +359,47 @@ class App:
         self.trigger_async_refresh()
         self.notify("刷新中…")
 
-    def trigger_async_refresh(self) -> None:
-        if self._refreshing or self._exiting:
+    def trigger_async_refresh(self) -> RequestResult:
+        return self._refresh.request()
+
+    def _signal_action_ready(self) -> None:
+        self._signal_pipe(self._action_pipe_fd)
+
+    def _signal_pipe(self, pipe_fd: int | None) -> None:
+        if pipe_fd is None or self._exiting:
             return
-        self._refreshing = True
+        try:
+            os.write(pipe_fd, b"1")
+        except OSError:
+            pass
 
-        def worker() -> None:
-            try:
-                self._run_fetch_cycle()
-            finally:
-                self._refreshing = False
-            if self._pipe_fd is not None:
-                try:
-                    os.write(self._pipe_fd, b"1")
-                except OSError:
-                    pass
+    def _on_action_pipe(self, data: bytes) -> bool:
+        if self._exiting:
+            return True
+        result = self._actions.consume_result()
+        if not self._action_in_progress:
+            return True
+        self._action_in_progress = False
+        on_complete = self._action_completion
+        self._action_completion = None
+        if result is None:
+            # Unknown exceptions remain visible through threading.excepthook;
+            # only clear the stale busy marker here.
+            self._clear_notification()
+            return True
+        if isinstance(result, ActionCompletion):
+            self._clear_notification()
+            if on_complete is None:
+                raise RuntimeError("typed action completion has no main-loop handler")
+            on_complete(result.value)
+            return True
+        self.notify(result.message)
+        if result.needs_refresh:
+            self.trigger_async_refresh()
+        return True
 
-        threading.Thread(target=worker, daemon=True).start()
+    def _signal_refresh_ready(self) -> None:
+        self._signal_pipe(self._pipe_fd)
 
     def _schedule_refresh(self, loop: object = None, data: object = None) -> None:
         if self._exiting:
@@ -296,14 +408,24 @@ class App:
         self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)
 
     def _on_pipe(self, data: bytes) -> bool:
-        if not self._exiting:
+        if self._exiting:
+            return True
+        result = self._refresh.consume_latest()
+        if result is None or result.generation <= self._last_refresh_generation:
+            return True
+        self._last_refresh_generation = result.generation
+        if isinstance(result, RefreshFailure):
             for view in self.views:
-                view.apply_data()
+                view.apply_refresh_failure(result)
+            self.notify(f"刷新失败（{result.source}）：{result.detail}")
+            return True
+        for view in self.views:
+            view.apply_refresh(result)
         return True
 
     def run(self) -> ExitIntent | None:
         self._pipe_fd = self.loop.watch_pipe(self._on_pipe)
-        self.views[self._active].load()
+        self._action_pipe_fd = self.loop.watch_pipe(self._on_action_pipe)
         self.set_hints(self.views[self._active].keyhints())
         self.trigger_async_refresh()
         self._alarm_handle = self.loop.set_alarm_in(10, self._schedule_refresh)

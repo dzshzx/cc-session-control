@@ -8,12 +8,11 @@ claude.ai/code — there is NO local deregister, this module never deletes a
 cloud environment.
 
 Design invariants:
-  - **Passive store.** Callers push observations in (`upsert(records)`); this
-    module never reaches up to collect them. It must NOT import `rc`
-    (`environments` is below `rc` in the import DAG; `rc` calls `upsert` one-way
-    in Phase 5 for the `env_*` namespace). `observe()` is a convenience builder
-    that reads the lower-level `registry` (and accepts `env_*` records passed in,
-    never collected here).
+  - **Passive store.** `reconcile()` is the sole production ledger writer; this
+    module never reaches up to collect observations. It must NOT import `rc`
+    (`environments` is below `rc` in the import DAG). `observe()` is a
+    convenience builder that reads the lower-level `registry` and accepts
+    `env_*` records passed in, never collected here.
   - **Two observation tiers.** `observe()` is the bridge-truthy FILE-REFERENCED
     set — what defines ledger MEMBERSHIP (an env exists in the cloud while any
     on-disk file references it, alive or zombie). `observe_live()` alive-gates the
@@ -25,16 +24,10 @@ Design invariants:
     `session_*` and `cse_*` never merge (their suffixes never coincide in
     practice); `env_*` ids are opaque and each unique. Dedup is WITHIN a
     namespace, never cross-view.
-  - **Write-on-change + atomic + single-writer.** The read-modify-write runs
-    under an advisory `flock` (degrades gracefully where unavailable), the
-    resulting ledger is serialized canonically and only rewritten when it
-    differs from disk, and the write is `tmp + os.replace` atomic.
-  - **Retention/compaction.** Entries older than `_RETENTION_SECONDS` (90d) are
-    dropped; if still over `_MAX_ENTRIES`, the most-recently-seen are kept. A
-    re-observed env always carries `last_seen == now` so it survives compaction.
-
-Everything swallows errors → safe empties: a missing or corrupt ledger never
-crashes (returns `[]` / no-ops).
+  - **Typed persistence.** `environment_ledger` owns the locked atomic
+    read-modify-write. Missing is a legal empty ledger; unreadable history,
+    malformed rows, and write failures remain distinct and operator-visible.
+    Programming errors are never converted into empty observations.
 
 Known limitation (capability red line): the ledger cannot back-fill
 environments minted while csctl was not running — there is no `null`/history on
@@ -44,40 +37,85 @@ incomplete.
 
 from __future__ import annotations
 
-import contextlib
-import json
-import os
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 
-from ..config import cfg
 from ..models import (
     AgentJob,
     BridgeEnv,
     EnvRecord,
+    InventoryIssue,
     RCServer,
-    Reconciliation,
     SessionProc,
     split_env_id,
 )
-from . import liveness, registry
+from . import environment_ledger, liveness, registry
+from .environment_ledger import (
+    LedgerRead,
+    LedgerReadState,
+    LedgerUpdate,
+    LedgerUpdateState,
+)
 
-try:  # POSIX advisory locking; absent on Windows → degrade to no lock.
-    import fcntl
-except ImportError:  # pragma: no cover - platform dependent
-    fcntl = None  # type: ignore[assignment]
 
-# Drop entries unseen for longer than this; cap total entries beyond that.
-_RETENTION_SECONDS = 90 * 86400
-_MAX_ENTRIES = 500
+@dataclass(frozen=True)
+class Reconciliation:
+    """One observation and ledger reconciliation for CLI/TUI consumers."""
+
+    current: tuple[BridgeEnv, ...] = ()
+    orphans: tuple[BridgeEnv, ...] = ()
+    observed: tuple[EnvRecord, ...] = ()
+    file_referenced: tuple[EnvRecord, ...] = ()
+    ledger: LedgerUpdate = field(
+        default_factory=lambda: LedgerUpdate(
+            LedgerUpdateState.UNCHANGED,
+            read=LedgerRead(LedgerReadState.MISSING),
+        ),
+    )
+    ledger_history_complete: bool = True
+    liveness_issues: tuple[liveness.LivenessIssue, ...] = ()
+    inventory_issues: tuple[InventoryIssue, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "current", tuple(self.current))
+        object.__setattr__(self, "orphans", tuple(self.orphans))
+        object.__setattr__(self, "observed", tuple(self.observed))
+        object.__setattr__(
+            self,
+            "file_referenced",
+            tuple(self.file_referenced),
+        )
+        object.__setattr__(
+            self,
+            "liveness_issues",
+            tuple(self.liveness_issues),
+        )
+        object.__setattr__(
+            self,
+            "inventory_issues",
+            tuple(self.inventory_issues),
+        )
+
+    @property
+    def evidence_complete(self) -> bool:
+        """Whether every liveness source was available for this inventory."""
+
+        return not self.liveness_issues and not self.inventory_issues
+
+    @property
+    def success(self) -> bool:
+        """Whether the result is safe to present as a complete inventory."""
+
+        return self.evidence_complete and self.ledger.success
 
 
 # --- observation builder (reads registry + liveness, never rc) -------------
 
+
 def _collect(
-    session_procs: list[SessionProc],
-    agent_jobs: list[AgentJob],
-    rc_servers: list[RCServer] | None,
+    session_procs: Sequence[SessionProc],
+    agent_jobs: Sequence[AgentJob],
+    rc_servers: Sequence[RCServer] | None,
     *,
     alive_gated: bool,
 ) -> list[EnvRecord]:
@@ -94,7 +132,10 @@ def _collect(
     for sp in session_procs:
         if not sp.bridge:
             continue
-        if alive_gated and not liveness.is_rc_exposed(sp.bridge, sp.proc_alive):
+        if alive_gated and not liveness.is_rc_exposed(
+            sp.bridge,
+            sp.proc_alive is True,
+        ):
             continue
         prefix, key = split_env_id(sp.bridge)
         if prefix and key:
@@ -104,9 +145,7 @@ def _collect(
             continue
         if alive_gated and not (job.host_alive or job.sid in alive_sids):
             continue
-        records.append(
-            EnvRecord(prefix="cse", key=job.env_suffix, bound_sid=job.sid)
-        )
+        records.append(EnvRecord(prefix="cse", key=job.env_suffix, bound_sid=job.sid))
     for srv in rc_servers or []:
         if not srv.env_id:
             continue
@@ -119,9 +158,9 @@ def _collect(
 
 
 def observe(
-    session_procs: list[SessionProc] | None = None,
-    agent_jobs: list[AgentJob] | None = None,
-    rc_servers: list[RCServer] | None = None,
+    session_procs: Sequence[SessionProc] | None = None,
+    agent_jobs: Sequence[AgentJob] | None = None,
+    rc_servers: Sequence[RCServer] | None = None,
     max_age: float = 5.0,
 ) -> list[EnvRecord]:
     """FILE-REFERENCED bridge envs — the ledger MEMBERSHIP set (R6).
@@ -136,22 +175,20 @@ def observe(
 
     Pure when the sources are supplied (snapshot path / tests); self-reads the
     registry when they are None (CLI / no-snapshot fallback). `env_*` is only ever
-    passed in (this module never imports rc). Swallows errors → [].
+    passed in (this module never imports rc). Lower-level registry readers own
+    their expected external-I/O degradation; programming errors propagate.
     """
-    try:
-        if session_procs is None:
-            session_procs = registry.read_session_procs(max_age=max_age)
-        if agent_jobs is None:
-            agent_jobs = registry.read_agent_jobs(max_age=max_age)
-        return _collect(session_procs, agent_jobs, rc_servers, alive_gated=False)
-    except Exception:
-        return []
+    if session_procs is None:
+        session_procs = registry.read_session_procs(max_age=max_age)
+    if agent_jobs is None:
+        agent_jobs = registry.read_agent_jobs(max_age=max_age)
+    return _collect(session_procs, agent_jobs, rc_servers, alive_gated=False)
 
 
 def observe_live(
-    session_procs: list[SessionProc] | None = None,
-    agent_jobs: list[AgentJob] | None = None,
-    rc_servers: list[RCServer] | None = None,
+    session_procs: Sequence[SessionProc] | None = None,
+    agent_jobs: Sequence[AgentJob] | None = None,
+    rc_servers: Sequence[RCServer] | None = None,
     max_age: float = 5.0,
 ) -> list[EnvRecord]:
     """Alive-gated "currently exposed" bridge envs (R3/R6) — the CURRENT set.
@@ -167,193 +204,23 @@ def observe_live(
 
     Pure when `session_procs`/`agent_jobs` are supplied (the snapshot path passes
     its already-liveness-resolved data — DI for tests); reads the registry +
-    `/proc` itself when they are None (CLI / no-snapshot view fallback). Swallows
-    errors → [].
+    `/proc` itself when they are None (CLI / no-snapshot view fallback).
     """
-    try:
-        if session_procs is None:
-            session_procs = liveness.live_session_procs(max_age=max_age)
-        if agent_jobs is None:
-            agent_jobs = registry.read_agent_jobs(max_age=max_age)
-        return _collect(session_procs, agent_jobs, rc_servers, alive_gated=True)
-    except Exception:
-        return []
-
-
-# --- ledger IO (parse / serialize / atomic write / lock) -------------------
-
-def _read_raw() -> str:
-    try:
-        with open(cfg.environments_ledger, errors="ignore") as fh:
-            return fh.read()
-    except Exception:
-        return ""
-
-
-def _parse_ledger(text: str) -> dict[tuple[str, str], BridgeEnv]:
-    """Parse ledger text into a (prefix, key) -> BridgeEnv map. Skips bad lines.
-
-    Persisted `status` is ignored (recomputed against the live observation), so
-    only the five durable fields are read back.
-    """
-    out: dict[tuple[str, str], BridgeEnv] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = json.loads(line)
-        except Exception:
-            continue
-        prefix = d.get("prefix")
-        key = d.get("key")
-        if not prefix or not key:
-            continue
-        out[(prefix, key)] = BridgeEnv(
-            prefix=str(prefix),
-            key=str(key),
-            bound_sid=d.get("bound_sid"),
-            first_seen=_as_float(d.get("first_seen")),
-            last_seen=_as_float(d.get("last_seen")),
-        )
-    return out
-
-
-def _as_float(v: Any) -> float:
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _serialize(entries: list[BridgeEnv]) -> str:
-    """Canonical JSONL (sorted by id, sorted keys) so write-on-change is exact."""
-    lines: list[str] = []
-    for e in sorted(entries, key=lambda e: (e.prefix, e.key)):
-        d = {
-            "prefix": e.prefix,
-            "key": e.key,
-            "bound_sid": e.bound_sid,
-            "first_seen": e.first_seen,
-            "last_seen": e.last_seen,
-        }
-        lines.append(json.dumps(d, sort_keys=True, ensure_ascii=False))
-    return ("\n".join(lines) + "\n") if lines else ""
-
-
-def _atomic_write(text: str) -> None:
-    cfg.config_dir.mkdir(parents=True, exist_ok=True)
-    path = str(cfg.environments_ledger)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
-        fh.write(text)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
-
-
-@contextlib.contextmanager
-def _write_lock() -> Iterator[None]:
-    """Advisory single-writer lock around a read-modify-write.
-
-    Uses a dedicated `.lock` file (never replaced) so the lock survives the
-    ledger's atomic `os.replace`. Degrades to no-op locking where `fcntl` is
-    unavailable (Windows) — the atomic rename still prevents a torn file.
-    """
-    fh = None
-    try:
-        cfg.config_dir.mkdir(parents=True, exist_ok=True)
-        fh = open(str(cfg.environments_ledger) + ".lock", "w")
-        if fcntl is not None:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            except Exception:
-                pass
-        yield
-    except Exception:
-        yield
-    finally:
-        if fh is not None:
-            if fcntl is not None:
-                try:
-                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-                except Exception:
-                    pass
-            fh.close()
-
-
-# --- merge / compaction ----------------------------------------------------
-
-def _dedup_records(records: list[EnvRecord]) -> list[EnvRecord]:
-    """Collapse records by (prefix, key) — within-namespace dedup (resume pairs).
-
-    Picks a deterministic canonical `bound_sid` (the smallest non-empty sid) so
-    the merge result is stable regardless of the observation order (registry
-    glob order is not sorted), keeping write-on-change from flapping.
-    """
-    grouped: dict[tuple[str, str], list[EnvRecord]] = {}
-    for r in records:
-        if not r.prefix or not r.key:
-            continue
-        grouped.setdefault((r.prefix, r.key), []).append(r)
-    out: list[EnvRecord] = []
-    for (prefix, key), recs in grouped.items():
-        sids = sorted({r.bound_sid for r in recs if r.bound_sid})
-        out.append(EnvRecord(prefix=prefix, key=key, bound_sid=sids[0] if sids else None))
-    return out
-
-
-def _merge(
-    ledger: dict[tuple[str, str], BridgeEnv],
-    records: list[EnvRecord],
-    now: float,
-) -> dict[tuple[str, str], BridgeEnv]:
-    for rec in _dedup_records(records):
-        k = (rec.prefix, rec.key)
-        existing = ledger.get(k)
-        if existing is None:
-            ledger[k] = BridgeEnv(
-                prefix=rec.prefix,
-                key=rec.key,
-                bound_sid=rec.bound_sid,
-                first_seen=now,
-                last_seen=now,
-            )
-        else:
-            existing.bound_sid = rec.bound_sid
-            existing.last_seen = now
-    return ledger
-
-
-def _membership(ledger: dict[tuple[str, str], BridgeEnv]) -> set[tuple[str, str, str | None, float]]:
-    """Durable identity of the ledger, EXCLUDING `last_seen` (M2).
-
-    Two ledgers with the same membership but different `last_seen` are
-    write-equivalent: re-observing the same envs must not rewrite the file just
-    because the clock advanced. `first_seen` and `bound_sid` ARE part of identity
-    (a new entry, a dropped entry, or a resume re-bind is a real change).
-    """
-    return {(e.prefix, e.key, e.bound_sid, e.first_seen) for e in ledger.values()}
-
-
-def _compact(
-    ledger: dict[tuple[str, str], BridgeEnv], now: float
-) -> dict[tuple[str, str], BridgeEnv]:
-    cutoff = now - _RETENTION_SECONDS
-    kept = {k: e for k, e in ledger.items() if e.last_seen >= cutoff}
-    if len(kept) > _MAX_ENTRIES:
-        newest = sorted(kept.values(), key=lambda e: e.last_seen, reverse=True)
-        kept = {(e.prefix, e.key): e for e in newest[:_MAX_ENTRIES]}
-    return kept
+    if session_procs is None:
+        session_procs = liveness.live_session_procs(max_age=max_age)
+    if agent_jobs is None:
+        agent_jobs = registry.read_agent_jobs(max_age=max_age)
+    return _collect(session_procs, agent_jobs, rc_servers, alive_gated=True)
 
 
 # --- public API ------------------------------------------------------------
 
+
 def reconcile(
-    session_procs: list[SessionProc] | None = None,
-    agent_jobs: list[AgentJob] | None = None,
-    rc_servers: list[RCServer] | None = None,
-    max_age: float = 5.0,
+    evidence: liveness.LivenessSnapshot,
+    rc_servers: Sequence[RCServer] | None = None,
+    *,
+    inventory_issues: Sequence[InventoryIssue] = (),
     now: float | None = None,
 ) -> Reconciliation:
     """THE R6 pipeline, in one place: observe (file-referenced) → `upsert` →
@@ -365,21 +232,61 @@ def reconcile(
     used to be re-established by hand at each call site; here it is an
     implementation detail. Both consumers (`build_world_snapshot` every cycle
     and `csctl env`) call this instead of re-wiring the pieces. Sources are
-    injectable like `observe`/`observe_live` (None → self-read); `rc_servers`
-    is always passed in (this module never imports rc — DAG unchanged).
+    supplied as one typed liveness snapshot; this seam never falls back to the
+    compatibility readers that discard source issues. `rc_servers` is passed in
+    separately because this module never imports rc (the data DAG stays intact).
+
+    Incomplete liveness is fail-closed: partial current observations remain
+    available for explicitly partial display, but ledger persistence and orphan
+    classification are skipped. A partial membership set can neither add a
+    durable record nor prove that a remembered environment became an orphan.
+    Partial ledger history is handled the same way: its salvaged entries and
+    precise warnings remain visible, but it is neither rewritten nor classified.
     """
-    file_referenced = observe(session_procs, agent_jobs, rc_servers, max_age=max_age)
-    upsert(file_referenced, now=now)
-    observed = observe_live(session_procs, agent_jobs, rc_servers, max_age=max_age)
+    file_referenced = observe(
+        evidence.session_procs,
+        evidence.agent_jobs,
+        rc_servers,
+    )
+    observed = observe_live(
+        evidence.session_procs,
+        evidence.agent_jobs,
+        rc_servers,
+    )
+    if not evidence.complete or inventory_issues:
+        return Reconciliation(
+            current=tuple(_current_envs(observed, {})),
+            observed=tuple(observed),
+            file_referenced=tuple(file_referenced),
+            ledger_history_complete=False,
+            liveness_issues=evidence.issues,
+            inventory_issues=tuple(inventory_issues),
+        )
+
+    update = upsert(file_referenced, now=now)
+    entries = update.entries if update.history_available else {}
+    ledger_history_complete = (
+        update.success and update.history_available and not update.warnings
+    )
     return Reconciliation(
-        current=current_envs(observed),
-        orphans=orphan_envs(file_referenced),
-        observed=observed,
-        file_referenced=file_referenced,
+        current=tuple(_current_envs(observed, entries)),
+        orphans=(
+            tuple(_orphan_envs(file_referenced, entries))
+            if update.history_available
+            else ()
+        ),
+        observed=tuple(observed),
+        file_referenced=tuple(file_referenced),
+        ledger=update,
+        ledger_history_complete=ledger_history_complete,
+        liveness_issues=evidence.issues,
     )
 
 
-def upsert(records: list[EnvRecord], now: float | None = None) -> None:
+def upsert(
+    records: Sequence[EnvRecord],
+    now: float | None = None,
+) -> LedgerUpdate:
     """Merge observed env records into the ledger (passive store, R6/D4).
 
     Sets `first_seen` on insert, advances `last_seen` to `now` on re-observation
@@ -388,60 +295,62 @@ def upsert(records: list[EnvRecord], now: float | None = None) -> None:
 
     Write-on-change ignores `last_seen` (M2): the file is rewritten only when the
     MEMBERSHIP changes (an env added/dropped, a re-bind, a new `first_seen`) or
-    when the on-disk text is not already canonical (corrupt / legacy line cleanup).
-    A pure clock advance on otherwise-identical membership does NOT rewrite, so a
+    when valid on-disk text is not already canonical (legacy line cleanup).
+    Malformed rows block the entire update and preserve the original bytes. A
+    pure clock advance on otherwise-identical membership does NOT rewrite, so a
     steady-state refresh cycle leaves the file (and its mtime) untouched. The
     persisted copy still carries the advanced `last_seen` whenever a real write
-    happens. Swallows all errors.
+    happens. Expected I/O failures are returned as `LedgerUpdateState.FAILED`;
+    unsafe partial history is `LedgerUpdateState.BLOCKED`; programming errors
+    propagate.
     """
-    import time
-
-    ts = time.time() if now is None else now
-    try:
-        with _write_lock():
-            old_text = _read_raw()
-            ledger = _parse_ledger(old_text)
-            # Snapshot identity BEFORE _merge mutates bound_sid/last_seen in place.
-            old_sig = _membership(ledger)
-            non_canonical = _serialize(list(ledger.values())) != old_text
-            ledger = _merge(ledger, records, ts)
-            ledger = _compact(ledger, ts)
-            if _membership(ledger) != old_sig or non_canonical:
-                _atomic_write(_serialize(list(ledger.values())))
-    except Exception:
-        return
+    return environment_ledger.update(records, now=now)
 
 
-def _read_ledger() -> dict[tuple[str, str], BridgeEnv]:
-    return _parse_ledger(_read_raw())
+def read_ledger() -> LedgerRead:
+    """Public typed read for consumers that do not need reconciliation."""
+
+    return environment_ledger.read()
 
 
-def current_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
+def current_envs(observed: Sequence[EnvRecord]) -> list[BridgeEnv]:
     """Envs bound to something observed right now (status='current').
 
     Classifies the ledger against the observation. An observed env not yet in
     the ledger is still reported current — inside `reconcile` (which upserts
-    first) that branch only fires when `upsert` itself failed silently (e.g. a
-    read-only ledger), so a write failure never hides a bound env. Sorted
-    newest-seen first.
+    first) that branch covers a typed ledger failure (for example a read-only
+    file), so a write failure never hides a bound env. Sorted newest-seen first.
     """
+    result = read_ledger()
+    entries = result.entries if result.usable else {}
+    return _current_envs(observed, entries)
+
+
+def _current_envs(
+    observed: Sequence[EnvRecord],
+    entries: Mapping[tuple[str, str], BridgeEnv],
+) -> list[BridgeEnv]:
     obs = {(r.prefix, r.key): r for r in observed if r.prefix and r.key}
-    ledger = _read_ledger()
     out: list[BridgeEnv] = []
     seen: set[tuple[str, str]] = set()
-    for k, env in ledger.items():
+    for k, env in entries.items():
         if k in obs:
-            env.status = "current"
-            out.append(env)
+            out.append(replace(env, status="current"))
             seen.add(k)
     for k, rec in obs.items():
         if k not in seen:
-            out.append(BridgeEnv(prefix=rec.prefix, key=rec.key,
-                                 bound_sid=rec.bound_sid, status="current"))
+            out.append(
+                BridgeEnv(
+                    prefix=rec.prefix,
+                    key=rec.key,
+                    bound_sid=rec.bound_sid,
+                    status="current",
+                )
+            )
     return sorted(out, key=lambda e: e.last_seen, reverse=True)
 
 
-def orphan_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
+def orphan_envs(observed: Sequence[EnvRecord]) -> list[BridgeEnv]:
     """Ledger entries NOT in the current observation (status='orphan').
 
     Pass the FILE-REFERENCED set (`observe()`) here so orphans are precisely
@@ -450,13 +359,21 @@ def orphan_envs(observed: list[EnvRecord]) -> list[BridgeEnv]:
     the manual-delete candidates: csctl cannot deregister a cloud environment, so
     the user removes them on claude.ai/code. Sorted newest-seen first.
     (Inherently incomplete — see the module docstring's red line.)
+    Partial ledger history cannot prove orphanhood and returns no candidates.
     """
+    result = read_ledger()
+    if not result.history_complete:
+        return []
+    return _orphan_envs(observed, result.entries)
+
+
+def _orphan_envs(
+    observed: Sequence[EnvRecord],
+    entries: Mapping[tuple[str, str], BridgeEnv],
+) -> list[BridgeEnv]:
     obs_keys = {(r.prefix, r.key) for r in observed if r.prefix and r.key}
     out: list[BridgeEnv] = []
-    for k, env in _read_ledger().items():
+    for k, env in entries.items():
         if k not in obs_keys:
-            env.status = "orphan"
-            out.append(env)
+            out.append(replace(env, status="orphan"))
     return sorted(out, key=lambda e: e.last_seen, reverse=True)
-
-

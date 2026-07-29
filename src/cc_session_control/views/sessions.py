@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import urwid
 
+from ..actions import tui_actions
 from ..actions.session_ops import (
     ResumeIntent,
-    do_tmux_resume,
-    resume_cmd,
-    terminate_session,
-    to_clipboard,
+    attach_target,
+    would_take_over,
 )
 from ..data import proc
-from ..data.cleanup import CleanupPlan, build_plan, remove_session
-from ..data.liveness import liveness_inputs
-from ..data.sessions import scan
-from ..models import AgentJob, Session, SessionProc
+from ..data.cleanup import CleanupPlan
+from ..models import Session
 from ._base import ListTabView
-from ._confirm import DEGRADED as _DEGRADED
-from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
+from ._confirm import (
+    accept_ancestor_probe,
+    confirm_stop,
+    confirm_takeover,
+    confirm_tmux_takeover,
+)
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 from ._session_row import (
@@ -28,12 +30,11 @@ from ._session_row import (
     SessionRow,
     _hidden_marker,
 )
-from ._sessions_cleanup import CleanupMixin
+from ._sessions_cleanup import CleanupMixin, _CleanupPreview
 
 if TYPE_CHECKING:
-    from ..data.snapshot import WorldSnapshot
-
     from ..app import App
+    from ..data.refresh import RefreshBatch, RefreshFailure
 
 
 class SessionsView(CleanupMixin, ListTabView):
@@ -46,47 +47,99 @@ class SessionsView(CleanupMixin, ListTabView):
     # table in the footer is a user preference (2026-07-05); `r 刷新` stays in
     # the App-level FOOTER_PREFIX, so its entry is hint-less here.
     KEY_TABLE = (
-        Key(("enter",), "Enter 接回", "_key_resume", section="会话操作:", help_lines=(
-            "  Enter  tmux 接回（主操作：会话恢复进所属项目的 tmux 窗口并接入前台，",
-            "         终端断线会话不死；已驻留 tmux 的会话就地进入不重启；",
-            "         接运行中的裸终端会话会先确认接管）",
-        )),
-        Key(("t",), "t 终端接回", "_key_terminal", section="会话操作:", help_lines=(
-            "  t      终端接回（在当前终端恢复，会话随终端关闭而结束——tmux 不可用",
-            "         时的兜底；对已驻留会话 = 拉出 tmux，先确认接管）",
-        )),
-        Key(("f",), "f 分叉", "_key_fork", section="会话操作:", help_lines=(
-            "  f      分叉会话（创建副本进 tmux 窗口并进入，不影响原会话）",
-        )),
-        Key(("s",), "s 停止", "_key_stop", section="会话操作:", help_lines=(
-            "  s      停止运行中的会话（发送 SIGTERM，需二次确认）",
-        )),
-        Key(("R",), "R 转后台", "_key_relaunch", section="会话操作:", help_lines=(
-            "  R      转入 tmux 后台（不开远控、不进入，留在 csctl；已驻留会话",
-            "         无需转移；接运行中的会话会先确认接管）",
-        )),
-        Key(("d",), "d 删除", "_key_delete", section="会话操作:", help_lines=(
-            "  d      删除已结束的会话记录",
-        )),
-        Key(("y",), "y 复制命令", "_key_yank", section="会话操作:", help_lines=(
-            "  y      复制接回命令到剪贴板",
-        )),
-        Key(("h",), "h 桥接显隐", "_key_toggle_hidden", needs_selection=False,
-            section="会话操作:", help_lines=(
-                "  h      显示/隐藏桥接、SDK 会话",
-            )),
-        Key(("c",), "c 清理", "_enter_cleanup", needs_selection=False,
-            section="清理与过滤:", help_lines=(
-                "  c      打开清理子菜单",
-            )),
-        Key(("/",), "/ 过滤", "_enter_filter", needs_selection=False,
-            section="清理与过滤:", help_lines=(
-                "  /      按关键词过滤会话列表",
-            )),
-        Key(("r",), None, "_key_refresh", needs_selection=False,
-            section="清理与过滤:", help_lines=(
-                "  r      刷新",
-            )),
+        Key(
+            ("enter",),
+            "Enter 接回",
+            "_key_resume",
+            section="会话操作:",
+            help_lines=(
+                "  Enter  tmux 接回（主操作：会话恢复进所属项目的 tmux 窗口并接入前台，",
+                "         终端断线会话不死；已驻留 tmux 的会话就地进入不重启；",
+                "         接运行中的裸终端会话会先确认接管）",
+            ),
+        ),
+        Key(
+            ("t",),
+            "t 终端接回",
+            "_key_terminal",
+            section="会话操作:",
+            help_lines=(
+                "  t      终端接回（在当前终端恢复，会话随终端关闭而结束——tmux 不可用",
+                "         时的兜底；对已驻留会话 = 拉出 tmux，先确认接管）",
+            ),
+        ),
+        Key(
+            ("f",),
+            "f 分叉",
+            "_key_fork",
+            section="会话操作:",
+            help_lines=(
+                "  f      分叉会话（创建副本进 tmux 窗口并进入，不影响原会话）",
+            ),
+        ),
+        Key(
+            ("s",),
+            "s 停止",
+            "_key_stop",
+            section="会话操作:",
+            help_lines=("  s      停止运行中的会话（发送 SIGTERM，需二次确认）",),
+        ),
+        Key(
+            ("R",),
+            "R 转后台",
+            "_key_relaunch",
+            section="会话操作:",
+            help_lines=(
+                "  R      转入 tmux 后台（不开远控、不进入，留在 csctl；已驻留会话",
+                "         无需转移；接运行中的会话会先确认接管）",
+            ),
+        ),
+        Key(
+            ("d",),
+            "d 删除",
+            "_key_delete",
+            section="会话操作:",
+            help_lines=("  d      删除已结束的会话记录",),
+        ),
+        Key(
+            ("y",),
+            "y 复制命令",
+            "_key_yank",
+            section="会话操作:",
+            help_lines=("  y      复制接回命令到剪贴板",),
+        ),
+        Key(
+            ("h",),
+            "h 桥接显隐",
+            "_key_toggle_hidden",
+            needs_selection=False,
+            section="会话操作:",
+            help_lines=("  h      显示/隐藏桥接、SDK 会话",),
+        ),
+        Key(
+            ("c",),
+            "c 清理",
+            "_enter_cleanup",
+            needs_selection=False,
+            section="清理与过滤:",
+            help_lines=("  c      打开清理子菜单",),
+        ),
+        Key(
+            ("/",),
+            "/ 过滤",
+            "_enter_filter",
+            needs_selection=False,
+            section="清理与过滤:",
+            help_lines=("  /      按关键词过滤会话列表",),
+        ),
+        Key(
+            ("r",),
+            None,
+            "_key_refresh",
+            needs_selection=False,
+            section="清理与过滤:",
+            help_lines=("  r      刷新",),
+        ),
         Key(("?",), "? 详细说明", "_show_help", needs_selection=False),
     )
 
@@ -95,6 +148,7 @@ class SessionsView(CleanupMixin, ListTabView):
             "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 · ○ 停 = 无进程",
             "        ▸ = 当前会话（启动 csctl 的会话，受保护） · 📱 = 已开远控",
             "        ⧉ = tmux 驻留（会话进程在 tmux 窗口里，断线不死）",
+            "        ? = tmux 驻留未知（盘点不完整，不能确认驻留或裸终端）",
             "",
         ),
         sections=("会话操作:", "清理与过滤:"),
@@ -109,19 +163,16 @@ class SessionsView(CleanupMixin, ListTabView):
         super().__init__(app, _SESSION_HEADER)
         self._sessions: list[Session] = []
         self._all_sessions: list[Session] = []
-        self._pending: list[Session] | None = None
         self._mode = "list"
         self._filter_text = ""
         self._cleanup_stats: dict[str, int] = {}
         self._classified: dict[str, int] = {}
-        self._preview_action = None  # the previewed _CleanupAction record
-        self._preview_targets: list = []
+        self._preview: _CleanupPreview | None = None
         self._show_hidden = True
         # The frozen cleanup plan (R11/D8 — built from the shared snapshot,
-        # never re-scanned per view): counts, preview, and confirm all read it.
+        # never re-scanned per view): counts and each new preview read it;
+        # confirmation uses the plan pinned when that preview was rendered.
         self._plan = CleanupPlan()
-        self._pending_plan: CleanupPlan | None = None
-        self._pending_classified: dict[str, int] | None = None
         self._cleanup_walker = urwid.SimpleFocusListWalker([])
 
     def keyhints(self) -> str:
@@ -139,88 +190,30 @@ class SessionsView(CleanupMixin, ListTabView):
         # footer Text wraps (urwid wrap='space'), trading rows for width.
         return footer_hints(self.KEY_TABLE)
 
-    def load(self) -> None:
-        sessions = scan()
-        procs, cur, jobs, agents = liveness_inputs()
-        self._all_sessions = sessions
-        self._plan = self._build_plan(sessions, procs, cur, jobs, agents)
-        self._classified = self._plan.counts()
-        self._cleanup_stats = self._derive_stats(sessions, self._classified)
+    def apply_refresh(self, batch: RefreshBatch) -> None:
+        """Apply one complete generation on the urwid main loop."""
+        self._all_sessions = list(batch.snapshot.sessions)
+        self._plan = batch.cleanup_plan
+        self._classified = dict(batch.cleanup_counts)
+        self._cleanup_stats = dict(batch.session_stats)
         self._loaded = True
-        self._apply_filter()
-        self._rebuild()
+        if self._mode == "list" or self._mode == "filter":
+            self._apply_filter()
+            self._rebuild()
+        elif self._mode == "cleanup":
+            self._rebuild_cleanup()
 
-    def _build_plan(
-        self,
-        sessions: list[Session],
-        procs: list[SessionProc],
-        cur: set[int],
-        jobs: list[AgentJob],
-        agents: dict[str, int | None],
-    ) -> CleanupPlan:
-        try:
-            return build_plan(sessions, procs, cur, jobs, agents)
-        except Exception:
-            return CleanupPlan()
-
-    def _derive_stats(self, sessions: list[Session], classified: dict[str, int]) -> dict[str, int]:
-        """The legacy 4-key status-bar shape, derived from the classified counts."""
-        return {
-            "total": len(sessions),
-            "empty": classified.get("empty", 0),
-            "short": classified.get("short", 0),
-            "orphans": classified.get("orphan_dirs", 0),
-        }
-
-    def fetch_pending(self, snapshot: WorldSnapshot | None = None) -> None:
-        """Worker-thread data fetch. Only sets pending fields — no widgets.
-
-        Projects the shared `snapshot` when given (R11/D8 — no per-view re-scan);
-        falls back to a self-contained scan when called with no snapshot
-        (back-compat / tests). The liveness inputs feed ONE frozen `CleanupPlan`
-        — counts, preview, and confirm all read it, never a re-scan.
-        """
-        if snapshot is not None:
-            sessions = snapshot.sessions
-            procs, cur = snapshot.session_procs, snapshot.cur
-            jobs, agents = snapshot.agent_jobs, snapshot.agents_map
-        else:
-            sessions = scan()
-            procs, cur, jobs, agents = liveness_inputs()
-        plan = self._build_plan(sessions, procs, cur, jobs, agents)
-        self.set_pending(sessions)
-        self._pending_plan = plan
-        self._pending_classified = plan.counts()
-        self.set_pending_stats(self._derive_stats(sessions, plan.counts()))
-
-    def set_pending(self, sessions: list[Session]) -> None:
-        self._pending = sessions
-
-    def set_pending_stats(self, stats: dict[str, int]) -> None:
-        self._cleanup_stats = stats
-
-    def apply_data(self) -> None:
-        if self._pending is not None:
-            self._all_sessions = self._pending
-            self._pending = None
-            if self._pending_plan is not None:
-                self._plan = self._pending_plan
-                self._pending_plan = None
-            if self._pending_classified is not None:
-                self._classified = self._pending_classified
-                self._pending_classified = None
-            self._loaded = True
-            if self._mode == "list" or self._mode == "filter":
-                self._apply_filter()
-                self._rebuild()
-            elif self._mode == "cleanup":
-                self._rebuild_cleanup()
+    def apply_refresh_failure(self, failure: RefreshFailure) -> None:
+        """Apply only the worker-built, session-agnostic cleanup projection."""
+        self._apply_failure_cleanup_plan(failure.cleanup_plan)
 
     def _build_rows(self) -> None:
         for s in self._sessions:
             self.walker.append(SessionRow(s))
         if not self._sessions:
-            empty = "无匹配 · 按 / 改过滤 · Esc 清空" if self._filter_text else "暂无会话"
+            empty = (
+                "无匹配 · 按 / 改过滤 · Esc 清空" if self._filter_text else "暂无会话"
+            )
             self.walker.append(urwid.AttrMap(urwid.Text(f" {empty}"), "dead"))
 
     def _status_text(self) -> str:
@@ -232,8 +225,30 @@ class SessionsView(CleanupMixin, ListTabView):
         cleanup_text = ""
         hidden_n = sum(1 for s in self._all_sessions if s.bridge_or_sdk)
         hidden_text = ""
+        tmux_unknown = [
+            s
+            for s in self._all_sessions
+            if s.alive and not s.tmux_target and not s.tmux_inventory_complete
+        ]
+        tmux_text = ""
+        if tmux_unknown:
+            detail = next(
+                (
+                    s.tmux_inventory_detail
+                    for s in tmux_unknown
+                    if s.tmux_inventory_detail
+                ),
+                "",
+            )
+            tmux_text = f" · tmux 驻留未知 {len(tmux_unknown)}"
+            if detail:
+                tmux_text += f"（{detail}）"
         if hidden_n:
-            hidden_text = f" · 桥接/SDK {hidden_n}" if self._show_hidden else f" · 桥接/SDK已隐藏 {hidden_n}"
+            hidden_text = (
+                f" · 桥接/SDK {hidden_n}"
+                if self._show_hidden
+                else f" · 桥接/SDK已隐藏 {hidden_n}"
+            )
         if empty or short or orphans:
             parts = []
             if empty:
@@ -243,9 +258,7 @@ class SessionsView(CleanupMixin, ListTabView):
             if orphans:
                 parts.append(f"孤儿 {orphans}")
             cleanup_text = f" · {' · '.join(parts)}"
-        return (
-            f" 共 {len(self._all_sessions)} 条会话 · 运行 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{cleanup_text}"
-        )
+        return f" 共 {len(self._all_sessions)} 条会话 · 运行 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{tmux_text}{cleanup_text}"
 
     def _close_overlay_mode(self) -> None:
         self._mode = "list"
@@ -261,18 +274,26 @@ class SessionsView(CleanupMixin, ListTabView):
         # registry `source == "sdk"` signal (Session.bridge_or_sdk), so the
         # badge and the `h` toggle never disagree.
         visible = [
-            s for s in self._all_sessions
-            if self._show_hidden or not s.bridge_or_sdk
+            s for s in self._all_sessions if self._show_hidden or not s.bridge_or_sdk
         ]
         if not self._filter_text:
             self._sessions = visible
         else:
             k = self._filter_text.lower()
             self._sessions = [
-                s for s in visible
-                if k in (
-                    s.label + " " + s.cwd + " " + s.sid + " "
-                    + _hidden_marker(s) + " " + " ".join(sorted(s.hidden))
+                s
+                for s in visible
+                if k
+                in (
+                    s.label
+                    + " "
+                    + s.cwd
+                    + " "
+                    + s.sid
+                    + " "
+                    + _hidden_marker(s)
+                    + " "
+                    + " ".join(sorted(s.hidden))
                 ).lower()
             ]
 
@@ -302,19 +323,33 @@ class SessionsView(CleanupMixin, ListTabView):
 
     def _do_terminate(self, s: Session) -> None:
         """Stop body, run only after the y/n confirm accepts."""
-        ok = terminate_session(s)
-        self.app.notify("已停止" if ok else "停止失败")
-        self.app.trigger_async_refresh()
+        request = tui_actions.SessionRequest.from_session(s)
+        self.app.submit_action(
+            "session.stop",
+            lambda: tui_actions.stop_session(request),
+        )
 
     def _do_relaunch(self, s: Session) -> None:
         """转后台 body (after confirm when it takes over a live one): spawn the
         resume window in the per-project tmux session, do NOT enter it — the
         operator stays in csctl. No --remote-control (ADR-0001)."""
-        target = do_tmux_resume(s)
-        self.app.notify(
-            f"已转入后台（tmux {target}）" if target else "转入后台失败"
+        request = tui_actions.SessionRequest.from_session(s)
+        self.app.submit_action(
+            "session.background",
+            lambda: tui_actions.background_session(request),
         )
-        self.app.trigger_async_refresh()
+
+    def _submit_ancestor_probe(
+        self,
+        action_key: str,
+        on_complete: Callable[[proc.AncestorProbe], None],
+    ) -> None:
+        """Prepare current-session protection off-loop for one key action."""
+        self.app.submit_completion(
+            action_key,
+            proc.probe_current_ancestors,
+            on_complete,
+        )
 
     # --- Key dispatch ---
 
@@ -366,7 +401,18 @@ class SessionsView(CleanupMixin, ListTabView):
         if s.current:
             self.app.notify("不能接回当前会话")
             return
-        confirm_tmux_takeover(self.app, s, "接回会话")
+        if attach_target(s) or not would_take_over(s):
+            confirm_tmux_takeover(self.app, s, "接回会话", gated=False)
+            return
+        self._submit_ancestor_probe(
+            "session.resume.prepare",
+            lambda evidence: confirm_tmux_takeover(
+                self.app,
+                s,
+                "接回会话",
+                evidence=evidence,
+            ),
+        )
 
     def _key_terminal(self, s: Session) -> None:
         """t — 终端接回 (fallback): bare-terminal resume; a resident session is
@@ -374,9 +420,24 @@ class SessionsView(CleanupMixin, ListTabView):
         if s.current:
             self.app.notify("不能接回当前会话")
             return
-        confirm_takeover(
-            self.app, s, "终端接回会话",
-            lambda: self.app.exit_with(ResumeIntent(s, fork=False)),
+        if not would_take_over(s):
+            confirm_takeover(
+                self.app,
+                s,
+                "终端接回会话",
+                lambda: self.app.exit_with(ResumeIntent(s, fork=False)),
+                gated=False,
+            )
+            return
+        self._submit_ancestor_probe(
+            "session.terminal.prepare",
+            lambda evidence: confirm_takeover(
+                self.app,
+                s,
+                "终端接回会话",
+                lambda: self.app.exit_with(ResumeIntent(s, fork=False)),
+                evidence=evidence,
+            ),
         )
 
     def _key_fork(self, s: Session) -> None:
@@ -384,13 +445,31 @@ class SessionsView(CleanupMixin, ListTabView):
         if s.current:
             self.app.notify("不能分叉当前会话")
             return
-        confirm_tmux_takeover(self.app, s, "分叉会话", fork=True)
+        confirm_tmux_takeover(
+            self.app,
+            s,
+            "分叉会话",
+            fork=True,
+            gated=False,
+        )
 
     def _key_stop(self, s: Session) -> None:
-        confirm_stop(
-            self.app, "会话", s.label, lambda: self._do_terminate(s),
-            alive=s.alive, current=s.current,
-        )
+        def complete(evidence: proc.AncestorProbe | None = None) -> None:
+            confirm_stop(
+                self.app,
+                "会话",
+                s.label,
+                lambda: self._do_terminate(s),
+                alive=s.alive,
+                current=s.current,
+                gated=evidence is not None,
+                evidence=evidence,
+            )
+
+        if not s.alive:
+            complete()
+            return
+        self._submit_ancestor_probe("session.stop.prepare", complete)
 
     def _key_relaunch(self, s: Session) -> None:
         """R — 转后台 (no Remote Control): a resident session needs no move."""
@@ -400,27 +479,54 @@ class SessionsView(CleanupMixin, ListTabView):
         if s.alive and s.tmux_target:
             self.app.notify(f"已在 tmux（{s.tmux_target}），无需转移")
             return
-        confirm_takeover(self.app, s, "转入后台", lambda: self._do_relaunch(s))
+        if not would_take_over(s):
+            confirm_takeover(
+                self.app,
+                s,
+                "转入后台",
+                lambda: self._do_relaunch(s),
+                gated=False,
+            )
+            return
+        self._submit_ancestor_probe(
+            "session.background.prepare",
+            lambda evidence: confirm_takeover(
+                self.app,
+                s,
+                "转入后台",
+                lambda: self._do_relaunch(s),
+                evidence=evidence,
+            ),
+        )
+
+    def _complete_delete(
+        self,
+        evidence: proc.AncestorProbe,
+        request: tui_actions.SessionRequest,
+    ) -> None:
+        if not accept_ancestor_probe(self.app, evidence):
+            return
+        self.app.submit_action(
+            "session.delete",
+            lambda: tui_actions.delete_session(request),
+        )
 
     def _key_delete(self, s: Session) -> None:
         if s.alive:
             self.app.notify("运行中的会话不删，先停止")
             return
-        if not proc.current_determinable():
-            self.app.notify(_DEGRADED)
-            return
-        # L4: honour remove_session's bool — only claim success when it truly
-        # removed something; a False here means there was nothing to delete.
-        if remove_session(s):
-            self.app.notify("已删除")
-        else:
-            self.app.notify("无可删除内容")
-        self.app.trigger_async_refresh()
+        request = tui_actions.SessionRequest.from_session(s)
+        self._submit_ancestor_probe(
+            "session.delete.prepare",
+            lambda evidence: self._complete_delete(evidence, request),
+        )
 
     def _key_yank(self, s: Session) -> None:
-        cmd = resume_cmd(s)
-        ok = to_clipboard(cmd)
-        self.app.notify("已复制" if ok else f"复制失败: {cmd}")
+        request = tui_actions.SessionRequest.from_session(s)
+        self.app.submit_action(
+            "session.copy-command",
+            lambda: tui_actions.copy_resume_command(request),
+        )
 
     def _key_toggle_hidden(self) -> None:
         self._show_hidden = not self._show_hidden

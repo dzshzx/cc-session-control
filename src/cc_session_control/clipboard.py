@@ -36,9 +36,12 @@ def copy(text: str) -> bool:
 
     try:
         subprocess.run(
-            _backend, input=text.encode(_encoding),
-            timeout=5, check=True, capture_output=True,
+            _backend,
+            input=text.encode(_encoding),
+            timeout=5,
+            check=True,
+            capture_output=True,
         )
         return True
-    except Exception:
+    except (OSError, subprocess.SubprocessError, UnicodeError):
         return False

@@ -1,26 +1,31 @@
 """Shared world snapshot — ONE scan per refresh cycle (R11 / D8).
 
-The async refresh used to call `fetch_pending()` on every view, so three tabs
-each re-scanned `/proc`, the transcripts, and the registries. `build_world_snapshot`
-computes that world ONCE on the worker thread; `App` then hands the same
-immutable snapshot to each view's `fetch_pending(snapshot)` so they only project
-it (no per-view IO). Views stay back-compatible: `fetch_pending(None)` self-fetches.
+The async refresh used to let every view scan `/proc`, transcripts, and
+registries independently. `build_world_snapshot` computes that world ONCE on
+the worker thread; `data.refresh.build_refresh_result` derives one complete batch
+from it before the App main loop gives that batch to every view.
 
 This is the TOP of the data layer — it composes `sessions` / `rc` / `liveness` /
-`environments`. Nothing in `data/` imports it (only `app`/`views` do), so there
-is no cycle. Errors are swallowed by the callees; `App` additionally guards
-`build_world_snapshot` so a failed build degrades to per-view self-fetch.
+`environments`. Only the data layer's top-level `refresh` module imports it, so
+there is no cycle. Recoverable external failures are typed by their owning data
+module. Expected boundary I/O failures become an explicit `RefreshFailure`;
+programming and invariant errors are not converted into empty view data.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
 from . import environments, liveness, rc, sessions
+from .project_settings import ProjectSettingsResult, ProjectSettingsState
+from .rc_enabled import EnabledListResult
+from .sessions import SessionScanResult
 
 
-@dataclass
+@dataclass(frozen=True)
 class WorldSnapshot:
     """One cycle's shared view of the machine (read-only data for the views).
 
@@ -32,35 +37,85 @@ class WorldSnapshot:
       - `file_referenced_envs` — bridge-truthy (`observe`): ledger MEMBERSHIP, and
         the set orphans are computed against (`orphan = ledger − file-referenced`).
 
+    `environment_reconciliation` carries the ledger update outcome and any
+    integrity warning so the Projects status can expose degraded history.
+
     `session_procs` (with `/proc` liveness already injected), `agents_map`
     (`claude agents --json`) and `cur` (the ancestor-pid set) are the raw liveness
-    inputs `build_world_snapshot` already computes for the scan; they are exposed
-    here so the Sessions cleanup submenu can feed `cleanup.build_plan` /
-    `select_zombie_pids` WITHOUT a second scan (R11/D8).
+    inputs `build_world_snapshot` already computes for the scan. The owning
+    `liveness_snapshot` is passed intact to `cleanup.build_plan`; the projections
+    remain available to views without becoming a second completeness authority
+    (R11/D8).
     """
-    sessions: list[Session] = field(default_factory=list)
-    agent_jobs: list[AgentJob] = field(default_factory=list)
-    rc_projects: list[RCProject] = field(default_factory=list)
-    rc_servers: list[RCServer] = field(default_factory=list)
-    observed_envs: list[EnvRecord] = field(default_factory=list)
-    file_referenced_envs: list[EnvRecord] = field(default_factory=list)
-    session_procs: list[SessionProc] = field(default_factory=list)
-    agents_map: dict[str, int | None] = field(default_factory=dict)
-    cur: set[int] = field(default_factory=set)
+
+    sessions: tuple[Session, ...] = ()
+    agent_jobs: tuple[AgentJob, ...] = ()
+    rc_projects: tuple[RCProject, ...] = ()
+    rc_project_settings: ProjectSettingsResult = field(
+        default_factory=lambda: ProjectSettingsResult(
+            ProjectSettingsState.MISSING,
+            {},
+        ),
+    )
+    rc_enabled_list: EnabledListResult[tuple[str, ...]] | None = None
+    rc_servers: tuple[RCServer, ...] = ()
+    observed_envs: tuple[EnvRecord, ...] = ()
+    file_referenced_envs: tuple[EnvRecord, ...] = ()
+    environment_reconciliation: environments.Reconciliation = field(
+        default_factory=environments.Reconciliation,
+    )
+    session_procs: tuple[SessionProc, ...] = ()
+    agents_map: Mapping[str, int | None] = field(default_factory=dict)
+    cur: frozenset[int] = frozenset()
+    liveness_snapshot: liveness.LivenessSnapshot | None = None
+    transcript_scan: SessionScanResult = field(default_factory=SessionScanResult)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sessions", tuple(self.sessions))
+        object.__setattr__(self, "agent_jobs", tuple(self.agent_jobs))
+        object.__setattr__(self, "rc_projects", tuple(self.rc_projects))
+        object.__setattr__(self, "rc_servers", tuple(self.rc_servers))
+        object.__setattr__(self, "observed_envs", tuple(self.observed_envs))
+        object.__setattr__(
+            self,
+            "file_referenced_envs",
+            tuple(self.file_referenced_envs),
+        )
+        object.__setattr__(self, "session_procs", tuple(self.session_procs))
+        object.__setattr__(
+            self,
+            "agents_map",
+            MappingProxyType(dict(self.agents_map)),
+        )
+        object.__setattr__(self, "cur", frozenset(self.cur))
 
 
 def build_world_snapshot() -> WorldSnapshot:
     """Compute the shared per-cycle world once (worker thread, R11/D8).
 
-    Heavy scans (transcript glob via `sessions.scan`, `/proc` walk via
-    `rc.scan_servers`) run exactly once here instead of once per tab. The
-    registry reads are ~5s-TTL cached so the few repeat reads inside `scan()`
-    hit the cache. Each callee swallows its own errors and returns safe empties.
+    Heavy scans (typed transcript discovery via `sessions.scan_result`, the
+    full `/proc` walk via
+    `rc.scan_servers`) run exactly once here instead of once per tab. Session
+    liveness uses targeted per-pid `/proc` reads, not another full walk; those
+    inputs are captured once and injected into `sessions.scan_result`. Each data
+    owner handles its expected external failures.
     """
-    session_procs, cur, agent_jobs, agents_map = liveness.liveness_inputs()
-    all_sessions = sessions.scan()
-    rc_projects = rc.scan()
-    rc_servers = rc.scan_servers()
+    inputs = liveness.liveness_inputs()
+    transcript_scan = sessions.scan_result(inputs)
+    if not transcript_scan.complete:
+        return WorldSnapshot(
+            sessions=transcript_scan.sessions,
+            session_procs=inputs.session_procs,
+            agents_map=inputs.agents_map,
+            cur=inputs.cur,
+            liveness_snapshot=inputs,
+            transcript_scan=transcript_scan,
+        )
+    all_sessions = transcript_scan.sessions
+    window_inventory = rc._tmux_window_inventory()
+    rc_scan = rc.scan_result(window_inventory=window_inventory)
+    server_scan = rc.scan_servers_result(window_inventory=window_inventory)
+    rc_servers = server_scan.servers
     # R6 ledger reconciliation (the whole point of the ledger): ONE pipeline —
     # observe (file-referenced membership) → upsert → observe_live (alive-gated
     # CURRENT) — owned by `environments.reconcile`, so the ordering invariant
@@ -69,15 +124,24 @@ def build_world_snapshot() -> WorldSnapshot:
     # file-referenced set, surfacing as an orphan / manual-delete candidate.
     # Cheap and safe on the worker thread: the ledger write is write-on-change
     # + flock + compacted, so re-observing the same set is a no-op rewrite.
-    recon = environments.reconcile(session_procs, agent_jobs, rc_servers)
+    recon = environments.reconcile(
+        inputs,
+        rc_servers,
+        inventory_issues=server_scan.issues,
+    )
     return WorldSnapshot(
-        sessions=all_sessions,
-        agent_jobs=agent_jobs,
-        rc_projects=rc_projects,
-        rc_servers=rc_servers,
-        observed_envs=recon.observed,
-        file_referenced_envs=recon.file_referenced,
-        session_procs=session_procs,
-        agents_map=agents_map,
-        cur=cur,
+        sessions=tuple(all_sessions),
+        agent_jobs=inputs.agent_jobs,
+        rc_projects=tuple(rc_scan.projects),
+        rc_project_settings=rc_scan.settings,
+        rc_enabled_list=rc_scan.enabled_list,
+        rc_servers=tuple(rc_servers),
+        observed_envs=tuple(recon.observed),
+        file_referenced_envs=tuple(recon.file_referenced),
+        environment_reconciliation=recon,
+        session_procs=inputs.session_procs,
+        agents_map=inputs.agents_map,
+        cur=inputs.cur,
+        liveness_snapshot=inputs,
+        transcript_scan=transcript_scan,
     )

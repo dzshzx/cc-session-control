@@ -16,6 +16,7 @@ import urwid
 
 if TYPE_CHECKING:
     from ..app import App
+    from ..data.refresh import RefreshBatch, RefreshFailure
     from ._keytable import Key
 
 
@@ -43,6 +44,17 @@ class ListTabView:
         the Sessions filter Edit) — App then forwards EVERY key here, including
         tab/q, instead of acting on them globally."""
         return False
+
+    def apply_refresh(self, batch: RefreshBatch) -> None:
+        """Apply one complete refresh generation on the main loop."""
+        raise NotImplementedError
+
+    def apply_refresh_failure(self, failure: RefreshFailure) -> None:
+        """Keep the last complete view data unless a tab owns a safe projection."""
+
+    def keyhints(self) -> str:
+        """Return view-specific footer hints."""
+        raise NotImplementedError
 
     # --- rendering plumbing ---
 
@@ -80,6 +92,10 @@ class ListTabView:
         if not self.walker:
             return None
         return self.walker.get_focus()[0]
+
+    def _selected(self) -> object | None:
+        """Return the domain object represented by the focused row."""
+        raise NotImplementedError
 
     # --- key-table dispatch (see views/_keytable.py) ---
 
@@ -123,18 +139,19 @@ class ListTabView:
         if self.app.is_active(self):
             self.app.set_hints(self.keyhints())
 
-    def _show_overlay(
-        self, title: str, rows: list, height: int | None = None
-    ) -> None:
+    def _show_overlay(self, title: str, rows: list, height: int | None = None) -> None:
         walker = urwid.SimpleFocusListWalker(rows)
         listbox = urwid.ListBox(walker)
         header = urwid.AttrMap(urwid.Text(f" {title}", align="center"), "col_header")
         box = urwid.LineBox(urwid.Frame(listbox, header=header))
         h = height or min(len(rows) + 4, 30)
         self._body.original_widget = urwid.Overlay(
-            box, self._list_body,
-            align="center", width=("relative", self.OVERLAY_WIDTH),
-            valign="middle", height=h,
+            box,
+            self._list_body,
+            align="center",
+            width=("relative", self.OVERLAY_WIDTH),
+            valign="middle",
+            height=h,
         )
 
     # --- overlay-mode dispatch ---

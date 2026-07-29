@@ -21,7 +21,7 @@ def test_bundled_skill_key_table_matches_tui():
     assert "`t` 终端接回" in text
     assert "`s` 停止活会话" in text
     assert "`R` 转后台" in text
-    assert "`R` 转入后台+远控" not in text     # the pre-0.7 RC relaunch is gone
+    assert "`R` 转入后台+远控" not in text  # the pre-0.7 RC relaunch is gone
     assert "`d` 删除" in text
 
 

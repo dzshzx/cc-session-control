@@ -20,7 +20,9 @@ SKILL_NAME = "claude-session-doctor"
 
 def bundled_skill_text() -> str:
     return (
-        resources.files("cc_session_control").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
+        resources.files("cc_session_control")
+        .joinpath("skill/SKILL.md")
+        .read_text(encoding="utf-8")
     )
 
 

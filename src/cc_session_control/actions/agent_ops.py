@@ -3,8 +3,9 @@
 The persistent truth for a background agent lives in `jobs/<short>/state.json`
 (registry.read_agent_jobs → AgentJob); it carries NO pid. So a live worker's host
 pid is resolved by JOINing the job's sid back to `sessions/<pid>.json`
-(`job_host`) — a live worker with no sessions file is therefore unstoppable, a
-documented orphan risk surfaced in `HELP`.
+(the production takeover path does this inside one typed liveness snapshot;
+`job_host` is records-only compatibility) — a live worker with no sessions file
+is therefore unstoppable, a documented orphan risk surfaced in `HELP`.
 
 Capability red lines honoured here:
   - respawn/takeover never replace the csctl process (respawn spawns a tmux
@@ -21,17 +22,22 @@ constants the (Phase 7) background view reads are Simplified Chinese.
 
 from __future__ import annotations
 
-import os
 import shlex
+from collections import deque
+from dataclasses import dataclass
+from enum import Enum
 
 from ..config import cfg
-from ..data import cleanup, liveness, proc, registry, tmux
+from ..data import cleanup, liveness, registry, tmux
+from ..data import proc as proc
+from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session
 from . import session_ops
 
-# --- host-pid join (shared by stop_job, remove_job, and the view) -------------
+# --- host-pid join (resume-takeover compatibility view) -----------------------
 
-def job_host(job: AgentJob) -> tuple[int | None, bool]:
+
+def job_host(job: AgentJob, *, max_age: float = 5.0) -> tuple[int | None, bool]:
     """Resolve a background job's host pid + liveness — `(pid, alive)`.
 
     `state.json` has no pid, so the worker's pid is JOINed from
@@ -44,11 +50,26 @@ def job_host(job: AgentJob) -> tuple[int | None, bool]:
     Injects `/proc` liveness onto the registry rows, then defers to the single
     pure join `registry.host_pid_for_sid` (shared with `snapshot._enrich_jobs`).
     """
-    procs = liveness.live_session_procs()
+    procs = liveness.live_session_procs(max_age=max_age)
     return registry.host_pid_for_sid(job.sid, procs)
 
 
 # --- respawn ------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RespawnResult:
+    """Exact command plus the tmux target that proves it was launched."""
+
+    command: str
+    target: str | None
+    detail: str = ""
+    tmux_result: tmux.TmuxWriteResult | None = None
+
+    @property
+    def success(self) -> bool:
+        return self.target is not None
+
 
 def respawn_cmd(job: AgentJob) -> str:
     """The exact relaunch command: `claude --resume <resume_sid> <flags> --bg`.
@@ -67,113 +88,264 @@ def _job_window(job: AgentJob) -> str:
     return f"{base}-{job.short[:8]}"
 
 
-def respawn(job: AgentJob) -> str:
-    """Relaunch a background agent in tmux; returns the exact command string.
-
-    Runs `respawn_cmd(job)` in the job's per-project tmux session
-    (`tmux.session_name_for(job.cwd)`) so it outlives the terminal — it does NOT
-    os.exec/replace the csctl process. The returned string also feeds the
-    clipboard `y`-style key.
-    """
+def respawn_result(job: AgentJob) -> RespawnResult:
+    """Relaunch a background agent while retaining the tmux outcome."""
     cmd = respawn_cmd(job)
-    tmux.run_in_tmux(tmux.session_name_for(job.cwd), _job_window(job), cmd)
-    return cmd
+    result = tmux.run_in_tmux_result(
+        tmux.session_name_for(job.cwd),
+        _job_window(job),
+        cmd,
+    )
+    target = result.target if result.success else None
+    return RespawnResult(cmd, target, result.diagnostic, result)
 
 
 # --- remove (settled agents only) ---------------------------------------------
 
-def remove_job(job: AgentJob) -> bool:
+
+def remove_job(job: AgentJob) -> CleanupExecution:
     """Remove a SETTLED background agent: `jobs/<short>/` + its sid artifacts.
 
-    Returns True iff the job dir was removed. Refuses (False) for a LIVE worker
-    (`job_host` reports alive) and when "current" can't be determined (no
-    `/proc`, R10) — destructive, must not run blind.
+    The public data-layer executor owns the final fresh liveness check, so no
+    caller-held evidence can authorize deletion.
     """
-    if not proc.current_determinable():
-        return False
-    _, alive = job_host(job)
-    if alive:
-        return False
-    return cleanup.remove_agent_artifacts(job.short, job.sid)
+    result = CleanupExecution()
+    try:
+        anchors = cleanup.agent_removal_anchors(job.short, job.sid)
+    except OSError as exc:
+        result.refuse([job.short], f"cannot establish removal anchor: {exc}")
+        return result
+    return cleanup.remove_agent_artifacts(job.short, job.sid, anchors=anchors)
 
 
 # --- watch (read-only) --------------------------------------------------------
 
-def watch(job: AgentJob) -> str | None:
-    """Path to the job's read-only `jobs/<short>/timeline.jsonl`, or None.
+_TIMELINE_LINE_LIMIT = 200
 
-    Pure lookup, no mutation — returns the path only when the file exists so the
-    view can fall back gracefully (R4.4 read-only watch).
-    """
-    path = os.path.join(str(cfg.jobs_dir), job.short, "timeline.jsonl")
-    return path if os.path.isfile(path) else None
+
+class TimelineReadState(Enum):
+    READY = "ready"
+    MISSING = "missing"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class TimelineReadResult:
+    """Bounded timeline data for a main-loop read-only overlay."""
+
+    state: TimelineReadState
+    lines: tuple[str, ...] = ()
+    detail: str = ""
+
+
+def watch(job: AgentJob) -> TimelineReadResult:
+    """Stream the last 200 timeline lines without loading the whole file."""
+    path = cfg.jobs_dir / job.short / "timeline.jsonl"
+    try:
+        with open(path, errors="ignore") as fh:
+            lines = deque(
+                (line.rstrip("\r\n") for line in fh),
+                maxlen=_TIMELINE_LINE_LIMIT,
+            )
+    except FileNotFoundError:
+        return TimelineReadResult(TimelineReadState.MISSING)
+    except OSError as exc:
+        return TimelineReadResult(TimelineReadState.FAILED, detail=str(exc))
+    return TimelineReadResult(TimelineReadState.READY, tuple(lines))
 
 
 # --- resume takeover (reuses the existing foreground resume path) -------------
 
-def resume_takeover(job: AgentJob) -> Session:
-    """Adapt a background job into a `Session` for the EXISTING resume path.
 
-    Bringing a bg session to the foreground is just a resume of its
-    `resume_sid`, so this returns a Session the view feeds to the SAME
-    `app.exit_with(ResumeIntent)` → `do_resume` pipeline used for foreground sessions —
-    all kill/exec/`_resume_plan` logic is reused, none duplicated (R4.4 takeover).
-    `pid`/`alive` come from the host join so a live worker is killed first
-    (resume = takeover); `current` is computed so the launching session stays
-    protected. `tmux_target` is filled here at action time (the agents list
-    renders no ⧉ badge, so there is no batch snapshot value to reuse) so the
-    tmux-first Enter can enter a resident worker in place. Does NOT itself
-    replace the csctl process.
-    """
-    pid, alive = job_host(job)
-    current = bool(pid) and pid in proc.ancestor_pids()
-    return Session(
-        sid=job.resume_sid,
-        cwd=job.cwd,
-        label=job.name or job.short,
-        mtime=0.0,
-        prompts=0,
-        pid=pid,
-        alive=alive,
-        current=current,
-        proc_start=_host_start(pid),
-        source="bg",
-        agent_short=job.short,
-        tmux_target=tmux.find_session_window([pid]) if alive and pid else None,
+class TakeoverPreparationState(Enum):
+    """Whether one fresh generation permits constructing a takeover session."""
+
+    READY = "ready"
+    REFUSED = "refused"
+
+
+@dataclass(frozen=True)
+class TakeoverPreparationResult:
+    """Typed result of preparing one background-agent takeover."""
+
+    state: TakeoverPreparationState
+    session: Session | None = None
+    detail: str = ""
+
+
+def _ready_takeover(
+    job: AgentJob,
+    *,
+    pid: int | None = None,
+    alive: bool = False,
+    current: bool = False,
+    proc_start: str = "",
+    tmux_target: str | None = None,
+) -> TakeoverPreparationResult:
+    """Build the existing resume-path adapter for one prepared agent."""
+    return TakeoverPreparationResult(
+        TakeoverPreparationState.READY,
+        session=Session(
+            sid=job.resume_sid,
+            cwd=job.cwd,
+            label=job.name or job.short,
+            mtime=0.0,
+            prompts=0,
+            pid=pid,
+            alive=alive,
+            current=current,
+            proc_start=proc_start,
+            source="bg",
+            agent_short=job.short,
+            tmux_target=tmux_target,
+        ),
     )
 
 
-def _host_start(pid: int | None) -> str:
-    """`proc_start` of the joined host pid ("" when unknown).
+def prepare_takeover(job: AgentJob) -> TakeoverPreparationResult:
+    """Prepare one background-agent resume without widening destructive gates.
 
-    `job_host` deliberately keeps its small `(pid, alive)` shape; this second
-    lookup feeds `take_over`'s kill-time `pid_alive` recheck so the pid-reuse
-    window is closed on the bg-agent path too, not just for scanned sessions.
+    Bringing a bg session to the foreground is just a resume of its
+    `resume_sid`, so a ready result carries the Session the view feeds to the SAME
+    `app.exit_with(ResumeIntent)` → `do_resume` pipeline used for foreground sessions —
+    all kill/exec/`_resume_plan` logic is reused, none duplicated (R4.4 takeover).
+
+    The published immutable ``job.host_alive`` decides whether this action can
+    kill. A dead job resumes directly without acquiring liveness or tmux state.
+    A live job acquires exactly one fresh typed generation; incomplete registry,
+    process, ancestor, or agents evidence is refused before any tmux lookup.
+    Host identity, liveness, proc-start, and current-session protection all come
+    from that same generation. If it proves the former host is gone, the action
+    safely contracts to the same non-destructive dead resume.
     """
-    if not pid:
-        return ""
-    return next(
-        (sp.proc_start for sp in liveness.live_session_procs() if sp.pid == pid),
+    if not job.host_alive:
+        return _ready_takeover(job)
+
+    evidence = liveness.liveness_inputs()
+    if not evidence.complete:
+        return TakeoverPreparationResult(
+            TakeoverPreparationState.REFUSED,
+            detail=_incomplete_liveness_detail(evidence),
+        )
+    pid, alive = registry.host_pid_for_sid(job.sid, evidence.session_procs)
+    if not alive or pid is None:
+        return _ready_takeover(job)
+
+    proc_start = next(
+        (
+            item.proc_start
+            for item in evidence.session_procs
+            if item.sid == job.sid and item.pid == pid and item.proc_alive is True
+        ),
         "",
+    )
+    residency = tmux.find_session_window_result([pid])
+    if not residency.complete:
+        detail = "; ".join(
+            f"{issue.source}"
+            + (f" at {issue.path}" if issue.path else "")
+            + f": {issue.detail}"
+            for issue in residency.issues
+        )
+        return TakeoverPreparationResult(
+            TakeoverPreparationState.REFUSED,
+            detail=detail,
+        )
+    return _ready_takeover(
+        job,
+        pid=pid,
+        alive=True,
+        current=pid in evidence.cur,
+        proc_start=proc_start,
+        tmux_target=residency.target,
     )
 
 
 # --- stop (live workers only) -------------------------------------------------
 
-def stop_job(job: AgentJob) -> bool:
-    """Stop a LIVE background worker via its joined host pid. True iff signalled.
+
+class AgentStopState(Enum):
+    """Observable outcome of stopping one background agent."""
+
+    STOPPED = "stopped"
+    NOT_RUNNING = "not-running"
+    REFUSED = "refused"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class AgentStopResult:
+    state: AgentStopState
+    pid: int | None = None
+    detail: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.state is AgentStopState.STOPPED
+
+
+def _incomplete_liveness_detail(evidence: liveness.LivenessSnapshot) -> str:
+    issues = []
+    for issue in evidence.issues:
+        location = f" at {issue.path}" if issue.path else ""
+        issues.append(f"{issue.source}{location}: {issue.detail}")
+    return "liveness evidence incomplete: " + "; ".join(issues)
+
+
+def stop_job_result(job: AgentJob) -> AgentStopResult:
+    """Stop one live background agent from one fresh liveness snapshot.
 
     The host pid is JOINed from `sessions/<pid>.json` (`job_host`); only a
-    confirmed-live pid is killed — a worker with no sessions file is unstoppable
-    (no-op False, orphan risk). The kill itself is `session_ops.take_over` (the
-    ONE primitive: R10 gate, recheck, SIGTERM, cache invalidation); the early
-    R10 check here just skips the join IO when the answer is already no.
+    confirmed-live pid is killed. Incomplete source evidence and unavailable
+    current-session determination refuse the destructive action. The same
+    snapshot supplies both the host pid and its proc-start identity, avoiding
+    a second compatibility scan before ``take_over_result`` rechecks liveness.
+
+    The kill itself is `session_ops.take_over_result` (the ONE primitive: R10 gate,
+    recheck, SIGTERM, cache invalidation). Its four outcomes map one-for-one to
+    this domain result.
+
     Killing does not always fully reap a `--remote-control`/bg worker (orphan
     risk, see `HELP`).
     """
-    if not proc.current_determinable():
-        return False
-    pid, alive = job_host(job)
+    evidence = liveness.liveness_inputs()
+    if not evidence.complete:
+        return AgentStopResult(
+            AgentStopState.REFUSED,
+            detail=_incomplete_liveness_detail(evidence),
+        )
+    pid, alive = registry.host_pid_for_sid(job.sid, evidence.session_procs)
     if not alive or not pid:
-        return False
-    return session_ops.take_over(pid, _host_start(pid)) in session_ops.TAKE_OVER_OK
+        return AgentStopResult(
+            AgentStopState.NOT_RUNNING,
+            pid=pid,
+            detail="no live host for background agent",
+        )
+    proc_start = next(
+        (
+            item.proc_start
+            for item in evidence.session_procs
+            if item.sid == job.sid and item.pid == pid
+        ),
+        "",
+    )
+    outcome = session_ops.take_over_result(pid, proc_start)
+    if outcome.state is session_ops.TakeOverState.KILLED:
+        return AgentStopResult(AgentStopState.STOPPED, pid=pid)
+    if outcome.state is session_ops.TakeOverState.GONE:
+        return AgentStopResult(
+            AgentStopState.NOT_RUNNING,
+            pid=pid,
+            detail="background agent host is no longer running",
+        )
+    if outcome.state is session_ops.TakeOverState.REFUSED:
+        return AgentStopResult(
+            AgentStopState.REFUSED,
+            pid=pid,
+            detail=outcome.detail or "current session cannot be determined",
+        )
+    return AgentStopResult(
+        AgentStopState.FAILED,
+        pid=pid,
+        detail=outcome.detail or "failed to signal background agent host",
+    )
