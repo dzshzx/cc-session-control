@@ -190,8 +190,8 @@ def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
     launches = []
     monkeypatch.setattr(
         rc.tmux,
-        "run_in_tmux",
-        lambda *args, **kwargs: launches.append(args) or "rc:1",
+        "run_in_tmux_result",
+        lambda *args, **kwargs: launches.append(args),
     )
 
     scan_result = rc.scan_result()

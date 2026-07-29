@@ -170,8 +170,9 @@ def copy_resume_command(request: SessionRequest) -> ActionResult:
 def respawn_agent(request: AgentRequest) -> ActionResult:
     result = agent_ops.respawn_result(request.to_job())
     if not result.success:
+        detail = result.detail or "无法创建 tmux 窗口"
         return ActionResult.failure(
-            "重启失败：无法创建 tmux 窗口",
+            f"重启失败：{detail}",
             needs_refresh=True,
         )
     return ActionResult.success(
@@ -231,7 +232,15 @@ def start_project(path: str, name: str) -> ActionResult:
             "目录缺失 — 无法启动（可用 a 键移出自启列表）",
             needs_refresh=True,
         )
-    return ActionResult.failure("启动失败", needs_refresh=True)
+    if result.state is rc.StartState.METADATA_FAILED:
+        target = result.target or "unknown"
+        detail = result.detail or "tmux 元数据写入失败"
+        return ActionResult.failure(
+            f"启动不完整：tmux 窗口 {target} 已创建，但元数据写入失败：{detail}",
+            needs_refresh=True,
+        )
+    detail = f"：{result.detail}" if result.detail else ""
+    return ActionResult.failure(f"启动失败{detail}", needs_refresh=True)
 
 
 def stop_project(path: str, name: str) -> ActionResult:
@@ -280,13 +289,29 @@ def start_all_projects() -> ActionResult:
         result = rc.start_all_listed_result()
     except (OSError, UnicodeError) as exc:
         return ActionResult.failure(f"启动列表读取失败: {exc}")
-    parts = [f"已启动 {result.started} 个项目"]
+    parts = [f"已启动 {result.started} 个项目"] if result.started else []
     if result.unavailable:
         parts.append(f"项目设置不可用，拒绝 {result.unavailable} 个")
     if result.untrusted:
         parts.append(f"未信任，拒绝 {result.untrusted} 个")
     if result.failed:
         parts.append(f"启动失败 {result.failed} 个")
+    for item in result.results:
+        if item.state is rc.StartState.METADATA_FAILED and item.target:
+            detail = item.detail or "tmux 元数据写入失败"
+            parts.append(
+                f"{item.path} 的 tmux 窗口 {item.target} 已创建但元数据写入失败："
+                f"{detail}"
+            )
+        elif item.state not in {
+            rc.StartState.STARTED,
+            rc.StartState.TRUST_UNAVAILABLE,
+            rc.StartState.UNTRUSTED,
+        }:
+            detail = item.detail or "无诊断详情"
+            parts.append(f"{item.path}（{item.state.value}）：{detail}")
+    if not parts:
+        parts.append("已启动 0 个项目")
     message = "；".join(parts)
     if result.started and (result.unavailable or result.untrusted or result.failed):
         return ActionResult.partial(message, needs_refresh=True)

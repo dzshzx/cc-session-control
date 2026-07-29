@@ -6,7 +6,6 @@ Names are display-only; enabled-list, tmux, and settings joins use absolute path
 from __future__ import annotations
 
 import os
-import shlex
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -459,24 +458,24 @@ def _start_one_with_trust(
                 stop_result.issues,
             )
 
-    remote_name = _basename(path)
-    # Each fresh Remote Control process registers a distinct cloud environment.
-    # Keep restart explicit so transient exits do not pile up duplicate mobile
-    # environment entries with the same display name.
-    cmd = (
-        f"cd {shlex.quote(path)} && exec claude remote-control "
-        f"--name {shlex.quote(remote_name)} --spawn same-dir"
+    cmd = rc_outcomes.remote_control_command(path, _basename(path))
+    create_result = tmux.run_in_tmux_result(
+        cfg.rc_session, tmux.session_name_for(path), cmd
     )
-
-    target = tmux.run_in_tmux(cfg.rc_session, tmux.session_name_for(path), cmd)
+    if not create_result.success:
+        return rc_outcomes.start_from_tmux(StartState.TMUX_FAILED, path, create_result)
+    target = create_result.target
     if target is None:
-        return StartResult(StartState.TMUX_FAILED, path)
+        raise AssertionError("successful tmux create must carry a target")
     # Declare the window's project — the collision-safe join key `scan` and
     # `stop_one` read back. Until this lands, `pane_current_path` (the `cd`
     # above) covers the same join, so a mid-spawn scan still matches.
-    tmux.set_window_option(target, "@csctl_path", path)
+    metadata_result = tmux.set_window_option_result(target, "@csctl_path", path)
     _environment_ids.invalidate_all()
-    return StartResult(StartState.STARTED, path)
+    state = (
+        StartState.STARTED if metadata_result.success else StartState.METADATA_FAILED
+    )
+    return rc_outcomes.start_from_tmux(state, path, metadata_result)
 
 
 def start_one_result(path: str) -> StartResult:
@@ -569,20 +568,15 @@ def start_many(projects: list[str]) -> int:
 def start_many_result(projects: list[str]) -> StartManyResult:
     """Start a batch while retaining trust-unavailable refusals."""
 
-    started = unavailable = untrusted = failed = 0
+    results: list[StartResult] = []
+    any_target_created = False
     for project in projects:
-        if started > 0:
+        if any_target_created:
             time.sleep(cfg.rc_stagger)
         result = start_one_result(project)
-        if result.state is StartState.STARTED:
-            started += 1
-        elif result.state is StartState.TRUST_UNAVAILABLE:
-            unavailable += 1
-        elif result.state is StartState.UNTRUSTED:
-            untrusted += 1
-        else:
-            failed += 1
-    return StartManyResult(started, unavailable, untrusted, failed)
+        results.append(result)
+        any_target_created = any_target_created or result.target is not None
+    return rc_outcomes.summarize_starts(results)
 
 
 def start_all_listed() -> int:

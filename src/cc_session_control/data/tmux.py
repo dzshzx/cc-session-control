@@ -35,7 +35,13 @@ from .tmux_outcomes import (
     TmuxIssue,
     TmuxPane,
     TmuxWindow,
+    TmuxWriteOperation,
+    TmuxWriteResult,
+    TmuxWriteStage,
+    TmuxWriteState,
     WindowInventory,
+    create_target_result,
+    window_option_result,
 )
 
 
@@ -178,9 +184,23 @@ def list_windows_meta(session: str) -> list[TmuxWindow]:
 
 
 def set_window_option(target: str, option: str, value: str) -> bool:
-    """Set a per-window (user) option, e.g. `@csctl_path`; False on failure."""
-    cp = _tmux_run(["set-option", "-w", "-t", target, option, value])
-    return cp is not None and cp.returncode == 0
+    """Compatibility bool view of :func:`set_window_option_result`."""
+    return set_window_option_result(target, option, value).success
+
+
+def set_window_option_result(
+    target: str,
+    option: str,
+    value: str,
+) -> TmuxWriteResult:
+    """Set one per-window option while retaining exact failure evidence."""
+    invocation = _tmux_run_result(["set-option", "-w", "-t", target, option, value])
+    cp = invocation.completed
+    return window_option_result(
+        target,
+        None if cp is None else cp.returncode,
+        invocation.detail,
+    )
 
 
 def _terminate_and_reap(process: subprocess.Popen[bytes]) -> str:
@@ -329,36 +349,36 @@ def capture_pane(target: str) -> str:
     return capture_pane_result(target).text
 
 
-def _tmux_has_session(session: str) -> bool:
-    cp = _tmux_run(["has-session", "-t", session])
-    return cp is not None and cp.returncode == 0
-
-
 # -P -F makes tmux print the exact target of the window it just created, so
 # callers enter THAT window even when names collide (no select-by-name guess).
 _TARGET_FMT = "#{session_name}:#{window_index}"
 
 
-def _spawned_target(cp: subprocess.CompletedProcess | None) -> str | None:
-    if cp is None or cp.returncode != 0:
-        return None
-    return cp.stdout.strip() or None
+def _spawn_result(
+    invocation: _TmuxInvocation,
+    stage: TmuxWriteStage,
+) -> TmuxWriteResult:
+    cp = invocation.completed
+    return create_target_result(
+        stage,
+        None if cp is None else cp.returncode,
+        "" if cp is None else cp.stdout,
+        invocation.detail,
+    )
 
 
-def _tmux_new_window(session: str, name: str, cmd: str) -> str | None:
-    """Create a window; return its exact "session:index" target, or None."""
-    cp = _tmux_run(
+def _tmux_new_window_result(session: str, name: str, cmd: str) -> TmuxWriteResult:
+    invocation = _tmux_run_result(
         ["new-window", "-P", "-F", _TARGET_FMT, "-t", session, "-n", name, cmd]
     )
-    return _spawned_target(cp)
+    return _spawn_result(invocation, TmuxWriteStage.NEW_WINDOW)
 
 
-def _tmux_new_session(session: str, name: str, cmd: str) -> str | None:
-    """Create a detached session; return its window's target, or None."""
-    cp = _tmux_run(
-        ["new-session", "-d", "-P", "-F", _TARGET_FMT, "-s", session, "-n", name, cmd]
-    )
-    return _spawned_target(cp)
+def _tmux_new_session_result(session: str, name: str, cmd: str) -> TmuxWriteResult:
+    args = ["new-session", "-d", "-P", "-F", _TARGET_FMT]
+    args.extend(["-s", session, "-n", name, cmd])
+    invocation = _tmux_run_result(args)
+    return _spawn_result(invocation, TmuxWriteStage.NEW_SESSION)
 
 
 _MISSING_TARGET_PREFIXES = (
@@ -421,14 +441,33 @@ def session_name_for(cwd: str) -> str:
 
 
 def run_in_tmux(session: str, window: str, cmd: str) -> str | None:
-    """Run `cmd` in a tmux `window` under `session`, creating the session if
-    it doesn't exist yet. Returns the exact "session:window_index" target of
-    the new window (None on failure) so callers can enter it unambiguously.
-    Public seam for relaunching a session outside the managed RC server
-    machinery."""
-    if _tmux_has_session(session):
-        return _tmux_new_window(session, window, cmd)
-    return _tmux_new_session(session, window, cmd)
+    """Compatibility target-only view of :func:`run_in_tmux_result`."""
+    result = run_in_tmux_result(session, window, cmd)
+    return result.target if result.success else None
+
+
+def run_in_tmux_result(session: str, window: str, cmd: str) -> TmuxWriteResult:
+    """Create a target while preserving probe/create stage and diagnostics."""
+
+    invocation = _tmux_run_result(["has-session", "-t", session])
+    cp = invocation.completed
+    if cp is None:
+        return TmuxWriteResult(
+            TmuxWriteOperation.CREATE_TARGET,
+            TmuxWriteStage.SESSION_PROBE,
+            TmuxWriteState.FAILED,
+            detail=invocation.detail,
+        )
+    if cp.returncode == 0:
+        return _tmux_new_window_result(session, window, cmd)
+    if not _target_not_found(invocation.detail):
+        return TmuxWriteResult(
+            TmuxWriteOperation.CREATE_TARGET,
+            TmuxWriteStage.SESSION_PROBE,
+            TmuxWriteState.FAILED,
+            detail=invocation.detail,
+        )
+    return _tmux_new_session_result(session, window, cmd)
 
 
 def list_panes_inventory() -> PaneInventory:

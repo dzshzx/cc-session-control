@@ -22,6 +22,24 @@ def _nul(*argv: str) -> str:
     return "\0".join(argv) + "\0"
 
 
+def _created_target(target: str) -> rc.tmux.TmuxWriteResult:
+    return rc.tmux.TmuxWriteResult(
+        rc.tmux.TmuxWriteOperation.CREATE_TARGET,
+        rc.tmux.TmuxWriteStage.NEW_WINDOW,
+        rc.tmux.TmuxWriteState.SUCCEEDED,
+        target=target,
+    )
+
+
+def _metadata_written(target: str) -> rc.tmux.TmuxWriteResult:
+    return rc.tmux.TmuxWriteResult(
+        rc.tmux.TmuxWriteOperation.SET_WINDOW_OPTION,
+        rc.tmux.TmuxWriteStage.WINDOW_OPTION,
+        rc.tmux.TmuxWriteState.SUCCEEDED,
+        target=target,
+    )
+
+
 # --- AC5: pure cmdline matcher --------------------------------------------
 
 
@@ -115,8 +133,8 @@ def test_start_refuses_incomplete_window_inventory_without_spawning(
     )
     monkeypatch.setattr(
         rc.tmux,
-        "run_in_tmux",
-        lambda *args: spawned.append(args) or "rc:1",
+        "run_in_tmux_result",
+        lambda *args: spawned.append(args) or _created_target("rc:1"),
     )
 
     result = rc.start_one_result(str(tmp_path))
@@ -125,6 +143,100 @@ def test_start_refuses_incomplete_window_inventory_without_spawning(
     assert result.success is False
     assert "tmux timed out" in result.detail
     assert spawned == []
+
+
+def test_start_retains_created_target_when_metadata_write_fails(
+    tmp_path,
+    monkeypatch,
+):
+    def run(argv, **_kwargs):
+        if argv[1] == "has-session":
+            return rc.tmux.subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[1] == "new-window":
+            return rc.tmux.subprocess.CompletedProcess(argv, 0, "rc:7\n", "")
+        if argv[1] == "set-option":
+            return rc.tmux.subprocess.CompletedProcess(
+                argv,
+                2,
+                "",
+                "lost server connection\n",
+            )
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(rc.tmux.subprocess, "run", run)
+
+    result = rc._start_one_with_trust(
+        str(tmp_path),
+        rc.TrustDecision.TRUSTED,
+        window_inventory=WindowInventory(),
+    )
+
+    assert result.state is rc.StartState.METADATA_FAILED
+    assert result.success is False
+    assert result.target == "rc:7"
+    assert result.tmux_result is not None
+    assert result.tmux_result.stage is rc.tmux.TmuxWriteStage.WINDOW_OPTION
+    assert result.detail == "window-option: lost server connection"
+
+
+def test_start_many_staggers_after_metadata_failure_with_created_target(
+    monkeypatch,
+):
+    outcomes = iter(
+        (
+            rc.StartResult(
+                rc.StartState.METADATA_FAILED,
+                "/first",
+                target="remote-control:1",
+            ),
+            rc.StartResult(
+                rc.StartState.STARTED,
+                "/second",
+                target="remote-control:2",
+            ),
+        )
+    )
+    sleep_calls: list[int] = []
+    monkeypatch.setattr(rc, "start_one_result", lambda _path: next(outcomes))
+    monkeypatch.setattr(rc.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(cfg, "rc_stagger", 17)
+
+    result = rc.start_many_result(["/first", "/second"])
+
+    assert [item.state for item in result.results] == [
+        rc.StartState.METADATA_FAILED,
+        rc.StartState.STARTED,
+    ]
+    assert (result.started, result.failed) == (1, 1)
+    assert sleep_calls == [17]
+
+
+def test_start_many_does_not_stagger_after_failure_without_created_target(
+    monkeypatch,
+):
+    outcomes = iter(
+        (
+            rc.StartResult(rc.StartState.TMUX_FAILED, "/first"),
+            rc.StartResult(
+                rc.StartState.STARTED,
+                "/second",
+                target="remote-control:2",
+            ),
+        )
+    )
+    sleep_calls: list[int] = []
+    monkeypatch.setattr(rc, "start_one_result", lambda _path: next(outcomes))
+    monkeypatch.setattr(rc.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(cfg, "rc_stagger", 17)
+
+    result = rc.start_many_result(["/first", "/second"])
+
+    assert [item.state for item in result.results] == [
+        rc.StartState.TMUX_FAILED,
+        rc.StartState.STARTED,
+    ]
+    assert (result.started, result.failed) == (1, 1)
+    assert sleep_calls == []
 
 
 def test_stop_fails_incomplete_window_inventory_without_killing(monkeypatch):
@@ -447,8 +559,16 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
         "trust_decision",
         lambda path: rc.TrustDecision.TRUSTED,
     )
-    monkeypatch.setattr(rc.tmux, "run_in_tmux", lambda *args: "rc:7")
-    monkeypatch.setattr(rc.tmux, "set_window_option", lambda *args: True)
+    monkeypatch.setattr(
+        rc.tmux,
+        "run_in_tmux_result",
+        lambda *args: _created_target("rc:7"),
+    )
+    monkeypatch.setattr(
+        rc.tmux,
+        "set_window_option_result",
+        lambda *args: _metadata_written("rc:7"),
+    )
 
     result = rc.start_one_result(project)
 
@@ -596,8 +716,16 @@ def test_restart_continues_when_dead_window_vanishes_during_stop(
             "can't find window: @7",
         ),
     )
-    monkeypatch.setattr(rc.tmux, "run_in_tmux", lambda *_args: "rc:7")
-    monkeypatch.setattr(rc.tmux, "set_window_option", lambda *_args: True)
+    monkeypatch.setattr(
+        rc.tmux,
+        "run_in_tmux_result",
+        lambda *_args: _created_target("rc:7"),
+    )
+    monkeypatch.setattr(
+        rc.tmux,
+        "set_window_option_result",
+        lambda *_args: _metadata_written("rc:7"),
+    )
 
     result = rc._start_one_with_trust(project, rc.TrustDecision.TRUSTED)
 

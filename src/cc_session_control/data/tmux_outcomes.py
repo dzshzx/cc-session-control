@@ -88,6 +88,101 @@ class KillResult:
         return self.state is KillState.KILLED
 
 
+class TmuxWriteOperation(Enum):
+    """One operator-requested tmux mutation."""
+
+    CREATE_TARGET = "create-target"
+    SET_WINDOW_OPTION = "set-window-option"
+
+
+class TmuxWriteStage(Enum):
+    """The exact tmux boundary reached by one write."""
+
+    SESSION_PROBE = "session-probe"
+    NEW_WINDOW = "new-window"
+    NEW_SESSION = "new-session"
+    WINDOW_OPTION = "window-option"
+
+
+class TmuxWriteState(Enum):
+    """Whether the requested tmux write completed."""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class TmuxWriteResult:
+    """Typed tmux write outcome with the created target when one exists."""
+
+    operation: TmuxWriteOperation
+    stage: TmuxWriteStage
+    state: TmuxWriteState
+    target: str | None = None
+    detail: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.state is TmuxWriteState.SUCCEEDED
+
+    @property
+    def diagnostic(self) -> str:
+        """Operator-facing stage plus honest external failure detail."""
+
+        if self.success:
+            return ""
+        detail = self.detail or "tmux operation failed without diagnostic output"
+        return f"{self.stage.value}: {detail}"
+
+
+def create_target_result(
+    stage: TmuxWriteStage,
+    returncode: int | None,
+    stdout: str,
+    detail: str,
+) -> TmuxWriteResult:
+    """Build one create result from invocation primitives."""
+
+    if returncode is None or returncode != 0:
+        return TmuxWriteResult(
+            TmuxWriteOperation.CREATE_TARGET,
+            stage,
+            TmuxWriteState.FAILED,
+            detail=detail,
+        )
+    target = stdout.strip()
+    if not target:
+        return TmuxWriteResult(
+            TmuxWriteOperation.CREATE_TARGET,
+            stage,
+            TmuxWriteState.FAILED,
+            detail="tmux succeeded without printing the created target",
+        )
+    return TmuxWriteResult(
+        TmuxWriteOperation.CREATE_TARGET,
+        stage,
+        TmuxWriteState.SUCCEEDED,
+        target=target,
+    )
+
+
+def window_option_result(
+    target: str,
+    returncode: int | None,
+    detail: str,
+) -> TmuxWriteResult:
+    """Build one per-window metadata result from invocation primitives."""
+
+    state = TmuxWriteState.SUCCEEDED if returncode == 0 else TmuxWriteState.FAILED
+    return TmuxWriteResult(
+        TmuxWriteOperation.SET_WINDOW_OPTION,
+        TmuxWriteStage.WINDOW_OPTION,
+        state,
+        target,
+        "" if state is TmuxWriteState.SUCCEEDED else detail,
+    )
+
+
 class TmuxPane(NamedTuple):
     """One pane root pid and its enterable session/window target."""
 

@@ -130,9 +130,18 @@ def _run_rc(args: Namespace) -> int:
                 "Project is no longer trusted — refusing to start",
                 file=sys.stderr,
             )
-        else:
+        elif start_result.state is rc.StartState.METADATA_FAILED:
+            target = start_result.target or "unknown"
+            detail = start_result.detail or "tmux metadata write failed"
             print(
-                f"RC server was not started: {start_result.state.value}",
+                f"RC server target {target} was created, but metadata was not "
+                f"written: {detail}",
+                file=sys.stderr,
+            )
+        else:
+            detail = f": {start_result.detail}" if start_result.detail else ""
+            print(
+                f"RC server was not started: {start_result.state.value}{detail}",
                 file=sys.stderr,
             )
         return 1
@@ -192,6 +201,21 @@ def _run_rc(args: Namespace) -> int:
                 f"Failed to start {batch_result.failed} project(s)",
                 file=sys.stderr,
             )
+            for result in batch_result.results:
+                if result.state in {
+                    rc.StartState.STARTED,
+                    rc.StartState.TRUST_UNAVAILABLE,
+                    rc.StartState.UNTRUSTED,
+                }:
+                    continue
+                detail = result.detail or "no diagnostic detail"
+                state = result.state.value
+                if result.state is rc.StartState.METADATA_FAILED and result.target:
+                    state += f"; target {result.target} created"
+                print(
+                    f"  {result.path} [{state}]: {detail}",
+                    file=sys.stderr,
+                )
         return int(
             bool(
                 batch_result.unavailable

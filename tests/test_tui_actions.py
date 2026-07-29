@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import threading
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -54,6 +55,16 @@ def _job() -> AgentJob:
         cwd="/tmp/project",
         name="worker",
         respawn_flags=["--model", "opus"],
+    )
+
+
+def _created_target(target: str) -> tui_actions.session_ops.tmux.TmuxWriteResult:
+    tmux = tui_actions.session_ops.tmux
+    return tmux.TmuxWriteResult(
+        tmux.TmuxWriteOperation.CREATE_TARGET,
+        tmux.TmuxWriteStage.NEW_WINDOW,
+        tmux.TmuxWriteState.SUCCEEDED,
+        target=target,
     )
 
 
@@ -143,9 +154,10 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
     )
     monkeypatch.setattr(
         tui_actions.session_ops.tmux,
-        "run_in_tmux",
+        "run_in_tmux_result",
         lambda tmux_session, window, cmd: (
-            spawn_calls.append((tmux_session, window, cmd)) or "project:4"
+            spawn_calls.append((tmux_session, window, cmd))
+            or _created_target("project:4")
         ),
     )
 
@@ -214,9 +226,10 @@ def test_live_background_session_requires_successful_takeover_before_spawn(
     )
     monkeypatch.setattr(
         tui_actions.session_ops.tmux,
-        "run_in_tmux",
+        "run_in_tmux_result",
         lambda tmux_session, window, cmd: (
-            spawn_calls.append((tmux_session, window, cmd)) or "project:4"
+            spawn_calls.append((tmux_session, window, cmd))
+            or _created_target("project:4")
         ),
     )
 
@@ -248,7 +261,7 @@ def test_live_background_session_without_pid_fails_closed_before_spawn(
     )
     monkeypatch.setattr(
         tui_actions.session_ops.tmux,
-        "run_in_tmux",
+        "run_in_tmux_result",
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
     )
 
@@ -363,6 +376,28 @@ def test_project_batch_result_distinguishes_partial_refused_and_failure(
     assert tui_actions.start_all_projects().status is ActionStatus.FAILURE
 
 
+def test_project_batch_reports_metadata_failure_target_and_detail(monkeypatch) -> None:
+    failure = StartResult(
+        StartState.METADATA_FAILED,
+        "/project",
+        "window-option: lost server connection",
+        target="rc:7",
+    )
+    monkeypatch.setattr(
+        tui_actions.rc,
+        "start_all_listed_result",
+        lambda: StartManyResult(failed=1, results=(failure,)),
+    )
+
+    result = tui_actions.start_all_projects()
+
+    assert result.status is ActionStatus.FAILURE
+    assert result.message == (
+        "启动失败 1 个；/project 的 tmux 窗口 rc:7 已创建但元数据写入失败："
+        "window-option: lost server connection"
+    )
+
+
 def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
     monkeypatch.setattr(
         tui_actions.rc,
@@ -401,6 +436,27 @@ def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
     setting = tui_actions.write_auto_rc("/project", "project", True)
     assert setting.status is ActionStatus.FAILURE
     assert setting.message == "配置写入失败（write）: read only"
+
+
+def test_project_start_reports_partial_metadata_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tui_actions.rc,
+        "start_one_result",
+        lambda _path: StartResult(
+            StartState.METADATA_FAILED,
+            "/project",
+            "window-option: lost server connection",
+            target="rc:7",
+        ),
+    )
+
+    result = tui_actions.start_project("/project", "project")
+
+    assert result.status is ActionStatus.FAILURE
+    assert result.message == (
+        "启动不完整：tmux 窗口 rc:7 已创建，但元数据写入失败："
+        "window-option: lost server connection"
+    )
 
 
 def test_deleted_project_after_setting_submission_is_a_visible_failure(
@@ -458,6 +514,23 @@ def test_agent_respawn_does_not_claim_success_when_tmux_fails(monkeypatch) -> No
 
     assert result.status is ActionStatus.FAILURE
     assert result.message == "重启失败：无法创建 tmux 窗口"
+
+
+def test_agent_respawn_reports_typed_tmux_failure_detail(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tui_actions.agent_ops.tmux.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(["tmux", "has-session"], 5)
+        ),
+    )
+
+    result = tui_actions.respawn_agent(
+        tui_actions.AgentRequest.from_job(_job()),
+    )
+
+    assert result.status is ActionStatus.FAILURE
+    assert result.message == ("重启失败：session-probe: tmux timed out after 5 seconds")
 
 
 def test_agent_stop_preserves_all_domain_states(monkeypatch) -> None:

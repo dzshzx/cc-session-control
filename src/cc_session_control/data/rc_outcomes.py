@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -60,6 +61,7 @@ class StartState(Enum):
     INVENTORY_UNAVAILABLE = "inventory-unavailable"
     STOP_FAILED = "stop-failed"
     TMUX_FAILED = "tmux-failed"
+    METADATA_FAILED = "metadata-failed"
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,8 @@ class StartResult:
     path: str
     detail: str = ""
     issues: tuple[InventoryIssue, ...] = ()
+    target: str | None = None
+    tmux_result: tmux.TmuxWriteResult | None = None
 
     @property
     def success(self) -> bool:
@@ -80,6 +84,53 @@ class StartManyResult:
     unavailable: int = 0
     untrusted: int = 0
     failed: int = 0
+    results: tuple[StartResult, ...] = ()
+
+
+def start_from_tmux(
+    state: StartState,
+    path: str,
+    result: tmux.TmuxWriteResult,
+) -> StartResult:
+    """Project one typed tmux write into the RC start domain."""
+
+    return StartResult(
+        state,
+        path,
+        "" if result.success else result.diagnostic,
+        target=result.target,
+        tmux_result=result,
+    )
+
+
+def remote_control_command(path: str, name: str) -> str:
+    """Build one explicit RC launch; each fresh process mints a cloud env."""
+
+    return (
+        f"cd {shlex.quote(path)} && exec claude remote-control "
+        f"--name {shlex.quote(name)} --spawn same-dir"
+    )
+
+
+def summarize_starts(results: Sequence[StartResult]) -> StartManyResult:
+    """Retain every start result alongside stable aggregate counters."""
+
+    items = tuple(results)
+    return StartManyResult(
+        sum(item.state is StartState.STARTED for item in items),
+        sum(item.state is StartState.TRUST_UNAVAILABLE for item in items),
+        sum(item.state is StartState.UNTRUSTED for item in items),
+        sum(
+            item.state
+            not in {
+                StartState.STARTED,
+                StartState.TRUST_UNAVAILABLE,
+                StartState.UNTRUSTED,
+            }
+            for item in items
+        ),
+        items,
+    )
 
 
 class StopState(Enum):

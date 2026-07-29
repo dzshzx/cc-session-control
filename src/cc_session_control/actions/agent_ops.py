@@ -63,6 +63,8 @@ class RespawnResult:
 
     command: str
     target: str | None
+    detail: str = ""
+    tmux_result: tmux.TmuxWriteResult | None = None
 
     @property
     def success(self) -> bool:
@@ -89,12 +91,13 @@ def _job_window(job: AgentJob) -> str:
 def respawn_result(job: AgentJob) -> RespawnResult:
     """Relaunch a background agent while retaining the tmux outcome."""
     cmd = respawn_cmd(job)
-    target = tmux.run_in_tmux(
+    result = tmux.run_in_tmux_result(
         tmux.session_name_for(job.cwd),
         _job_window(job),
         cmd,
     )
-    return RespawnResult(cmd, target)
+    target = result.target if result.success else None
+    return RespawnResult(cmd, target, result.diagnostic, result)
 
 
 def respawn(job: AgentJob) -> str:

@@ -356,6 +356,42 @@ def test_rc_add_updates_list_and_reports_start_result(
     assert "RC server was not started: tmux-failed" in captured.err
 
 
+def test_rc_add_reports_created_target_when_metadata_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(cfg, "rc_list", tmp_path / "config" / "rc-enabled")
+    monkeypatch.setattr(
+        rc,
+        "project_trust",
+        lambda _path: rc.ProjectTrustResult(
+            TrustDecision.TRUSTED,
+            _settings(),
+        ),
+    )
+    monkeypatch.setattr(
+        rc,
+        "start_one_result",
+        lambda path: rc.StartResult(
+            rc.StartState.METADATA_FAILED,
+            path,
+            "window-option: lost server connection",
+            target="rc:7",
+        ),
+    )
+
+    assert cli.main(["rc", "add", str(project)]) == 1
+    captured = capsys.readouterr()
+    assert "Started RC server" not in captured.out
+    assert captured.err == (
+        "RC server target rc:7 was created, but metadata was not written: "
+        "window-option: lost server connection\n"
+    )
+
+
 def test_rc_rm_real_enabled_list_and_tmux_outcomes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -457,6 +493,56 @@ def test_rc_up_empty_success_and_partial_failure(
     )
     assert cli.main(["rc", "up"]) == 0
     assert capsys.readouterr().out == "Started 2 project(s)\n"
+
+
+def test_rc_up_reports_each_typed_tmux_start_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    failure = rc.StartResult(
+        rc.StartState.TMUX_FAILED,
+        "/project",
+        "new-window: lost server connection",
+    )
+    monkeypatch.setattr(rc, "list_enabled", lambda: ["/project"])
+    monkeypatch.setattr(
+        rc,
+        "start_many_result",
+        lambda _paths: rc.StartManyResult(failed=1, results=(failure,)),
+    )
+
+    assert cli.main(["rc", "up"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "Failed to start 1 project(s)\n"
+        "  /project [tmux-failed]: new-window: lost server connection\n"
+    )
+
+
+def test_rc_up_acknowledges_created_target_on_metadata_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    failure = rc.StartResult(
+        rc.StartState.METADATA_FAILED,
+        "/project",
+        "window-option: permission denied",
+        target="rc:7",
+    )
+    monkeypatch.setattr(rc, "list_enabled", lambda: ["/project"])
+    monkeypatch.setattr(
+        rc,
+        "start_many_result",
+        lambda _paths: rc.StartManyResult(failed=1, results=(failure,)),
+    )
+
+    assert cli.main(["rc", "up"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "Failed to start 1 project(s)\n"
+        "  /project [metadata-failed; target rc:7 created]: "
+        "window-option: permission denied\n"
+    )
 
 
 def test_resume_keyword_page_limit_and_all_reach_public_renderer(

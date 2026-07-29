@@ -46,9 +46,15 @@ def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         ao.tmux,
-        "run_in_tmux",
+        "run_in_tmux_result",
         lambda session, window, cmd: (
-            captured.update(session=session, window=window, cmd=cmd) or "proj:1"
+            captured.update(session=session, window=window, cmd=cmd)
+            or ao.tmux.TmuxWriteResult(
+                ao.tmux.TmuxWriteOperation.CREATE_TARGET,
+                ao.tmux.TmuxWriteStage.NEW_WINDOW,
+                ao.tmux.TmuxWriteState.SUCCEEDED,
+                target="proj:1",
+            )
         ),
     )
     job = _make_job(resume_sid="sid-xyz", respawn_flags=["--bg-extra"])
@@ -60,12 +66,22 @@ def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
 
 
 def test_respawn_result_retains_tmux_failure(monkeypatch):
-    monkeypatch.setattr(ao.tmux, "run_in_tmux", lambda *_: None)
+    monkeypatch.setattr(
+        ao.tmux,
+        "run_in_tmux_result",
+        lambda *_: ao.tmux.TmuxWriteResult(
+            ao.tmux.TmuxWriteOperation.CREATE_TARGET,
+            ao.tmux.TmuxWriteStage.NEW_WINDOW,
+            ao.tmux.TmuxWriteState.FAILED,
+            detail="tmux unavailable",
+        ),
+    )
 
     result = ao.respawn_result(_make_job(resume_sid="sid-xyz"))
 
     assert result.command == "claude --resume sid-xyz --bg"
     assert result.target is None
+    assert result.detail == "new-window: tmux unavailable"
     assert result.success is False
 
 

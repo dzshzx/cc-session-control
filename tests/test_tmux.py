@@ -205,6 +205,110 @@ def test_kill_session_result_retains_timeout(monkeypatch) -> None:
     assert result.detail == "tmux timed out after 5 seconds"
 
 
+def test_run_in_tmux_result_retains_new_window_failure_detail(monkeypatch) -> None:
+    def run(argv, **_kwargs):
+        if argv[1] == "has-session":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if argv[1] == "new-window":
+            return subprocess.CompletedProcess(
+                argv,
+                2,
+                stdout="",
+                stderr="lost server connection\n",
+            )
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    result = tmux.run_in_tmux_result("project", "claude", "cmd")
+
+    assert result.operation is tmux.TmuxWriteOperation.CREATE_TARGET
+    assert result.stage is tmux.TmuxWriteStage.NEW_WINDOW
+    assert result.state is tmux.TmuxWriteState.FAILED
+    assert result.target is None
+    assert result.detail == "lost server connection"
+
+
+def test_run_in_tmux_result_retains_new_session_timeout(monkeypatch) -> None:
+    def run(argv, **_kwargs):
+        if argv[1] == "has-session":
+            return subprocess.CompletedProcess(
+                argv,
+                1,
+                stdout="",
+                stderr="can't find session: project\n",
+            )
+        raise subprocess.TimeoutExpired(argv, 5)
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    result = tmux.run_in_tmux_result("project", "claude", "cmd")
+
+    assert result.stage is tmux.TmuxWriteStage.NEW_SESSION
+    assert result.state is tmux.TmuxWriteState.FAILED
+    assert result.detail == "tmux timed out after 5 seconds"
+
+
+def test_run_in_tmux_result_retains_spawn_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tmux.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            FileNotFoundError("tmux executable missing")
+        ),
+    )
+
+    result = tmux.run_in_tmux_result("project", "claude", "cmd")
+
+    assert result.stage is tmux.TmuxWriteStage.SESSION_PROBE
+    assert result.state is tmux.TmuxWriteState.FAILED
+    assert result.detail == "tmux executable missing"
+
+
+def test_run_in_tmux_result_rejects_success_without_created_target(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        tmux.subprocess,
+        "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="",
+            stderr="",
+        ),
+    )
+
+    result = tmux.run_in_tmux_result("project", "claude", "cmd")
+
+    assert result.stage is tmux.TmuxWriteStage.NEW_WINDOW
+    assert result.state is tmux.TmuxWriteState.FAILED
+    assert result.detail == "tmux succeeded without printing the created target"
+
+
+def test_set_window_option_result_retains_target_and_nonzero_detail(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        tmux.subprocess,
+        "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(
+            argv,
+            2,
+            stdout="",
+            stderr="permission denied\n",
+        ),
+    )
+
+    result = tmux.set_window_option_result("project:7", "@csctl_path", "/project")
+
+    assert result.operation is tmux.TmuxWriteOperation.SET_WINDOW_OPTION
+    assert result.stage is tmux.TmuxWriteStage.WINDOW_OPTION
+    assert result.state is tmux.TmuxWriteState.FAILED
+    assert result.target == "project:7"
+    assert result.detail == "permission denied"
+
+
 def test_bool_kill_compatibility_is_derived_from_typed_result(monkeypatch) -> None:
     monkeypatch.setattr(
         tmux,

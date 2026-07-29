@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 
@@ -44,6 +45,27 @@ def _session(
     )
 
 
+def _created_target(target: str) -> tmux.TmuxWriteResult:
+    return tmux.TmuxWriteResult(
+        tmux.TmuxWriteOperation.CREATE_TARGET,
+        tmux.TmuxWriteStage.NEW_WINDOW,
+        tmux.TmuxWriteState.SUCCEEDED,
+        target=target,
+    )
+
+
+def _create_failure(
+    stage: tmux.TmuxWriteStage,
+    detail: str = "tmux unavailable",
+) -> tmux.TmuxWriteResult:
+    return tmux.TmuxWriteResult(
+        tmux.TmuxWriteOperation.CREATE_TARGET,
+        stage,
+        tmux.TmuxWriteState.FAILED,
+        detail=detail,
+    )
+
+
 def _install_app(
     monkeypatch: pytest.MonkeyPatch,
     intent: session_ops.ExitIntent,
@@ -62,11 +84,11 @@ def _install_app(
     [
         (
             session_ops.TmuxResumeIntent(_session()),
-            "Failed to resume the session inside tmux: tmux unavailable.",
+            "Failed to resume the session inside tmux: new-window: tmux unavailable.",
         ),
         (
             session_ops.TmuxNewIntent("/project"),
-            "Failed to start a new session inside tmux (is tmux available?).",
+            "Failed to start a new session inside tmux: new-session: tmux unavailable.",
         ),
     ],
 )
@@ -77,12 +99,69 @@ def test_tui_tmux_spawn_failure_exits_nonzero_on_stderr(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     _install_app(monkeypatch, intent)
-    monkeypatch.setattr(tmux, "run_in_tmux", lambda *_args: None)
+    stage = (
+        tmux.TmuxWriteStage.NEW_SESSION
+        if isinstance(intent, session_ops.TmuxNewIntent)
+        else tmux.TmuxWriteStage.NEW_WINDOW
+    )
+    monkeypatch.setattr(
+        tmux,
+        "run_in_tmux_result",
+        lambda *_args: _create_failure(stage),
+    )
 
     assert cli.main([]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == f"{message}\n"
+
+
+def test_tmux_resume_reports_typed_create_failure_detail(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def run(argv, **_kwargs):
+        if argv[1] == "has-session":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            argv,
+            2,
+            stdout="",
+            stderr="lost server connection\n",
+        )
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    assert session_ops.TmuxResumeIntent(_session()).run() == 1
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "Failed to resume the session inside tmux: "
+        "new-window: lost server connection.\n"
+    )
+
+
+def test_tmux_new_reports_typed_create_timeout_detail(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def run(argv, **_kwargs):
+        if argv[1] == "has-session":
+            return subprocess.CompletedProcess(
+                argv,
+                1,
+                stdout="",
+                stderr="can't find session: project\n",
+            )
+        raise subprocess.TimeoutExpired(argv, 5)
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    assert session_ops.TmuxNewIntent("/project").run() == 1
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "Failed to start a new session inside tmux: "
+        "new-session: tmux timed out after 5 seconds.\n"
+    )
 
 
 @pytest.mark.parametrize(
@@ -112,7 +191,11 @@ def test_tui_attach_exec_failure_exits_nonzero_with_context_on_stderr(
         raise FileNotFoundError("tmux executable missing")
 
     _install_app(monkeypatch, intent)
-    monkeypatch.setattr(tmux, "run_in_tmux", lambda *_args: "project:1")
+    monkeypatch.setattr(
+        tmux,
+        "run_in_tmux_result",
+        lambda *_args: _created_target("project:1"),
+    )
     monkeypatch.setattr(tmux, "select_window", lambda _target: True)
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setattr(session_ops.os, "execvp", fail_exec)
@@ -313,7 +396,7 @@ def test_tui_live_tmux_resume_refuses_incomplete_liveness_without_spawn(
     )
     monkeypatch.setattr(
         tmux,
-        "run_in_tmux",
+        "run_in_tmux_result",
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
     )
 
@@ -382,9 +465,9 @@ def test_tui_dead_tmux_resume_skips_liveness_and_spawns(
     )
     monkeypatch.setattr(
         tmux,
-        "run_in_tmux",
+        "run_in_tmux_result",
         lambda session, window, cmd: (
-            spawn_calls.append((session, window, cmd)) or "project:7"
+            spawn_calls.append((session, window, cmd)) or _created_target("project:7")
         ),
     )
     monkeypatch.setattr(
@@ -432,9 +515,10 @@ def test_tui_live_fork_skips_incomplete_liveness_and_residency(
     )
     monkeypatch.setattr(
         tmux,
-        "run_in_tmux",
+        "run_in_tmux_result",
         lambda tmux_session, window, cmd: (
-            spawn_calls.append((tmux_session, window, cmd)) or "project:8"
+            spawn_calls.append((tmux_session, window, cmd))
+            or _created_target("project:8")
         ),
     )
     monkeypatch.setattr(
@@ -480,7 +564,7 @@ def test_tui_tmux_resume_refuses_incomplete_residency_without_spawn(
     )
     monkeypatch.setattr(
         tmux,
-        "run_in_tmux",
+        "run_in_tmux_result",
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
     )
     monkeypatch.setattr(
@@ -561,7 +645,11 @@ def test_installed_console_entry_exits_with_tui_failure_status(
     entrypoint = Path(sys.executable).with_name("csctl")
     assert entrypoint.is_file()
     _install_app(monkeypatch, session_ops.TmuxNewIntent("/project"))
-    monkeypatch.setattr(tmux, "run_in_tmux", lambda *_args: None)
+    monkeypatch.setattr(
+        tmux,
+        "run_in_tmux_result",
+        lambda *_args: _create_failure(tmux.TmuxWriteStage.NEW_SESSION),
+    )
     monkeypatch.setattr(sys, "argv", [str(entrypoint)])
 
     with pytest.raises(SystemExit) as stopped:
@@ -578,7 +666,11 @@ def test_module_entry_exits_with_tui_failure_status(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     _install_app(monkeypatch, session_ops.TmuxNewIntent("/project"))
-    monkeypatch.setattr(tmux, "run_in_tmux", lambda *_args: None)
+    monkeypatch.setattr(
+        tmux,
+        "run_in_tmux_result",
+        lambda *_args: _create_failure(tmux.TmuxWriteStage.NEW_SESSION),
+    )
     monkeypatch.setattr(sys, "argv", ["cc_session_control"])
 
     with pytest.raises(SystemExit) as stopped:

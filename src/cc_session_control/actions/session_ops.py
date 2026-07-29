@@ -166,6 +166,7 @@ class ResumeOutcome:
 class TmuxResumeOutcome:
     target: str | None
     detail: str = ""
+    tmux_result: tmux.TmuxWriteResult | None = None
 
     @property
     def success(self) -> bool:
@@ -250,9 +251,9 @@ def _spawn_in_tmux_result(
         if takeover_failure:
             return TmuxResumeOutcome(None, takeover_failure)
     window = f"{s.sid[:8]}-fork" if fork else s.sid[:8]
-    target = tmux.run_in_tmux(tmux.session_name_for(s.cwd), window, cmd)
-    detail = "" if target is not None else "tmux unavailable"
-    return TmuxResumeOutcome(target, detail)
+    result = tmux.run_in_tmux_result(tmux.session_name_for(s.cwd), window, cmd)
+    target = result.target if result.success else None
+    return TmuxResumeOutcome(target, result.diagnostic, result)
 
 
 def attach_target(s: Session) -> str | None:
@@ -294,8 +295,14 @@ def do_tmux_resume_result(s: Session, fork: bool = False) -> TmuxResumeOutcome:
 
 
 def do_tmux_new(directory: str) -> str | None:
+    """Compatibility target-only view of :func:`do_tmux_new_result`."""
+    result = do_tmux_new_result(directory)
+    return result.target if result.success else None
+
+
+def do_tmux_new_result(directory: str) -> tmux.TmuxWriteResult:
     """Start a NEW claude session in `directory`, inside that project's own
-    tmux session, and return the exact tmux target to enter; None on failure.
+    tmux session, retaining the exact create stage and failure detail.
 
     The 项目-tab Enter key: same skeleton as `do_tmux_resume` but nothing exists
     yet — no kill, no confirm, no R10 gate (no process is terminated). Plain
@@ -304,7 +311,7 @@ def do_tmux_new(directory: str) -> str | None:
     either: the user lands inside the window, so claude's own trust dialog
     shows interactively."""
     cmd = f"cd {shlex.quote(directory)} && claude"
-    return tmux.run_in_tmux(tmux.session_name_for(directory), "claude", cmd)
+    return tmux.run_in_tmux_result(tmux.session_name_for(directory), "claude", cmd)
 
 
 # --- exit intents (the payload crossing the exit-then-exec seam) ------------
@@ -418,13 +425,17 @@ class TmuxNewIntent(ExitIntent):
     directory: str
 
     def run(self) -> int:
-        target = do_tmux_new(self.directory)
-        if target is None:
+        result = do_tmux_new_result(self.directory)
+        if not result.success:
+            detail = f": {result.diagnostic}" if result.diagnostic else ""
             print(
-                "Failed to start a new session inside tmux (is tmux available?).",
+                f"Failed to start a new session inside tmux{detail}.",
                 file=sys.stderr,
             )
             return 1
+        target = result.target
+        if target is None:
+            raise AssertionError("successful tmux create must carry a target")
         try:
             entered = enter_window(target)
         except OSError as exc:
