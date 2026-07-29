@@ -4,6 +4,8 @@ import json
 import subprocess
 import time
 
+from factories import make_session
+
 from cc_session_control.actions.session_ops import resume_cmd
 from cc_session_control.data.cleanup import prune_sessions
 from cc_session_control.data.sessions import _parse_transcript
@@ -37,21 +39,7 @@ def _metadata_written(tmux, target):
     )
 
 
-def _make_session(**overrides):
-    defaults = dict(
-        sid="abc123",
-        cwd="/tmp/proj",
-        label="test",
-        mtime=0.0,
-        prompts=0,
-        pid=None,
-        alive=False,
-        current=False,
-        hidden=set(),
-        file="/tmp/abc123.jsonl",
-    )
-    defaults.update(overrides)
-    return Session(**defaults)
+_make_session = make_session
 
 
 # --- D1: prune_sessions ---

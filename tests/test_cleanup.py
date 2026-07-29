@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 import pytest
+from factories import make_session
 
 from cc_session_control.config import cfg
 from cc_session_control.data import (
@@ -41,20 +42,7 @@ def _hermetic_liveness(monkeypatch):
     registry.invalidate_cache()
 
 
-def _make_session(**overrides) -> Session:
-    defaults = dict(
-        sid="abc123",
-        cwd="/tmp/proj",
-        label="t",
-        mtime=0.0,
-        prompts=0,
-        pid=None,
-        alive=False,
-        current=False,
-        file="/tmp/abc123.jsonl",
-    )
-    defaults.update(overrides)
-    return Session(**defaults)
+_make_session = make_session
 
 
 def _mkdir(base, *parts):

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import urwid
+from factories import make_session
 
 from cc_session_control.actions.runner import Accepted
 from cc_session_control.data.cleanup import CleanupPlan
@@ -98,20 +99,9 @@ def _set_proc_complete(monkeypatch, proc_module, complete):
 
 
 def _make_session(**overrides):
-    defaults = dict(
-        sid="abc123",
-        cwd="/tmp/proj",
-        label="test session",
-        mtime=1700000000.0,
-        prompts=5,
-        pid=None,
-        alive=False,
-        current=False,
-        hidden=set(),
-        file="/tmp/abc123.jsonl",
-    )
-    defaults.update(overrides)
-    return Session(**defaults)
+    view_defaults = dict(label="test session", mtime=1700000000.0, prompts=5)
+    view_defaults.update(overrides)
+    return make_session(**view_defaults)
 
 
 def _make_project(**overrides):
