@@ -447,7 +447,25 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
         ),
     )
     s = _make_session(
-        sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242
+        sid="abcdef0123456789",
+        cwd="/tmp/proj",
+        alive=True,
+        current=False,
+        pid=4242,
+        proc_start="known-start",
+    )
+
+    def resolve_execution_session(sid: str) -> so.ExecutionSessionResolution:
+        assert sid == s.sid
+        return so.ExecutionSessionResolution(
+            so.ExecutionSessionState.RESOLVED,
+            session=s,
+        )
+
+    monkeypatch.setattr(
+        so,
+        "resolve_execution_session",
+        resolve_execution_session,
     )
     target = so.do_tmux_resume(s)
     assert calls["kill"] == [4242]

@@ -68,6 +68,17 @@ def _created_target(target: str) -> tui_actions.session_ops.tmux.TmuxWriteResult
     )
 
 
+def _install_execution_session(
+    monkeypatch: pytest.MonkeyPatch,
+    session: Session,
+) -> None:
+    monkeypatch.setattr(
+        tui_actions.session_ops.sessions,
+        "scan_result",
+        lambda _inputs: tui_actions.session_ops.sessions.SessionScanResult((session,)),
+    )
+
+
 def test_requests_round_trip_immutable_models() -> None:
     session = _session()
     job = _job()
@@ -212,8 +223,10 @@ def test_live_background_session_requires_successful_takeover_before_spawn(
     expected_spawns: list[tuple[str, str, str]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    request = tui_actions.SessionRequest.from_session(_session())
+    session = _session()
+    request = tui_actions.SessionRequest.from_session(session)
     spawn_calls: list[tuple[str, str, str]] = []
+    _install_execution_session(monkeypatch, session)
     monkeypatch.setattr(
         tui_actions.session_ops.liveness,
         "liveness_inputs",
@@ -223,6 +236,11 @@ def test_live_background_session_requires_successful_takeover_before_spawn(
         tui_actions.session_ops,
         "take_over_result",
         lambda *_args: takeover,
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops.os.path,
+        "isdir",
+        lambda _path: True,
     )
     monkeypatch.setattr(
         tui_actions.session_ops.tmux,
@@ -246,9 +264,9 @@ def test_live_background_session_requires_successful_takeover_before_spawn(
 def test_live_background_session_without_pid_fails_closed_before_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    request = tui_actions.SessionRequest.from_session(
-        replace(_session(), pid=None),
-    )
+    session = replace(_session(), pid=None)
+    request = tui_actions.SessionRequest.from_session(session)
+    _install_execution_session(monkeypatch, session)
     monkeypatch.setattr(
         tui_actions.session_ops.liveness,
         "liveness_inputs",
@@ -260,6 +278,11 @@ def test_live_background_session_without_pid_fails_closed_before_spawn(
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
     )
     monkeypatch.setattr(
+        tui_actions.session_ops.os.path,
+        "isdir",
+        lambda _path: True,
+    )
+    monkeypatch.setattr(
         tui_actions.session_ops.tmux,
         "run_in_tmux_result",
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
@@ -268,7 +291,58 @@ def test_live_background_session_without_pid_fails_closed_before_spawn(
     result = tui_actions.background_session(request)
 
     assert result.status is ActionStatus.FAILURE
-    assert "live session takeover requires a pid" in result.message
+    assert "incomplete execution-time identity (pid)" in result.message
+
+
+def test_live_background_session_uses_execution_time_session_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale = _session()
+    fresh = replace(
+        stale,
+        cwd="/fresh-project",
+        pid=9002,
+        proc_start="fresh-start",
+    )
+    request = tui_actions.SessionRequest.from_session(stale)
+    _install_execution_session(monkeypatch, fresh)
+    takeovers: list[tuple[int, str]] = []
+    spawns: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "take_over_result",
+        lambda pid, start: (
+            takeovers.append((pid, start))
+            or tui_actions.session_ops.TakeOverOutcome(
+                tui_actions.session_ops.TakeOverState.KILLED
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops.os.path,
+        "isdir",
+        lambda _path: True,
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops.tmux,
+        "run_in_tmux_result",
+        lambda tmux_session, window, cmd: (
+            spawns.append((tmux_session, window, cmd))
+            or _created_target("fresh-project:4")
+        ),
+    )
+
+    result = tui_actions.background_session(request)
+
+    assert result.status is ActionStatus.SUCCESS
+    assert takeovers == [(9002, "fresh-start")]
+    assert spawns == [
+        (
+            "fresh-project",
+            "sid-1",
+            "cd /fresh-project && claude --resume sid-1",
+        )
+    ]
 
 
 def test_cleanup_adapter_reports_partial_and_refused() -> None:

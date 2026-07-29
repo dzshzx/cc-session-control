@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Literal
 
 from .. import clipboard
-from ..data import liveness, proc, tmux
+from ..data import liveness, proc, sessions, tmux
 from ..data.liveness import invalidate_cache
 from ..models import Session
 
@@ -40,6 +40,30 @@ class TakeOverOutcome:
     @property
     def success(self) -> bool:
         return self.state in {TakeOverState.KILLED, TakeOverState.GONE}
+
+
+class ExecutionSessionState(StrEnum):
+    """Execution-time exact-SID resolution states."""
+
+    RESOLVED = "resolved"
+    LIVENESS_INCOMPLETE = "liveness_incomplete"
+    TRANSCRIPT_INCOMPLETE = "transcript_incomplete"
+    MISSING = "missing"
+    AMBIGUOUS = "ambiguous"
+    CURRENT = "current"
+    INCOMPLETE_IDENTITY = "incomplete_identity"
+    UNUSABLE_CWD = "unusable_cwd"
+
+
+@dataclass(frozen=True)
+class ExecutionSessionResolution:
+    state: ExecutionSessionState
+    session: Session | None = None
+    detail: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.state is ExecutionSessionState.RESOLVED
 
 
 def _proc_issue_detail(issues: tuple[proc.ProcIssue, ...]) -> str:
@@ -191,9 +215,80 @@ def _liveness_issue_detail(evidence: liveness.LivenessSnapshot) -> str:
     return "; ".join(parts)
 
 
-def _resume_liveness_gate() -> str:
+def _transcript_issue_detail(result: sessions.SessionScanResult) -> str:
+    return "; ".join(
+        f"{issue.source} at {issue.path}: {issue.detail}" for issue in result.issues
+    )
+
+
+def resolve_execution_session(sid: str) -> ExecutionSessionResolution:
+    """Resolve one stable SID against one fresh liveness/transcript generation."""
     evidence = liveness.liveness_inputs()
-    return "" if evidence.complete else _liveness_issue_detail(evidence)
+    if not evidence.complete:
+        return ExecutionSessionResolution(
+            ExecutionSessionState.LIVENESS_INCOMPLETE,
+            detail=_liveness_issue_detail(evidence),
+        )
+    transcript_scan = sessions.scan_result(evidence)
+    if not transcript_scan.complete:
+        return ExecutionSessionResolution(
+            ExecutionSessionState.TRANSCRIPT_INCOMPLETE,
+            detail=_transcript_issue_detail(transcript_scan),
+        )
+    matches = tuple(
+        session for session in transcript_scan.sessions if session.sid == sid
+    )
+    if not matches:
+        return ExecutionSessionResolution(
+            ExecutionSessionState.MISSING,
+            detail=f"missing session id {sid!r}",
+        )
+    if len(matches) != 1:
+        return ExecutionSessionResolution(
+            ExecutionSessionState.AMBIGUOUS,
+            detail=f"ambiguous session id {sid!r}; found {len(matches)} exact matches",
+        )
+    target = matches[0]
+    if target.current:
+        return ExecutionSessionResolution(
+            ExecutionSessionState.CURRENT,
+            detail=f"session {sid!r} is the current session",
+        )
+    if not target.cwd or not os.path.isdir(target.cwd):
+        return ExecutionSessionResolution(
+            ExecutionSessionState.UNUSABLE_CWD,
+            detail=f"session {sid!r} has no usable execution-time cwd: {target.cwd!r}",
+        )
+    if target.alive:
+        missing = []
+        if target.pid is None:
+            missing.append("pid")
+        if not target.proc_start:
+            missing.append("proc_start")
+        if missing:
+            return ExecutionSessionResolution(
+                ExecutionSessionState.INCOMPLETE_IDENTITY,
+                detail=(
+                    f"live session {sid!r} has incomplete execution-time identity "
+                    f"({', '.join(missing)})"
+                ),
+            )
+    return ExecutionSessionResolution(
+        ExecutionSessionState.RESOLVED,
+        session=target,
+    )
+
+
+def _session_for_execution(
+    session: Session,
+    fork: bool,
+) -> ExecutionSessionResolution:
+    if not session.alive or fork:
+        return ExecutionSessionResolution(
+            ExecutionSessionState.RESOLVED,
+            session=session,
+        )
+    return resolve_execution_session(session.sid)
 
 
 def _required_takeover_failure(s: Session) -> str:
@@ -206,21 +301,10 @@ def _required_takeover_failure(s: Session) -> str:
     return outcome.detail or f"takeover {outcome.state.value}"
 
 
-def do_resume_result(s: Session, fork: bool = False) -> ResumeOutcome:
-    """chdir + (kill if needed) + exec claude, with a typed failure outcome.
-
-    R10: when a takeover kill is required but "current" can't be determined (no
-    `/proc`), refuse WITHOUT killing or exec'ing, so we never SIGTERM the
-    launching session (every pid looks dead off `/proc`). A required live
-    takeover without a pid also fails closed. Only KILLED or GONE may proceed
-    to chdir/exec. A successful exec replaces csctl and never returns; True is
-    the modeled-success return for tests whose system boundary returns.
-    """
+def _do_resume_resolved_result(s: Session, fork: bool = False) -> ResumeOutcome:
+    """Execute a Session already selected for this execution generation."""
     cwd, args, should_kill = _resume_plan(s, fork)
     if should_kill:
-        incomplete = _resume_liveness_gate()
-        if incomplete:
-            return ResumeOutcome(False, incomplete)
         takeover_failure = _required_takeover_failure(s)
         if takeover_failure:
             return ResumeOutcome(False, takeover_failure)
@@ -230,6 +314,31 @@ def do_resume_result(s: Session, fork: bool = False) -> ResumeOutcome:
     return ResumeOutcome(True)
 
 
+def do_resume_result(s: Session, fork: bool = False) -> ResumeOutcome:
+    """Resolve live takeover identity, then kill-if-needed, chdir, and exec."""
+    resolution = _session_for_execution(s, fork)
+    if not resolution.success:
+        return ResumeOutcome(False, resolution.detail)
+    if resolution.session is None:
+        raise AssertionError("successful session resolution must carry a Session")
+    return _do_resume_resolved_result(resolution.session, fork)
+
+
+def do_resume_sid_result(sid: str) -> ResumeOutcome:
+    """Resolve an exact SID once, then perform a terminal takeover."""
+    resolution = resolve_execution_session(sid)
+    if not resolution.success:
+        detail = resolution.detail
+        if resolution.state is ExecutionSessionState.LIVENESS_INCOMPLETE:
+            detail = f"liveness evidence is incomplete: {detail}"
+        elif resolution.state is ExecutionSessionState.TRANSCRIPT_INCOMPLETE:
+            detail = f"transcript inventory is incomplete: {detail}"
+        return ResumeOutcome(False, detail)
+    if resolution.session is None:
+        raise AssertionError("successful session resolution must carry a Session")
+    return _do_resume_resolved_result(resolution.session)
+
+
 def do_resume(s: Session, fork: bool = False) -> bool:
     """Compatibility bool view; public intents use :func:`do_resume_result`."""
     return do_resume_result(s, fork).success
@@ -237,31 +346,33 @@ def do_resume(s: Session, fork: bool = False) -> bool:
 
 def _spawn_in_tmux_result(
     s: Session,
-    cmd: str,
     fork: bool = False,
 ) -> TmuxResumeOutcome:
-    """Kill-if-takeover, then spawn `cmd` in the session's per-project tmux
-    session — the shared skeleton behind `do_tmux_resume` (Enter/f/R, the
-    tmux-first dispatch verbs, ADR-0001). A fork is a copy (never kills) and
-    gets its own `<sid8>-fork` window so it doesn't shadow the original's.
-    Returns a typed outcome containing the exact tmux target, or a detail on
-    liveness, takeover, or tmux failure. A required live takeover must have a
-    pid and return KILLED or GONE before the tmux window may be created.
-    """
-    _, _, should_kill = _resume_plan(s, fork)
-    if should_kill:
-        incomplete = _resume_liveness_gate()
-        if incomplete:
-            return TmuxResumeOutcome(None, incomplete)
-    if should_kill and not s.tmux_inventory_complete:
-        detail = s.tmux_inventory_detail or "tmux residency inventory incomplete"
+    """Resolve and kill-if-needed, then spawn in the per-project tmux session."""
+    resolution = _session_for_execution(s, fork)
+    if not resolution.success:
+        return TmuxResumeOutcome(None, resolution.detail)
+    if resolution.session is None:
+        raise AssertionError("successful session resolution must carry a Session")
+    target_session = resolution.session
+    _, _, should_kill = _resume_plan(target_session, fork)
+    if should_kill and not target_session.tmux_inventory_complete:
+        detail = (
+            target_session.tmux_inventory_detail
+            or "tmux residency inventory incomplete"
+        )
         return TmuxResumeOutcome(None, detail)
     if should_kill:
-        takeover_failure = _required_takeover_failure(s)
+        takeover_failure = _required_takeover_failure(target_session)
         if takeover_failure:
             return TmuxResumeOutcome(None, takeover_failure)
-    window = f"{s.sid[:8]}-fork" if fork else s.sid[:8]
-    result = tmux.run_in_tmux_result(tmux.session_name_for(s.cwd), window, cmd)
+    window = f"{target_session.sid[:8]}-fork" if fork else target_session.sid[:8]
+    cmd = tmux_foreground_cmd(target_session, fork)
+    result = tmux.run_in_tmux_result(
+        tmux.session_name_for(target_session.cwd),
+        window,
+        cmd,
+    )
     target = result.target if result.success else None
     return TmuxResumeOutcome(target, result.diagnostic, result)
 
@@ -301,7 +412,7 @@ def do_tmux_resume(s: Session, fork: bool = False) -> str | None:
 
 def do_tmux_resume_result(s: Session, fork: bool = False) -> TmuxResumeOutcome:
     """Typed tmux resume outcome retaining probe or spawn failure detail."""
-    return _spawn_in_tmux_result(s, tmux_foreground_cmd(s, fork), fork=fork)
+    return _spawn_in_tmux_result(s, fork=fork)
 
 
 def do_tmux_new(directory: str) -> str | None:

@@ -934,6 +934,7 @@ def test_resume_take_over_never_kills_recycled_or_current_ancestor_pid(
         ("current", "current"),
         ("pid", "pid"),
         ("proc_start", "proc_start"),
+        ("cwd", "usable"),
         ("liveness", "liveness evidence is incomplete"),
         ("transcript", "transcript inventory is incomplete"),
     ],
@@ -953,6 +954,8 @@ def test_resume_take_over_refuses_unsafe_target_before_kill_or_exec(
         rows = (replace(target, alive=True, proc_start="known"),)
     elif case == "proc_start":
         rows = (replace(target, alive=True, pid=9002),)
+    elif case == "cwd":
+        rows = (replace(target, cwd=str(tmp_path / "missing")),)
 
     if case == "liveness":
         issue = liveness.LivenessIssue("process ancestors", "/proc", "unavailable")
@@ -975,7 +978,7 @@ def test_resume_take_over_refuses_unsafe_target_before_kill_or_exec(
                 "scan_result",
                 lambda _inputs: sessions.SessionScanResult(rows, (issue,)),
             )
-    for boundary in ("kill", "execvp"):
+    for boundary in ("kill", "chdir", "execvp"):
         monkeypatch.setattr(
             session_ops.os,
             boundary,

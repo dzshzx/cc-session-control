@@ -5,13 +5,14 @@ from __future__ import annotations
 import runpy
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from cc_session_control import cli
 from cc_session_control.actions import session_ops
-from cc_session_control.data import liveness, tmux
+from cc_session_control.data import liveness, sessions, tmux
 from cc_session_control.models import Session
 
 
@@ -43,6 +44,23 @@ def _session(
         tmux_inventory_complete=tmux_inventory_complete,
         tmux_inventory_detail=tmux_inventory_detail,
     )
+
+
+def _install_execution_session(
+    monkeypatch: pytest.MonkeyPatch,
+    session: Session,
+) -> Session:
+    fresh = (
+        replace(session, proc_start="known-start")
+        if session.alive and not session.proc_start
+        else session
+    )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda _inputs: sessions.SessionScanResult((fresh,)),
+    )
+    return fresh
 
 
 def _created_target(target: str) -> tmux.TmuxWriteResult:
@@ -302,9 +320,13 @@ def test_tui_live_terminal_resume_requires_successful_takeover_before_exec(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     side_effects: list[str] = []
+    session = _install_execution_session(
+        monkeypatch,
+        _session(alive=True, pid=4242),
+    )
     _install_app(
         monkeypatch,
-        session_ops.ResumeIntent(_session(alive=True, pid=4242)),
+        session_ops.ResumeIntent(session),
     )
     monkeypatch.setattr(
         session_ops,
@@ -330,14 +352,276 @@ def test_tui_live_terminal_resume_requires_successful_takeover_before_exec(
     assert captured.err == expected_error
 
 
+def test_live_terminal_resume_uses_execution_time_session_generation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stale = _session(alive=True, pid=4242)
+    fresh = Session(
+        sid=stale.sid,
+        cwd="/fresh-project",
+        label=stale.label,
+        mtime=2,
+        prompts=2,
+        pid=9002,
+        alive=True,
+        current=False,
+        proc_start="fresh-start",
+    )
+    liveness_calls = 0
+    scan_calls = 0
+
+    def read_liveness() -> liveness.LivenessSnapshot:
+        nonlocal liveness_calls
+        liveness_calls += 1
+        return liveness.LivenessSnapshot()
+
+    def scan_execution_generation(
+        _inputs: liveness.LivenessSnapshot,
+    ) -> sessions.SessionScanResult:
+        nonlocal scan_calls
+        scan_calls += 1
+        return sessions.SessionScanResult((fresh,))
+
+    monkeypatch.setattr(liveness, "liveness_inputs", read_liveness)
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        scan_execution_generation,
+    )
+    takeovers: list[tuple[int, str]] = []
+    changed: list[str] = []
+    executed: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda pid, start: (
+            takeovers.append((pid, start))
+            or session_ops.TakeOverOutcome(session_ops.TakeOverState.KILLED)
+        ),
+    )
+    monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: True)
+    monkeypatch.setattr(session_ops.os, "chdir", changed.append)
+    monkeypatch.setattr(
+        session_ops.os,
+        "execvp",
+        lambda program, argv: executed.append((program, argv)),
+    )
+
+    assert session_ops.ResumeIntent(stale).run() == 0
+    assert takeovers == [(9002, "fresh-start")]
+    assert changed == ["/fresh-project"]
+    assert executed == [("claude", ["claude", "--resume", "resume"])]
+    assert (liveness_calls, scan_calls) == (1, 1)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_live_tmux_resume_uses_execution_time_session_generation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stale = _session(alive=True, pid=4242)
+    fresh = replace(
+        stale,
+        cwd="/fresh-project",
+        pid=9002,
+        proc_start="fresh-start",
+    )
+    _install_execution_session(monkeypatch, fresh)
+    takeovers: list[tuple[int, str]] = []
+    spawns: list[tuple[str, str, str]] = []
+    entered: list[str] = []
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda pid, start: (
+            takeovers.append((pid, start))
+            or session_ops.TakeOverOutcome(session_ops.TakeOverState.KILLED)
+        ),
+    )
+    monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: True)
+    monkeypatch.setattr(
+        tmux,
+        "run_in_tmux_result",
+        lambda tmux_session, window, cmd: (
+            spawns.append((tmux_session, window, cmd))
+            or _created_target("fresh-project:3")
+        ),
+    )
+    monkeypatch.setattr(tmux, "select_window", entered.append)
+    monkeypatch.setattr(
+        tmux,
+        "switch_client",
+        lambda target: entered.append(target) or True,
+    )
+    monkeypatch.setenv("TMUX", "resident")
+
+    assert session_ops.TmuxResumeIntent(stale).run() == 0
+    assert takeovers == [(9002, "fresh-start")]
+    assert spawns == [
+        (
+            "fresh-project",
+            "resume",
+            "cd /fresh-project && claude --resume resume",
+        )
+    ]
+    assert entered == ["fresh-project:3", "fresh-project:3"]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_stale_pid_becoming_gone_never_authorizes_terminal_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stale = replace(
+        _session(alive=True, pid=4242),
+        proc_start="stale-start",
+    )
+    fresh = replace(stale, pid=9002, proc_start="fresh-start")
+    _install_execution_session(monkeypatch, fresh)
+    takeovers: list[tuple[int, str]] = []
+
+    def take_over(pid: int, start: str) -> session_ops.TakeOverOutcome:
+        takeovers.append((pid, start))
+        if pid == stale.pid:
+            return session_ops.TakeOverOutcome(session_ops.TakeOverState.GONE)
+        return session_ops.TakeOverOutcome(
+            session_ops.TakeOverState.REFUSED,
+            "fresh generation refused",
+        )
+
+    monkeypatch.setattr(session_ops, "take_over_result", take_over)
+    monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: True)
+    monkeypatch.setattr(
+        session_ops.os,
+        "chdir",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not chdir")),
+    )
+    monkeypatch.setattr(
+        session_ops.os,
+        "execvp",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not exec")),
+    )
+
+    assert session_ops.ResumeIntent(stale).run() == 1
+    assert takeovers == [(9002, "fresh-start")]
+    captured = capsys.readouterr()
+    assert "fresh generation refused" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("liveness", "process ancestors"),
+        ("transcript", "session transcript"),
+        ("missing", "missing session id"),
+        ("ambiguous", "ambiguous session id"),
+        ("current", "current session"),
+        ("identity", "incomplete execution-time identity"),
+        ("cwd", "no usable execution-time cwd"),
+    ],
+)
+def test_live_resume_refusal_matrix_stops_all_execution_boundaries(
+    case: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stale = replace(
+        _session(alive=True, pid=4242),
+        proc_start="stale-start",
+    )
+    fresh = replace(stale, pid=9002, proc_start="fresh-start")
+    rows = (fresh,)
+    if case == "missing":
+        rows = ()
+    elif case == "ambiguous":
+        rows = (fresh, replace(fresh, cwd="/other-project"))
+    elif case == "current":
+        rows = (replace(fresh, current=True),)
+    elif case == "identity":
+        rows = (replace(fresh, pid=None, proc_start=""),)
+    elif case == "cwd":
+        rows = (replace(fresh, cwd="/missing-project"),)
+
+    if case == "liveness":
+        issue = liveness.LivenessIssue("process ancestors", "/proc", "unavailable")
+        monkeypatch.setattr(
+            liveness,
+            "liveness_inputs",
+            lambda: liveness.LivenessSnapshot(issues=(issue,)),
+        )
+        monkeypatch.setattr(
+            sessions,
+            "scan_result",
+            lambda _inputs: (_ for _ in ()).throw(AssertionError("must not scan")),
+        )
+    else:
+        monkeypatch.setattr(
+            sessions,
+            "scan_result",
+            lambda _inputs: sessions.SessionScanResult(rows),
+        )
+        if case == "transcript":
+            issue = sessions.TranscriptIssue(
+                "session transcript",
+                "/transcript",
+                "unreadable",
+            )
+            monkeypatch.setattr(
+                sessions,
+                "scan_result",
+                lambda _inputs: sessions.SessionScanResult(rows, (issue,)),
+            )
+    monkeypatch.setattr(
+        session_ops.os.path,
+        "isdir",
+        lambda path: case != "cwd" or path != "/missing-project",
+    )
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
+    )
+    monkeypatch.setattr(
+        session_ops.os,
+        "chdir",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not chdir")),
+    )
+    monkeypatch.setattr(
+        session_ops.os,
+        "execvp",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not exec")),
+    )
+    monkeypatch.setattr(
+        tmux,
+        "run_in_tmux_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
+    )
+
+    assert session_ops.ResumeIntent(stale).run() == 1
+    assert session_ops.TmuxResumeIntent(stale).run() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert expected in captured.err
+
+
 def test_tui_live_terminal_resume_without_pid_fails_closed_before_exec(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     side_effects: list[str] = []
+    session = _install_execution_session(
+        monkeypatch,
+        _session(alive=True, pid=None),
+    )
     _install_app(
         monkeypatch,
-        session_ops.ResumeIntent(_session(alive=True, pid=None)),
+        session_ops.ResumeIntent(session),
     )
     monkeypatch.setattr(
         session_ops,
@@ -360,7 +644,7 @@ def test_tui_live_terminal_resume_without_pid_fails_closed_before_exec(
     assert side_effects == []
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "live session takeover requires a pid" in captured.err
+    assert "incomplete execution-time identity (pid)" in captured.err
 
 
 @pytest.mark.parametrize("pid", [4242, None])
@@ -394,6 +678,7 @@ def test_tui_live_tmux_resume_refuses_incomplete_liveness_without_spawn(
         "take_over_result",
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
     )
+    monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: True)
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
@@ -549,18 +834,18 @@ def test_tui_tmux_resume_refuses_incomplete_residency_without_spawn(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    session = _install_execution_session(
+        monkeypatch,
+        _session(
+            alive=True,
+            pid=4242,
+            tmux_inventory_complete=False,
+            tmux_inventory_detail=("tmux list-panes: tmux timed out after 5 seconds"),
+        ),
+    )
     _install_app(
         monkeypatch,
-        session_ops.TmuxResumeIntent(
-            _session(
-                alive=True,
-                pid=4242,
-                tmux_inventory_complete=False,
-                tmux_inventory_detail=(
-                    "tmux list-panes: tmux timed out after 5 seconds"
-                ),
-            )
-        ),
+        session_ops.TmuxResumeIntent(session),
     )
     monkeypatch.setattr(
         tmux,
@@ -572,6 +857,7 @@ def test_tui_tmux_resume_refuses_incomplete_residency_without_spawn(
         "take_over_result",
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
     )
+    monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: True)
 
     assert cli.main([]) == 1
     captured = capsys.readouterr()
