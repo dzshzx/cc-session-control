@@ -141,6 +141,7 @@ class SessionsView(CleanupMixin, ListTabView):
             "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 · ○ 停 = 无进程",
             "        ▸ = 当前会话（启动 csctl 的会话，受保护） · 📱 = 已开远控",
             "        ⧉ = tmux 驻留（会话进程在 tmux 窗口里，断线不死）",
+            "        ? = tmux 驻留未知（盘点不完整，不能确认驻留或裸终端）",
             "",
         ),
         sections=("会话操作:", "清理与过滤:"),
@@ -213,6 +214,24 @@ class SessionsView(CleanupMixin, ListTabView):
         cleanup_text = ""
         hidden_n = sum(1 for s in self._all_sessions if s.bridge_or_sdk)
         hidden_text = ""
+        tmux_unknown = [
+            s
+            for s in self._all_sessions
+            if s.alive and not s.tmux_target and not s.tmux_inventory_complete
+        ]
+        tmux_text = ""
+        if tmux_unknown:
+            detail = next(
+                (
+                    s.tmux_inventory_detail
+                    for s in tmux_unknown
+                    if s.tmux_inventory_detail
+                ),
+                "",
+            )
+            tmux_text = f" · tmux 驻留未知 {len(tmux_unknown)}"
+            if detail:
+                tmux_text += f"（{detail}）"
         if hidden_n:
             hidden_text = (
                 f" · 桥接/SDK {hidden_n}"
@@ -228,7 +247,7 @@ class SessionsView(CleanupMixin, ListTabView):
             if orphans:
                 parts.append(f"孤儿 {orphans}")
             cleanup_text = f" · {' · '.join(parts)}"
-        return f" 共 {len(self._all_sessions)} 条会话 · 运行 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{cleanup_text}"
+        return f" 共 {len(self._all_sessions)} 条会话 · 运行 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{tmux_text}{cleanup_text}"
 
     def _close_overlay_mode(self) -> None:
         self._mode = "list"

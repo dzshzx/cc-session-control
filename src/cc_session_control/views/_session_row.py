@@ -80,12 +80,18 @@ def _status_parts(session: Session) -> tuple[str, str]:
     A live tmux-resident session (ADR-0001) additionally shows the ⧉ badge —
     U+29C9 is East_Asian_Width=Neutral (width-stable 1 cell, verified against
     wcwidth + urwid.calc_width, the P5 check), unlike the ambiguous glyphs the
-    P5 lesson banned. Data comes from the snapshot's `tmux_target`; the resume
-    actions read the SAME field."""
+    P5 lesson banned. A live session whose inventory is incomplete shows the
+    width-stable ASCII `?`, visibly distinct from confirmed bare residency.
+    Data comes from the snapshot's tmux fields; the resume actions read the
+    SAME evidence."""
     cur = "▸" if session.current else " "
     if session.alive:
         word = "忙" if session.status == "busy" else "闲"
-        badge = " ⧉" if session.tmux_target else ""
+        badge = ""
+        if session.tmux_target:
+            badge = " ⧉"
+        elif not session.tmux_inventory_complete:
+            badge = " ?"
         return f"{cur}● {word}{badge}", ("status_busy" if word == "忙" else "alive")
     return f"{cur}○ 停", "dead"
 
