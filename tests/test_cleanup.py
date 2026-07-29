@@ -8,12 +8,14 @@ path is forced by monkeypatching `proc.has_proc -> False` (so
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
 from cc_session_control.config import cfg
-from cc_session_control.data import cleanup, liveness, registry
+from cc_session_control.data import age_cleanup, cleanup, liveness, registry
 from cc_session_control.data import proc as proc_mod
+from cc_session_control.data.removal import CleanupIssue, CleanupPlan, RemovalAnchor
 from cc_session_control.models import AgentJob, Session, SessionProc
 
 
@@ -332,6 +334,30 @@ def test_remove_aged_entries(tmp_path, monkeypatch):
     assert result.completed == ["shell-snapshots/old.sh"]
     assert not os.path.exists(os.path.join(snap, "old.sh"))
     assert os.path.exists(os.path.join(snap, "new.sh"))
+
+
+def test_age_cleanup_plan_projects_age_state_from_shared_cleanup_plan():
+    anchor = RemovalAnchor(
+        configured_root=Path("plans"),
+        canonical_root=Path("plans"),
+        root_identity=None,
+        configured_target=Path("plans/old"),
+        relative_target=Path("old"),
+        target_identity=None,
+    )
+    unrelated_issue = CleanupIssue("orphan_dirs", "unavailable")
+    age_issue = CleanupIssue("aged_entries", "unavailable")
+    shared = CleanupPlan(
+        aged_entries=("plans/old",),
+        aged_anchors={"plans/old": anchor},
+        issues=(unrelated_issue, age_issue),
+    )
+
+    age_plan = age_cleanup.AgeCleanupPlan.from_cleanup_plan(shared)
+
+    assert age_plan.entries == ("plans/old",)
+    assert age_plan.anchors == {"plans/old": anchor}
+    assert age_plan.issues == (age_issue,)
 
 
 # --- Classified counts (injected deps) -------------------------------------

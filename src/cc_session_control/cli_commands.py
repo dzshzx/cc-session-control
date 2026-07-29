@@ -5,10 +5,13 @@ from __future__ import annotations
 import sys
 from argparse import Namespace
 from collections.abc import Mapping, Sequence
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
 from .cli_streams import run_with_streams
 from .data.removal import CleanupExecution, CleanupIssue, RemovalAnchor
+
+if TYPE_CHECKING:
+    from .data.age_cleanup import AgeCleanupPlan
 
 
 def _print_cleanup_issues(issues: Sequence[CleanupIssue]) -> int:
@@ -97,11 +100,7 @@ def _cmd_prune(args: Namespace) -> int:
         age_plan = build_age_plan()
         plan_status = _print_cleanup_issues(age_plan.issues)
         return max(
-            _cmd_prune_aged(
-                args,
-                list(age_plan.entries),
-                age_plan.anchors,
-            ),
+            _cmd_prune_aged(args, age_plan),
             plan_status,
         )
 
@@ -176,8 +175,10 @@ def _cmd_prune(args: Namespace) -> int:
         )
 
     if args.sweep_aged:
+        from .data.age_cleanup import AgeCleanupPlan
+
         return max(
-            _cmd_prune_aged(args, list(plan.aged_entries), plan.aged_anchors),
+            _cmd_prune_aged(args, AgeCleanupPlan.from_cleanup_plan(plan)),
             plan_status,
         )
 
@@ -241,8 +242,7 @@ def _cmd_prune_zombies(
 
 def _cmd_prune_aged(
     args: Namespace,
-    aged: list[str],
-    anchors: Mapping[str, RemovalAnchor],
+    plan: AgeCleanupPlan,
 ) -> int:
     """Strategy B age sweep of time/global-keyed dirs (R7.2) via the CLI.
 
@@ -253,12 +253,13 @@ def _cmd_prune_aged(
     from .data.cleanup import execute_aged_removals
 
     print(
-        f"Would sweep {len(aged)} aged entr(y/ies) older than {cfg.cleanup_age_days}d"
+        f"Would sweep {len(plan.entries)} aged entr(y/ies) "
+        f"older than {cfg.cleanup_age_days}d"
     )
     if not args.apply:
         print("Dry run. Add --apply to execute.")
         return 0
-    result = execute_aged_removals(aged, anchors=anchors)
+    result = execute_aged_removals(list(plan.entries), anchors=plan.anchors)
     return _print_cleanup_execution(
         result,
         success="Swept {n} aged entr(y/ies).",
