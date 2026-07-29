@@ -79,6 +79,12 @@ def test_readme_lists_every_public_environment_setting(variable: str) -> None:
         "`_window_for_inventory`",
         "`EnabledListResult`",
         "`operation` / `stage` / `detail` / `changed` / `committed`",
+        "`take_over_result`",
+        "`stop_job_result`",
+        "`prepare_takeover`",
+        "`respawn_result`",
+        "`proc.probe_pid`",
+        "`proc.probe_current_ancestors().complete`",
     ],
 )
 def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None:
@@ -98,6 +104,15 @@ def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None
         "`_window_for`",
         "只有它的 `_tmux_run` 触碰 `subprocess`",
         "ledger 是 **CLI-only**",
+        "`terminate_session`",
+        "`stop_job`",
+        "`resume_takeover`",
+        "`respawn`",
+        "`current_determinable`",
+        "`proc.pid_exists`",
+        "`capture_pane`",
+        "`residency_targets`",
+        "`list_orphan_dirs`",
     ],
 )
 def test_claude_architecture_rejects_retired_seam_claims(
