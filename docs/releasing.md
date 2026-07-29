@@ -90,7 +90,7 @@ Then run the local quality gate:
 uv run --extra dev ruff check src tests scripts
 uv run --extra dev ruff format --check src tests scripts
 uv run --extra dev mypy src/
-uv run --extra dev python scripts/check_file_sizes.py
+uv run --extra dev python scripts/check_file_sizes.py --tests tests
 uv run --extra dev pytest tests/ \
   --cov=cc_session_control --cov-branch \
   --cov-report=term-missing --cov-report=json

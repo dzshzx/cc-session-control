@@ -57,6 +57,31 @@ def test_main_ignores_non_python_files_and_test_directories(
     assert capsys.readouterr() == ("", "")
 
 
+def test_main_enforces_the_wider_cap_on_an_explicit_test_tree(
+    tmp_path: Path, capsys
+) -> None:
+    source = tmp_path / "src"
+    tests = tmp_path / "tests"
+    _write_lines(source / "package" / "module.py", 2)
+    _write_lines(tests / "test_ok.py", 4)
+    oversized = tests / "test_large.py"
+    _write_lines(oversized, 5)
+
+    arguments = [
+        str(source),
+        "--max-lines",
+        "2",
+        "--tests",
+        str(tests),
+        "--test-max-lines",
+        "4",
+    ]
+    assert _load_main("check_file_sizes")(arguments) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"{oversized}: 5 lines exceeds limit 4\n"
+
+
 def _write_coverage(path: Path, *, statements: float, branches: float) -> None:
     path.write_text(
         json.dumps(

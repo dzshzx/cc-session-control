@@ -63,7 +63,7 @@ def test_reusable_quality_gate_has_every_release_blocker() -> None:
         "uv run --extra dev ruff check src tests scripts",
         "uv run --extra dev ruff format --check src tests scripts",
         "uv run --extra dev mypy src/",
-        "uv run --extra dev python scripts/check_file_sizes.py",
+        "uv run --extra dev python scripts/check_file_sizes.py --tests tests",
         "grep -rn --include='*.py' '/home/' src/",
         "uv run --extra dev pytest tests/",
         "--cov=cc_session_control",

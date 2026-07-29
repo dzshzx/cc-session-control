@@ -20,8 +20,7 @@ type Pathish = str | os.PathLike[str]
 
 _RENAME_NOREPLACE = 1
 try:
-    # A platform that cannot open the process's own libc handle must degrade
-    # to the typed "renameat2 unavailable" refusal, not fail at import time.
+    # No libc self-handle → typed renameat2 refusal, not an import crash.
     _libc = ctypes.CDLL(None, use_errno=True)
 except OSError:
     _renameat2 = None
