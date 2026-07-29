@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-STATEMENT_FLOOR = 85.0
-BRANCH_FLOOR = 75.0
+STATEMENT_FLOOR = 91.0
+BRANCH_FLOOR = 82.0
 
 
 def _coverage_totals(report: Path) -> tuple[float, float]:

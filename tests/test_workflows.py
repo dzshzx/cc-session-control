@@ -70,8 +70,8 @@ def test_reusable_quality_gate_has_every_release_blocker() -> None:
         "--cov-branch",
         "--cov-report=json",
         "uv run --extra dev python scripts/check_coverage.py coverage.json",
-        "--statement-floor 85",
-        "--branch-floor 75",
+        "--statement-floor 91",
+        "--branch-floor 82",
     ]
     for command in required_commands:
         assert command in commands

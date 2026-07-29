@@ -54,5 +54,5 @@ jobs:
       - name: Enforce coverage floors
         run: >
           uv run --extra dev python scripts/check_coverage.py coverage.json
-          --statement-floor 85
-          --branch-floor 75
+          --statement-floor 91
+          --branch-floor 82
