@@ -30,7 +30,7 @@ from ._session_row import (
     SessionRow,
     _hidden_marker,
 )
-from ._sessions_cleanup import CleanupMixin
+from ._sessions_cleanup import CleanupMixin, _CleanupPreview
 
 if TYPE_CHECKING:
     from ..app import App
@@ -167,9 +167,7 @@ class SessionsView(CleanupMixin, ListTabView):
         self._filter_text = ""
         self._cleanup_stats: dict[str, int] = {}
         self._classified: dict[str, int] = {}
-        self._preview_action = None  # the previewed _CleanupAction record
-        self._preview_targets: list = []
-        self._preview_plan: CleanupPlan | None = None
+        self._preview: _CleanupPreview | None = None
         self._show_hidden = True
         # The frozen cleanup plan (R11/D8 — built from the shared snapshot,
         # never re-scanned per view): counts and each new preview read it;

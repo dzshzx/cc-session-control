@@ -366,7 +366,11 @@ def test_sessions_short_cleanup_preview_reads_frozen_plan(monkeypatch):
 
     view._enter_preview("short")
 
-    assert {s.sid for s in view._preview_targets} == {"short1", "short2"}
+    assert view._preview is not None
+    assert {s.sid for s in view._preview.targets if isinstance(s, Session)} == {
+        "short1",
+        "short2",
+    }
 
 
 def _sessions_view_with(monkeypatch, session):
@@ -1858,22 +1862,28 @@ def test_zombie_sweep_preview_and_confirm(monkeypatch):
 
     view._enter_preview("zombies")
     assert view._mode == "preview"
-    assert view._preview_action.key == "zombies"
+    assert view._preview is not None
+    assert view._preview.action.key == "zombies"
 
     import dataclasses
 
     swept = {}
     from cc_session_control.data.removal import CleanupExecution
 
-    view._preview_action = dataclasses.replace(
-        view._preview_action,
-        execute=lambda plan, pids, **k: (
-            swept.update(pids=pids) or CleanupExecution(completed=["111"])
+    view._preview = dataclasses.replace(
+        view._preview,
+        action=dataclasses.replace(
+            view._preview.action,
+            execute=lambda plan, pids, **k: (
+                swept.update(pids=pids) or CleanupExecution(completed=["111"])
+            ),
         ),
     )
     view._confirm_cleanup()
     assert swept["pids"] == [111]  # exactly the previewed targets
     assert app._submitted_actions == ["session.cleanup.zombies"]
+    assert view._mode == "cleanup"
+    assert view._preview is None
     assert any("僵尸会话文件" in m for m in app._notifications)
 
 
@@ -1904,18 +1914,22 @@ def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
 
     view._enter_preview("aged")
     assert view._mode == "preview"
-    assert view._preview_action.key == "aged"
+    assert view._preview is not None
+    assert view._preview.action.key == "aged"
 
     import dataclasses
 
     swept = {}
     from cc_session_control.data.removal import CleanupExecution
 
-    view._preview_action = dataclasses.replace(
-        view._preview_action,
-        execute=lambda plan, entries, **k: (
-            swept.update(entries=entries)
-            or CleanupExecution(completed=["shell-snapshots/old.sh"])
+    view._preview = dataclasses.replace(
+        view._preview,
+        action=dataclasses.replace(
+            view._preview.action,
+            execute=lambda plan, entries, **k: (
+                swept.update(entries=entries)
+                or CleanupExecution(completed=["shell-snapshots/old.sh"])
+            ),
         ),
     )
     view._confirm_cleanup()
@@ -1959,7 +1973,8 @@ def test_successful_refresh_keeps_cleanup_preview_anchored_to_displayed_generati
 
     assert view._body.original_widget is overlay
     assert view._plan is plan_b
-    assert view._preview_plan is plan_a
+    assert view._preview is not None
+    assert view._preview.plan is plan_a
 
     view._confirm_cleanup()
 
@@ -1978,9 +1993,7 @@ def test_cleanup_preview_escape_clears_pinned_generation():
     view.handle_key("esc")
 
     assert view._mode == "cleanup"
-    assert view._preview_action is None
-    assert view._preview_targets == []
-    assert view._preview_plan is None
+    assert view._preview is None
 
 
 @pytest.mark.parametrize("outcome", [Busy("other"), Closed()])
@@ -1991,16 +2004,14 @@ def test_cleanup_preview_rejected_submission_keeps_pinned_generation(outcome):
     plan = CleanupPlan(aged_entries=["plans/old"])
     view.apply_refresh(_refresh_batch(plan=plan))
     view._enter_preview("aged")
-    action = view._preview_action
-    targets = list(view._preview_targets)
+    preview = view._preview
+    assert preview is not None
     app.submit_action = lambda *_args: outcome
 
     view._confirm_cleanup()
 
     assert view._mode == "preview"
-    assert view._preview_action is action
-    assert view._preview_targets == targets
-    assert view._preview_plan is plan
+    assert view._preview is preview
 
 
 def test_new_cleanup_preview_pins_current_generation():
@@ -2016,25 +2027,21 @@ def test_new_cleanup_preview_pins_current_generation():
 
     view._enter_preview("aged")
 
-    assert view._preview_targets == ["plans/new"]
-    assert view._preview_plan is plan_b
+    assert view._preview is not None
+    assert view._preview.targets == ("plans/new",)
+    assert view._preview.plan is plan_b
 
 
-def test_cleanup_confirmation_without_pinned_plan_fails_closed():
+def test_cleanup_confirmation_without_preview_is_noop():
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]
-    view._plan = CleanupPlan(aged_entries=["plans/old"])
-    view._enter_preview("aged")
-    view._preview_plan = None
 
     view._confirm_cleanup()
 
     assert app._submitted_actions == []
-    assert view._mode == "cleanup"
-    assert view._preview_action is None
-    assert view._preview_targets == []
-    assert "预览已失效" in app._notifications[-1]
+    assert view._mode == "list"
+    assert view._preview is None
 
 
 def test_refresh_failure_updates_open_cleanup_and_aged_preview_in_memory():
@@ -2057,7 +2064,8 @@ def test_refresh_failure_updates_open_cleanup_and_aged_preview_in_memory():
     aged_row = next(row for row in view._cleanup_walker if row.action_key == "aged")
     assert "1" in _row_text(aged_row)
     view._enter_preview("aged")
-    assert view._preview_targets == ["plans/new"]
+    assert view._preview is not None
+    assert view._preview.targets == ("plans/new",)
 
     newer = RefreshFailure(
         3,
@@ -2067,8 +2075,9 @@ def test_refresh_failure_updates_open_cleanup_and_aged_preview_in_memory():
     )
     view.apply_refresh_failure(newer)
     assert view._mode == "preview"
-    assert view._preview_targets == ["plans/newer"]
-    assert view._preview_plan is newer.cleanup_plan
+    assert view._preview is not None
+    assert view._preview.targets == ("plans/newer",)
+    assert view._preview.plan is newer.cleanup_plan
 
 
 def test_refresh_failure_closes_session_keyed_preview_fail_closed(monkeypatch):
@@ -2092,8 +2101,7 @@ def test_refresh_failure_closes_session_keyed_preview_fail_closed(monkeypatch):
     )
 
     assert view._mode == "cleanup"
-    assert view._preview_action is None
-    assert view._preview_targets == []
+    assert view._preview is None
     assert view._plan.short == ()
     assert view._plan.aged_entries == ("plans/old",)
 
@@ -2145,7 +2153,8 @@ def test_refresh_failure_refuses_session_preview_before_proc_and_keeps_aged(
     view._enter_preview("aged")
 
     assert view._mode == "preview"
-    assert view._preview_targets == ["plans/old"]
+    assert view._preview is not None
+    assert view._preview.targets == ("plans/old",)
 
 
 def test_cleanup_confirmation_reports_partial_failure(monkeypatch, tmp_path):
@@ -2174,8 +2183,13 @@ def test_cleanup_confirmation_reports_partial_failure(monkeypatch, tmp_path):
             ),
         ],
     )
-    view._preview_action = dataclasses.replace(
-        view._preview_action, execute=lambda plan, targets: partial
+    assert view._preview is not None
+    view._preview = dataclasses.replace(
+        view._preview,
+        action=dataclasses.replace(
+            view._preview.action,
+            execute=lambda plan, targets: partial,
+        ),
     )
 
     view._confirm_cleanup()

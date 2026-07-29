@@ -205,7 +205,8 @@ def test_cold_start_failure_exposes_worker_built_age_preview_without_main_loop_i
     sessions_view._enter_cleanup()
     sessions_view._enter_preview("aged")
     assert sessions_view._mode == "preview"
-    assert sessions_view._preview_targets == ["shell-snapshots/old.sh"]
+    assert sessions_view._preview is not None
+    assert sessions_view._preview.targets == ("shell-snapshots/old.sh",)
     assert "无过期文件需要清理" not in notifications
 
 

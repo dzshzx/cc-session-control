@@ -86,6 +86,15 @@ class _CleanupAction:
     done_tpl: str  # post-confirm notify
 
 
+@dataclass(frozen=True)
+class _CleanupPreview:
+    """One complete preview pinned to a single cleanup generation."""
+
+    action: _CleanupAction
+    targets: tuple[Session | str | int, ...]
+    plan: CleanupPlan
+
+
 # The age sweep (Strategy B) is mtime-only/session-agnostic, so it is NOT
 # R10-gated; every other action is.
 _CLEANUP_ACTIONS: tuple[_CleanupAction, ...] = (
@@ -164,9 +173,7 @@ class CleanupMixin:
     _list_body: urwid.Widget
     _mode: str
     _plan: CleanupPlan
-    _preview_action: _CleanupAction | None
-    _preview_targets: list[Session | str | int]
-    _preview_plan: CleanupPlan | None
+    _preview: _CleanupPreview | None
 
     if TYPE_CHECKING:
 
@@ -200,10 +207,10 @@ class CleanupMixin:
             return
         if self._mode != "preview":
             return
-        action = self._preview_action
-        targets = action.targets(plan) if action is not None else ()
-        if action is not None and action.key == "aged" and targets:
-            self._show_action_preview(action, plan, targets)
+        preview = self._preview
+        targets = preview.action.targets(plan) if preview is not None else ()
+        if preview is not None and preview.action.key == "aged" and targets:
+            self._show_action_preview(preview.action, plan, targets)
             return
         self._enter_cleanup(show_issues=False)
 
@@ -234,9 +241,7 @@ class CleanupMixin:
         self._update_footer()
 
     def _clear_preview(self) -> None:
-        self._preview_action = None
-        self._preview_targets = []
-        self._preview_plan = None
+        self._preview = None
 
     def _exit_cleanup(self) -> None:
         self._mode = "list"
@@ -298,34 +303,32 @@ class CleanupMixin:
         targets: Sequence[Session | str | int],
     ) -> None:
         """Render one already-selected frozen target set without acquiring data."""
+        preview = _CleanupPreview(action, tuple(targets), plan)
         self._mode = "preview"
-        self._preview_action = action
-        self._preview_targets = list(targets)
-        self._preview_plan = plan
-        rows = [TextRow(action.format_row(t)) for t in targets]
-        self._show_overlay(action.title_tpl.format(n=len(targets)), rows)
+        self._preview = preview
+        rows = [TextRow(preview.action.format_row(t)) for t in preview.targets]
+        self._show_overlay(
+            preview.action.title_tpl.format(n=len(preview.targets)),
+            rows,
+        )
         self._update_footer()
 
     def _confirm_cleanup(self) -> None:
-        action = self._preview_action
-        plan = self._preview_plan
-        if action is None or plan is None or not self._preview_targets:
-            if action is not None or plan is not None or self._preview_targets:
-                self._enter_cleanup(show_issues=False)
-                self.app.notify("清理预览已失效，请重新预览")
+        preview = self._preview
+        if preview is None:
             return
         targets = tuple(
             tui_actions.SessionRequest.from_session(target)
             if isinstance(target, Session)
             else target
-            for target in self._preview_targets
+            for target in preview.targets
         )
         outcome = self.app.submit_action(
-            f"session.cleanup.{action.key}",
+            f"session.cleanup.{preview.action.key}",
             lambda: tui_actions.run_cleanup(
-                lambda mutable: action.execute(plan, mutable),
+                lambda mutable: preview.action.execute(preview.plan, mutable),
                 targets,
-                action.done_tpl,
+                preview.action.done_tpl,
             ),
         )
         if not isinstance(outcome, Accepted):

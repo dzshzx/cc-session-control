@@ -261,8 +261,9 @@ def test_cleanup_preview_pins_plan_while_probe_runs_off_loop(
 
     assert app._on_action_pipe(b"prepared") is True
     assert view._mode == "preview"
-    assert view._preview_targets == [old]
-    assert view._preview_plan is old_plan
+    assert view._preview is not None
+    assert view._preview.targets == (old,)
+    assert view._preview.plan is old_plan
 
 
 def test_incomplete_cleanup_probe_cannot_open_preview(
@@ -286,7 +287,7 @@ def test_incomplete_cleanup_probe_cannot_open_preview(
     assert view._mode == "cleanup"
     assert app._on_action_pipe(b"prepared") is True
     assert view._mode == "cleanup"
-    assert view._preview_targets == []
+    assert view._preview is None
     assert notifications[-1] == (main_thread, DEGRADED)
 
 
