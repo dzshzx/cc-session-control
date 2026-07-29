@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.7.5 (2026-07-29)
+
+### Changed
+
+- **Hardening batch**: destructive paths now run on typed, fail-closed
+  evidence end to end — cleanup plans/previews and executors share one
+  protection authority (including pathname-only transcript sids), refresh
+  publishes immutable single-generation batches, resume/takeover re-resolves
+  the live session at execution time instead of trusting keypress-time PIDs,
+  `rc-enabled` updates are locked read-modify-write transactions with exact
+  persistence-stage results, and RC pane capture is bounded (2000 lines /
+  1 MiB) with negative-cache backoff. Copied live-resume commands emit
+  `csctl resume --take-over <sid>` instead of a raw `kill <pid>`.
+- **Cleanup safety**: orphan removal atomically claims its target with
+  `renameat2(RENAME_NOREPLACE)` and verifies identity, so a same-name
+  replacement created between preview and apply can no longer be deleted;
+  platforms without the syscall get a typed refusal (including a libc
+  self-handle failure, which previously crashed at import).
+- **Quality gates**: CI runs a 3.12–3.14 matrix with Ruff, mypy, coverage
+  floors ratcheted to measurement (91% statements / 82% branches), and a
+  file-size gate that now also enforces a 1000-line hard cap on test
+  modules. Production publishing requires an annotated, version-matching
+  tag plus the full quality gate.
+- **Dead weight removed**: the bool/list/text compatibility shims left by
+  the typed-outcome migration (and the write-only `ActionStatus` taxonomy)
+  are gone; every caller consumes the typed results directly.
+- `CSCTL_CLEANUP_AGE_DAYS=0` is accepted again (sweep every aged entry);
+  invalid values still fail fast with a typed message.
+
 ## 0.7.4 (2026-07-23)
 
 ### Changed
