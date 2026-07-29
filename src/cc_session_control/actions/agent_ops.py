@@ -100,17 +100,6 @@ def respawn_result(job: AgentJob) -> RespawnResult:
     return RespawnResult(cmd, target, result.diagnostic, result)
 
 
-def respawn(job: AgentJob) -> str:
-    """Compatibility view of ``respawn_result`` returning the exact command.
-
-    Runs `respawn_cmd(job)` in the job's per-project tmux session
-    (`tmux.session_name_for(job.cwd)`) so it outlives the terminal — it does NOT
-    os.exec/replace the csctl process. The returned string also feeds the
-    clipboard `y`-style key.
-    """
-    return respawn_result(job).command
-
-
 # --- remove (settled agents only) ---------------------------------------------
 
 

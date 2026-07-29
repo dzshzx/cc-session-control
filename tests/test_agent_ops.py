@@ -58,7 +58,7 @@ def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
         ),
     )
     job = _make_job(resume_sid="sid-xyz", respawn_flags=["--bg-extra"])
-    out = ao.respawn(job)
+    out = ao.respawn_result(job).command
     assert out == "claude --resume sid-xyz --bg-extra --bg"
     assert captured["cmd"] == out
     # per-project grouping: the job's cwd basename, not one shared session
