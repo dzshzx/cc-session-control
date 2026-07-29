@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import urwid
@@ -9,13 +10,19 @@ import urwid
 from ..actions import tui_actions
 from ..actions.session_ops import (
     ResumeIntent,
+    attach_target,
+    would_take_over,
 )
 from ..data import proc
 from ..data.cleanup import CleanupPlan
 from ..models import Session
 from ._base import ListTabView
-from ._confirm import DEGRADED as _DEGRADED
-from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
+from ._confirm import (
+    accept_ancestor_probe,
+    confirm_stop,
+    confirm_takeover,
+    confirm_tmux_takeover,
+)
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
 from ._rows import TextRow
 from ._session_row import (
@@ -334,6 +341,18 @@ class SessionsView(CleanupMixin, ListTabView):
             lambda: tui_actions.background_session(request),
         )
 
+    def _submit_ancestor_probe(
+        self,
+        action_key: str,
+        on_complete: Callable[[proc.AncestorProbe], None],
+    ) -> None:
+        """Prepare current-session protection off-loop for one key action."""
+        self.app.submit_completion(
+            action_key,
+            proc.probe_current_ancestors,
+            on_complete,
+        )
+
     # --- Key dispatch ---
 
     def _overlay_active(self) -> bool:
@@ -384,7 +403,18 @@ class SessionsView(CleanupMixin, ListTabView):
         if s.current:
             self.app.notify("不能接回当前会话")
             return
-        confirm_tmux_takeover(self.app, s, "接回会话")
+        if attach_target(s) or not would_take_over(s):
+            confirm_tmux_takeover(self.app, s, "接回会话", gated=False)
+            return
+        self._submit_ancestor_probe(
+            "session.resume.prepare",
+            lambda evidence: confirm_tmux_takeover(
+                self.app,
+                s,
+                "接回会话",
+                evidence=evidence,
+            ),
+        )
 
     def _key_terminal(self, s: Session) -> None:
         """t — 终端接回 (fallback): bare-terminal resume; a resident session is
@@ -392,11 +422,24 @@ class SessionsView(CleanupMixin, ListTabView):
         if s.current:
             self.app.notify("不能接回当前会话")
             return
-        confirm_takeover(
-            self.app,
-            s,
-            "终端接回会话",
-            lambda: self.app.exit_with(ResumeIntent(s, fork=False)),
+        if not would_take_over(s):
+            confirm_takeover(
+                self.app,
+                s,
+                "终端接回会话",
+                lambda: self.app.exit_with(ResumeIntent(s, fork=False)),
+                gated=False,
+            )
+            return
+        self._submit_ancestor_probe(
+            "session.terminal.prepare",
+            lambda evidence: confirm_takeover(
+                self.app,
+                s,
+                "终端接回会话",
+                lambda: self.app.exit_with(ResumeIntent(s, fork=False)),
+                evidence=evidence,
+            ),
         )
 
     def _key_fork(self, s: Session) -> None:
@@ -404,17 +447,31 @@ class SessionsView(CleanupMixin, ListTabView):
         if s.current:
             self.app.notify("不能分叉当前会话")
             return
-        confirm_tmux_takeover(self.app, s, "分叉会话", fork=True)
+        confirm_tmux_takeover(
+            self.app,
+            s,
+            "分叉会话",
+            fork=True,
+            gated=False,
+        )
 
     def _key_stop(self, s: Session) -> None:
-        confirm_stop(
-            self.app,
-            "会话",
-            s.label,
-            lambda: self._do_terminate(s),
-            alive=s.alive,
-            current=s.current,
-        )
+        def complete(evidence: proc.AncestorProbe | None = None) -> None:
+            confirm_stop(
+                self.app,
+                "会话",
+                s.label,
+                lambda: self._do_terminate(s),
+                alive=s.alive,
+                current=s.current,
+                gated=evidence is not None,
+                evidence=evidence,
+            )
+
+        if not s.alive:
+            complete()
+            return
+        self._submit_ancestor_probe("session.stop.prepare", complete)
 
     def _key_relaunch(self, s: Session) -> None:
         """R — 转后台 (no Remote Control): a resident session needs no move."""
@@ -424,19 +481,46 @@ class SessionsView(CleanupMixin, ListTabView):
         if s.alive and s.tmux_target:
             self.app.notify(f"已在 tmux（{s.tmux_target}），无需转移")
             return
-        confirm_takeover(self.app, s, "转入后台", lambda: self._do_relaunch(s))
+        if not would_take_over(s):
+            confirm_takeover(
+                self.app,
+                s,
+                "转入后台",
+                lambda: self._do_relaunch(s),
+                gated=False,
+            )
+            return
+        self._submit_ancestor_probe(
+            "session.background.prepare",
+            lambda evidence: confirm_takeover(
+                self.app,
+                s,
+                "转入后台",
+                lambda: self._do_relaunch(s),
+                evidence=evidence,
+            ),
+        )
+
+    def _complete_delete(
+        self,
+        evidence: proc.AncestorProbe,
+        request: tui_actions.SessionRequest,
+    ) -> None:
+        if not accept_ancestor_probe(self.app, evidence):
+            return
+        self.app.submit_action(
+            "session.delete",
+            lambda: tui_actions.delete_session(request),
+        )
 
     def _key_delete(self, s: Session) -> None:
         if s.alive:
             self.app.notify("运行中的会话不删，先停止")
             return
-        if not proc.probe_current_ancestors().complete:
-            self.app.notify(_DEGRADED)
-            return
         request = tui_actions.SessionRequest.from_session(s)
-        self.app.submit_action(
-            "session.delete",
-            lambda: tui_actions.delete_session(request),
+        self._submit_ancestor_probe(
+            "session.delete.prepare",
+            lambda evidence: self._complete_delete(evidence, request),
         )
 
     def _key_yank(self, s: Session) -> None:

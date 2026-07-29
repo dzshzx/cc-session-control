@@ -34,7 +34,7 @@ from ..data.cleanup import (
 )
 from ..data.removal import CleanupExecution
 from ..models import Session
-from ._confirm import DEGRADED as _DEGRADED
+from ._confirm import accept_ancestor_probe
 from ._rows import TextRow, truncate_cells
 from ._session_row import _ActionRow
 
@@ -179,6 +179,12 @@ class CleanupMixin:
 
         def _update_footer(self) -> None: ...
 
+        def _submit_ancestor_probe(
+            self,
+            action_key: str,
+            on_complete: Callable[[proc.AncestorProbe], None],
+        ) -> None: ...
+
     def _rebuild_cleanup(self) -> None:
         c = self._classified
         self._cleanup_walker.clear()
@@ -197,7 +203,7 @@ class CleanupMixin:
         action = self._preview_action
         targets = action.targets(plan) if action is not None else ()
         if action is not None and action.key == "aged" and targets:
-            self._show_action_preview(action, targets)
+            self._show_action_preview(action, plan, targets)
             return
         self._enter_cleanup(show_issues=False)
 
@@ -254,32 +260,48 @@ class CleanupMixin:
             issue = self._plan.session_keyed_issue
             self.app.notify(f"{action.label}预览不可用：{issue.source}: {issue.error}")
             return
-        if action.gated and not proc.probe_current_ancestors().complete:
-            self.app.notify(_DEGRADED)
-            return
-        if action.key == "aged" and self._plan.age_issues:
-            issue = self._plan.age_issues[0]
+        plan = self._plan
+        if action.key == "aged" and plan.age_issues:
+            issue = plan.age_issues[0]
             self.app.notify(
-                f"过期文件预览不可用（{len(self._plan.age_issues)} 个来源）："
+                f"过期文件预览不可用（{len(plan.age_issues)} 个来源）："
                 f"{issue.source}: {issue.error}"
             )
             return
-        targets = action.targets(self._plan)
+        if action.gated:
+            self._submit_ancestor_probe(
+                f"session.cleanup.{action.key}.prepare",
+                lambda evidence: self._complete_preview(action, plan, evidence),
+            )
+            return
+        self._complete_preview(action, plan)
+
+    def _complete_preview(
+        self,
+        action: _CleanupAction,
+        plan: CleanupPlan,
+        evidence: proc.AncestorProbe | None = None,
+    ) -> None:
+        """Apply one pinned plan after worker-owned protection preparation."""
+        if evidence is not None and not accept_ancestor_probe(self.app, evidence):
+            return
+        targets = action.targets(plan)
         if not targets:
             self.app.notify(action.none_notice)
             return
-        self._show_action_preview(action, targets)
+        self._show_action_preview(action, plan, targets)
 
     def _show_action_preview(
         self,
         action: _CleanupAction,
+        plan: CleanupPlan,
         targets: Sequence[Session | str | int],
     ) -> None:
         """Render one already-selected frozen target set without acquiring data."""
         self._mode = "preview"
         self._preview_action = action
         self._preview_targets = list(targets)
-        self._preview_plan = self._plan
+        self._preview_plan = plan
         rows = [TextRow(action.format_row(t)) for t in targets]
         self._show_overlay(action.title_tpl.format(n=len(targets)), rows)
         self._update_footer()

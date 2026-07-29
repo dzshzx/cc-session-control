@@ -32,6 +32,7 @@ from cc_session_control.models import (
     RCStartupSettingState,
     Session,
 )
+from cc_session_control.views._confirm import DEGRADED
 from cc_session_control.views.rc import RCRow, RCView, ServerRow
 from cc_session_control.views.sessions import SessionRow, SessionsView
 
@@ -72,6 +73,10 @@ class FakeApp:
         self.notify(result.message)
         if result.needs_refresh:
             self.trigger_async_refresh()
+        return Accepted(action_key)
+
+    def submit_completion(self, action_key, action, on_complete):
+        on_complete(action())
         return Accepted(action_key)
 
     def refresh_with_notice(self):
@@ -542,7 +547,7 @@ def test_enter_key_live_takeover_gated_when_degraded(monkeypatch):
     view.handle_key("enter")
     assert app.result is None
     assert app._confirm_messages == []  # refused before any confirm
-    assert app._notifications[-1] == sv_mod._DEGRADED
+    assert app._notifications[-1] == DEGRADED
 
 
 def test_enter_key_dead_session_not_gated_when_degraded(monkeypatch):
@@ -564,7 +569,7 @@ def test_t_key_takeover_gated_when_degraded(monkeypatch):
     _set_proc_complete(monkeypatch, sv_mod.proc, False)
     view.handle_key("t")
     assert app.result is None
-    assert app._notifications[-1] == sv_mod._DEGRADED
+    assert app._notifications[-1] == DEGRADED
 
 
 def test_status_cell_three_states():
@@ -1802,7 +1807,7 @@ def test_delete_refuses_when_current_undeterminable(monkeypatch):
 
     view.handle_key("d")
     assert removed["n"] == 0
-    assert app._notifications[-1] == sv_mod._DEGRADED
+    assert app._notifications[-1] == DEGRADED
 
 
 def test_cleanup_preview_refuses_when_undeterminable_not_nothing(monkeypatch):
@@ -1815,7 +1820,7 @@ def test_cleanup_preview_refuses_when_undeterminable_not_nothing(monkeypatch):
     app.views = [view]
     view._enter_preview("empty")
     assert view._mode == "list"  # never opened a preview
-    assert app._notifications[-1] == sv_mod._DEGRADED
+    assert app._notifications[-1] == DEGRADED
     assert "需要清理" not in app._notifications[-1]
 
 
@@ -1883,7 +1888,7 @@ def test_zombie_sweep_gated_when_undeterminable(monkeypatch):
     view._plan = CleanupPlan(zombie_pids=[111])
     view._enter_preview("zombies")
     assert view._mode == "list"
-    assert app._notifications[-1] == sv_mod._DEGRADED
+    assert app._notifications[-1] == DEGRADED
 
 
 def test_aged_sweep_preview_and_confirm_not_gated(monkeypatch):
