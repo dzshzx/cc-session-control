@@ -473,6 +473,35 @@ def test_live_tmux_resume_uses_execution_time_session_generation(
     assert captured.err == ""
 
 
+def test_live_tmux_resume_enters_fresh_resident_target_without_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stale = _session(alive=True, pid=4242)
+    fresh = replace(
+        stale, pid=9002, proc_start="fresh-start", tmux_target="fresh-project:7"
+    )
+    _install_execution_session(monkeypatch, fresh)
+    entered: list[str] = []
+    monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: True)
+
+    def fail_replacement(*_args: object) -> None:
+        pytest.fail("must not replace fresh resident target")
+
+    monkeypatch.setattr(session_ops, "take_over_result", fail_replacement)
+    monkeypatch.setattr(tmux, "run_in_tmux_result", fail_replacement)
+    monkeypatch.setattr(tmux, "select_window", entered.append)
+    monkeypatch.setattr(
+        tmux, "switch_client", lambda target: entered.append(target) or True
+    )
+    monkeypatch.setenv("TMUX", "resident")
+
+    assert session_ops.TmuxResumeIntent(stale).run() == 0
+    assert entered == ["fresh-project:7", "fresh-project:7"]
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+
 def test_stale_pid_becoming_gone_never_authorizes_terminal_resume(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

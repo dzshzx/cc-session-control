@@ -362,6 +362,10 @@ def _spawn_in_tmux_result(
             or "tmux residency inventory incomplete"
         )
         return TmuxResumeOutcome(None, detail)
+    if not fork:
+        resident_target = attach_target(target_session)
+        if resident_target is not None:
+            return TmuxResumeOutcome(resident_target)
     if should_kill:
         takeover_failure = _required_takeover_failure(target_session)
         if takeover_failure:
