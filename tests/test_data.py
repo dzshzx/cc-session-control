@@ -161,7 +161,7 @@ def test_take_over_refused_without_proc(monkeypatch):
     monkeypatch.setattr(
         so.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill"))
     )
-    assert so.take_over(4242) == "refused"
+    assert so.take_over_result(4242).state is so.TakeOverState.REFUSED
 
 
 def test_take_over_skips_kill_when_pid_gone_or_recycled(monkeypatch):
@@ -186,7 +186,7 @@ def test_take_over_skips_kill_when_pid_gone_or_recycled(monkeypatch):
     monkeypatch.setattr(
         so, "invalidate_cache", lambda: inv.__setitem__("n", inv["n"] + 1)
     )
-    assert so.take_over(4242, "12345") == "gone"
+    assert so.take_over_result(4242, "12345").state is so.TakeOverState.GONE
     assert inv["n"] == 1
 
 
@@ -208,7 +208,7 @@ def test_take_over_failed_on_signal_error(monkeypatch):
         raise PermissionError("nope")
 
     monkeypatch.setattr(so.os, "kill", raise_perm)
-    assert so.take_over(4242) == "failed"
+    assert so.take_over_result(4242).state is so.TakeOverState.FAILED
 
 
 def test_take_over_kills_settles_and_invalidates(monkeypatch):
@@ -236,7 +236,7 @@ def test_take_over_kills_settles_and_invalidates(monkeypatch):
         "invalidate_cache",
         lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1),
     )
-    assert so.take_over(4242, "999") == "killed"
+    assert so.take_over_result(4242, "999").state is so.TakeOverState.KILLED
     assert calls["kill"] == (4242, so.signal.SIGTERM)
     assert calls["sleep"] == 1
     assert calls["invalidate"] == 1

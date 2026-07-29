@@ -9,18 +9,11 @@ import sys
 import time
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
 
 from .. import clipboard
 from ..data import liveness, proc, sessions, tmux
 from ..data.liveness import invalidate_cache
 from ..models import Session
-
-TakeOverResult = Literal["killed", "gone", "refused", "failed"]
-
-#: The results a fail-fast caller counts as success (signalled, or nothing
-#: left to signal) — single-sourced so terminate/stop can't diverge on it.
-TAKE_OVER_OK = ("killed", "gone")
 
 
 class TakeOverState(StrEnum):
@@ -123,11 +116,6 @@ def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
     time.sleep(1)
     invalidate_cache()
     return TakeOverOutcome(TakeOverState.KILLED)
-
-
-def take_over(pid: int, proc_start: str = "") -> TakeOverResult:
-    """Compatibility string view; safety decisions use :func:`take_over_result`."""
-    return take_over_result(pid, proc_start).state.value
 
 
 def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:

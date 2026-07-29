@@ -525,8 +525,10 @@ def test_sessions_s_key_guards_before_confirm(monkeypatch):
 
     monkeypatch.setattr(
         sv_mod.tui_actions.session_ops,
-        "take_over",
-        lambda *_: "killed",
+        "take_over_result",
+        lambda *_: sv_mod.tui_actions.session_ops.TakeOverOutcome(
+            sv_mod.tui_actions.session_ops.TakeOverState.KILLED
+        ),
     )
     _set_proc_complete(monkeypatch, sv_mod.proc, True)
     app = FakeApp()
