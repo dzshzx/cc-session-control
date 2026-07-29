@@ -6,10 +6,16 @@ import os
 import shutil
 import time
 
+import pytest
+
 from cc_session_control.actions import agent_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import cleanup, cleanup_liveness, liveness
-from cc_session_control.data.removal import RemovalStatus
+from cc_session_control.data.removal import (
+    RemovalStatus,
+    anchor_path,
+    remove_anchored,
+)
 from cc_session_control.models import AgentJob, Session, SessionProc
 
 
@@ -253,6 +259,56 @@ def test_target_inode_and_type_replacement_is_refused(tmp_path, monkeypatch):
     assert result.path_refusals
     assert "identity or type" in result.refused[0].reason
     assert sentinel.read_text() == "keep"
+
+
+@pytest.mark.parametrize("is_directory", [False, True], ids=["file", "directory"])
+def test_removal_refuses_same_name_replacement_after_verification(
+    tmp_path,
+    monkeypatch,
+    is_directory: bool,
+):
+    target = tmp_path / "target"
+    saved = tmp_path / "anchored-target"
+    if is_directory:
+        target.mkdir()
+        (target / "anchored.txt").write_text("anchored")
+    else:
+        target.write_text("anchored")
+    anchor = anchor_path(tmp_path, target)
+    real_stat = os.stat
+    swapped = False
+
+    def stat_then_swap(
+        path,
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ):
+        nonlocal swapped
+        metadata = real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+        if path == target.name and dir_fd is not None and not swapped:
+            swapped = True
+            target.rename(saved)
+            if is_directory:
+                target.mkdir()
+                (target / "replacement.txt").write_text("replacement")
+            else:
+                target.write_text("replacement")
+        return metadata
+
+    monkeypatch.setattr(os, "stat", stat_then_swap)
+
+    result = remove_anchored(anchor)
+
+    assert swapped
+    assert result.status is RemovalStatus.REFUSED
+    assert "identity" in (result.error or "")
+    if is_directory:
+        assert (target / "replacement.txt").read_text() == "replacement"
+        assert (saved / "anchored.txt").read_text() == "anchored"
+    else:
+        assert target.read_text() == "replacement"
+        assert saved.read_text() == "anchored"
 
 
 def test_previewed_target_that_disappears_is_idempotently_missing(

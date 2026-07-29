@@ -557,9 +557,11 @@ def test_prune_aged_partial_failure_is_visible_and_nonzero(
     os.utime(good, (stamp, stamp))
     os.utime(bad, (stamp, stamp))
     original_unlink = os.unlink
+    bad_inode = os.stat(bad, follow_symlinks=False).st_ino
 
     def fail_one(path: str, *, dir_fd: int | None = None) -> None:
-        if os.fspath(path) == bad.name:
+        metadata = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
+        if metadata.st_ino == bad_inode:
             raise PermissionError("permission denied")
         original_unlink(path, dir_fd=dir_fd)
 
@@ -593,9 +595,11 @@ def test_prune_aged_missing_target_is_not_counted_as_swept(
     os.utime(old, (stamp, stamp))
 
     original_unlink = os.unlink
+    old_inode = os.stat(old, follow_symlinks=False).st_ino
 
     def disappear(path: str, *, dir_fd: int | None = None) -> None:
-        if os.fspath(path) == old.name:
+        metadata = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
+        if metadata.st_ino == old_inode:
             original_unlink(path, dir_fd=dir_fd)
             raise FileNotFoundError(path)
         original_unlink(path, dir_fd=dir_fd)

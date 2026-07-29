@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import os
+import secrets
 import shutil
 import stat
 from collections.abc import Iterable, Mapping
@@ -14,6 +17,13 @@ from types import MappingProxyType
 from ..models import Session
 
 type Pathish = str | os.PathLike[str]
+
+_RENAME_NOREPLACE = 1
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_renameat2 = getattr(_LIBC, "renameat2", None)
+if _renameat2 is not None:
+    _renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p] * 2 + [ctypes.c_uint]
+    _renameat2.restype = ctypes.c_int
 
 
 class RemovalStatus(StrEnum):
@@ -355,6 +365,7 @@ def _failed(anchor: RemovalAnchor, exc: OSError) -> PathRemoval:
 class _VerifiedTarget:
     parent_fd: int
     metadata: os.stat_result
+    name: str
 
 
 def _current_paths_match(anchor: RemovalAnchor) -> str | None:
@@ -410,28 +421,104 @@ def _verified_target(
         return _refused(anchor, "target appeared after preview")
     if not anchor.target_identity.matches(target_metadata):
         return _refused(anchor, "target identity or type changed after preview")
-    return _VerifiedTarget(parent_fd, target_metadata)
+    return _VerifiedTarget(parent_fd, target_metadata, basename)
+
+
+def _rename_noreplace(source: str, destination: str, dir_fd: int) -> None:
+    function = _renameat2
+    if function is None:
+        raise OSError("renameat2(RENAME_NOREPLACE) support is unavailable")
+    ctypes.set_errno(0)
+    if function(
+        dir_fd,
+        os.fsencode(source),
+        dir_fd,
+        os.fsencode(destination),
+        _RENAME_NOREPLACE,
+    ):
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), source)
+
+
+def _restore_claim(
+    anchor: RemovalAnchor,
+    claimed: _VerifiedTarget,
+    status: RemovalStatus,
+    error: str,
+    missing_if_gone: bool = False,
+) -> PathRemoval:
+    try:
+        _rename_noreplace(claimed.name, anchor.relative_target.name, claimed.parent_fd)
+    except OSError as exc:
+        if missing_if_gone and isinstance(exc, FileNotFoundError):
+            return PathRemoval(anchor.display_path, RemovalStatus.MISSING)
+        return PathRemoval(
+            anchor.display_path,
+            RemovalStatus.FAILED,
+            f"{error}; could not restore claimed target {claimed.name}: {exc}",
+        )
+    return PathRemoval(anchor.display_path, status, error)
+
+
+def _claim_verified(
+    anchor: RemovalAnchor,
+    verified: _VerifiedTarget,
+) -> _VerifiedTarget | PathRemoval:
+    claimed_name = f".csctl-remove-{secrets.token_hex(16)}"
+    try:
+        _rename_noreplace(verified.name, claimed_name, verified.parent_fd)
+    except FileNotFoundError:
+        return PathRemoval(anchor.display_path, RemovalStatus.MISSING)
+    except OSError as exc:
+        if exc.errno in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
+            return _refused(anchor, f"atomic removal claim is unavailable: {exc}")
+        return _failed(anchor, exc)
+
+    claimed = _VerifiedTarget(verified.parent_fd, verified.metadata, claimed_name)
+    try:
+        metadata = os.stat(
+            claimed_name, dir_fd=verified.parent_fd, follow_symlinks=False
+        )
+    except OSError as exc:
+        return _restore_claim(
+            anchor, claimed, RemovalStatus.FAILED, f"cannot verify claim: {exc}"
+        )
+    identity = anchor.target_identity
+    if identity is None or not identity.matches(metadata):
+        return _restore_claim(
+            anchor,
+            claimed,
+            RemovalStatus.REFUSED,
+            "target identity or type changed during atomic removal claim",
+        )
+    return _VerifiedTarget(verified.parent_fd, metadata, claimed_name)
 
 
 def _remove_verified(
     anchor: RemovalAnchor,
     verified: _VerifiedTarget,
 ) -> PathRemoval:
-    basename = anchor.relative_target.name
+    directory = stat.S_ISDIR(verified.metadata.st_mode)
+    if directory and not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        return _refused(anchor, "fd-safe directory removal is unavailable")
+    claimed = _claim_verified(anchor, verified)
+    if isinstance(claimed, PathRemoval):
+        return claimed
     try:
-        if stat.S_ISDIR(verified.metadata.st_mode):
-            if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
-                return _refused(
-                    anchor,
-                    "fd-safe directory removal is unavailable on this platform",
-                )
-            shutil.rmtree(basename, dir_fd=verified.parent_fd)
+        if stat.S_ISDIR(claimed.metadata.st_mode):
+            shutil.rmtree(claimed.name, dir_fd=claimed.parent_fd)
         else:
-            os.unlink(basename, dir_fd=verified.parent_fd)
+            os.unlink(claimed.name, dir_fd=claimed.parent_fd)
     except FileNotFoundError:
-        return PathRemoval(anchor.display_path, RemovalStatus.MISSING)
+        return _restore_claim(
+            anchor,
+            claimed,
+            RemovalStatus.FAILED,
+            "claimed target disappeared during removal",
+            missing_if_gone=True,
+        )
     except OSError as exc:
-        return _failed(anchor, exc)
+        return _restore_claim(anchor, claimed, RemovalStatus.FAILED, str(exc))
     return PathRemoval(anchor.display_path, RemovalStatus.REMOVED)
 
 
@@ -476,7 +563,9 @@ def inspect_anchored(anchor: RemovalAnchor) -> os.stat_result | PathRemoval:
 
 
 def remove_anchored(anchor: RemovalAnchor) -> PathRemoval:
-    """Remove via verified directory fds, refusing any preview-time mismatch."""
+    """Atomically claim and remove only the preview-anchored target identity."""
+    if _renameat2 is None:
+        return _refused(anchor, "renameat2(RENAME_NOREPLACE) support is unavailable")
     refusal = _preflight(anchor)
     if refusal is not None:
         return refusal

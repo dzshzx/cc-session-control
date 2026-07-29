@@ -8,9 +8,27 @@ import subprocess
 import time
 
 from cc_session_control.config import cfg
-from cc_session_control.data import cleanup, cleanup_liveness, liveness, registry
+from cc_session_control.data import (
+    cleanup,
+    cleanup_liveness,
+    liveness,
+    registry,
+    removal,
+)
 from cc_session_control.data.removal import RemovalStatus, remove_path
 from cc_session_control.models import Session, SessionProc
+
+
+def test_remove_path_refuses_without_atomic_rename_capability(tmp_path, monkeypatch):
+    target = tmp_path / "keep.txt"
+    target.write_text("keep")
+    monkeypatch.setattr(removal, "_renameat2", None)
+
+    result = remove_path(target)
+
+    assert result.status is RemovalStatus.REFUSED
+    assert "renameat2(RENAME_NOREPLACE)" in (result.error or "")
+    assert target.read_text() == "keep"
 
 
 def test_remove_directory_reports_permission_error(tmp_path, monkeypatch):
@@ -79,9 +97,11 @@ def test_aged_execution_reports_partial_failure(tmp_path, monkeypatch):
     os.utime(good, (stamp, stamp))
     os.utime(bad, (stamp, stamp))
     original_rmtree = shutil.rmtree
+    bad_inode = os.stat(bad, follow_symlinks=False).st_ino
 
     def fail_one(path: str, *, dir_fd: int | None = None) -> None:
-        if os.fspath(path) == bad.name:
+        metadata = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
+        if metadata.st_ino == bad_inode:
             raise PermissionError("permission denied")
         original_rmtree(path, dir_fd=dir_fd)
 
@@ -189,9 +209,11 @@ def test_orphan_execution_reports_removed_and_failed_paths(tmp_path, monkeypatch
     good.mkdir(parents=True)
     bad.mkdir()
     original_rmtree = shutil.rmtree
+    bad_inode = os.stat(bad, follow_symlinks=False).st_ino
 
     def fail_one(path: str, *, dir_fd: int | None = None) -> None:
-        if os.fspath(path) == bad.name:
+        metadata = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
+        if metadata.st_ino == bad_inode:
             raise PermissionError("permission denied")
         original_rmtree(path, dir_fd=dir_fd)
 
