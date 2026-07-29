@@ -1,4 +1,4 @@
-"""Public CLI examples and configuration documented in README.md."""
+"""Documentation contracts for public CLI examples and architecture seams."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import pytest
 from cc_session_control.cli import build_parser
 
 README = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+CLAUDE = (Path(__file__).parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -55,3 +56,51 @@ def test_readme_cli_examples_are_accepted_by_the_parser(command: str) -> None:
 )
 def test_readme_lists_every_public_environment_setting(variable: str) -> None:
     assert f"`{variable}`" in README
+
+
+@pytest.mark.parametrize(
+    "settled_term",
+    [
+        "`transcripts.py`",
+        "`sessions.scan_result(inputs)`",
+        "`proc.scan_rc_server_inventory()`",
+        "`resolve_execution_session`",
+        "`tmux.residency_inventory`",
+        "`Session.tmux_inventory_complete`",
+        "`Session.tmux_inventory_detail`",
+        "ASCII `?`",
+        "`_tmux_run_result`",
+        "`capture_pane_result`",
+        "`tmux.run_in_tmux_result`",
+        "`tmux_outcomes.py`",
+        "`LedgerUpdate`",
+        "`_tmux_window_inventory`",
+        "`_tmux_capture_pane_result`",
+        "`_window_for_inventory`",
+        "`EnabledListResult`",
+        "`operation` / `stage` / `detail` / `changed` / `committed`",
+    ],
+)
+def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None:
+    assert settled_term in CLAUDE
+
+
+@pytest.mark.parametrize(
+    "stale_claim",
+    [
+        "`sessions.scan()`",
+        "`sessions.scan(inputs)`",
+        "`proc.scan_rc_servers()`",
+        "`tmux.residency_targets`",
+        "`tmux.run_in_tmux`",
+        "`environments.upsert`",
+        "`_tmux_windows`",
+        "`_window_for`",
+        "只有它的 `_tmux_run` 触碰 `subprocess`",
+        "ledger 是 **CLI-only**",
+    ],
+)
+def test_claude_architecture_rejects_retired_seam_claims(
+    stale_claim: str,
+) -> None:
+    assert stale_claim not in CLAUDE
