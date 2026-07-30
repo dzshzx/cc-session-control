@@ -46,27 +46,6 @@ class WindowInventory:
         return not self.issues
 
 
-class PaneCaptureIssue(NamedTuple):
-    """Expected failure to capture one pane."""
-
-    source: str
-    target: str
-    detail: str
-
-
-class PaneCaptureResult(NamedTuple):
-    """Bounded pane text or typed failure evidence."""
-
-    target: str
-    text: str = ""
-    issue: PaneCaptureIssue | None = None
-    truncated: bool = False
-
-    @property
-    def success(self) -> bool:
-        return self.issue is None
-
-
 class KillState(Enum):
     """Observable outcome of killing one tmux target."""
 

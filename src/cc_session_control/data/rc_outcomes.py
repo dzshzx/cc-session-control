@@ -15,7 +15,7 @@ from ..models import (
     Session,
     TrustDecision,
 )
-from . import proc, rc_environment, tmux
+from . import proc, tmux
 from .project_settings import ProjectSettingsResult
 from .rc_enabled import EnabledListResult
 
@@ -211,21 +211,6 @@ def proc_inventory_issues(
     return tuple(
         InventoryIssue(issue.source, issue.path, issue.detail)
         for issue in inventory.issues
-    )
-
-
-def environment_capture_issues(
-    resolution: rc_environment.EnvironmentIdResolution,
-) -> tuple[InventoryIssue, ...]:
-    """Translate per-window capture failures into operator inventory issues."""
-
-    return tuple(
-        InventoryIssue(
-            issue.source,
-            f"{issue.path} [{issue.target}]" if issue.path else issue.target,
-            issue.detail,
-        )
-        for issue in resolution.issues
     )
 
 

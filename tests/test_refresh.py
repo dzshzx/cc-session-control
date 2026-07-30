@@ -12,13 +12,6 @@ from cc_session_control.config import cfg
 from cc_session_control.data import age_cleanup, cleanup
 from cc_session_control.data.age_cleanup import AgeCleanupPlan
 from cc_session_control.data.cleanup import CleanupPlan
-from cc_session_control.data.environment_ledger import (
-    LedgerRead,
-    LedgerReadState,
-    LedgerUpdate,
-    LedgerUpdateState,
-)
-from cc_session_control.data.environments import Reconciliation
 from cc_session_control.data.liveness import LivenessIssue, LivenessSnapshot
 from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
@@ -34,8 +27,6 @@ from cc_session_control.data.refresh import (
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import (
     AgentJob,
-    BridgeEnv,
-    EnvRecord,
     RCProject,
     RCServer,
     Session,
@@ -190,23 +181,7 @@ def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
         "running",
         True,
     )
-    server = RCServer("project", "/tmp/project", True, 456, "env-server", "running")
-    environment = BridgeEnv("session", "bridge", "session-1", 1.0, 2.0, "current")
-    ledger_entries = {("session", "bridge"): environment}
-    ledger_read = LedgerRead(LedgerReadState.READY, ledger_entries)
-    ledger_update = LedgerUpdate(
-        LedgerUpdateState.UNCHANGED,
-        ledger_entries,
-        ledger_read,
-    )
-    observed = EnvRecord("session", "bridge", "session-1")
-    current_environments = [environment]
-    reconciliation = Reconciliation(
-        current=current_environments,
-        observed=[observed],
-        file_referenced=[observed],
-        ledger=ledger_update,
-    )
+    server = RCServer("project", "/tmp/project", True, 456, "running")
     settings = ProjectSettingsResult(
         ProjectSettingsState.AVAILABLE,
         project_document,
@@ -219,7 +194,6 @@ def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
             rc_projects=[project],
             rc_project_settings=settings,
             rc_servers=[server],
-            environment_reconciliation=reconciliation,
             liveness_snapshot=LivenessSnapshot(
                 session_procs=[session_proc],
                 agent_jobs=[job],
@@ -235,16 +209,12 @@ def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
     respawn_flags.append("--later")
     project_document["/tmp/project"]["hasTrustDialogAccepted"] = False
     project_document["/tmp/project"]["metadata"]["tags"].append("later")
-    ledger_entries[("session", "other")] = BridgeEnv("session", "other")
-    current_environments.append(BridgeEnv("session", "later"))
 
     assert batch.snapshot.sessions[0].hidden == frozenset({"tool"})
     assert batch.snapshot.agent_jobs[0].respawn_flags == ("--verbose",)
     published_settings = batch.snapshot.rc_project_settings.projects["/tmp/project"]
     assert published_settings["hasTrustDialogAccepted"] is True
     assert published_settings["metadata"]["tags"] == ("one",)
-    assert tuple(reconciliation.ledger.entries) == (("session", "bridge"),)
-    assert reconciliation.current == (environment,)
     with pytest.raises(FrozenInstanceError):
         batch.snapshot.sessions = ()
     with pytest.raises(FrozenInstanceError):
@@ -263,16 +233,6 @@ def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
         batch.snapshot.rc_projects[0].status = "stopped"
     with pytest.raises(FrozenInstanceError):
         batch.snapshot.rc_servers[0].status = "stopped"
-    with pytest.raises(FrozenInstanceError):
-        batch.snapshot.environment_reconciliation.current[0].status = "orphan"
-    with pytest.raises(AttributeError):
-        batch.snapshot.environment_reconciliation.current.append(environment)
-    with pytest.raises(TypeError):
-        batch.snapshot.environment_reconciliation.ledger.entries[
-            ("session", "other")
-        ] = environment
-    with pytest.raises(TypeError):
-        ledger_read.entries[("session", "other")] = environment
     with pytest.raises(TypeError):
         batch.cleanup_plan.orphan_anchors["projects/later"] = None
     with pytest.raises(TypeError):

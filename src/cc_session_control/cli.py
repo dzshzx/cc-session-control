@@ -180,12 +180,6 @@ def build_parser() -> argparse.ArgumentParser:
     agents = commands.add_parser("agents", help="List background agents")
     agents.set_defaults(handler=cli_commands._cmd_agents)
 
-    env = commands.add_parser(
-        "env",
-        help="List bridge environments (current + orphan)",
-    )
-    env.set_defaults(handler=cli_commands._cmd_env)
-
     return parser
 
 

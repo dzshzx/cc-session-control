@@ -19,7 +19,7 @@ from ..models import (
     TrustDecision,
     effective_trust_decision,
 )
-from . import proc, rc_environment, rc_outcomes, tmux
+from . import proc, rc_outcomes, tmux
 from .project_settings import (
     ProjectSettingsResult,
     read_project_settings,
@@ -38,8 +38,6 @@ from .rc_outcomes import (
     StopResult,
     StopState,
 )
-
-_environment_ids = rc_environment.EnvironmentIdCache()
 
 
 def _legacy_workspace_root() -> str:
@@ -148,12 +146,6 @@ def _tmux_window_inventory() -> tmux.WindowInventory:
     return tmux.list_windows_inventory(cfg.rc_session)
 
 
-def _tmux_capture_pane_result(target: str) -> tmux.PaneCaptureResult:
-    """Typed pane capture used by production RC inventory."""
-
-    return tmux.capture_pane_result(target)
-
-
 def _window_for_inventory(
     path: str,
     inventory: tmux.WindowInventory,
@@ -247,7 +239,6 @@ def scan_servers_result(
     *,
     window_inventory: tmux.WindowInventory | None = None,
     proc_inventory: proc.ProcRCInventory | None = None,
-    environment_cache: rc_environment.EnvironmentIdCache | None = None,
 ) -> RCServerScanResult:
     """All project RC servers: managed (csctl tmux) ∪ external (/proc) — R5/D5.
 
@@ -256,10 +247,8 @@ def scan_servers_result(
     NOT owned by a managed pane. External servers are READ-ONLY (no
     takeover/restart — review gate; sustains the "no auto-restart RC" rule).
 
-    For managed servers the captured `env_*` cloud id is returned on `RCServer`;
-    this scan is read-only. The caller passes those observations to environment
-    reconciliation, the sole ledger writer. The lower tmux and proc adapters own
-    expected external failures; parser and programming failures stay observable.
+    The lower tmux and proc adapters own expected external failures; parser and
+    programming failures stay observable.
     """
     window_scan = (
         _tmux_window_inventory() if window_inventory is None else window_inventory
@@ -269,12 +258,6 @@ def scan_servers_result(
     )
     windows = window_scan.records
     discovered = process_scan.records
-    cache = _environment_ids if environment_cache is None else environment_cache
-    environment_resolution = cache.resolve_result(
-        windows,
-        _tmux_capture_pane_result,
-    )
-    captured_env_ids = environment_resolution.environment_ids
 
     by_pid = {p.pid: p for p in discovered}
     managed_pid_set = {w.pid for w in windows if w.pid}
@@ -285,14 +268,12 @@ def scan_servers_result(
     for w in windows:
         status: Status = "dead" if w.dead else "running"
         found = by_pid.get(w.pid) if w.pid else None
-        env_id = captured_env_ids.get(w.wid, "")
         servers.append(
             RCServer(
                 name=found.name if found else w.name,
                 cwd=found.cwd if found else w.path,
                 managed=True,
                 pid=w.pid or None,
-                env_id=env_id or None,
                 status=status,
             )
         )
@@ -307,7 +288,6 @@ def scan_servers_result(
                 cwd=p.cwd,
                 managed=False,
                 pid=p.pid or None,
-                env_id=None,
                 status="running",
             )
         )
@@ -315,7 +295,6 @@ def scan_servers_result(
     issues = (
         *window_scan.issues,
         *rc_outcomes.proc_inventory_issues(process_scan),
-        *rc_outcomes.environment_capture_issues(environment_resolution),
     )
     return RCServerScanResult(tuple(servers), issues)
 
@@ -369,7 +348,6 @@ def _start_one_with_trust(
     # `stop_one_result` read back. Until this lands, `pane_current_path` (the `cd`
     # above) covers the same join, so a mid-spawn scan still matches.
     metadata_result = tmux.set_window_option_result(target, "@csctl_path", path)
-    _environment_ids.invalidate_all()
     state = (
         StartState.STARTED if metadata_result.success else StartState.METADATA_FAILED
     )
@@ -403,7 +381,6 @@ def stop_one_result(
         return StopResult(StopState.NOT_RUNNING, path)
     kill_result = tmux.kill_window_result(win.wid)
     if kill_result.state is tmux.KillState.KILLED:
-        _environment_ids.invalidate_window(win.wid)
         return StopResult(StopState.STOPPED, path)
     if kill_result.state is tmux.KillState.TARGET_NOT_FOUND:
         return StopResult(StopState.NOT_RUNNING, path, kill_result.detail)
@@ -424,7 +401,6 @@ def stop_all_result() -> StopAllResult:
 
     kill_result = tmux.kill_session_result(cfg.rc_session)
     if kill_result.state is tmux.KillState.KILLED:
-        _environment_ids.invalidate_all()
         return StopAllResult(StopState.STOPPED, cfg.rc_session)
     if kill_result.state is tmux.KillState.TARGET_NOT_FOUND:
         return StopAllResult(

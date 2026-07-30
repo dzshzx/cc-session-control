@@ -1,20 +1,14 @@
-"""Tests for data/snapshot.py — the shared world + R6 ledger persistence.
+"""Tests for data/snapshot.py — the shared world snapshot.
 
-`build_world_snapshot` runs on the worker thread once per cycle (R11/D8) and is
-also the persistence point for the bridge-environment ledger (R6): it records
-EVERY file-referenced env so a later toggle-away surfaces as an orphan. These
-tests monkeypatch the data sources and point the ledger at a tmp dir.
+`build_world_snapshot` runs on the worker thread once per cycle (R11/D8).
+These tests monkeypatch the data sources.
 """
 
-import json
 import os
-from pathlib import Path
 
 from cc_session_control.config import cfg
-from cc_session_control.data import environment_ledger as ledger
-from cc_session_control.data import environments as env
 from cc_session_control.data import liveness, registry, snapshot
-from cc_session_control.data.proc import ProcRC, ProcRCInventory
+from cc_session_control.data.proc import ProcRCInventory
 from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
@@ -25,7 +19,6 @@ from cc_session_control.data.rc_enabled import (
     EnabledListStage,
     EnabledListState,
 )
-from cc_session_control.data.rc_environment import EnvironmentIdCache
 from cc_session_control.data.refresh import RefreshFailure, build_refresh_result
 from cc_session_control.data.tmux import TmuxWindow, WindowInventory
 from cc_session_control.models import SessionProc
@@ -76,50 +69,9 @@ def _stub_sources(monkeypatch, procs):
     )
 
 
-def _ledger_keys(tmp_path):
-    text = (tmp_path / "environments.jsonl").read_text()
-    return {
-        (json.loads(line)["prefix"], json.loads(line)["key"])
-        for line in text.splitlines()
-        if line.strip()
-    }
-
-
-def test_snapshot_persists_file_referenced_keeps_active_alive_gated(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(cfg, "config_dir", tmp_path)  # tmp ledger
-    procs = [
-        _sp(1, "sid-alive", bridge="session_ALIVE"),
-        _sp(2, "sid-zombie", bridge="session_ZOMBIE"),
-    ]
-    _stub_sources(monkeypatch, procs)
-    monkeypatch.setattr(
-        snapshot.liveness.proc,
-        "probe_pid",
-        lambda pid, start: snapshot.liveness.proc.PidProbe(pid, pid == 1),
-    )
-
-    snap = snapshot.build_world_snapshot()
-
-    # file-referenced carries BOTH bridges (membership, not liveness)...
-    fr = {(r.prefix, r.key) for r in snap.environment_reconciliation.file_referenced}
-    assert fr == {("session", "ALIVE"), ("session", "ZOMBIE")}
-    # ...and the ledger persisted both, so the zombie can orphan later.
-    assert _ledger_keys(tmp_path) == {("session", "ALIVE"), ("session", "ZOMBIE")}
-
-    # observed (alive-gated) excludes the zombie -> active display stays honest.
-    obs = {(r.prefix, r.key) for r in snap.environment_reconciliation.observed}
-    assert obs == {("session", "ALIVE")}
-    current = snap.environment_reconciliation.current
-    assert all(e.env_id != "session_ZOMBIE" for e in current)
-
-
-def test_snapshot_keeps_partial_enabled_list_result_without_blocking_reconcile(
-    tmp_path,
+def test_snapshot_keeps_partial_enabled_list_result(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(cfg, "config_dir", tmp_path)
     _stub_sources(monkeypatch, [])
     failure = EnabledListResult(
         EnabledListOperation.LIST,
@@ -139,104 +91,17 @@ def test_snapshot_keeps_partial_enabled_list_result_without_blocking_reconcile(
             enabled_list=failure,
         ),
     )
-    reconciled: list[bool] = []
-    monkeypatch.setattr(
-        snapshot.environments,
-        "reconcile",
-        lambda *_args, **_kwargs: (
-            reconciled.append(True) or snapshot.environments.Reconciliation()
-        ),
-    )
 
     snap = snapshot.build_world_snapshot()
 
     assert snap.rc_enabled_list is failure
-    assert reconciled == [True]
 
 
-def test_snapshot_toggle_away_becomes_orphan(tmp_path, monkeypatch):
-    monkeypatch.setattr(cfg, "config_dir", tmp_path)
-    monkeypatch.setattr(
-        snapshot.liveness.proc,
-        "probe_pid",
-        lambda pid, start: snapshot.liveness.proc.PidProbe(pid, True),
-    )
-
-    # Cycle 1: a session references env X.
-    _stub_sources(monkeypatch, [_sp(1, "sid-x", bridge="session_X")])
-    snapshot.build_world_snapshot()
-    assert ("session", "X") in _ledger_keys(tmp_path)
-
-    # Cycle 2: the session toggled RC off -> no file references X anymore.
-    _stub_sources(monkeypatch, [_sp(1, "sid-x", bridge=None)])
-    snap2 = snapshot.build_world_snapshot()
-
-    assert snap2.environment_reconciliation.file_referenced == ()
-    orphans = snap2.environment_reconciliation.orphans
-    assert any(e.env_id == "session_X" for e in orphans)
-
-
-def test_snapshot_reobserve_keeps_single_stable_entry(tmp_path, monkeypatch):
-    monkeypatch.setattr(cfg, "config_dir", tmp_path)
-    monkeypatch.setattr(
-        snapshot.liveness.proc,
-        "probe_pid",
-        lambda pid, start: snapshot.liveness.proc.PidProbe(pid, True),
-    )
-    _stub_sources(monkeypatch, [_sp(1, "sid-x", bridge="session_X")])
-
-    snapshot.build_world_snapshot()
-    path = tmp_path / "environments.jsonl"
-    assert len(path.read_text().splitlines()) == 1
-
-    # Same world again: a re-observed env stays ONE entry (no duplication), and
-    # membership is stable (write-on-change itself is unit-tested with an injected
-    # `now` in test_environments.py; here `now` is real time so last_seen advances).
-    snapshot.build_world_snapshot()
-    assert _ledger_keys(tmp_path) == {("session", "X")}
-    assert len(path.read_text().splitlines()) == 1
-
-
-def test_snapshot_keeps_current_environment_and_carries_ledger_failure(
+def test_incomplete_liveness_snapshot_fails_generation(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setattr(cfg, "config_dir", tmp_path)
-    path = cfg.environments_ledger
-    path.write_text('{"prefix":"session","key":"OLD"}\n')
-    original_open = Path.open
-
-    def deny_ledger(target, *args, **kwargs):
-        if target == path:
-            raise PermissionError("snapshot history denied")
-        return original_open(target, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", deny_ledger)
-    _stub_sources(monkeypatch, [_sp(1, "sid-live", bridge="session_LIVE")])
-    monkeypatch.setattr(
-        snapshot.liveness.proc,
-        "probe_pid",
-        lambda pid, start: snapshot.liveness.proc.PidProbe(pid, True),
-    )
-
-    snap = snapshot.build_world_snapshot()
-
-    assert [item.env_id for item in snap.environment_reconciliation.current] == [
-        "session_LIVE",
-    ]
-    assert not snap.environment_reconciliation.ledger_history_complete
-    assert snap.environment_reconciliation.ledger.failure is ledger.LedgerFailure.READ
-    assert snap.environment_reconciliation.ledger.detail == "snapshot history denied"
-
-
-def test_incomplete_snapshot_fails_without_mutating_environment_ledger(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setattr(cfg, "config_dir", tmp_path)
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    env.upsert([env.EnvRecord("session", "OLD", "sid-old")], now=1.0)
-    original = cfg.environments_ledger.read_bytes()
     _stub_sources(monkeypatch, [])
     evidence = liveness.LivenessSnapshot(
         session_procs=(
@@ -264,14 +129,12 @@ def test_incomplete_snapshot_fails_without_mutating_environment_ledger(
 
     assert isinstance(result, RefreshFailure)
     assert "job registry" in result.source
-    assert cfg.environments_ledger.read_bytes() == original
 
 
 def test_incomplete_transcript_snapshot_fails_before_cleanup_plan(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.setattr(cfg, "config_dir", tmp_path)
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
     aged = cfg.shell_snapshots_dir / "old.sh"
     aged.parent.mkdir(parents=True)
@@ -314,113 +177,7 @@ def test_incomplete_transcript_snapshot_fails_before_cleanup_plan(
     assert result.cleanup_plan.zombie_pids == ()
 
 
-def test_snapshot_reconciliation_owns_single_rc_environment_ledger_update(
-    monkeypatch,
-):
-    actual_scan_servers = snapshot.rc.scan_servers_result
-    _stub_sources(monkeypatch, [])
-    monkeypatch.setattr(snapshot.rc, "scan_servers_result", actual_scan_servers)
-    monkeypatch.setattr(
-        snapshot.rc,
-        "_tmux_window_inventory",
-        lambda: WindowInventory((TmuxWindow("@1", "foo", False, 111, "/a"),)),
-    )
-    monkeypatch.setattr(
-        snapshot.rc,
-        "_tmux_capture_pane_result",
-        lambda target: snapshot.rc.tmux.PaneCaptureResult(
-            target,
-            "environment=env_CAPTURED",
-        ),
-    )
-    monkeypatch.setattr(
-        snapshot.rc.proc,
-        "scan_rc_server_inventory",
-        lambda: ProcRCInventory((ProcRC(111, "ws/foo", "/a"),)),
-    )
-    monkeypatch.setattr(snapshot.rc, "_environment_ids", EnvironmentIdCache())
-
-    failed = ledger.LedgerUpdate(
-        ledger.LedgerUpdateState.FAILED,
-        read=ledger.LedgerRead(ledger.LedgerReadState.MISSING),
-        failure=ledger.LedgerFailure.WRITE,
-        detail="first write failed",
-    )
-    later_success = ledger.LedgerUpdate(
-        ledger.LedgerUpdateState.WRITTEN,
-        read=ledger.LedgerRead(ledger.LedgerReadState.MISSING),
-    )
-    outcomes = iter((failed, later_success))
-    updates = []
-
-    def record_update(records, now=None):
-        updates.append(records)
-        return next(outcomes)
-
-    monkeypatch.setattr(env, "upsert", record_update)
-
-    snap = snapshot.build_world_snapshot()
-
-    assert [
-        [(record.prefix, record.key) for record in records] for records in updates
-    ] == [[("env", "CAPTURED")]]
-    assert snap.rc_servers[0].env_id == "env_CAPTURED"
-    assert [
-        (record.prefix, record.key)
-        for record in snap.environment_reconciliation.file_referenced
-    ] == [("env", "CAPTURED")]
-    assert snap.environment_reconciliation.ledger is failed
-    assert snap.environment_reconciliation.ledger.failure is ledger.LedgerFailure.WRITE
-    assert snap.environment_reconciliation.ledger.detail == "first write failed"
-
-
-def test_pane_capture_failure_keeps_snapshot_rows_but_blocks_ledger_and_orphans(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setattr(cfg, "config_dir", tmp_path)
-    env.upsert([env.EnvRecord("env", "OLD", "")], now=1.0)
-    original = cfg.environments_ledger.read_bytes()
-    actual_scan_servers = snapshot.rc.scan_servers_result
-    _stub_sources(monkeypatch, [])
-    monkeypatch.setattr(snapshot.rc, "scan_servers_result", actual_scan_servers)
-    monkeypatch.setattr(
-        snapshot.rc,
-        "_tmux_window_inventory",
-        lambda: WindowInventory((TmuxWindow("@1", "foo", False, 111, "/a"),)),
-    )
-    monkeypatch.setattr(
-        snapshot.rc,
-        "_tmux_capture_pane_result",
-        lambda target: snapshot.rc.tmux.PaneCaptureResult(
-            target,
-            issue=snapshot.rc.tmux.PaneCaptureIssue(
-                "tmux capture-pane",
-                target,
-                "timed out after 5 seconds",
-            ),
-        ),
-    )
-    monkeypatch.setattr(
-        snapshot.rc.proc,
-        "scan_rc_server_inventory",
-        lambda: ProcRCInventory((ProcRC(111, "ws/foo", "/a"),)),
-    )
-    monkeypatch.setattr(snapshot.rc, "_environment_ids", EnvironmentIdCache())
-
-    snap = snapshot.build_world_snapshot()
-
-    assert [(server.name, server.env_id) for server in snap.rc_servers] == [
-        ("ws/foo", None),
-    ]
-    assert snap.environment_reconciliation.evidence_complete is False
-    assert snap.environment_reconciliation.orphans == ()
-    assert snap.environment_reconciliation.inventory_issues[0].path == "/a [@1]"
-    assert cfg.environments_ledger.read_bytes() == original
-
-
 def test_snapshot_captures_each_liveness_source_once_per_generation(
-    tmp_path,
     monkeypatch,
 ):
     """Sessions consumes the generation's injected liveness, not fresh proc reads.
@@ -428,7 +185,6 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
     The liveness side performs targeted pid checks; the RC side performs the one
     full `/proc` traversal.  Keep those costs distinct in the regression test.
     """
-    monkeypatch.setattr(cfg, "config_dir", tmp_path)
     calls = {
         "registry_sessions": 0,
         "pid_alive": 0,
@@ -559,11 +315,6 @@ def test_snapshot_reuses_one_window_inventory_for_project_and_server_joins(
     monkeypatch.setattr(snapshot.rc, "_tmux_window_inventory", read_windows)
     monkeypatch.setattr(snapshot.rc, "scan_result", scan_projects)
     monkeypatch.setattr(snapshot.rc, "scan_servers_result", scan_servers)
-    monkeypatch.setattr(
-        snapshot.environments,
-        "reconcile",
-        lambda _evidence, _servers, inventory_issues=(): env.Reconciliation(),
-    )
 
     snapshot.build_world_snapshot()
 

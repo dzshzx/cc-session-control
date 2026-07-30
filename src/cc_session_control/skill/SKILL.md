@@ -43,7 +43,6 @@ csctl          # 三个 tab（tmux-first，启动落在项目 tab）：项目（
 
 ```bash
 csctl agents   # 后台 agent 一览（live/settled、tempo、目录）
-csctl env      # bridge 环境（当前绑定 + 孤儿）
 ```
 
 status=busy/working 的**别杀**。

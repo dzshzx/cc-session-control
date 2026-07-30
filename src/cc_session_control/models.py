@@ -230,15 +230,12 @@ class RCServer:
     Discovered from tmux (managed) and/or `/proc` (external). `managed` is True
     when the pid belongs to a csctl-managed tmux pane; otherwise the server was
     started outside csctl and is READ-ONLY (no takeover/restart — review gate).
-    `env_id` is the full cloud bridge id (`env_*`) captured from a managed
-    server's pane output, or None when unknown / external.
     """
 
     name: str
     cwd: str = ""
     managed: bool = False
     pid: int | None = None
-    env_id: str | None = None
     status: Status = "stopped"
 
 
@@ -283,10 +280,9 @@ def effective_trust_decision(
 def split_env_id(value: str | None) -> tuple[str, str]:
     """`cse_abc` -> ("cse", "abc"); ("", "") when not a namespaced id.
 
-    THE one parser for namespaced bridge/env ids (`session_*` / `cse_*` /
-    `env_*`) — registry, environments, and rc all route through it so the edge
-    rules (None, no underscore, empty prefix or suffix) cannot diverge. The
-    formatting inverse is `BridgeEnv.env_id`.
+    THE one parser for namespaced bridge/env ids (`session_*` / `cse_*`) —
+    registry routes through it so the edge rules (None, no underscore, empty
+    prefix or suffix) cannot diverge.
     """
     if not value:
         return "", ""
@@ -294,43 +290,3 @@ def split_env_id(value: str | None) -> tuple[str, str]:
     if not sep or not prefix or not suffix:
         return "", ""
     return prefix, suffix
-
-
-@dataclass(frozen=True)
-class EnvRecord:
-    """One live observation of a bridge environment (R6, D4).
-
-    `prefix` is the namespace (`session` / `cse` / `env`); `key` is the suffix
-    that is the canonical environment id WITHIN that namespace. `bound_sid` is
-    the session this observation is bound to (None for namespaces with no sid).
-    Frozen so it is hashable for set membership when splitting current/orphan.
-    Built by `environments.observe()` (registry) and, in Phase 5, pushed in by
-    `rc` for the `env_*` namespace — environments never imports rc.
-    """
-
-    prefix: str
-    key: str
-    bound_sid: str | None = None
-
-
-@dataclass(frozen=True)
-class BridgeEnv:
-    """A ledger entry for one bridge environment (R6, D4).
-
-    `status` is NOT persisted — it is recomputed against the current observation
-    by `environments.reconcile` (an orphan is a manual-delete candidate on
-    claude.ai/code; there is no local deregister). `first_seen`/`last_seen` are
-    epoch seconds. The full namespaced id is `prefix_key`.
-    """
-
-    prefix: str
-    key: str
-    bound_sid: str | None = None
-    first_seen: float = 0.0
-    last_seen: float = 0.0
-    status: Literal["current", "orphan"] = "orphan"
-
-    @property
-    def env_id(self) -> str:
-        """Full namespaced id (`cse_<key>` / `session_<key>` / `env_<key>`)."""
-        return f"{self.prefix}_{self.key}"

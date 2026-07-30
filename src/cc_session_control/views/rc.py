@@ -9,11 +9,6 @@ Shows two things:
   2. project RC servers (RCServer) discovered via tmux ∪ /proc, badged
      managed/external — external servers are READ-ONLY (no takeover/restart key).
 
-The bridge-environment ledger is deliberately NOT shown here: csctl cannot
-deregister cloud environments, so the TUI doesn't list what it can't act on.
-The ledger keeps recording in the background (snapshot upserts every cycle) and
-stays queryable via `csctl env`.
-
 Only project rows are actionable. Server rows are display-only, so no key
 toggles RC on a running session or takes over an external server.
 """
@@ -255,7 +250,6 @@ class RCView(ListTabView):
             "",
             "RC 服务（只读）:",
             "  外部服务只展示，不接管、不重启。",
-            "  云端环境台账不在 TUI 展示（csctl 无法注销云端环境）；查询用 csctl env。",
             "",
             "导航:",
             "  Tab    切换标签页",
@@ -269,7 +263,6 @@ class RCView(ListTabView):
         self._servers: list[RCServer] = []
         self._settings = ProjectSettingsResult(ProjectSettingsState.MISSING, {})
         self._enabled_list: EnabledListResult[tuple[str, ...]] | None = None
-        self._environment_issue_count = 0
         self._inventory_issues: tuple[InventoryIssue, ...] = ()
         self._help = False
 
@@ -291,11 +284,7 @@ class RCView(ListTabView):
         self._settings = batch.snapshot.rc_project_settings
         self._enabled_list = batch.snapshot.rc_enabled_list
         self._servers = list(batch.snapshot.rc_servers)
-        reconciliation = batch.snapshot.environment_reconciliation
-        self._environment_issue_count = len(reconciliation.ledger.warnings) + int(
-            reconciliation.ledger.failure is not None,
-        )
-        self._inventory_issues = reconciliation.inventory_issues
+        self._inventory_issues = batch.snapshot.rc_inventory_issues
         self._loaded = True
         if not self._help:
             self._rebuild()
@@ -330,11 +319,6 @@ class RCView(ListTabView):
             if not self._settings.available
             else ""
         )
-        ledger_text = (
-            f" · ⚠ 环境台账异常 {self._environment_issue_count}"
-            if self._environment_issue_count
-            else ""
-        )
         enabled_issue = (
             self._enabled_list is not None and not self._enabled_list.success
         )
@@ -358,7 +342,7 @@ class RCView(ListTabView):
         return (
             f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}"
             f"{rc_text}{rc_error_text}{miss_text}{srv_text}{settings_text}"
-            f"{ledger_text}{inventory_text}"
+            f"{inventory_text}"
         )
 
     def _close_overlay_mode(self) -> None:

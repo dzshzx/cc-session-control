@@ -83,7 +83,6 @@ csctl resume --all           # Everything, no paging
 
 # Read-only inventory
 csctl agents                 # Background agents: state, tempo, name, cwd
-csctl env                    # Current + orphan bridge environments
 
 # Bundled Claude Code skill (session-doctor knowledge for the agent)
 csctl skill install          # Write SKILL.md to ~/.claude/skills/
@@ -106,8 +105,7 @@ csctl --version
 | `XDG_CONFIG_HOME` | `~/.config` | Config directory base |
 
 The RC auto-start list is stored at
-`$XDG_CONFIG_HOME/csctl/rc-enabled`; the bridge-environment ledger is stored
-at `$XDG_CONFIG_HOME/csctl/environments.jsonl`.
+`$XDG_CONFIG_HOME/csctl/rc-enabled`.
 
 ## License
 

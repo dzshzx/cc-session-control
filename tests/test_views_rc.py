@@ -163,8 +163,6 @@ def test_rc_view_status_counts_per_project_setting_failures():
 
 
 def test_rc_view_shows_unknown_inventory_status_and_warning():
-    from cc_session_control.data import environments
-
     issue = InventoryIssue(
         "tmux list-windows",
         None,
@@ -173,9 +171,7 @@ def test_rc_view_shows_unknown_inventory_status_and_warning():
     project = _make_project(status="unknown")
     snap = WorldSnapshot(
         rc_projects=[project],
-        environment_reconciliation=environments.Reconciliation(
-            inventory_issues=(issue,),
-        ),
+        rc_inventory_issues=(issue,),
     )
     app = FakeApp()
     view = RCView(app)
@@ -479,8 +475,8 @@ def test_server_row_managed_external_badge():
 
 
 def test_rc_view_renders_servers_but_no_env_ledger():
-    # The env ledger is deliberately NOT rendered in the TUI (csctl can't act on
-    # cloud environments) — only project rows + the RC server section remain.
+    # No env-ledger section exists (the pipeline was removed in 0.8; csctl
+    # can't act on cloud environments) — only project rows + RC servers remain.
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
@@ -585,26 +581,11 @@ def test_no_deregister_or_delete_env_symbols_in_src():
     assert offenders == []
 
 
-def test_environments_and_agent_ops_do_not_export_deregister():
+def test_agent_ops_does_not_export_deregister():
     from cc_session_control.actions import agent_ops
-    from cc_session_control.data import environments
 
-    for mod in (environments, agent_ops):
-        assert not hasattr(mod, "deregister")
-        assert not hasattr(mod, "delete_env")
-
-
-def test_rc_view_help_points_ledger_queries_at_cli():
-    # The env ledger left the TUI; the help must still be honest about WHY
-    # (csctl cannot deregister cloud envs) and point at `csctl env`.
-    app = FakeApp()
-    view = RCView(app)
-    app.views = [view]
-    view._show_help()
-    canvas = view._body.original_widget.render((100, 40), focus=False)
-    blob = b"\n".join(canvas.text).decode()
-    assert "无法注销" in blob
-    assert "csctl env" in blob
+    assert not hasattr(agent_ops, "deregister")
+    assert not hasattr(agent_ops, "delete_env")
 
 
 def test_rc_view_help_is_overlay_and_keeps_list(monkeypatch):
