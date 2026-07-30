@@ -121,18 +121,11 @@ def test_typed_mutation_results_distinguish_value_changed_and_committed(
     path.write_text(f"{project}\n", encoding="utf-8")
     store = _store(path)
 
-    contained = store.contains_result(str(project / "."))
     duplicate = store.add_result(str(project))
     disabled = store.toggle_result(str(project))
     enabled = store.toggle_result(str(project))
     removed = store.remove_result(str(project))
 
-    assert (
-        contained.operation,
-        contained.value,
-        contained.changed,
-        contained.committed,
-    ) == (EnabledListOperation.CONTAINS, True, False, False)
     assert (
         duplicate.operation,
         duplicate.value,
@@ -159,7 +152,7 @@ def test_typed_mutation_results_distinguish_value_changed_and_committed(
     ) == (EnabledListOperation.REMOVE, True, True, True)
     assert all(
         result.state is EnabledListState.SUCCEEDED
-        for result in (contained, duplicate, disabled, enabled, removed)
+        for result in (duplicate, disabled, enabled, removed)
     )
 
 
@@ -210,7 +203,6 @@ def test_add_remove_toggle_are_canonical_and_preserve_layout(tmp_path: Path) -> 
     store = _store(path)
 
     assert store.list_result().value == (str(one),)
-    assert store.contains_result(str(one / ".")).value is True
     assert store.add_result(str(one / ".")).value is False
     assert store.add_result(str(two)).value is True
     assert store.remove_result(str(one / ".." / "one")).value is True

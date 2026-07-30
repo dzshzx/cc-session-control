@@ -98,7 +98,7 @@ def confirm_takeover(
     gate never re-derives the takeover condition. Gate order is fixed: the R10
     degrade refusal fires BEFORE the confirm modal — off `/proc` a live
     takeover cannot safely kill the old pid, and refusing here beats exiting
-    the TUI only to have `do_resume` print its refusal. Resuming/relaunching a
+    the TUI only to have `do_resume_result` print its refusal. Resuming/relaunching a
     DEAD session kills nothing: no gate, no confirm (B3). ``gated=False`` is
     reserved for callers carrying a complete typed liveness preparation, so
     confirmation does not mix generations. Otherwise the caller supplies the

@@ -111,22 +111,9 @@ def _project_transcript(
     )
 
 
-def _parse_transcript(
-    path: str,
-    idx: dict[str, LiveInfo],
-    cur: AbstractSet[int],
-    job_shorts: set[str],
-) -> Session | None:
-    """Compatibility projection for focused parser tests."""
-    transcript = transcripts._parse_transcript(path)
-    if transcript is None:
-        return None
-    return _project_transcript(transcript, idx, cur, job_shorts)
-
-
 def _candidate_pids(info: LiveInfo | None) -> tuple[int, ...]:
     """A LiveInfo's pid candidate set — `pids` when filled, else the chosen pid
-    (same fallback rule the `current` check in `_parse_transcript` uses)."""
+    (same fallback rule the `current` check in `_project_transcript` uses)."""
     if info is None:
         return ()
     if info.pids:

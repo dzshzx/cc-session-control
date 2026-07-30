@@ -280,8 +280,8 @@ def host_pid_for_sid(
     `liveness.live_session_procs` injection can. Returns `(None, False)` when
     no sessions file references the sid (that live worker is unstoppable).
 
-    The single host-pid join shared by `snapshot._enrich_jobs`,
-    `actions.agent_ops.job_host`, and `cleanup.remove_session` (M3 guard).
+    The single host-pid join shared by `liveness.enrich_jobs` and
+    `cleanup.remove_session` (M3 guard).
     """
     procs = [sp for sp in session_procs if sp.sid == sid]
     if not procs:

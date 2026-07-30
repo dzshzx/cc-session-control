@@ -296,8 +296,8 @@ def test_sessions_help_mode_r_refreshes_and_stays():
 
 def test_enter_key_live_takeover_gated_when_degraded(monkeypatch):
     # R10: like `t`/`R`, a live Enter-takeover must be refused in-TUI when
-    # /proc is unavailable — not confirmed and then refused by do_resume after
-    # csctl has already exited.
+    # /proc is unavailable — not confirmed and then refused by do_resume_result
+    # after csctl has already exited.
     import cc_session_control.views.sessions as sv_mod
 
     s = _make_session(sid="sid1", alive=True, current=False, pid=4242)
@@ -781,11 +781,8 @@ def test_sessions_view_applies_snapshot_and_plan_from_same_batch():
     plan = CleanupPlan()
 
     fake = [_make_session(sid="snap1")]
-    from cc_session_control.models import SessionProc
 
-    snap = WorldSnapshot(
-        sessions=fake, session_procs=[SessionProc(pid=9, sid="snap1")], cur={42}
-    )
+    snap = WorldSnapshot(sessions=fake)
     app = FakeApp()
     view = SessionsView(app)
     app.views = [view]

@@ -184,11 +184,6 @@ def probe_pid(pid: int | None, proc_start: str | None) -> PidProbe:
     return PidProbe(pid=pid, alive=alive, stat=stat)
 
 
-def pid_alive(pid: int | None, proc_start: str | None) -> bool:
-    """Compatibility bool view; unknown evidence is conservatively False."""
-    return probe_pid(pid, proc_start).alive is True
-
-
 def probe_ancestors(start_pid: int) -> AncestorProbe:
     """Walk a pid's ancestors without discarding a partial chain on failure."""
     pids = {start_pid}

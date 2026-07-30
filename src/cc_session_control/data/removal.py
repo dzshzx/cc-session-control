@@ -109,10 +109,6 @@ class CleanupExecution:
         return [item for item in self.removals if item.status is RemovalStatus.REMOVED]
 
     @property
-    def missing(self) -> list[PathRemoval]:
-        return [item for item in self.removals if item.status is RemovalStatus.MISSING]
-
-    @property
     def failed(self) -> list[PathRemoval]:
         return [item for item in self.removals if item.status is RemovalStatus.FAILED]
 
@@ -586,15 +582,3 @@ def remove_anchored(anchor: RemovalAnchor) -> PathRemoval:
             f"descriptor close failed: {close_error}",
         )
     return outcome
-
-
-def remove_path(path: Pathish) -> PathRemoval:
-    """Compatibility wrapper that anchors one target before removing it."""
-    target = _absolute(path)
-    try:
-        anchor = anchor_path(target.parent, target)
-    except RemovalSafetyError as exc:
-        return PathRemoval(target, RemovalStatus.REFUSED, str(exc))
-    except OSError as exc:
-        return PathRemoval(target, RemovalStatus.FAILED, str(exc))
-    return remove_anchored(anchor)

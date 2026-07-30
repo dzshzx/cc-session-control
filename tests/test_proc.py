@@ -182,60 +182,13 @@ def test_read_proc_stat_missing_pid_returns_none_starttime(tmp_path, monkeypatch
     assert proc.read_proc_stat(999999).starttime is None
 
 
-# --- pid_alive: zombie vs alive vs reuse ---
-
-
-def test_pid_alive_zombie_no_proc(monkeypatch):
-    # No /proc entry -> starttime None -> not alive.
-    monkeypatch.setattr(
-        proc,
-        "probe_pid",
-        lambda pid, start: proc.PidProbe(pid, False),
-    )
-    assert proc.pid_alive(4242, "123") is False
-
-
-def test_pid_alive_matches_proc_start(monkeypatch):
-    monkeypatch.setattr(
-        proc,
-        "probe_pid",
-        lambda pid, start: proc.PidProbe(pid, True),
-    )
-    assert proc.pid_alive(4242, "123") is True
-
-
-def test_pid_alive_reuse_mismatch_is_dead(monkeypatch):
-    # pid exists but starttime differs -> a recycled pid, treated as dead.
-    monkeypatch.setattr(
-        proc,
-        "probe_pid",
-        lambda pid, start: proc.PidProbe(pid, False),
-    )
-    assert proc.pid_alive(4242, "123") is False
-
-
-def test_pid_alive_unknown_procstart_falls_back_to_existence(monkeypatch):
-    monkeypatch.setattr(
-        proc,
-        "probe_pid",
-        lambda pid, start: proc.PidProbe(pid, True),
-    )
-    assert proc.pid_alive(4242, None) is True
-    assert proc.pid_alive(4242, "") is True
-
-
-def test_pid_alive_none_pid_is_false():
-    assert proc.pid_alive(None, "123") is False
-    assert proc.pid_alive(0, "123") is False
-
-
 # --- non-Linux degradation ---
 
 
 def test_non_linux_degrades(monkeypatch):
     monkeypatch.setattr(proc, "has_proc", lambda: False)
     assert proc.read_proc_stat(4242).starttime is None
-    assert proc.pid_alive(4242, "123") is False
+    assert proc.probe_pid(4242, "123").alive is None
     # ancestor_pids returns only self, so "current" can't be determined.
     import os
 

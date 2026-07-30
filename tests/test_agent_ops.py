@@ -148,14 +148,8 @@ def test_remove_job_refuses_without_proc(monkeypatch):
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(issues=(issue,)),
     )
-    called = {"host": 0}
-    monkeypatch.setattr(
-        ao, "job_host", lambda job: called.__setitem__("host", 1) or (None, False)
-    )
     result = ao.remove_job(_make_job())
     assert len(result.refused) == 1
-    # Refused before even resolving the host pid.
-    assert called["host"] == 0
 
 
 def test_remove_job_refuses_real_agents_failure_before_deleting(
@@ -273,11 +267,6 @@ def test_prepare_takeover_builds_session_for_existing_resume_path(monkeypatch):
 
     monkeypatch.setattr(ao.liveness, "liveness_inputs", snapshot)
     monkeypatch.setattr(
-        ao,
-        "job_host",
-        lambda *_: (_ for _ in ()).throw(AssertionError("legacy join must not run")),
-    )
-    monkeypatch.setattr(
         ao.tmux,
         "find_session_window_result",
         lambda pids: ao.tmux.SessionWindowResult("proj:4" if pids == [4242] else None),
@@ -316,11 +305,6 @@ def test_prepare_takeover_dead_worker_no_kill(monkeypatch):
         lambda: (_ for _ in ()).throw(
             AssertionError("published dead job must not acquire liveness")
         ),
-    )
-    monkeypatch.setattr(
-        ao,
-        "job_host",
-        lambda *_: (_ for _ in ()).throw(AssertionError("legacy join must not run")),
     )
     monkeypatch.setattr(
         ao.tmux,
@@ -519,46 +503,6 @@ def test_stop_job_result_maps_take_over_without_second_scan(
     assert result.state is getattr(ao.AgentStopState, expected)
     assert result.pid == 4242
     assert calls == {"snapshot": 1, "take_over": [(4242, "777")]}
-
-
-# --- job_host: join sid -> sessions/<pid>.json ---
-
-
-def test_job_host_prefers_live_match(monkeypatch):
-    procs = [
-        SessionProc(pid=100, sid="sid-a", proc_start="111"),
-        SessionProc(pid=200, sid="sid-a", proc_start="222"),
-        SessionProc(pid=300, sid="other", proc_start="333"),
-    ]
-    monkeypatch.setattr(ao.registry, "read_session_procs", lambda *a, **k: procs)
-    monkeypatch.setattr(
-        ao.proc,
-        "probe_pid",
-        lambda pid, start: ao.proc.PidProbe(pid, pid == 200 and start == "222"),
-    )
-    job = _make_job(sid="sid-a")
-    assert ao.job_host(job) == (200, True)
-
-
-def test_job_host_none_when_no_sessions_file(monkeypatch):
-    monkeypatch.setattr(ao.registry, "read_session_procs", lambda *a, **k: [])
-    monkeypatch.setattr(
-        ao.proc,
-        "probe_pid",
-        lambda pid, start: ao.proc.PidProbe(pid, True),
-    )
-    assert ao.job_host(_make_job(sid="sid-missing")) == (None, False)
-
-
-def test_job_host_dead_when_no_live_match(monkeypatch):
-    procs = [SessionProc(pid=100, sid="sid-a", proc_start="111")]
-    monkeypatch.setattr(ao.registry, "read_session_procs", lambda *a, **k: procs)
-    monkeypatch.setattr(
-        ao.proc,
-        "probe_pid",
-        lambda pid, start: ao.proc.PidProbe(pid, False),
-    )
-    assert ao.job_host(_make_job(sid="sid-a")) == (100, False)
 
 
 # --- AC4: help/keyhints carry orphan-risk warning + "接回" label ---

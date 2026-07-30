@@ -503,7 +503,6 @@ def test_rc_view_applies_servers_from_snapshot():
     snap = WorldSnapshot(
         rc_projects=[_make_project(name="p1")],
         rc_servers=[RCServer(name="ws/x", managed=True, pid=3, status="running")],
-        observed_envs=[],
     )
     app = FakeApp()
     view = RCView(app)

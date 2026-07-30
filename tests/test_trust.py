@@ -1,11 +1,12 @@
 """Tests for effective trust and path-keyed project membership.
 
-`models.effective_trust` mirrors Claude Code's runtime trust-dialog gate
-(verified against claude 2.1.218 on 2026-07-23): the dialog is suppressed when
-the cwd or ANY ancestor holds a `hasTrustDialogAccepted: true` entry, and a
-suppressed subdirectory gets an entry with an EXPLICIT False flag — while
-declining the dialog writes no entry at all. So explicit False must never
-veto, and ancestor matching must respect path-segment boundaries.
+`models.effective_trust_decision` mirrors Claude Code's runtime trust-dialog
+gate (verified against claude 2.1.218 on 2026-07-23): the dialog is
+suppressed when the cwd or ANY ancestor holds a `hasTrustDialogAccepted:
+true` entry, and a suppressed subdirectory gets an entry with an EXPLICIT
+False flag — while declining the dialog writes no entry at all. So explicit
+False must never veto, and ancestor matching must respect path-segment
+boundaries.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from cc_session_control.data.rc_enabled import (
 )
 from cc_session_control.models import (
     TrustDecision,
-    effective_trust,
     effective_trust_decision,
 )
 
@@ -36,22 +36,22 @@ def _enabled_list(paths=()) -> EnabledListResult:
 
 def test_own_true_flag_is_trusted():
     projects = {WS + "/proj": {"hasTrustDialogAccepted": True}}
-    assert effective_trust(WS + "/proj", projects) is True
+    assert effective_trust_decision(WS + "/proj", projects) is TrustDecision.TRUSTED
 
 
 def test_no_entry_no_ancestor_is_untrusted():
     projects = {WS + "/proj": {"hasTrustDialogAccepted": True}}
-    assert effective_trust("/srv/other", projects) is False
+    assert effective_trust_decision("/srv/other", projects) is TrustDecision.UNTRUSTED
 
 
 def test_missing_flag_without_trusted_ancestor_is_untrusted():
     projects = {WS + "/proj": {}}
-    assert effective_trust(WS + "/proj", projects) is False
+    assert effective_trust_decision(WS + "/proj", projects) is TrustDecision.UNTRUSTED
 
 
 def test_explicit_false_without_trusted_ancestor_is_untrusted():
     projects = {WS + "/proj": {"hasTrustDialogAccepted": False}}
-    assert effective_trust(WS + "/proj", projects) is False
+    assert effective_trust_decision(WS + "/proj", projects) is TrustDecision.UNTRUSTED
 
 
 def test_ancestor_true_inherits_to_subdir():
@@ -60,35 +60,43 @@ def test_ancestor_true_inherits_to_subdir():
         WS: {"hasTrustDialogAccepted": True},
         WS + "/new-proj": {"hasTrustDialogAccepted": False},
     }
-    assert effective_trust(WS + "/new-proj", projects) is True
+    assert effective_trust_decision(WS + "/new-proj", projects) is TrustDecision.TRUSTED
 
 
 def test_ancestor_true_inherits_without_own_entry():
     projects = {WS: {"hasTrustDialogAccepted": True}}
-    assert effective_trust(WS + "/brand-new", projects) is True
+    assert (
+        effective_trust_decision(WS + "/brand-new", projects) is TrustDecision.TRUSTED
+    )
 
 
 def test_ancestor_matches_any_depth():
     projects = {"/home/u": {"hasTrustDialogAccepted": True}}
-    assert effective_trust(WS + "/deep/nested/dir", projects) is True
+    assert (
+        effective_trust_decision(WS + "/deep/nested/dir", projects)
+        is TrustDecision.TRUSTED
+    )
 
 
 def test_prefix_collision_is_not_an_ancestor():
     # /a/workspace must NOT cover /a/workspace-external (segment boundary).
     projects = {WS: {"hasTrustDialogAccepted": True}}
-    assert effective_trust(WS + "-external/proj", projects) is False
+    assert (
+        effective_trust_decision(WS + "-external/proj", projects)
+        is TrustDecision.UNTRUSTED
+    )
 
 
 def test_root_trusted_covers_everything():
     # rstrip guard: root="/" must not degenerate to a never-matching "//".
     projects = {"/": {"hasTrustDialogAccepted": True}}
-    assert effective_trust("/any/dir", projects) is True
+    assert effective_trust_decision("/any/dir", projects) is TrustDecision.TRUSTED
 
 
 def test_trailing_slash_keys_normalize():
     projects = {WS + "/": {"hasTrustDialogAccepted": True}}
-    assert effective_trust(WS + "/proj", projects) is True
-    assert effective_trust(WS, projects) is True
+    assert effective_trust_decision(WS + "/proj", projects) is TrustDecision.TRUSTED
+    assert effective_trust_decision(WS, projects) is TrustDecision.TRUSTED
 
 
 def test_false_ancestor_does_not_inherit():
@@ -96,17 +104,20 @@ def test_false_ancestor_does_not_inherit():
         WS: {"hasTrustDialogAccepted": False},
         WS + "/proj": {"hasTrustDialogAccepted": False},
     }
-    assert effective_trust(WS + "/proj", projects) is False
+    assert effective_trust_decision(WS + "/proj", projects) is TrustDecision.UNTRUSTED
 
 
 def test_non_dict_entry_is_ignored():
     projects = {WS: None, WS + "/proj": "garbage"}
-    assert effective_trust(WS + "/proj", projects) is False
+    assert effective_trust_decision(WS + "/proj", projects) is TrustDecision.UNTRUSTED
 
 
 def test_empty_inputs():
-    assert effective_trust("", {WS: {"hasTrustDialogAccepted": True}}) is False
-    assert effective_trust(WS, {}) is False
+    assert (
+        effective_trust_decision("", {WS: {"hasTrustDialogAccepted": True}})
+        is TrustDecision.UNTRUSTED
+    )
+    assert effective_trust_decision(WS, {}) is TrustDecision.UNTRUSTED
 
 
 def test_effective_trust_decision_keeps_unavailable_distinct_and_fail_closed():
@@ -119,7 +130,6 @@ def test_effective_trust_decision_keeps_unavailable_distinct_and_fail_closed():
     )
     assert effective_trust_decision(WS + "/proj", {}) is TrustDecision.UNTRUSTED
     assert effective_trust_decision(WS + "/proj", None) is TrustDecision.UNAVAILABLE
-    assert effective_trust(WS + "/proj", None) is False
 
 
 # --- scan-level membership (path-keyed, inheritance-aware) ------------------

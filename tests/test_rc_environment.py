@@ -62,6 +62,17 @@ def test_tmux_reexports_pure_outcome_types_from_the_split_module():
         assert getattr(tmux, name) is getattr(outcomes, name)
 
 
+def _text_capture(fn):
+    """Wrap a legacy `target -> str` capture as the typed `resolve_result`
+    seam expects (the composition the removed `EnvironmentIdCache.resolve`
+    compatibility wrapper used to perform)."""
+
+    def capture(target: str) -> tmux.PaneCaptureResult:
+        return tmux.PaneCaptureResult(target, fn(target))
+
+    return capture
+
+
 def test_successful_capture_is_reused_for_the_same_window_and_pid():
     calls: list[str] = []
     cache = rc_environment.EnvironmentIdCache(clock=Clock())
@@ -70,8 +81,14 @@ def test_successful_capture_is_reused_for_the_same_window_and_pid():
         calls.append(target)
         return "env_STABLE"
 
-    assert cache.resolve([_window()], capture) == {"@1": "env_STABLE"}
-    assert cache.resolve([_window()], capture) == {"@1": "env_STABLE"}
+    capture = _text_capture(capture)
+
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {
+        "@1": "env_STABLE"
+    }
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {
+        "@1": "env_STABLE"
+    }
     assert calls == ["@1"]
 
 
@@ -83,8 +100,14 @@ def test_pid_change_invalidates_immediately_even_when_name_and_path_match():
         calls.append(target)
         return f"env_{len(calls)}"
 
-    assert cache.resolve([_window(pid=101)], capture) == {"@1": "env_1"}
-    assert cache.resolve([_window(pid=202)], capture) == {"@1": "env_2"}
+    capture = _text_capture(capture)
+
+    assert dict(cache.resolve_result([_window(pid=101)], capture).environment_ids) == {
+        "@1": "env_1"
+    }
+    assert dict(cache.resolve_result([_window(pid=202)], capture).environment_ids) == {
+        "@1": "env_2"
+    }
     assert calls == ["@1", "@1"]
     assert len(cache) == 1
 
@@ -97,10 +120,16 @@ def test_disappeared_windows_are_pruned_and_do_not_reuse_old_ids():
         calls.append(target)
         return f"env_{len(calls)}"
 
-    assert cache.resolve([_window()], capture) == {"@1": "env_1"}
-    assert cache.resolve([], capture) == {}
+    capture = _text_capture(capture)
+
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {
+        "@1": "env_1"
+    }
+    assert dict(cache.resolve_result([], capture).environment_ids) == {}
     assert len(cache) == 0
-    assert cache.resolve([_window()], capture) == {"@1": "env_2"}
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {
+        "@1": "env_2"
+    }
 
 
 def test_negative_capture_retries_only_after_bounded_exponential_backoff():
@@ -116,19 +145,21 @@ def test_negative_capture_retries_only_after_bounded_exponential_backoff():
         calls.append(clock.now)
         return ""
 
-    cache.resolve([_window()], capture)  # miss; next at 2
+    capture = _text_capture(capture)
+
+    cache.resolve_result([_window()], capture)  # miss; next at 2
     clock.advance(1.0)
-    cache.resolve([_window()], capture)  # too early
+    cache.resolve_result([_window()], capture)  # too early
     clock.advance(1.0)
-    cache.resolve([_window()], capture)  # miss; next at 6
+    cache.resolve_result([_window()], capture)  # miss; next at 6
     clock.advance(3.0)
-    cache.resolve([_window()], capture)  # too early
+    cache.resolve_result([_window()], capture)  # too early
     clock.advance(1.0)
-    cache.resolve([_window()], capture)  # miss; next at 14
+    cache.resolve_result([_window()], capture)  # miss; next at 14
     clock.advance(8.0)
-    cache.resolve([_window()], capture)  # miss; cap stays 8
+    cache.resolve_result([_window()], capture)  # miss; cap stays 8
     clock.advance(8.0)
-    cache.resolve([_window()], capture)
+    cache.resolve_result([_window()], capture)
 
     assert calls == [0.0, 2.0, 6.0, 14.0, 22.0]
 
@@ -148,15 +179,21 @@ def test_negative_capture_eventually_picks_up_a_delayed_environment_id():
         calls += 1
         return next(responses)
 
-    assert cache.resolve([_window()], capture) == {}
+    capture = _text_capture(capture)
+
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {}
     clock.advance(0.5)
-    assert cache.resolve([_window()], capture) == {}
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {}
     clock.advance(0.5)
-    assert cache.resolve([_window()], capture) == {}
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {}
     clock.advance(2.0)
-    assert cache.resolve([_window()], capture) == {"@1": "env_LATE"}
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {
+        "@1": "env_LATE"
+    }
     clock.advance(100.0)
-    assert cache.resolve([_window()], capture) == {"@1": "env_LATE"}
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {
+        "@1": "env_LATE"
+    }
     assert calls == 3
 
 
@@ -230,11 +267,17 @@ def test_explicit_window_and_global_invalidation_force_recapture():
         calls += 1
         return f"env_{calls}"
 
-    cache.resolve([_window()], capture)
+    capture = _text_capture(capture)
+
+    cache.resolve_result([_window()], capture)
     cache.invalidate_window("@1")
-    assert cache.resolve([_window()], capture) == {"@1": "env_2"}
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {
+        "@1": "env_2"
+    }
     cache.invalidate_all()
-    assert cache.resolve([_window()], capture) == {"@1": "env_3"}
+    assert dict(cache.resolve_result([_window()], capture).environment_ids) == {
+        "@1": "env_3"
+    }
 
 
 def test_tmux_capture_keeps_only_the_first_two_thousand_lines(monkeypatch):

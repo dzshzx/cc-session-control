@@ -3,14 +3,14 @@
 The persistent truth for a background agent lives in `jobs/<short>/state.json`
 (registry.read_agent_jobs → AgentJob); it carries NO pid. So a live worker's host
 pid is resolved by JOINing the job's sid back to `sessions/<pid>.json`
-(the production takeover path does this inside one typed liveness snapshot;
-`job_host` is records-only compatibility) — a live worker with no sessions file
-is therefore unstoppable, a documented orphan risk surfaced in `HELP`.
+(the production takeover path does this inside one typed liveness snapshot via
+`registry.host_pid_for_sid`) — a live worker with no sessions file is therefore
+unstoppable, a documented orphan risk surfaced in `HELP`.
 
 Capability red lines honoured here:
   - respawn/takeover never replace the csctl process (respawn spawns a tmux
-    window; takeover hands a Session to the existing `do_resume` path run AFTER
-    the UI loop exits).
+    window; takeover hands a Session to the existing `do_resume_result` path run
+    AFTER the UI loop exits).
   - stop only signals a confirmed-live joined host pid; killing a
     `--remote-control`/bg worker does not always fully reap it (orphan risk).
   - destructive ops (remove/stop) refuse when "current" can't be determined
@@ -33,26 +33,6 @@ from ..data import proc as proc
 from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session, issue_detail
 from . import session_ops
-
-# --- host-pid join (resume-takeover compatibility view) -----------------------
-
-
-def job_host(job: AgentJob, *, max_age: float = 5.0) -> tuple[int | None, bool]:
-    """Resolve a background job's host pid + liveness — `(pid, alive)`.
-
-    `state.json` has no pid, so the worker's pid is JOINed from
-    `sessions/<pid>.json` on `job.sid` (a bg session proc; `kind` is typically
-    "bg"). Prefers a `/proc`-confirmed live match (so `alive=True` is trustworthy
-    and defeats pid reuse via `procStart`); falls back to the first sid match
-    with `alive=False`. Returns `(None, False)` when no sessions file exists for
-    the sid — that live worker is unstoppable (documented orphan risk).
-
-    Injects `/proc` liveness onto the registry rows, then defers to the single
-    pure join `registry.host_pid_for_sid` (shared with `snapshot._enrich_jobs`).
-    """
-    procs = liveness.live_session_procs(max_age=max_age)
-    return registry.host_pid_for_sid(job.sid, procs)
-
 
 # --- respawn ------------------------------------------------------------------
 
@@ -206,8 +186,9 @@ def prepare_takeover(job: AgentJob) -> TakeoverPreparationResult:
 
     Bringing a bg session to the foreground is just a resume of its
     `resume_sid`, so a ready result carries the Session the view feeds to the SAME
-    `app.exit_with(ResumeIntent)` → `do_resume` pipeline used for foreground sessions —
-    all kill/exec/`_resume_plan` logic is reused, none duplicated (R4.4 takeover).
+    `app.exit_with(ResumeIntent)` → `do_resume_result` pipeline used for foreground
+    sessions — all kill/exec/`_resume_plan` logic is reused, none duplicated
+    (R4.4 takeover).
 
     The published immutable ``job.host_alive`` decides whether this action can
     kill. A dead job resumes directly without acquiring liveness or tmux state.
@@ -286,8 +267,8 @@ class AgentStopResult:
 def stop_job_result(job: AgentJob) -> AgentStopResult:
     """Stop one live background agent from one fresh liveness snapshot.
 
-    The host pid is JOINed from `sessions/<pid>.json` (`job_host`); only a
-    confirmed-live pid is killed. Incomplete source evidence and unavailable
+    The host pid is JOINed from `sessions/<pid>.json` (`registry.host_pid_for_sid`);
+    only a confirmed-live pid is killed. Incomplete source evidence and unavailable
     current-session determination refuse the destructive action. The same
     snapshot supplies both the host pid and its proc-start identity, avoiding
     a second compatibility scan before ``take_over_result`` rechecks liveness.

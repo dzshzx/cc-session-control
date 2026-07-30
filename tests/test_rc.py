@@ -587,7 +587,7 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
         "kill_window_result",
         lambda target: rc.tmux.KillResult(rc.tmux.KillState.KILLED, target),
     )
-    assert rc.stop_one(project)
+    assert rc.stop_one_result(project).success
     assert cache.windows == ["@7"]
 
     removed: list[str] = []

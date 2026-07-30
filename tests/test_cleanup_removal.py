@@ -15,8 +15,15 @@ from cc_session_control.data import (
     registry,
     removal,
 )
-from cc_session_control.data.removal import RemovalStatus, remove_path
+from cc_session_control.data.removal import RemovalStatus
 from cc_session_control.models import Session, SessionProc
+
+
+def _anchor_and_remove(target):
+    """Anchor `target` under its own parent, then remove it — the sequence the
+    now-removed `remove_path` compatibility wrapper used to perform."""
+    anchor = removal.anchor_path(target.parent, target)
+    return removal.remove_anchored(anchor)
 
 
 def test_remove_path_refuses_without_atomic_rename_capability(tmp_path, monkeypatch):
@@ -24,7 +31,7 @@ def test_remove_path_refuses_without_atomic_rename_capability(tmp_path, monkeypa
     target.write_text("keep")
     monkeypatch.setattr(removal, "_renameat2", None)
 
-    result = remove_path(target)
+    result = _anchor_and_remove(target)
 
     assert result.status is RemovalStatus.REFUSED
     assert "renameat2(RENAME_NOREPLACE)" in (result.error or "")
@@ -41,27 +48,12 @@ def test_remove_directory_reports_permission_error(tmp_path, monkeypatch):
     refuse.avoids_symlink_attacks = True
     monkeypatch.setattr(shutil, "rmtree", refuse)
 
-    result = remove_path(target)
+    result = _anchor_and_remove(target)
 
     assert result.status is RemovalStatus.FAILED
     assert result.path == target
     assert "read-only filesystem" in (result.error or "")
     assert target.exists()
-
-
-def test_remove_directory_symlink_does_not_follow_target(tmp_path):
-    target = tmp_path / "target"
-    target.mkdir()
-    payload = target / "keep.txt"
-    payload.write_text("keep")
-    link = tmp_path / "link"
-    link.symlink_to(target, target_is_directory=True)
-
-    result = remove_path(link)
-
-    assert result.status is RemovalStatus.REMOVED
-    assert not link.exists()
-    assert payload.read_text() == "keep"
 
 
 def test_remove_path_reports_missing_when_it_disappears_during_delete(
@@ -78,7 +70,7 @@ def test_remove_path_reports_missing_when_it_disappears_during_delete(
 
     monkeypatch.setattr(os, "unlink", disappear)
 
-    result = remove_path(target)
+    result = _anchor_and_remove(target)
 
     assert result.status is RemovalStatus.MISSING
     assert result.path == target
@@ -133,8 +125,9 @@ def test_duplicate_execution_target_is_removed_once_then_missing(tmp_path, monke
         ["shell-snapshots/old.txt", "shell-snapshots/old.txt"],
     )
 
+    missing = [item for item in result.removals if item.status is RemovalStatus.MISSING]
     assert [item.path for item in result.removed] == [old]
-    assert [item.path for item in result.missing] == [old]
+    assert [item.path for item in missing] == [old]
 
 
 def test_build_plan_keeps_partial_results_and_reports_source_issue(

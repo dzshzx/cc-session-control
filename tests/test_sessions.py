@@ -2,7 +2,7 @@
 
 scan() merges three liveness/identity sources (registry sessions/<pid>.json,
 `claude agents --json`, jobs/*/state.json) and projects each transcript through
-`live_index()`. These tests feed monkeypatched cfg paths + a fake `pid_alive`
+`live_index()`. These tests feed monkeypatched cfg paths + a fake `probe_pid`
 (no real /proc) and assert source/liveness/current/rc-exposure/agent-link.
 """
 

@@ -503,7 +503,6 @@ def test_prune_sweep_zombies_apply_keeps_alive_and_current(
         lambda: proc_mod.AncestorProbe(frozenset({999})),
     )
     monkeypatch.setattr(proc_mod, "ancestor_pids", lambda: set())
-    monkeypatch.setattr(proc_mod, "pid_alive", lambda pid, ps: pid == 710575)
     monkeypatch.setattr(
         liveness,
         "liveness_inputs",

@@ -14,11 +14,9 @@ programming and invariant errors are not converted into empty view data.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
-from types import MappingProxyType
 
-from ..models import AgentJob, EnvRecord, RCProject, RCServer, Session, SessionProc
+from ..models import AgentJob, RCProject, RCServer, Session
 from . import environments, liveness, rc, sessions
 from .project_settings import ProjectSettingsResult, ProjectSettingsState
 from .rc_enabled import EnabledListResult
@@ -31,21 +29,18 @@ class WorldSnapshot:
 
     `sessions` is the full transcript-driven scan (SessionsView), `agent_jobs`
     the background jobs enriched with host liveness (AgentsView), and
-    `rc_projects`/`rc_servers` the Remote Control world (RCView). The two env
-    sets are the bridge-environment ledger's two tiers (R6):
-      - `observed_envs` — ALIVE-GATED (`observe_live`): the CURRENT/bound display.
-      - `file_referenced_envs` — bridge-truthy (`observe`): ledger MEMBERSHIP, and
-        the set orphans are computed against (`orphan = ledger − file-referenced`).
+    `rc_projects`/`rc_servers` the Remote Control world (RCView).
+    `environment_reconciliation` carries the bridge-environment ledger's two
+    observation tiers (`.observed` alive-gated, `.file_referenced` bridge-truthy
+    membership), the ledger update outcome, and any integrity warning so the
+    Projects status can expose degraded history.
 
-    `environment_reconciliation` carries the ledger update outcome and any
-    integrity warning so the Projects status can expose degraded history.
-
-    `session_procs` (with `/proc` liveness already injected), `agents_map`
-    (`claude agents --json`) and `cur` (the ancestor-pid set) are the raw liveness
-    inputs `build_world_snapshot` already computes for the scan. The owning
-    `liveness_snapshot` is passed intact to `cleanup.build_plan`; the projections
-    remain available to views without becoming a second completeness authority
-    (R11/D8).
+    `liveness_snapshot` is the one typed liveness evidence `build_world_snapshot`
+    already computes for the scan (`.session_procs` with `/proc` liveness already
+    injected, `.agents_map` from `claude agents --json`, `.cur` the ancestor-pid
+    set); it is passed intact to `cleanup.build_plan` and is the sole authority
+    views/cleanup read those projections from — WorldSnapshot does not keep a
+    second copy (R11/D8).
     """
 
     sessions: tuple[Session, ...] = ()
@@ -59,14 +54,9 @@ class WorldSnapshot:
     )
     rc_enabled_list: EnabledListResult[tuple[str, ...]] | None = None
     rc_servers: tuple[RCServer, ...] = ()
-    observed_envs: tuple[EnvRecord, ...] = ()
-    file_referenced_envs: tuple[EnvRecord, ...] = ()
     environment_reconciliation: environments.Reconciliation = field(
         default_factory=environments.Reconciliation,
     )
-    session_procs: tuple[SessionProc, ...] = ()
-    agents_map: Mapping[str, int | None] = field(default_factory=dict)
-    cur: frozenset[int] = frozenset()
     liveness_snapshot: liveness.LivenessSnapshot | None = None
     transcript_scan: SessionScanResult = field(default_factory=SessionScanResult)
 
@@ -75,19 +65,6 @@ class WorldSnapshot:
         object.__setattr__(self, "agent_jobs", tuple(self.agent_jobs))
         object.__setattr__(self, "rc_projects", tuple(self.rc_projects))
         object.__setattr__(self, "rc_servers", tuple(self.rc_servers))
-        object.__setattr__(self, "observed_envs", tuple(self.observed_envs))
-        object.__setattr__(
-            self,
-            "file_referenced_envs",
-            tuple(self.file_referenced_envs),
-        )
-        object.__setattr__(self, "session_procs", tuple(self.session_procs))
-        object.__setattr__(
-            self,
-            "agents_map",
-            MappingProxyType(dict(self.agents_map)),
-        )
-        object.__setattr__(self, "cur", frozenset(self.cur))
 
 
 def build_world_snapshot() -> WorldSnapshot:
@@ -105,9 +82,6 @@ def build_world_snapshot() -> WorldSnapshot:
     if not transcript_scan.complete:
         return WorldSnapshot(
             sessions=transcript_scan.sessions,
-            session_procs=inputs.session_procs,
-            agents_map=inputs.agents_map,
-            cur=inputs.cur,
             liveness_snapshot=inputs,
             transcript_scan=transcript_scan,
         )
@@ -136,12 +110,7 @@ def build_world_snapshot() -> WorldSnapshot:
         rc_project_settings=rc_scan.settings,
         rc_enabled_list=rc_scan.enabled_list,
         rc_servers=tuple(rc_servers),
-        observed_envs=tuple(recon.observed),
-        file_referenced_envs=tuple(recon.file_referenced),
         environment_reconciliation=recon,
-        session_procs=inputs.session_procs,
-        agents_map=inputs.agents_map,
-        cur=inputs.cur,
         liveness_snapshot=inputs,
         transcript_scan=transcript_scan,
     )

@@ -113,11 +113,6 @@ def test_refresh_batch_copies_and_freezes_nested_handoff_containers() -> None:
     agent_jobs = []
     projects = []
     servers = []
-    observed = []
-    referenced = []
-    session_procs = []
-    agents_map = {"session-1": None}
-    current_pids = {123}
     empty = [session]
     orphan_entries = ["projects/orphan"]
 
@@ -128,11 +123,6 @@ def test_refresh_batch_copies_and_freezes_nested_handoff_containers() -> None:
             agent_jobs=agent_jobs,
             rc_projects=projects,
             rc_servers=servers,
-            observed_envs=observed,
-            file_referenced_envs=referenced,
-            session_procs=session_procs,
-            agents_map=agents_map,
-            cur=current_pids,
         ),
         cleanup_plan=CleanupPlan(
             empty=empty,
@@ -147,11 +137,6 @@ def test_refresh_batch_copies_and_freezes_nested_handoff_containers() -> None:
     agent_jobs.append(object())
     projects.append(object())
     servers.append(object())
-    observed.append(object())
-    referenced.append(object())
-    session_procs.append(object())
-    agents_map["later"] = 7
-    current_pids.add(456)
     empty.append(session)
     orphan_entries.append("projects/later")
 
@@ -159,19 +144,10 @@ def test_refresh_batch_copies_and_freezes_nested_handoff_containers() -> None:
     assert batch.snapshot.agent_jobs == ()
     assert batch.snapshot.rc_projects == ()
     assert batch.snapshot.rc_servers == ()
-    assert batch.snapshot.observed_envs == ()
-    assert batch.snapshot.file_referenced_envs == ()
-    assert batch.snapshot.session_procs == ()
-    assert dict(batch.snapshot.agents_map) == {"session-1": None}
-    assert batch.snapshot.cur == frozenset({123})
     assert batch.cleanup_plan.empty == (session,)
     assert batch.cleanup_plan.orphan_entries == ("projects/orphan",)
     with pytest.raises(AttributeError):
         batch.snapshot.sessions.append(session)
-    with pytest.raises(TypeError):
-        batch.snapshot.agents_map["later"] = 7
-    with pytest.raises(AttributeError):
-        batch.snapshot.cur.add(456)
     with pytest.raises(AttributeError):
         batch.cleanup_plan.empty.append(session)
 
@@ -242,10 +218,7 @@ def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
             rc_projects=[project],
             rc_project_settings=settings,
             rc_servers=[server],
-            observed_envs=[observed],
-            file_referenced_envs=[observed],
             environment_reconciliation=reconciliation,
-            session_procs=[session_proc],
             liveness_snapshot=LivenessSnapshot(
                 session_procs=[session_proc],
                 agent_jobs=[job],
@@ -280,7 +253,7 @@ def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
     with pytest.raises(AttributeError):
         batch.snapshot.sessions[0].hidden.add("changed")
     with pytest.raises(FrozenInstanceError):
-        batch.snapshot.session_procs[0].status = "changed"
+        batch.snapshot.liveness_snapshot.session_procs[0].status = "changed"
     with pytest.raises(FrozenInstanceError):
         batch.snapshot.agent_jobs[0].host_alive = False
     with pytest.raises(AttributeError):

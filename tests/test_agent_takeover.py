@@ -81,7 +81,6 @@ def test_enter_live_refuses_partial_registry_before_takeover_side_effects(
         raise AssertionError("refused preparation must have no side effects")
 
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
-    monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
     monkeypatch.setattr(
         av_mod.agent_ops.tmux,
         "find_session_window_result",
@@ -124,7 +123,6 @@ def test_terminal_live_refuses_unknown_proc_before_takeover_side_effects(
         raise AssertionError("refused preparation must have no side effects")
 
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
-    monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
     monkeypatch.setattr(
         av_mod.agent_ops.tmux,
         "find_session_window_result",
@@ -164,7 +162,6 @@ def test_enter_live_takeover_uses_one_complete_generation(monkeypatch):
         raise AssertionError("complete preparation must not rescan liveness")
 
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
-    monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
     monkeypatch.setattr(av_mod.agent_ops.liveness, "live_session_procs", unexpected)
     monkeypatch.setattr(proc, "probe_current_ancestors", unexpected)
     monkeypatch.setattr(
@@ -281,7 +278,6 @@ def test_enter_dead_without_host_skips_incomplete_liveness(monkeypatch):
         raise AssertionError("dead resume must not query liveness, tmux, or confirm")
 
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
-    monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
     monkeypatch.setattr(av_mod.agent_ops.liveness, "live_session_procs", unexpected)
     monkeypatch.setattr(proc, "probe_current_ancestors", unexpected)
     monkeypatch.setattr(
@@ -328,7 +324,6 @@ def test_terminal_dead_without_host_skips_incomplete_liveness(monkeypatch):
         raise AssertionError("dead resume must not query liveness, tmux, or confirm")
 
     monkeypatch.setattr(av_mod.agent_ops.liveness, "liveness_inputs", snapshot)
-    monkeypatch.setattr(av_mod.agent_ops, "job_host", unexpected)
     monkeypatch.setattr(av_mod.agent_ops.liveness, "live_session_procs", unexpected)
     monkeypatch.setattr(proc, "probe_current_ancestors", unexpected)
     monkeypatch.setattr(

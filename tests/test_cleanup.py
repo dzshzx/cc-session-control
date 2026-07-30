@@ -331,7 +331,7 @@ def test_list_aged_entries_uses_cleanup_age_days(tmp_path, monkeypatch):
     open(old_plan, "w").close()
     os.utime(old_plan, (old, old))
 
-    aged = cleanup.list_aged_entries(now=now)
+    aged = age_cleanup.list_aged_entries(now=now)
     assert aged == ["plans/p1", "shell-snapshots/old.sh"]
 
 
@@ -348,7 +348,7 @@ def test_remove_aged_entries(tmp_path, monkeypatch):
         open(f, "w").close()
         os.utime(f, (mtime, mtime))
 
-    entries = cleanup.list_aged_entries(now=now)
+    entries = age_cleanup.list_aged_entries(now=now)
     result = cleanup.execute_aged_removals(entries, now=now)
     assert result.completed == ["shell-snapshots/old.sh"]
     assert not os.path.exists(os.path.join(snap, "old.sh"))

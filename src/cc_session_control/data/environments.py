@@ -10,9 +10,9 @@ cloud environment.
 Design invariants:
   - **Passive store.** `reconcile()` is the sole production ledger writer; this
     module never reaches up to collect observations. It must NOT import `rc`
-    (`environments` is below `rc` in the import DAG). `observe()` is a
-    convenience builder that reads the lower-level `registry` and accepts
-    `env_*` records passed in, never collected here.
+    (`environments` is below `rc` in the import DAG). `observe()` takes its
+    `session_procs`/`agent_jobs` from the caller's typed liveness snapshot and
+    accepts `env_*` records passed in, never collected here.
   - **Two observation tiers.** `observe()` is the bridge-truthy FILE-REFERENCED
     set — what defines ledger MEMBERSHIP (an env exists in the cloud while any
     on-disk file references it, alive or zombie). `observe_live()` alive-gates the
@@ -49,7 +49,7 @@ from ..models import (
     SessionProc,
     split_env_id,
 )
-from . import environment_ledger, liveness, registry
+from . import environment_ledger, liveness
 from .environment_ledger import (
     LedgerRead,
     LedgerReadState,
@@ -158,10 +158,9 @@ def _collect(
 
 
 def observe(
-    session_procs: Sequence[SessionProc] | None = None,
-    agent_jobs: Sequence[AgentJob] | None = None,
+    session_procs: Sequence[SessionProc],
+    agent_jobs: Sequence[AgentJob],
     rc_servers: Sequence[RCServer] | None = None,
-    max_age: float = 5.0,
 ) -> list[EnvRecord]:
     """FILE-REFERENCED bridge envs — the ledger MEMBERSHIP set (R6).
 
@@ -173,23 +172,18 @@ def observe(
     alive-gates the same sources for the CURRENT/bound display; orphans are
     `ledger − file-referenced`.
 
-    Pure when the sources are supplied (snapshot path / tests); self-reads the
-    registry when they are None (CLI / no-snapshot fallback). `env_*` is only ever
-    passed in (this module never imports rc). Lower-level registry readers own
-    their expected external-I/O degradation; programming errors propagate.
+    Pure: `session_procs`/`agent_jobs` are always supplied by the caller (the
+    snapshot path and `csctl env` both source them from one typed
+    `liveness.LivenessSnapshot`). `env_*` is only ever passed in (this module
+    never imports rc).
     """
-    if session_procs is None:
-        session_procs = registry.read_session_procs(max_age=max_age)
-    if agent_jobs is None:
-        agent_jobs = registry.read_agent_jobs(max_age=max_age)
     return _collect(session_procs, agent_jobs, rc_servers, alive_gated=False)
 
 
 def observe_live(
-    session_procs: Sequence[SessionProc] | None = None,
-    agent_jobs: Sequence[AgentJob] | None = None,
+    session_procs: Sequence[SessionProc],
+    agent_jobs: Sequence[AgentJob],
     rc_servers: Sequence[RCServer] | None = None,
-    max_age: float = 5.0,
 ) -> list[EnvRecord]:
     """Alive-gated "currently exposed" bridge envs (R3/R6) — the CURRENT set.
 
@@ -199,17 +193,12 @@ def observe_live(
     gated by proc-alive, `cse_*` by a proc-alive session sharing the job sid
     (host-alive), `env_*` by a running RC server. So a zombie session's stale
     `bridgeSessionId` is NOT reported as current — it falls through to
-    `orphan_envs` (a manual-delete candidate) instead of overstating the bound
-    count.
+    `orphan` classification (a manual-delete candidate) instead of overstating
+    the bound count.
 
-    Pure when `session_procs`/`agent_jobs` are supplied (the snapshot path passes
-    its already-liveness-resolved data — DI for tests); reads the registry +
-    `/proc` itself when they are None (CLI / no-snapshot view fallback).
+    Pure: `session_procs`/`agent_jobs` are always supplied by the caller (the
+    snapshot path passes its already-liveness-resolved data — DI for tests).
     """
-    if session_procs is None:
-        session_procs = liveness.live_session_procs(max_age=max_age)
-    if agent_jobs is None:
-        agent_jobs = registry.read_agent_jobs(max_age=max_age)
     return _collect(session_procs, agent_jobs, rc_servers, alive_gated=True)
 
 
@@ -307,25 +296,6 @@ def upsert(
     return environment_ledger.update(records, now=now)
 
 
-def read_ledger() -> LedgerRead:
-    """Public typed read for consumers that do not need reconciliation."""
-
-    return environment_ledger.read()
-
-
-def current_envs(observed: Sequence[EnvRecord]) -> list[BridgeEnv]:
-    """Envs bound to something observed right now (status='current').
-
-    Classifies the ledger against the observation. An observed env not yet in
-    the ledger is still reported current — inside `reconcile` (which upserts
-    first) that branch covers a typed ledger failure (for example a read-only
-    file), so a write failure never hides a bound env. Sorted newest-seen first.
-    """
-    result = read_ledger()
-    entries = result.entries if result.usable else {}
-    return _current_envs(observed, entries)
-
-
 def _current_envs(
     observed: Sequence[EnvRecord],
     entries: Mapping[tuple[str, str], BridgeEnv],
@@ -348,23 +318,6 @@ def _current_envs(
                 )
             )
     return sorted(out, key=lambda e: e.last_seen, reverse=True)
-
-
-def orphan_envs(observed: Sequence[EnvRecord]) -> list[BridgeEnv]:
-    """Ledger entries NOT in the current observation (status='orphan').
-
-    Pass the FILE-REFERENCED set (`observe()`) here so orphans are precisely
-    `ledger − file-referenced`: envs the ledger remembers but no on-disk file
-    references anymore (RC toggled off, job removed, server stopped). These are
-    the manual-delete candidates: csctl cannot deregister a cloud environment, so
-    the user removes them on claude.ai/code. Sorted newest-seen first.
-    (Inherently incomplete — see the module docstring's red line.)
-    Partial ledger history cannot prove orphanhood and returns no candidates.
-    """
-    result = read_ledger()
-    if not result.history_complete:
-        return []
-    return _orphan_envs(observed, result.entries)
 
 
 def _orphan_envs(

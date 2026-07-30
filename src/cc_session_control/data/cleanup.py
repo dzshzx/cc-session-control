@@ -20,9 +20,6 @@ from .age_cleanup import (
 from .age_cleanup import (
     execute_aged_removals as execute_aged_removals,
 )
-from .age_cleanup import (
-    list_aged_entries as list_aged_entries,
-)
 from .cleanup_anchors import (
     PlanAnchors,
     pin_plan_targets,

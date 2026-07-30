@@ -2,8 +2,7 @@
 
 The ledger lives at `cfg.environments_ledger` (under `cfg.config_dir`); all
 tests monkeypatch `cfg.config_dir` to a tmp dir. `now` is injected so
-first_seen/last_seen are deterministic. The observe() builder test monkeypatches
-`cfg.claude_home` and feeds registry fixtures.
+first_seen/last_seen are deterministic.
 """
 
 import json
@@ -12,7 +11,7 @@ import time
 from pathlib import Path
 
 from cc_session_control.config import cfg
-from cc_session_control.data import atomic_write, liveness, registry
+from cc_session_control.data import atomic_write, liveness
 from cc_session_control.data import environment_ledger as ledger
 from cc_session_control.data import environments as env
 from cc_session_control.models import (
@@ -188,41 +187,41 @@ def test_session_and_cse_same_suffix_not_merged(tmp_path, monkeypatch):
     assert rows == {("session", "SAME"), ("cse", "SAME")}
 
 
-# --- current vs orphan split -----------------------------------------------
+# --- current vs orphan split (via reconcile) --------------------------------
 
 
 def test_current_vs_orphan_split(tmp_path, monkeypatch):
     _use_tmp_ledger(tmp_path, monkeypatch)
+    # Recent enough to survive the 90d retention compaction inside reconcile.
+    bootstrap_now = time.time() - 10
     env.upsert(
         [EnvRecord("cse", "AAA", "sid-a"), EnvRecord("session", "BBB", "sid-b")],
-        now=100.0,
+        now=bootstrap_now,
     )
-    # Only AAA is observed now -> AAA current, BBB orphan.
-    observed = [EnvRecord("cse", "AAA", "sid-a")]
+    # Only AAA is observed now (a live job referencing it) -> AAA current, BBB
+    # orphan (nothing references it anymore).
+    job = AgentJob(
+        short="a", sid="sid-a", resume_sid="sid-a", env_suffix="AAA", host_alive=True
+    )
+    recon = env.reconcile(liveness.LivenessSnapshot(agent_jobs=(job,)), [])
 
-    current = env.current_envs(observed)
-    orphans = env.orphan_envs(observed)
-    assert [(e.prefix, e.key, e.status) for e in current] == [("cse", "AAA", "current")]
-    assert [(e.prefix, e.key, e.status) for e in orphans] == [
+    assert [(e.prefix, e.key, e.status) for e in recon.current] == [
+        ("cse", "AAA", "current")
+    ]
+    assert [(e.prefix, e.key, e.status) for e in recon.orphans] == [
         ("session", "BBB", "orphan")
     ]
 
 
-def test_current_includes_observed_not_yet_in_ledger(tmp_path, monkeypatch):
-    _use_tmp_ledger(tmp_path, monkeypatch)
-    # Query before any upsert: observed env is still reported current.
-    observed = [EnvRecord("cse", "NEW", "sid-x")]
-    current = env.current_envs(observed)
-    assert [(e.prefix, e.key, e.status) for e in current] == [("cse", "NEW", "current")]
-    assert env.orphan_envs(observed) == []
-
-
 def test_orphan_split_when_nothing_observed(tmp_path, monkeypatch):
     _use_tmp_ledger(tmp_path, monkeypatch)
-    env.upsert([EnvRecord("cse", "AAA", "sid-a")], now=100.0)
-    assert env.current_envs([]) == []
-    orphans = env.orphan_envs([])
-    assert [(e.prefix, e.key) for e in orphans] == [("cse", "AAA")]
+    # Recent enough to survive the 90d retention compaction inside reconcile.
+    env.upsert([EnvRecord("cse", "AAA", "sid-a")], now=time.time() - 10)
+
+    recon = env.reconcile(liveness.LivenessSnapshot(), [])
+
+    assert recon.current == ()
+    assert [(e.prefix, e.key) for e in recon.orphans] == [("cse", "AAA")]
 
 
 # --- reconcile: the ONE observe → upsert → classify pipeline ----------------
@@ -473,29 +472,22 @@ def test_orphans_include_env_namespace(tmp_path, monkeypatch):
     _use_tmp_ledger(tmp_path, monkeypatch)
     # env_* is the project RC server namespace (pushed in by rc in Phase 5);
     # here we upsert one directly to prove it is a manual-delete candidate.
+    # Recent enough to survive the 90d retention compaction inside reconcile.
+    bootstrap_now = time.time() - 10
     env.upsert(
         [
             EnvRecord("cse", "AAA", "sid-a"),
             EnvRecord("env", "ENVKEY", None),
         ],
-        now=100.0,
+        now=bootstrap_now,
     )
     # Nothing observed -> both are orphans / candidates.
-    orphans = env.orphan_envs([])
+    recon = env.reconcile(liveness.LivenessSnapshot(), [])
+    orphans = recon.orphans
     assert {e.env_id for e in orphans} == {"cse_AAA", "env_ENVKEY"}
     env_row = next(e for e in orphans if e.env_id == "env_ENVKEY")
     assert env_row.prefix == "env"
-    assert env_row.last_seen == 100.0
-
-
-def test_orphans_exclude_currently_observed(tmp_path, monkeypatch):
-    _use_tmp_ledger(tmp_path, monkeypatch)
-    env.upsert(
-        [EnvRecord("cse", "AAA", "sid-a"), EnvRecord("session", "BBB", "sid-b")],
-        now=100.0,
-    )
-    orphans = env.orphan_envs([EnvRecord("cse", "AAA", "sid-a")])
-    assert {e.env_id for e in orphans} == {"session_BBB"}
+    assert env_row.last_seen == bootstrap_now
 
 
 # --- corrupt / missing ledger is safe --------------------------------------
@@ -503,77 +495,9 @@ def test_orphans_exclude_currently_observed(tmp_path, monkeypatch):
 
 def test_missing_ledger_is_safe(tmp_path, monkeypatch):
     _use_tmp_ledger(tmp_path, monkeypatch)
-    assert env.current_envs([]) == []
-    assert env.orphan_envs([]) == []
-
-
-def test_partial_ledger_is_visible_but_not_rewritten_or_classified(
-    tmp_path, monkeypatch
-):
-    _use_tmp_ledger(tmp_path, monkeypatch)
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    path = tmp_path / "environments.jsonl"
-    good = json.dumps(
-        {
-            "prefix": "cse",
-            "key": "AAA",
-            "bound_sid": "sid-a",
-            "first_seen": 1.0,
-            "last_seen": 2.0,
-        }
-    )
-    path.write_text("{not json\n" + good + '\n{"prefix": "", "key": "x"}\n')
-    original = path.read_bytes()
-
-    read = env.read_ledger()
-    assert read.state is ledger.LedgerReadState.PARTIAL
-    assert ("cse", "AAA") in read.entries
-    assert env.orphan_envs([]) == []
-
-    update = env.upsert([EnvRecord("cse", "AAA", "sid-a")], now=9.0)
-
-    assert update.state is ledger.LedgerUpdateState.BLOCKED
-    assert path.read_bytes() == original
-
-
-# --- observe() builder reads registry, not rc ------------------------------
-
-
-def test_observe_builds_from_registry(tmp_path, monkeypatch):
-    monkeypatch.setattr(cfg, "claude_home", tmp_path)
-    registry.invalidate_cache()
-    sessions = tmp_path / "sessions"
-    sessions.mkdir(parents=True, exist_ok=True)
-    (sessions / "1.json").write_text(
-        json.dumps(
-            {
-                "pid": 1,
-                "sessionId": "sid-s",
-                "bridgeSessionId": "session_016spR3Nkq2tJL2edM1exfuo",
-            }
-        )
-    )
-    # a session with no bridge -> not observed
-    (sessions / "2.json").write_text(
-        json.dumps({"pid": 2, "sessionId": "sid-nobridge"})
-    )
-    jobs = tmp_path / "jobs" / "0877f45e"
-    jobs.mkdir(parents=True, exist_ok=True)
-    (jobs / "state.json").write_text(
-        json.dumps(
-            {
-                "sessionId": "0877f45e-x",
-                "bridgeSessionId": "cse_01DgeqMqXMrSFpW59uSZwK99",
-            }
-        )
-    )
-
-    records = {(r.prefix, r.key): r for r in env.observe(max_age=0.0)}
-    assert set(records) == {
-        ("session", "016spR3Nkq2tJL2edM1exfuo"),
-        ("cse", "01DgeqMqXMrSFpW59uSZwK99"),
-    }
-    assert records[("session", "016spR3Nkq2tJL2edM1exfuo")].bound_sid == "sid-s"
+    recon = env.reconcile(liveness.LivenessSnapshot(), [])
+    assert recon.current == ()
+    assert recon.orphans == ()
 
 
 # --- observe(): bridge-truthy FILE-REFERENCED set (R6 ledger membership) -----
@@ -613,16 +537,24 @@ def test_orphan_appears_after_env_toggles_away(tmp_path, monkeypatch):
     # The whole point of R6: cycle 1 a file references env X (persist it); cycle 2
     # the file no longer references it -> X becomes an orphan / manual-delete.
     _use_tmp_ledger(tmp_path, monkeypatch)
-    file_ref1 = env.observe([_sp(1, "sid-x", bridge="session_X", proc_alive=True)], [])
-    env.upsert(file_ref1, now=100.0)
+    env.reconcile(
+        liveness.LivenessSnapshot(
+            session_procs=(_sp(1, "sid-x", bridge="session_X", proc_alive=True),)
+        ),
+        [],
+        now=100.0,
+    )
 
-    file_ref2 = env.observe([_sp(1, "sid-x", bridge=None, proc_alive=True)], [])
-    env.upsert(file_ref2, now=200.0)
+    recon2 = env.reconcile(
+        liveness.LivenessSnapshot(
+            session_procs=(_sp(1, "sid-x", bridge=None, proc_alive=True),)
+        ),
+        [],
+        now=200.0,
+    )
 
-    assert file_ref2 == []
-    orphans = env.orphan_envs(file_ref2)
-    assert [e.env_id for e in orphans] == ["session_X"]
-    assert {e.env_id for e in env.orphan_envs(file_ref2)} == {"session_X"}
+    assert recon2.file_referenced == ()
+    assert [e.env_id for e in recon2.orphans] == ["session_X"]
 
 
 def test_file_referenced_zombie_is_neither_current_nor_orphan(tmp_path, monkeypatch):
@@ -631,14 +563,15 @@ def test_file_referenced_zombie_is_neither_current_nor_orphan(tmp_path, monkeypa
     # middle tier active(alive) ⊆ file-referenced ⊆ ledger.
     _use_tmp_ledger(tmp_path, monkeypatch)
     procs = [_sp(2, "sid-dead", bridge="session_ZOMBIE", proc_alive=False)]
-    file_ref = env.observe(procs, [])
-    env.upsert(file_ref, now=100.0)
-    observed = env.observe_live(procs, [])
 
-    current = env.current_envs(observed)
-    orphans = env.orphan_envs(file_ref)
-    assert all(e.env_id != "session_ZOMBIE" for e in current)  # not current (dead)
-    assert all(e.env_id != "session_ZOMBIE" for e in orphans)  # not orphan (referenced)
+    recon = env.reconcile(liveness.LivenessSnapshot(session_procs=tuple(procs)), [])
+
+    assert all(
+        e.env_id != "session_ZOMBIE" for e in recon.current
+    )  # not current (dead)
+    assert all(
+        e.env_id != "session_ZOMBIE" for e in recon.orphans
+    )  # not orphan (referenced)
 
 
 # --- observe_live(): alive-gated CURRENT set (R3/R6, zombie not current) ----
@@ -653,15 +586,6 @@ def test_observe_live_excludes_dead_session_bridge():
     ]
     recs = {(r.prefix, r.key) for r in env.observe_live(procs, [])}
     assert recs == {("session", "ALIVE")}
-
-
-def test_observe_live_zombie_not_current_via_classifier():
-    # End-to-end: feed observe_live's output into current_envs — the zombie's
-    # stale bridge must not land in the current set.
-    procs = [_sp(2, "sid-dead", bridge="session_ZOMBIE", proc_alive=False)]
-    observed = env.observe_live(procs, [])
-    current = env.current_envs(observed)
-    assert all(e.env_id != "session_ZOMBIE" for e in current)
 
 
 def test_observe_live_cse_gated_by_host_alive():

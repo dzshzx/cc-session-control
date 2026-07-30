@@ -22,7 +22,6 @@ _INITIAL_BACKOFF = 10.0
 _MAXIMUM_BACKOFF = 300.0
 
 Capture = Callable[[str], PaneCaptureResult]
-LegacyCapture = Callable[[str], str]
 Clock = Callable[[], float]
 CacheKey = tuple[str, int]
 
@@ -156,19 +155,6 @@ class EnvironmentIdCache:
                 next_backoff=min(delay * 2, self._maximum_backoff),
             )
         return EnvironmentIdResolution(resolved, tuple(issues))
-
-    def resolve(
-        self,
-        windows: Iterable[TmuxWindow],
-        capture: LegacyCapture,
-    ) -> dict[str, str]:
-        """Compatibility ids-only view for legacy string capture callbacks."""
-
-        result = self.resolve_result(
-            windows,
-            lambda target: PaneCaptureResult(target, capture(target)),
-        )
-        return dict(result.environment_ids)
 
     def invalidate_window(self, window_id: str) -> None:
         """Forget every pane generation associated with one tmux window."""

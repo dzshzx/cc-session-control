@@ -89,7 +89,7 @@ class Session:
     pid: int | None
     alive: bool
     current: bool
-    # registry `procStart` of the chosen pid — lets kill-time `pid_alive`
+    # registry `procStart` of the chosen pid — lets kill-time `proc.probe_pid`
     # rechecks defeat pid reuse ("" = unknown, recheck degrades to existence).
     proc_start: str = ""
     hidden: frozenset[str] = frozenset()
@@ -263,7 +263,7 @@ def effective_trust_decision(
 ) -> TrustDecision:
     """PURE: is `path` trusted per Claude Code's runtime trust-dialog gate?
 
-    THE one trust predicate — membership discovery and the `start_one` gate
+    THE one trust predicate — membership discovery and the `start_one_result` gate
     both call it, never re-derive. Mirrors claude's own behavior (verified on
     2.1.218): the dialog is suppressed when the cwd or ANY ancestor entry in
     `projects` (the `~/.claude.json` map) carries `hasTrustDialogAccepted:
@@ -293,15 +293,6 @@ def effective_trust_decision(
         if target == root or target.startswith(root.rstrip("/") + "/"):
             return TrustDecision.TRUSTED
     return TrustDecision.UNTRUSTED
-
-
-def effective_trust(
-    path: str,
-    projects: Mapping[str, object] | None,
-) -> bool:
-    """Compatibility bool; unavailable evidence always fails closed."""
-
-    return effective_trust_decision(path, projects) is TrustDecision.TRUSTED
 
 
 def split_env_id(value: str | None) -> tuple[str, str]:
@@ -342,7 +333,7 @@ class BridgeEnv:
     """A ledger entry for one bridge environment (R6, D4).
 
     `status` is NOT persisted — it is recomputed against the current observation
-    by `current_envs`/`orphan_envs` (an orphan is a manual-delete candidate on
+    by `environments.reconcile` (an orphan is a manual-delete candidate on
     claude.ai/code; there is no local deregister). `first_seen`/`last_seen` are
     epoch seconds. The full namespaced id is `prefix_key`.
     """

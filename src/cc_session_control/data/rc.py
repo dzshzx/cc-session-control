@@ -118,8 +118,8 @@ _TEMP_ROOTS = frozenset(
 def _is_temp_path(path: str) -> bool:
     """PURE: is `path` a platform temp root, or beneath one?
 
-    Same segment-boundary matching as `models.effective_trust` (normpath
-    only; `/tmpfoo` is not under `/tmp`).
+    Same segment-boundary matching as `models.effective_trust_decision`
+    (normpath only; `/tmpfoo` is not under `/tmp`).
     """
     target = os.path.normpath(path)
     for root in _TEMP_ROOTS:
@@ -384,7 +384,7 @@ def _start_one_with_trust(
     if target is None:
         raise AssertionError("successful tmux create must carry a target")
     # Declare the window's project — the collision-safe join key `scan` and
-    # `stop_one` read back. Until this lands, `pane_current_path` (the `cd`
+    # `stop_one_result` read back. Until this lands, `pane_current_path` (the `cd`
     # above) covers the same join, so a mid-spawn scan still matches.
     metadata_result = tmux.set_window_option_result(target, "@csctl_path", path)
     _environment_ids.invalidate_all()
@@ -398,12 +398,6 @@ def start_one_result(path: str) -> StartResult:
     """Start one RC server with tri-state trust evidence."""
 
     return _start_one_with_trust(path, trust_decision(path))
-
-
-def start_one(path: str) -> bool:
-    """Compatibility bool; unavailable trust still fails closed."""
-
-    return start_one_result(path).success
 
 
 def stop_one_result(
@@ -432,12 +426,6 @@ def stop_one_result(
     if kill_result.state is tmux.KillState.TARGET_NOT_FOUND:
         return StopResult(StopState.NOT_RUNNING, path, kill_result.detail)
     return StopResult(StopState.FAILED, path, kill_result.detail)
-
-
-def stop_one(path: str) -> bool:
-    """Compatibility bool view of ``stop_one_result``."""
-
-    return stop_one_result(path).success
 
 
 def remove_one_result(path: str) -> RemoveResult:

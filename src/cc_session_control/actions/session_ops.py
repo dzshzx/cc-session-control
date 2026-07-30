@@ -66,7 +66,7 @@ def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
     One implementation so the gate order and the kill semantics cannot fork
     across the resume/terminate/stop variants (they had already started to:
     only terminate/stop skipped the settle sleep for an already-gone pid).
-    The recheck (`pid_alive` against `proc_start`; mere existence when the
+    The recheck (`proc.probe_pid` against `proc_start`; mere existence when the
     start is unknown) closes the pid-reuse window — a confirm modal can sit
     open for minutes, and a recycled pid must never be SIGTERMed.
 
@@ -292,11 +292,6 @@ def do_resume_sid_result(sid: str) -> ResumeOutcome:
     if resolution.session is None:
         raise AssertionError("successful session resolution must carry a Session")
     return _do_resume_resolved_result(resolution.session)
-
-
-def do_resume(s: Session, fork: bool = False) -> bool:
-    """Compatibility bool view; public intents use :func:`do_resume_result`."""
-    return do_resume_result(s, fork).success
 
 
 def _spawn_in_tmux_result(

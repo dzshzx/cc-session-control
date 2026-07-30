@@ -116,6 +116,9 @@ def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None
         "`capture_pane`",
         "`residency_targets`",
         "`list_orphan_dirs`",
+        "`pid_alive`",
+        "`start_one`",
+        "`job_host`",
     ],
 )
 def test_claude_architecture_rejects_retired_seam_claims(

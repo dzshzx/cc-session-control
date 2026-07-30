@@ -7,8 +7,9 @@ import time
 from factories import make_session
 
 from cc_session_control.actions.session_ops import resume_cmd
+from cc_session_control.data import sessions as sessions_mod
+from cc_session_control.data import transcripts as transcripts_mod
 from cc_session_control.data.cleanup import prune_sessions
-from cc_session_control.data.sessions import _parse_transcript
 from cc_session_control.models import LiveInfo
 
 
@@ -552,7 +553,7 @@ def test_do_resume_refuses_kill_without_proc(monkeypatch):
     monkeypatch.setattr(so.proc, "has_proc", lambda: False)
 
     s = _make_session(sid="sid1", cwd="/tmp/proj", alive=True, current=False, pid=4242)
-    so.do_resume(s)
+    so.do_resume_result(s)
     assert calls["kill"] == 0  # refused — never SIGTERM the (undeterminable) current
     assert calls["exec"] == 0  # and does not take over
 
@@ -677,7 +678,7 @@ def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
         ),
     )
 
-    assert rc.start_one(str(proj)) is True
+    assert rc.start_one_result(str(proj)).success is True
 
     assert f"cd '{proj}'" in calls["cmd"]
     assert "while true" not in calls["cmd"]
@@ -725,7 +726,7 @@ def test_start_one_refuses_running_window(tmp_path, monkeypatch):
         ),
     )
 
-    assert rc.start_one(str(proj)) is False
+    assert rc.start_one_result(str(proj)).success is False
     assert calls == {"kill": 0, "new": 0}
 
 
@@ -772,7 +773,7 @@ def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
         lambda target, *_a: _metadata_written(tmux, target),
     )
 
-    assert rc.start_one(str(proj)) is True
+    assert rc.start_one_result(str(proj)).success is True
     assert calls["kill"] == 1
     assert calls["cmd"] is not None
 
@@ -788,6 +789,18 @@ def _write_jsonl(tmp_path, sid, lines):
         "\n".join(json.dumps(line, separators=(",", ":")) for line in lines) + "\n"
     )
     return str(f)
+
+
+def _parse_transcript(path, idx, cur, job_shorts):
+    """Test-only composition of the two production seams the removed
+    `sessions._parse_transcript` compatibility wrapper used to chain: the
+    record-level parser (`transcripts._parse_transcript`) projected through
+    `sessions._project_transcript` (the same call `scan_result` makes per
+    inventory record)."""
+    transcript = transcripts_mod._parse_transcript(path)
+    if transcript is None:
+        return None
+    return sessions_mod._project_transcript(transcript, idx, cur, job_shorts)
 
 
 def test_parse_transcript_basic_fields(tmp_path):

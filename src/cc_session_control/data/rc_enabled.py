@@ -25,7 +25,6 @@ class EnabledListOperation(Enum):
     """Operation performed by one enabled-list transaction."""
 
     LIST = "list"
-    CONTAINS = "contains"
     ADD = "add"
     REMOVE = "remove"
     TOGGLE = "toggle"
@@ -200,13 +199,6 @@ class EnabledListStore:
         return self._update_result(
             EnabledListOperation.LIST,
             lambda lines: (lines, tuple(_path_lines(lines))),
-        )
-
-    def contains_result(self, path: str) -> EnabledListResult[bool]:
-        canonical = _canonical(path)
-        return self._update_result(
-            EnabledListOperation.CONTAINS,
-            lambda lines: (lines, canonical in _path_lines(lines)),
         )
 
     def add_result(self, path: str) -> EnabledListResult[bool]:
