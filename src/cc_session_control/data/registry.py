@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from ..config import cfg
-from ..models import AgentJob, SessionProc, split_env_id
+from ..models import AgentJob, InventoryIssue, SessionProc, split_env_id
 
 
 class RegistryAvailability(StrEnum):
@@ -30,13 +30,8 @@ class RegistryAvailability(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
-@dataclass(frozen=True)
-class RegistryIssue:
-    """One expected registry source failure."""
-
-    source: str
-    path: str
-    detail: str
+#: Same (source, path, detail) record everywhere — one canonical issue type.
+RegistryIssue = InventoryIssue
 
 
 @dataclass(frozen=True)

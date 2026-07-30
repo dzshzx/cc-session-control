@@ -8,6 +8,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import NamedTuple
 
+from ..models import InventoryIssue
+
 
 class TmuxWindow(NamedTuple):
     """One window of a session, with its identity metadata.
@@ -190,13 +192,8 @@ class TmuxPane(NamedTuple):
     pid: int
 
 
-@dataclass(frozen=True)
-class ResidencyIssue:
-    """One source preventing a complete tmux-residency inventory."""
-
-    source: str
-    path: str | None
-    detail: str
+#: Same (source, path, detail) record everywhere — one canonical issue type.
+ResidencyIssue = InventoryIssue
 
 
 @dataclass(frozen=True)

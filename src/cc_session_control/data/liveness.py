@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
 
-from ..models import AgentJob, LiveInfo, SessionProc
+from ..models import AgentJob, InventoryIssue, LiveInfo, SessionProc
 from . import proc, registry
 
 
@@ -27,13 +27,8 @@ class AgentsAvailability(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
-@dataclass(frozen=True)
-class AgentsIssue:
-    """One expected `claude agents --json` failure."""
-
-    source: str
-    path: str | None
-    detail: str
+#: Same (source, path, detail) record everywhere — one canonical issue type.
+AgentsIssue = InventoryIssue
 
 
 @dataclass(frozen=True)
@@ -59,13 +54,8 @@ _cache: AgentsScan | None = None
 _cache_time: float = 0.0
 
 
-@dataclass(frozen=True)
-class LivenessIssue:
-    """One incomplete protection source in a generation snapshot."""
-
-    source: str
-    path: str | None
-    detail: str
+#: Same (source, path, detail) record everywhere — one canonical issue type.
+LivenessIssue = InventoryIssue
 
 
 @dataclass(frozen=True)

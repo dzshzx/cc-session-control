@@ -14,6 +14,8 @@ import shlex
 from dataclasses import dataclass
 from enum import StrEnum
 
+from ..models import InventoryIssue
+
 _PROC = "/proc"
 
 
@@ -26,13 +28,8 @@ class ProcReadState(StrEnum):
     MALFORMED = "malformed"
 
 
-@dataclass(frozen=True)
-class ProcIssue:
-    """Actionable evidence explaining why a process probe is incomplete."""
-
-    source: str
-    path: str | None
-    detail: str
+#: Same (source, path, detail) record everywhere — one canonical issue type.
+ProcIssue = InventoryIssue
 
 
 @dataclass(frozen=True)

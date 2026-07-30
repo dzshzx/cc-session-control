@@ -6,6 +6,8 @@ import json
 import os
 from dataclasses import dataclass
 
+from ..models import InventoryIssue
+
 _NOISE = (
     "<command-message>",
     "<command-name>",
@@ -18,13 +20,8 @@ _NOISE = (
 )
 
 
-@dataclass(frozen=True)
-class TranscriptIssue:
-    """One expected transcript source failure."""
-
-    source: str
-    path: str
-    detail: str
+#: Same (source, path, detail) record everywhere — one canonical issue type.
+TranscriptIssue = InventoryIssue
 
 
 @dataclass(frozen=True)

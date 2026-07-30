@@ -11,17 +11,11 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from ..models import Session
+from ..models import InventoryIssue, Session
 from .session_ops import resume_cmd
 
-
-@dataclass(frozen=True)
-class ResumeRenderIssue:
-    """One transcript body failure encountered during keyword selection."""
-
-    source: str
-    path: str
-    detail: str
+#: Same (source, path, detail) record everywhere — one canonical issue type.
+ResumeRenderIssue = InventoryIssue
 
 
 @dataclass(frozen=True)
