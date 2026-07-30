@@ -31,7 +31,7 @@ from ..config import cfg
 from ..data import cleanup, liveness, registry, tmux
 from ..data import proc as proc
 from ..data.removal import CleanupExecution
-from ..models import AgentJob, Session
+from ..models import AgentJob, Session, issue_detail
 from . import session_ops
 
 # --- host-pid join (resume-takeover compatibility view) -----------------------
@@ -225,7 +225,7 @@ def prepare_takeover(job: AgentJob) -> TakeoverPreparationResult:
     if not evidence.complete:
         return TakeoverPreparationResult(
             TakeoverPreparationState.REFUSED,
-            detail=_incomplete_liveness_detail(evidence),
+            detail="liveness evidence incomplete: " + issue_detail(evidence.issues),
         )
     pid, alive = registry.host_pid_for_sid(job.sid, evidence.session_procs)
     if not alive or pid is None:
@@ -284,14 +284,6 @@ class AgentStopResult:
         return self.state is AgentStopState.STOPPED
 
 
-def _incomplete_liveness_detail(evidence: liveness.LivenessSnapshot) -> str:
-    issues = []
-    for issue in evidence.issues:
-        location = f" at {issue.path}" if issue.path else ""
-        issues.append(f"{issue.source}{location}: {issue.detail}")
-    return "liveness evidence incomplete: " + "; ".join(issues)
-
-
 def stop_job_result(job: AgentJob) -> AgentStopResult:
     """Stop one live background agent from one fresh liveness snapshot.
 
@@ -312,7 +304,7 @@ def stop_job_result(job: AgentJob) -> AgentStopResult:
     if not evidence.complete:
         return AgentStopResult(
             AgentStopState.REFUSED,
-            detail=_incomplete_liveness_detail(evidence),
+            detail="liveness evidence incomplete: " + issue_detail(evidence.issues),
         )
     pid, alive = registry.host_pid_for_sid(job.sid, evidence.session_procs)
     if not alive or not pid:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os.path
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -22,6 +22,15 @@ class InventoryIssue:
     source: str
     path: str | None
     detail: str
+
+
+def issue_detail(issues: Iterable[InventoryIssue]) -> str:
+    """The one `source at path: detail; …` rendering of issue evidence."""
+    parts = []
+    for issue in issues:
+        location = f" at {issue.path}" if issue.path else ""
+        parts.append(f"{issue.source}{location}: {issue.detail}")
+    return "; ".join(parts)
 
 
 class TrustDecision(Enum):

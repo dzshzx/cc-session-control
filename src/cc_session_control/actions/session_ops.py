@@ -13,7 +13,7 @@ from enum import StrEnum
 from .. import clipboard
 from ..data import liveness, proc, sessions, tmux
 from ..data.liveness import invalidate_cache
-from ..models import Session
+from ..models import Session, issue_detail
 
 
 class TakeOverState(StrEnum):
@@ -59,14 +59,6 @@ class ExecutionSessionResolution:
         return self.state is ExecutionSessionState.RESOLVED
 
 
-def _proc_issue_detail(issues: tuple[proc.ProcIssue, ...]) -> str:
-    parts = []
-    for issue in issues:
-        location = f" at {issue.path}" if issue.path else ""
-        parts.append(f"{issue.source}{location}: {issue.detail}")
-    return "; ".join(parts)
-
-
 def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
     """THE kill primitive behind every takeover/stop: R10 gate → kill-time
     liveness recheck → SIGTERM → settle → invalidate the liveness cache.
@@ -87,7 +79,7 @@ def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
     if not ancestors.complete:
         return TakeOverOutcome(
             TakeOverState.REFUSED,
-            _proc_issue_detail(ancestors.issues),
+            issue_detail(ancestors.issues),
         )
     if pid in ancestors.pids:
         return TakeOverOutcome(
@@ -101,7 +93,7 @@ def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
             raise AssertionError("unknown pid probe must carry an issue")
         return TakeOverOutcome(
             TakeOverState.REFUSED,
-            _proc_issue_detail((issue,)),
+            issue_detail((issue,)),
         )
     if not probe.alive:
         invalidate_cache()  # already gone — liveness may have changed
@@ -185,33 +177,19 @@ class TmuxResumeOutcome:
         return self.target is not None
 
 
-def _liveness_issue_detail(evidence: liveness.LivenessSnapshot) -> str:
-    parts = []
-    for issue in evidence.issues:
-        location = f" at {issue.path}" if issue.path else ""
-        parts.append(f"{issue.source}{location}: {issue.detail}")
-    return "; ".join(parts)
-
-
-def _transcript_issue_detail(result: sessions.SessionScanResult) -> str:
-    return "; ".join(
-        f"{issue.source} at {issue.path}: {issue.detail}" for issue in result.issues
-    )
-
-
 def resolve_execution_session(sid: str) -> ExecutionSessionResolution:
     """Resolve one stable SID against one fresh liveness/transcript generation."""
     evidence = liveness.liveness_inputs()
     if not evidence.complete:
         return ExecutionSessionResolution(
             ExecutionSessionState.LIVENESS_INCOMPLETE,
-            detail=_liveness_issue_detail(evidence),
+            detail=issue_detail(evidence.issues),
         )
     transcript_scan = sessions.scan_result(evidence)
     if not transcript_scan.complete:
         return ExecutionSessionResolution(
             ExecutionSessionState.TRANSCRIPT_INCOMPLETE,
-            detail=_transcript_issue_detail(transcript_scan),
+            detail=issue_detail(transcript_scan.issues),
         )
     matches = tuple(
         session for session in transcript_scan.sessions if session.sid == sid
