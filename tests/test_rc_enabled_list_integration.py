@@ -2,7 +2,6 @@
 
 import inspect
 
-from cc_session_control import cli_rc
 from cc_session_control.actions import tui_actions
 from cc_session_control.data import rc
 from cc_session_control.data.project_settings import (
@@ -115,25 +114,10 @@ def test_enabled_list_failure_keeps_partial_scan_rows_and_stops_dependents(
 
 
 def test_production_enabled_list_paths_do_not_call_compatibility_primitives() -> None:
-    # cli_rc has no single dispatch function post-refactor (each `rc <leaf>`
-    # subcommand binds its own `_cmd_*` directly to argparse) — concatenate
-    # every leaf's source so the "cli" surface still covers the whole family.
-    cli_rc_leaf_sources = "\n".join(
-        inspect.getsource(fn)
-        for fn in (
-            cli_rc._cmd_status,
-            cli_rc._cmd_add,
-            cli_rc._cmd_rm,
-            cli_rc._cmd_up,
-            cli_rc._cmd_stop,
-            cli_rc._cmd_list,
-        )
-    )
     sources = {
         "scan": inspect.getsource(rc.scan_result),
         "remove": inspect.getsource(rc.remove_one_result),
         "start-all": inspect.getsource(rc.start_all_listed_result),
-        "cli": cli_rc_leaf_sources,
         "toggle-action": inspect.getsource(tui_actions.toggle_autostart),
         "start-all-action": inspect.getsource(tui_actions.start_all_projects),
     }
@@ -141,7 +125,6 @@ def test_production_enabled_list_paths_do_not_call_compatibility_primitives() ->
         "scan": ("list_enabled(",),
         "remove": ("list_rm(",),
         "start-all": ("list_enabled(",),
-        "cli": ("rc.list_enabled(", "rc.list_add(", "rc.list_rm("),
         "toggle-action": ("rc.toggle_autostart(",),
         "start-all-action": (),
     }
@@ -149,5 +132,5 @@ def test_production_enabled_list_paths_do_not_call_compatibility_primitives() ->
     for surface, needles in forbidden.items():
         for needle in needles:
             assert needle not in sources[surface], (surface, needle)
-    for surface in ("cli", "toggle-action", "start-all-action"):
+    for surface in ("toggle-action", "start-all-action"):
         assert "except (OSError, UnicodeError)" not in sources[surface]

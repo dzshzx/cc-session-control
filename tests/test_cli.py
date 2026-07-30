@@ -1,12 +1,12 @@
-"""CLI wiring tests for theme flags, rc add trust reporting,
-the TUI exit-intent handoff, and `resume --take-over` safety (R7.1/R10)."""
+"""CLI wiring tests for theme flags, the TUI exit-intent handoff,
+and `resume --take-over` safety (R7.1/R10)."""
 
 import types
 from dataclasses import replace
 
 import pytest
 
-from cc_session_control import cli, cli_commands, cli_rc
+from cc_session_control import cli, cli_commands
 from cc_session_control.actions import session_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import liveness, sessions
@@ -26,29 +26,6 @@ def test_theme_flag_absent_keeps_cfg(monkeypatch):
     args = cli.build_parser().parse_args([])
     cli.apply_global_flags(args)
     assert cfg.theme == "auto"
-
-
-def test_rc_add_reports_unavailable_trust_without_calling_it_untrusted(
-    tmp_path,
-    monkeypatch,
-    capsys,
-):
-    from cc_session_control.data import rc
-
-    project = tmp_path / "app"
-    project.mkdir()
-    claude_json = tmp_path / ".claude.json"
-    claude_json.write_text("{broken")
-    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-
-    status = cli_rc._cmd_add(
-        types.SimpleNamespace(project=str(project)),
-    )
-
-    captured = capsys.readouterr()
-    assert status == 1
-    assert "Project settings unavailable" in captured.err
-    assert "Not trusted" not in captured.err
 
 
 def test_tui_exit_intent_runs_only_after_main_loop_returns(monkeypatch):

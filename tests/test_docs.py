@@ -16,31 +16,22 @@ CLAUDE = (Path(__file__).parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
 @pytest.mark.parametrize(
     "command",
     [
-        "rc status",
-        "rc add .",
-        "rc add ~/code/app",
-        "rc rm ~/code/app",
-        "rc up",
-        "rc stop all",
-        "rc list",
-        "prune",
-        "prune --max-prompts 1 --apply",
-        "prune --sweep-orphans",
-        "prune --sweep-zombies",
-        "prune --sweep-aged",
         "resume",
         "resume mybug",
         "resume --page 2",
         "resume --all",
         "agents",
-        "skill install",
-        "skill install --force",
-        "skill uninstall",
     ],
 )
 def test_readme_cli_examples_are_accepted_by_the_parser(command: str) -> None:
     assert f"csctl {command}" in README
     build_parser().parse_args(shlex.split(command))
+
+
+@pytest.mark.parametrize("retired_command", ["csctl prune", "csctl skill", "csctl rc "])
+def test_readme_drops_retired_cli_surfaces(retired_command: str) -> None:
+    assert retired_command not in README
+    assert retired_command not in CLAUDE
 
 
 @pytest.mark.parametrize(

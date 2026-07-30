@@ -107,10 +107,5 @@ class Config:
     def tasks_dir(self) -> Path:
         return self.claude_home / "tasks"
 
-    @property
-    def skills_dir(self) -> Path:
-        """User-level Claude Code agent skills (`skills/<name>/SKILL.md`)."""
-        return self.claude_home / "skills"
-
 
 cfg = Config()

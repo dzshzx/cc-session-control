@@ -1,6 +1,5 @@
-"""Public CLI entry/dispatch behavior, resume/skill/agents commands, and
-the TUI exit-intent handoff (rc subcommand family split into
-`test_cli_entry_rc.py`)."""
+"""Public CLI entry/dispatch behavior, resume/agents commands, and
+the TUI exit-intent handoff."""
 
 from __future__ import annotations
 
@@ -11,14 +10,12 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from cli_entry_helpers import enabled_list as _enabled_list
 
 from cc_session_control import cli
-from cc_session_control.actions import session_ops, skill_ops
+from cc_session_control.actions import session_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import (
     liveness,
-    rc,
     registry,
     sessions,
 )
@@ -60,15 +57,7 @@ def test_main_accepts_argv_and_returns_success(
     assert capsys.readouterr().out == "No matching sessions.\n"
 
 
-@pytest.mark.parametrize("argv", [["rc"], ["skill"]])
-def test_nested_command_is_required(argv: list[str]) -> None:
-    with pytest.raises(SystemExit) as stopped:
-        cli.main(argv)
-
-    assert stopped.value.code == 2
-
-
-@pytest.mark.parametrize("argv", [["unknown"], ["rc", "unknown"]])
+@pytest.mark.parametrize("argv", [["unknown"], ["prune"], ["skill"], ["rc", "status"]])
 def test_unknown_command_is_rejected(argv: list[str]) -> None:
     with pytest.raises(SystemExit) as stopped:
         cli.main(argv)
@@ -90,13 +79,13 @@ def test_handler_streams_are_injected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        rc,
-        "list_enabled_result",
-        lambda: _enabled_list(("/one", "/two")),
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
     )
     stdout = io.StringIO()
     stderr = io.StringIO()
-    args = cli.build_parser().parse_args(["rc", "list"])
+    args = cli.build_parser().parse_args(["agents"])
 
     status = cli.dispatch(
         args,
@@ -106,7 +95,7 @@ def test_handler_streams_are_injected(
     )
 
     assert status == 0
-    assert stdout.getvalue() == "/one\n/two\n"
+    assert stdout.getvalue() == "No background agents found.\n"
     assert stderr.getvalue() == ""
 
 
@@ -340,50 +329,6 @@ def test_resume_complete_liveness_is_injected_once(
     assert captured.err == ""
     assert snapshots == 1
     assert injected == [evidence]
-
-
-def test_skill_install_uninstall_and_refusal_use_real_filesystem(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-
-    assert cli.main(["skill", "install"]) == 0
-    captured = capsys.readouterr()
-    target = cfg.skills_dir / skill_ops.SKILL_NAME / "SKILL.md"
-    assert captured.err == ""
-    assert "Installed skill" in captured.out
-    assert target.is_file()
-
-    assert cli.main(["skill", "install"]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "Refused:" in captured.err
-
-    assert cli.main(["skill", "uninstall"]) == 0
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert "Removed" in captured.out
-    assert not target.parent.exists()
-
-    assert cli.main(["skill", "uninstall"]) == 1
-    assert "Not installed:" in capsys.readouterr().err
-
-
-def test_skill_boundary_failure_is_visible_and_nonzero(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    def fail_install(*, force: bool) -> tuple[bool, str]:
-        raise OSError("read only")
-
-    monkeypatch.setattr(skill_ops, "install", fail_install)
-
-    assert cli.main(["skill", "install"]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "Skill operation failed: read only" in captured.err
 
 
 def test_agents_empty_and_status_rendering(

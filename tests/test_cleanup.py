@@ -476,11 +476,11 @@ def test_prune_refuses_without_proc(tmp_path, monkeypatch):
 def test_remove_orphans_refuses_without_proc(tmp_path, monkeypatch):
     # The plan-construction side of R10 (`list_orphan_dirs`'s old internal
     # gate) is covered by test_build_plan_rejects_incomplete_generation_evidence
-    # — production callers (cli_commands._cmd_prune) now check
-    # `liveness.liveness_inputs().complete` themselves before calling
-    # `build_plan`, so there is no longer a preview-only entry point that
-    # silently degrades to an empty list. Only the executor's own fresh-evidence
-    # refusal is exercised here.
+    # — the production caller (the refresh generation feeding the Sessions
+    # cleanup submenu) checks `liveness.liveness_inputs().complete` before
+    # calling `build_plan`, so there is no longer a preview-only entry point
+    # that silently degrades to an empty list. Only the executor's own
+    # fresh-evidence refusal is exercised here.
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     _mkdir(tmp_path, "session-env", "orphan-a")
     _degrade(monkeypatch)

@@ -52,26 +52,13 @@ instead of using it, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Usage
 
+The TUI is the primary surface — Remote Control management and session
+cleanup live there (Projects tab and the Sessions cleanup submenu). The
+headless CLI keeps only the agent-facing commands: `resume` and `agents`.
+
 ```bash
 # Open TUI
 csctl
-
-# Remote Control management (no TUI)
-csctl rc status          # Show all projects and RC status
-csctl rc add .           # Add current directory to RC list and start
-csctl rc add ~/code/app  # Add by directory path
-csctl rc rm ~/code/app   # Remove and stop
-csctl rc up              # Start all listed projects
-csctl rc stop all        # Stop all RC servers
-csctl rc list            # Show auto-start list
-
-# Session cleanup
-csctl prune                          # Dry run: show stats
-csctl prune --max-prompts 1 --apply  # Delete sessions with ≤1 prompt
-csctl prune --sweep-orphans          # Dry run: orphan sid-keyed artifact dirs
-csctl prune --sweep-zombies          # Dry run: dead sessions/<pid>.json files
-csctl prune --sweep-aged             # Dry run: age-keyed global entries
-# Add --apply to exactly one of the sweep commands above to execute it.
 
 # Resume rescue (headless): list sessions across directories with
 # ready-to-copy resume commands (native /resume only searches the cwd
@@ -84,15 +71,15 @@ csctl resume --all           # Everything, no paging
 # Read-only inventory
 csctl agents                 # Background agents: state, tempo, name, cwd
 
-# Bundled Claude Code skill (session-doctor knowledge for the agent)
-csctl skill install          # Write SKILL.md to ~/.claude/skills/
-csctl skill install --force  # Replace an existing skill directory
-csctl skill uninstall
-
 # Options
 csctl --theme light            # Force the TUI palette (auto/dark/light)
 csctl --version
 ```
+
+The companion Claude Code skill (`claude-session-doctor`) is distributed via
+the [skills CLI](https://github.com/dzshzx/agent-skills) — install it with
+`skills add dzshzx/agent-skills --skill=claude-session-doctor` (it is no
+longer bundled with this package).
 
 ## Configuration
 
@@ -100,7 +87,7 @@ csctl --version
 |---|---|---|
 | `CSCTL_RC_SESSION` | `rc` | tmux session name for RC servers |
 | `CSCTL_RC_STAGGER` | `2` | Seconds between starting RC servers |
-| `CSCTL_CLEANUP_AGE_DAYS` | `14` | Minimum age in days for `csctl prune --sweep-aged` (must be an integer ≥ 1) |
+| `CSCTL_CLEANUP_AGE_DAYS` | `14` | Minimum age in days for the age sweep in the Sessions cleanup submenu (must be an integer ≥ 0) |
 | `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via OSC 11 / `$COLORFGBG`) / `dark` / `light`. tmux typically doesn't answer the OSC 11 query, so inside tmux `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |
 | `XDG_CONFIG_HOME` | `~/.config` | Config directory base |
 
