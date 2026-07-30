@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.6 (2026-07-30)
+
+### Changed
+
+- **Slimming pass, no behavior change on success paths**: the seven
+  structurally identical per-domain issue dataclasses collapse into one
+  canonical `InventoryIssue` (plus one shared detail renderer), and the
+  three hand-rolled atomic-write pipelines (project settings, environment
+  ledger, rc-enabled list) now share a single `data/atomic_write.py`
+  mechanism while keeping their typed stage/result surfaces. One deliberate
+  widening: an unencodable-content `UnicodeError` during settings/ledger
+  writes now surfaces as a typed stage failure instead of an unhandled
+  crash (matching the rc-enabled store's existing contract). The remaining
+  compatibility stragglers (`take_over` string view, `rc.scan_servers`)
+  are gone; drifted test factories consolidated.
+
 ## 0.7.5 (2026-07-29)
 
 ### Changed
