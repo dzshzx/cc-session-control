@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from cli_entry_helpers import enabled_list as _enabled_list
 
-from cc_session_control import cli, cli_rc
+from cc_session_control import cli
 from cc_session_control.actions import session_ops, skill_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import (
@@ -88,15 +88,6 @@ def test_dispatch_rejects_namespace_without_a_registered_handler() -> None:
         )
 
     assert stopped.value.code == 2
-
-
-def test_rc_handler_rejects_unknown_leaf(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    status = cli_rc.handle_rc(Namespace(rc_command="unregistered"))
-
-    assert status == 2
-    assert "Unknown rc command: unregistered" in capsys.readouterr().err
 
 
 def test_handler_streams_are_injected(

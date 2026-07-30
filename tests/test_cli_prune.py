@@ -8,6 +8,7 @@ import time
 import types
 
 from cc_session_control import cli, cli_commands
+from cc_session_control.cli_streams import run_with_streams
 from cc_session_control.config import cfg
 from cc_session_control.data import (
     age_cleanup,
@@ -101,7 +102,7 @@ def test_prune_refuses_incomplete_liveness_before_preview(monkeypatch, capsys):
         ),
     )
 
-    assert cli_commands.handle_prune(_args()) == 1
+    assert cli_commands._cmd_prune(_args()) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "Refused: liveness evidence is incomplete" in captured.err
@@ -220,7 +221,7 @@ def test_prune_preview_uses_one_typed_generation_without_ancestor_reprobe(
         ),
     )
 
-    assert cli_commands.handle_prune(_args()) == 0
+    assert cli_commands._cmd_prune(_args()) == 0
     captured = capsys.readouterr()
     assert liveness_calls == 1
     assert "Would prune 1 session(s)" in captured.out
@@ -300,12 +301,12 @@ def test_prune_sweep_aged_dry_run_then_apply(tmp_path, monkeypatch, capsys):
     stamp = time.time() - 40 * 86400
     os.utime(old, (stamp, stamp))
 
-    assert cli_commands.handle_prune(_args(sweep_aged=True, apply=False)) == 0
+    assert cli_commands._cmd_prune(_args(sweep_aged=True, apply=False)) == 0
     out = capsys.readouterr().out
     assert "Would sweep 1 aged" in out
     assert os.path.exists(old)  # dry run keeps it
 
-    assert cli_commands.handle_prune(_args(sweep_aged=True, apply=True)) == 0
+    assert cli_commands._cmd_prune(_args(sweep_aged=True, apply=True)) == 0
     out = capsys.readouterr().out
     assert "Swept 1 aged" in out
     assert not os.path.exists(old)
@@ -398,7 +399,8 @@ def test_prune_age_only_apply_refuses_source_root_replaced_after_preview(
     stdout = ReplaceRootOnPreview()
     stderr = io.StringIO()
 
-    status = cli_commands.handle_prune(
+    status = run_with_streams(
+        cli_commands._cmd_prune,
         _args(sweep_aged=True, apply=True),
         stdout=stdout,
         stderr=stderr,
@@ -430,7 +432,7 @@ def test_prune_age_only_surfaces_inventory_failure_for_dry_run_and_apply(
     monkeypatch.setattr(age_cleanup.os, "listdir", deny_source)
 
     for apply in (False, True):
-        status = cli_commands.handle_prune(
+        status = cli_commands._cmd_prune(
             _args(sweep_aged=True, apply=apply),
         )
         captured = capsys.readouterr()
@@ -524,7 +526,7 @@ def test_prune_sweep_zombies_apply_keeps_alive_and_current(
         ),
     )
 
-    assert cli_commands.handle_prune(_args(sweep_zombies=True, apply=True)) == 0
+    assert cli_commands._cmd_prune(_args(sweep_zombies=True, apply=True)) == 0
     out = capsys.readouterr().out
     assert "Swept 1 zombie" in out
     assert not os.path.exists(os.path.join(sessions_dir, "700772.json"))  # dead
@@ -545,7 +547,7 @@ def test_prune_sweep_zombies_refuses_without_proc(tmp_path, monkeypatch, capsys)
         lambda: LivenessSnapshot(issues=(issue,)),
     )
 
-    assert cli_commands.handle_prune(_args(sweep_zombies=True, apply=True)) == 1
+    assert cli_commands._cmd_prune(_args(sweep_zombies=True, apply=True)) == 1
     captured = capsys.readouterr()
     assert "Refused" in captured.err
     assert os.path.exists(os.path.join(sessions_dir, "1.json"))  # nothing removed
@@ -561,7 +563,7 @@ def test_prune_sweep_orphans_reports_real_success(
     orphan = tmp_path / "session-env" / "ghost"
     orphan.mkdir(parents=True)
 
-    status = cli_commands.handle_prune(_args(sweep_orphans=True, apply=True))
+    status = cli_commands._cmd_prune(_args(sweep_orphans=True, apply=True))
     output = capsys.readouterr().out
 
     assert status == 0
@@ -585,7 +587,7 @@ def test_prune_sweep_orphans_refuses_without_proc(
         lambda: LivenessSnapshot(issues=(issue,)),
     )
 
-    status = cli_commands.handle_prune(_args(sweep_orphans=True, apply=True))
+    status = cli_commands._cmd_prune(_args(sweep_orphans=True, apply=True))
     captured = capsys.readouterr()
 
     assert status == 1
@@ -616,7 +618,7 @@ def test_prune_apply_reports_incomplete_liveness_and_preserves_target(
     registry.invalidate_cache()
     liveness.invalidate_cache()
 
-    status = cli_commands.handle_prune(_args(sweep_orphans=True, apply=True))
+    status = cli_commands._cmd_prune(_args(sweep_orphans=True, apply=True))
     captured = capsys.readouterr()
 
     assert status == 1
@@ -654,7 +656,7 @@ def test_prune_aged_partial_failure_is_visible_and_nonzero(
 
     monkeypatch.setattr(os, "unlink", fail_one)
 
-    status = cli_commands.handle_prune(_args(sweep_aged=True, apply=True))
+    status = cli_commands._cmd_prune(_args(sweep_aged=True, apply=True))
     captured = capsys.readouterr()
 
     assert status == 1
@@ -693,7 +695,7 @@ def test_prune_aged_missing_target_is_not_counted_as_swept(
 
     monkeypatch.setattr(os, "unlink", disappear)
 
-    status = cli_commands.handle_prune(_args(sweep_aged=True, apply=True))
+    status = cli_commands._cmd_prune(_args(sweep_aged=True, apply=True))
     output = capsys.readouterr().out
 
     assert status == 0

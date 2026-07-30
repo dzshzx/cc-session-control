@@ -6,18 +6,19 @@ import argparse
 from typing import Protocol, TextIO
 
 from . import cli_commands, cli_rc
+from .cli_streams import run_with_streams
 
 
 class CommandHandler(Protocol):
-    """Uniform interface bound to every leaf command parser."""
+    """Uniform interface bound to every leaf command parser.
 
-    def __call__(
-        self,
-        args: argparse.Namespace,
-        *,
-        stdout: TextIO | None = None,
-        stderr: TextIO | None = None,
-    ) -> int: ...
+    Each ``_cmd_*`` function is bound once via ``set_defaults(handler=...)``;
+    `dispatch` is the single place that applies the stream-injection boundary
+    (`cli_streams.run_with_streams`) around whichever handler argparse
+    resolved.
+    """
+
+    def __call__(self, args: argparse.Namespace) -> int: ...
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         "status",
         help="Show RC status for all projects",
     )
-    rc_status.set_defaults(handler=cli_rc.handle_status)
+    rc_status.set_defaults(handler=cli_rc._cmd_status)
     rc_add = rc_commands.add_parser(
         "add",
         help="Add project to RC list and start",
@@ -61,26 +62,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=".",
         help="Project directory (default: current dir)",
     )
-    rc_add.set_defaults(handler=cli_rc.handle_add)
+    rc_add.set_defaults(handler=cli_rc._cmd_add)
     rc_rm = rc_commands.add_parser(
         "rm",
         help="Remove project from RC list and stop",
     )
     rc_rm.add_argument("project", help="Project directory")
-    rc_rm.set_defaults(handler=cli_rc.handle_rm)
+    rc_rm.set_defaults(handler=cli_rc._cmd_rm)
     rc_up = rc_commands.add_parser("up", help="Start all listed projects")
-    rc_up.set_defaults(handler=cli_rc.handle_up)
+    rc_up.set_defaults(handler=cli_rc._cmd_up)
     rc_stop = rc_commands.add_parser(
         "stop",
         help="Stop RC for a project",
     )
     rc_stop.add_argument("target", help="Project directory or 'all'")
-    rc_stop.set_defaults(handler=cli_rc.handle_stop)
+    rc_stop.set_defaults(handler=cli_rc._cmd_stop)
     rc_list = rc_commands.add_parser(
         "list",
         help="Show enabled project list",
     )
-    rc_list.set_defaults(handler=cli_rc.handle_list)
+    rc_list.set_defaults(handler=cli_rc._cmd_list)
 
     prune = commands.add_parser("prune", help="Clean up sessions")
     prune.add_argument(
@@ -112,7 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=("Remove age-keyed global entries older than cleanup_age_days"),
     )
-    prune.set_defaults(handler=cli_commands.handle_prune)
+    prune.set_defaults(handler=cli_commands._cmd_prune)
 
     resume = commands.add_parser(
         "resume",
@@ -150,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
             "execution-time takeover safety gates"
         ),
     )
-    resume.set_defaults(handler=cli_commands.handle_resume)
+    resume.set_defaults(handler=cli_commands._cmd_resume)
 
     skill = commands.add_parser(
         "skill",
@@ -169,23 +170,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Replace an existing skill directory",
     )
-    skill_install.set_defaults(handler=cli_commands.handle_skill_install)
+    skill_install.set_defaults(handler=cli_commands._cmd_skill)
     skill_uninstall = skill_commands.add_parser(
         "uninstall",
         help="Remove the installed skill directory",
     )
-    skill_uninstall.set_defaults(
-        handler=cli_commands.handle_skill_uninstall,
-    )
+    skill_uninstall.set_defaults(handler=cli_commands._cmd_skill)
 
     agents = commands.add_parser("agents", help="List background agents")
-    agents.set_defaults(handler=cli_commands.handle_agents)
+    agents.set_defaults(handler=cli_commands._cmd_agents)
 
     env = commands.add_parser(
         "env",
         help="List bridge environments (current + orphan)",
     )
-    env.set_defaults(handler=cli_commands.handle_env)
+    env.set_defaults(handler=cli_commands._cmd_env)
 
     return parser
 
@@ -205,9 +204,15 @@ def dispatch(
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> int:
-    """Dispatch one parsed command exactly once, or start the TUI."""
+    """Dispatch one parsed command exactly once, or start the TUI.
+
+    This is the single boundary where caller-owned streams are injected
+    (`cli_streams.run_with_streams`) — every `_cmd_*` handler, bound once via
+    `set_defaults(handler=...)` when its parser was built, runs through it.
+    """
     if args.command is None:
-        return cli_commands.handle_tui(
+        return run_with_streams(
+            cli_commands._cmd_tui,
             args,
             stdout=stdout,
             stderr=stderr,
@@ -215,7 +220,7 @@ def dispatch(
     handler: CommandHandler | None = getattr(args, "handler", None)
     if handler is None:
         parser.error(f"unknown command: {args.command}")
-    return handler(args, stdout=stdout, stderr=stderr)
+    return run_with_streams(handler, args, stdout=stdout, stderr=stderr)
 
 
 def main(argv: list[str] | None = None) -> int:

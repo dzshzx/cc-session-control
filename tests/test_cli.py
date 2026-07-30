@@ -69,7 +69,7 @@ def test_env_command_reports_partial_ledger_as_blocked_and_preserves_bytes(
     monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
     monkeypatch.setattr(liveness, "scan_agents", lambda *a, **k: liveness.AgentsScan())
 
-    status = cli_commands.handle_env(types.SimpleNamespace())
+    status = cli_commands._cmd_env(types.SimpleNamespace())
 
     captured = capsys.readouterr()
     assert status == 1
@@ -111,8 +111,8 @@ def test_rc_add_reports_unavailable_trust_without_calling_it_untrusted(
     claude_json.write_text("{broken")
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
 
-    status = cli_rc.handle_add(
-        types.SimpleNamespace(rc_command="add", project=str(project)),
+    status = cli_rc._cmd_add(
+        types.SimpleNamespace(project=str(project)),
     )
 
     captured = capsys.readouterr()
@@ -141,7 +141,7 @@ def test_tui_exit_intent_runs_only_after_main_loop_returns(monkeypatch):
 
     monkeypatch.setattr(app_mod, "App", FakeApp)
 
-    assert cli_commands.handle_tui(types.SimpleNamespace()) == 0
+    assert cli_commands._cmd_tui(types.SimpleNamespace()) == 0
 
     assert events == ["loop", "intent"]
 

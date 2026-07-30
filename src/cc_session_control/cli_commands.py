@@ -5,9 +5,8 @@ from __future__ import annotations
 import sys
 from argparse import Namespace
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING
 
-from .cli_streams import run_with_streams
 from .data.removal import CleanupExecution, CleanupIssue, RemovalAnchor
 
 if TYPE_CHECKING:
@@ -457,90 +456,3 @@ def _cmd_tui(args: Namespace) -> int:
     if isinstance(result, ExitIntent):
         return result.run()
     return 0
-
-
-def handle_prune(
-    args: Namespace,
-    *,
-    stdout: TextIO | None = None,
-    stderr: TextIO | None = None,
-) -> int:
-    return run_with_streams(
-        _cmd_prune,
-        args,
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-
-def handle_resume(
-    args: Namespace,
-    *,
-    stdout: TextIO | None = None,
-    stderr: TextIO | None = None,
-) -> int:
-    return run_with_streams(
-        _cmd_resume,
-        args,
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-
-def handle_skill_install(
-    args: Namespace,
-    *,
-    stdout: TextIO | None = None,
-    stderr: TextIO | None = None,
-) -> int:
-    return run_with_streams(
-        _cmd_skill,
-        args,
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-
-handle_skill_uninstall = handle_skill_install
-
-
-def handle_agents(
-    args: Namespace,
-    *,
-    stdout: TextIO | None = None,
-    stderr: TextIO | None = None,
-) -> int:
-    return run_with_streams(
-        _cmd_agents,
-        args,
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-
-def handle_env(
-    args: Namespace,
-    *,
-    stdout: TextIO | None = None,
-    stderr: TextIO | None = None,
-) -> int:
-    return run_with_streams(
-        _cmd_env,
-        args,
-        stdout=stdout,
-        stderr=stderr,
-    )
-
-
-def handle_tui(
-    args: Namespace,
-    *,
-    stdout: TextIO | None = None,
-    stderr: TextIO | None = None,
-) -> int:
-    return run_with_streams(
-        _cmd_tui,
-        args,
-        stdout=stdout,
-        stderr=stderr,
-    )

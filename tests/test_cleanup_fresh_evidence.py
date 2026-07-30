@@ -409,7 +409,7 @@ def test_cli_orphan_apply_does_not_inject_transcript_evidence(
         sweep_aged=False,
     )
 
-    assert cli_commands.handle_prune(args) == 0
+    assert cli_commands._cmd_prune(args) == 0
     assert len(scan_calls) == 1
     assert called["entries"] == ["session-env/ghost"]
     assert set(called["kwargs"]) == {"anchors"}

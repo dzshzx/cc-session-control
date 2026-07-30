@@ -115,11 +115,25 @@ def test_enabled_list_failure_keeps_partial_scan_rows_and_stops_dependents(
 
 
 def test_production_enabled_list_paths_do_not_call_compatibility_primitives() -> None:
+    # cli_rc has no single dispatch function post-refactor (each `rc <leaf>`
+    # subcommand binds its own `_cmd_*` directly to argparse) — concatenate
+    # every leaf's source so the "cli" surface still covers the whole family.
+    cli_rc_leaf_sources = "\n".join(
+        inspect.getsource(fn)
+        for fn in (
+            cli_rc._cmd_status,
+            cli_rc._cmd_add,
+            cli_rc._cmd_rm,
+            cli_rc._cmd_up,
+            cli_rc._cmd_stop,
+            cli_rc._cmd_list,
+        )
+    )
     sources = {
         "scan": inspect.getsource(rc.scan_result),
         "remove": inspect.getsource(rc.remove_one_result),
         "start-all": inspect.getsource(rc.start_all_listed_result),
-        "cli": inspect.getsource(cli_rc._run_rc),
+        "cli": cli_rc_leaf_sources,
         "toggle-action": inspect.getsource(tui_actions.toggle_autostart),
         "start-all-action": inspect.getsource(tui_actions.start_all_projects),
     }
