@@ -29,7 +29,6 @@ def _nul(*argv: str) -> str:
 
 def _created_target(target: str) -> rc.tmux.TmuxWriteResult:
     return rc.tmux.TmuxWriteResult(
-        rc.tmux.TmuxWriteOperation.CREATE_TARGET,
         rc.tmux.TmuxWriteStage.NEW_WINDOW,
         rc.tmux.TmuxWriteState.SUCCEEDED,
         target=target,
@@ -38,7 +37,6 @@ def _created_target(target: str) -> rc.tmux.TmuxWriteResult:
 
 def _metadata_written(target: str) -> rc.tmux.TmuxWriteResult:
     return rc.tmux.TmuxWriteResult(
-        rc.tmux.TmuxWriteOperation.SET_WINDOW_OPTION,
         rc.tmux.TmuxWriteStage.WINDOW_OPTION,
         rc.tmux.TmuxWriteState.SUCCEEDED,
         target=target,
@@ -194,8 +192,6 @@ def test_start_retains_created_target_when_metadata_write_fails(
     assert result.state is rc.StartState.METADATA_FAILED
     assert result.success is False
     assert result.target == "rc:7"
-    assert result.tmux_result is not None
-    assert result.tmux_result.stage is rc.tmux.TmuxWriteStage.WINDOW_OPTION
     assert result.detail == "window-option: lost server connection"
 
 

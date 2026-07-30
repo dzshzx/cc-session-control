@@ -66,7 +66,6 @@ def _job() -> AgentJob:
 def _created_target(target: str) -> tui_actions.session_ops.tmux.TmuxWriteResult:
     tmux = tui_actions.session_ops.tmux
     return tmux.TmuxWriteResult(
-        tmux.TmuxWriteOperation.CREATE_TARGET,
         tmux.TmuxWriteStage.NEW_WINDOW,
         tmux.TmuxWriteState.SUCCEEDED,
         target=target,

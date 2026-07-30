@@ -170,7 +170,6 @@ class ResumeOutcome:
 class TmuxResumeOutcome:
     target: str | None
     detail: str = ""
-    tmux_result: tmux.TmuxWriteResult | None = None
 
     @property
     def success(self) -> bool:
@@ -334,7 +333,7 @@ def _spawn_in_tmux_result(
         cmd,
     )
     target = result.target if result.success else None
-    return TmuxResumeOutcome(target, result.diagnostic, result)
+    return TmuxResumeOutcome(target, result.diagnostic)
 
 
 def attach_target(s: Session) -> str | None:

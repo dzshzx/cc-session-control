@@ -65,7 +65,6 @@ def _install_execution_session(
 
 def _created_target(target: str) -> tmux.TmuxWriteResult:
     return tmux.TmuxWriteResult(
-        tmux.TmuxWriteOperation.CREATE_TARGET,
         tmux.TmuxWriteStage.NEW_WINDOW,
         tmux.TmuxWriteState.SUCCEEDED,
         target=target,
@@ -77,7 +76,6 @@ def _create_failure(
     detail: str = "tmux unavailable",
 ) -> tmux.TmuxWriteResult:
     return tmux.TmuxWriteResult(
-        tmux.TmuxWriteOperation.CREATE_TARGET,
         stage,
         tmux.TmuxWriteState.FAILED,
         detail=detail,

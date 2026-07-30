@@ -50,7 +50,6 @@ def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
         lambda session, window, cmd: (
             captured.update(session=session, window=window, cmd=cmd)
             or ao.tmux.TmuxWriteResult(
-                ao.tmux.TmuxWriteOperation.CREATE_TARGET,
                 ao.tmux.TmuxWriteStage.NEW_WINDOW,
                 ao.tmux.TmuxWriteState.SUCCEEDED,
                 target="proj:1",
@@ -70,7 +69,6 @@ def test_respawn_result_retains_tmux_failure(monkeypatch):
         ao.tmux,
         "run_in_tmux_result",
         lambda *_: ao.tmux.TmuxWriteResult(
-            ao.tmux.TmuxWriteOperation.CREATE_TARGET,
             ao.tmux.TmuxWriteStage.NEW_WINDOW,
             ao.tmux.TmuxWriteState.FAILED,
             detail="tmux unavailable",

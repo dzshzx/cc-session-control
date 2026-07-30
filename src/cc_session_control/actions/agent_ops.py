@@ -64,7 +64,6 @@ class RespawnResult:
     command: str
     target: str | None
     detail: str = ""
-    tmux_result: tmux.TmuxWriteResult | None = None
 
     @property
     def success(self) -> bool:
@@ -97,7 +96,7 @@ def respawn_result(job: AgentJob) -> RespawnResult:
         cmd,
     )
     target = result.target if result.success else None
-    return RespawnResult(cmd, target, result.diagnostic, result)
+    return RespawnResult(cmd, target, result.diagnostic)
 
 
 # --- remove (settled agents only) ---------------------------------------------

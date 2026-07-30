@@ -14,7 +14,6 @@ from cc_session_control.models import LiveInfo
 
 def _created_target(tmux, target):
     return tmux.TmuxWriteResult(
-        tmux.TmuxWriteOperation.CREATE_TARGET,
         tmux.TmuxWriteStage.NEW_WINDOW,
         tmux.TmuxWriteState.SUCCEEDED,
         target=target,
@@ -23,7 +22,6 @@ def _created_target(tmux, target):
 
 def _create_failure(tmux, detail="tmux unavailable"):
     return tmux.TmuxWriteResult(
-        tmux.TmuxWriteOperation.CREATE_TARGET,
         tmux.TmuxWriteStage.NEW_WINDOW,
         tmux.TmuxWriteState.FAILED,
         detail=detail,
@@ -32,7 +30,6 @@ def _create_failure(tmux, detail="tmux unavailable"):
 
 def _metadata_written(tmux, target):
     return tmux.TmuxWriteResult(
-        tmux.TmuxWriteOperation.SET_WINDOW_OPTION,
         tmux.TmuxWriteStage.WINDOW_OPTION,
         tmux.TmuxWriteState.SUCCEEDED,
         target=target,

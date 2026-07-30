@@ -222,7 +222,7 @@ def test_run_in_tmux_result_retains_new_window_failure_detail(monkeypatch) -> No
 
     result = tmux.run_in_tmux_result("project", "claude", "cmd")
 
-    assert result.operation is tmux.TmuxWriteOperation.CREATE_TARGET
+    assert result.stage is tmux.TmuxWriteStage.NEW_WINDOW
     assert result.stage is tmux.TmuxWriteStage.NEW_WINDOW
     assert result.state is tmux.TmuxWriteState.FAILED
     assert result.target is None
@@ -302,7 +302,7 @@ def test_set_window_option_result_retains_target_and_nonzero_detail(
 
     result = tmux.set_window_option_result("project:7", "@csctl_path", "/project")
 
-    assert result.operation is tmux.TmuxWriteOperation.SET_WINDOW_OPTION
+    assert result.stage is tmux.TmuxWriteStage.WINDOW_OPTION
     assert result.stage is tmux.TmuxWriteStage.WINDOW_OPTION
     assert result.state is tmux.TmuxWriteState.FAILED
     assert result.target == "project:7"

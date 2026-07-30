@@ -86,13 +86,6 @@ class KillResult:
         return self.state is KillState.KILLED
 
 
-class TmuxWriteOperation(Enum):
-    """One operator-requested tmux mutation."""
-
-    CREATE_TARGET = "create-target"
-    SET_WINDOW_OPTION = "set-window-option"
-
-
 class TmuxWriteStage(Enum):
     """The exact tmux boundary reached by one write."""
 
@@ -113,7 +106,6 @@ class TmuxWriteState(Enum):
 class TmuxWriteResult:
     """Typed tmux write outcome with the created target when one exists."""
 
-    operation: TmuxWriteOperation
     stage: TmuxWriteStage
     state: TmuxWriteState
     target: str | None = None
@@ -143,7 +135,6 @@ def create_target_result(
 
     if returncode is None or returncode != 0:
         return TmuxWriteResult(
-            TmuxWriteOperation.CREATE_TARGET,
             stage,
             TmuxWriteState.FAILED,
             detail=detail,
@@ -151,13 +142,11 @@ def create_target_result(
     target = stdout.strip()
     if not target:
         return TmuxWriteResult(
-            TmuxWriteOperation.CREATE_TARGET,
             stage,
             TmuxWriteState.FAILED,
             detail="tmux succeeded without printing the created target",
         )
     return TmuxWriteResult(
-        TmuxWriteOperation.CREATE_TARGET,
         stage,
         TmuxWriteState.SUCCEEDED,
         target=target,
@@ -173,7 +162,6 @@ def window_option_result(
 
     state = TmuxWriteState.SUCCEEDED if returncode == 0 else TmuxWriteState.FAILED
     return TmuxWriteResult(
-        TmuxWriteOperation.SET_WINDOW_OPTION,
         TmuxWriteStage.WINDOW_OPTION,
         state,
         target,

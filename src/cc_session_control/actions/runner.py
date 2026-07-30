@@ -34,12 +34,12 @@ class ActionCompletion[T]:
 
 @dataclass(frozen=True)
 class Accepted:
-    action_key: str
+    pass
 
 
 @dataclass(frozen=True)
 class Busy:
-    active_key: str
+    pass
 
 
 @dataclass(frozen=True)
@@ -75,7 +75,6 @@ class ActionRunner:
         self._signal_ready = signal_ready
         self._lock = threading.Lock()
         self._state = _State.IDLE
-        self._active_key = ""
         self._result: ActionOutput | None = None
 
     def submit(self, action_key: str, action: Action) -> SubmitResult:
@@ -84,9 +83,8 @@ class ActionRunner:
             if self._state is _State.CLOSED:
                 return Closed()
             if self._state is not _State.IDLE:
-                return Busy(self._active_key)
+                return Busy()
             self._state = _State.RUNNING
-            self._active_key = action_key
 
         worker = threading.Thread(
             target=self._run,
@@ -95,7 +93,7 @@ class ActionRunner:
             daemon=True,
         )
         worker.start()
-        return Accepted(action_key)
+        return Accepted()
 
     def _run(self, action: Action) -> None:
         published = False
@@ -122,12 +120,10 @@ class ActionRunner:
             result = self._result
             self._result = None
             self._state = _State.IDLE
-            self._active_key = ""
             return result
 
     def close(self) -> None:
         """Reject new work and discard pending/late results without joining."""
         with self._lock:
             self._state = _State.CLOSED
-            self._active_key = ""
             self._result = None

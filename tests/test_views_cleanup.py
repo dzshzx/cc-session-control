@@ -406,7 +406,7 @@ def test_cleanup_preview_escape_clears_pinned_generation():
     assert view._preview is None
 
 
-@pytest.mark.parametrize("outcome", [Busy("other"), Closed()])
+@pytest.mark.parametrize("outcome", [Busy(), Closed()])
 def test_cleanup_preview_rejected_submission_keeps_pinned_generation(outcome):
     app = FakeApp()
     view = SessionsView(app)

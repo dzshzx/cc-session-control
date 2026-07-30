@@ -77,7 +77,6 @@ class StartResult:
     detail: str = ""
     issues: tuple[InventoryIssue, ...] = ()
     target: str | None = None
-    tmux_result: tmux.TmuxWriteResult | None = None
 
     @property
     def success(self) -> bool:
@@ -106,7 +105,6 @@ def start_from_tmux(
         path,
         "" if result.success else result.diagnostic,
         target=result.target,
-        tmux_result=result,
     )
 
 

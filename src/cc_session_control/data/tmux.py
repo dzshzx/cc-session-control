@@ -35,7 +35,6 @@ from .tmux_outcomes import (
     TmuxIssue,
     TmuxPane,
     TmuxWindow,
-    TmuxWriteOperation,
     TmuxWriteResult,
     TmuxWriteStage,
     TmuxWriteState,
@@ -422,7 +421,6 @@ def run_in_tmux_result(session: str, window: str, cmd: str) -> TmuxWriteResult:
     cp = invocation.completed
     if cp is None:
         return TmuxWriteResult(
-            TmuxWriteOperation.CREATE_TARGET,
             TmuxWriteStage.SESSION_PROBE,
             TmuxWriteState.FAILED,
             detail=invocation.detail,
@@ -431,7 +429,6 @@ def run_in_tmux_result(session: str, window: str, cmd: str) -> TmuxWriteResult:
         return _tmux_new_window_result(session, window, cmd)
     if not _target_not_found(invocation.detail):
         return TmuxWriteResult(
-            TmuxWriteOperation.CREATE_TARGET,
             TmuxWriteStage.SESSION_PROBE,
             TmuxWriteState.FAILED,
             detail=invocation.detail,

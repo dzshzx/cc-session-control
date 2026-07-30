@@ -60,11 +60,11 @@ class FakeApp:
         self.notify(result.message)
         if result.needs_refresh:
             self.trigger_async_refresh()
-        return Accepted(action_key)
+        return Accepted()
 
     def submit_completion(self, action_key, action, on_complete):
         on_complete(action())
-        return Accepted(action_key)
+        return Accepted()
 
     def refresh_with_notice(self):
         self.trigger_async_refresh()
