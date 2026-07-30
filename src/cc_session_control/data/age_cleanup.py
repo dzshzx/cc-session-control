@@ -38,15 +38,6 @@ class AgeCleanupPlan:
         object.__setattr__(self, "anchors", MappingProxyType(dict(self.anchors)))
         object.__setattr__(self, "issues", tuple(self.issues))
 
-    @classmethod
-    def from_cleanup_plan(cls, plan: CleanupPlan) -> AgeCleanupPlan:
-        """Project the age inventory from one shared cleanup generation."""
-        return cls(
-            entries=plan.aged_entries,
-            anchors=plan.aged_anchors,
-            issues=plan.age_issues,
-        )
-
     def to_cleanup_plan(self, base: CleanupPlan | None = None) -> CleanupPlan:
         """Attach this captured age projection without exposing field mapping."""
         plan = CleanupPlan() if base is None else base
