@@ -36,7 +36,7 @@ class Config:
             14,
             minimum=0,
         )
-        # TUI palette: "auto" (detect the terminal background) | "dark" | "light".
+        # TUI palette: "auto" ($COLORFGBG if set, else dark) | "dark" | "light".
         self.theme: str = os.environ.get("CSCTL_THEME", "auto")
 
     @property
