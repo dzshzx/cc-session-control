@@ -109,9 +109,7 @@ def _make_project(**overrides):
         name="myproj",
         directory="/tmp/myproj",
         trust_decision=TrustDecision.TRUSTED,
-        in_list=True,
         status="stopped",
-        auto_start=True,
     )
     if "rc_at_startup" in overrides:
         value = overrides.pop("rc_at_startup")

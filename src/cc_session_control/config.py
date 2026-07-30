@@ -27,15 +27,7 @@ class Config:
     def __init__(self) -> None:
         self.claude_home: Path = Path.home() / ".claude"
         self.claude_json: Path = Path.home() / ".claude.json"
-        xdg = os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
-        self.config_dir: Path = Path(xdg) / "csctl"
-        self.rc_list: Path = self.config_dir / "rc-enabled"
         self.rc_session: str = os.environ.get("CSCTL_RC_SESSION", "rc")
-        self.rc_stagger: int = _integer_environment(
-            "CSCTL_RC_STAGGER",
-            2,
-            minimum=0,
-        )
         # Age threshold (days) for the time/global-keyed cleanup strategy.
         # 0 is a valid operator value (sweep every aged entry) — pre-0.8
         # releases accepted it, so validation only rejects negatives/garbage.

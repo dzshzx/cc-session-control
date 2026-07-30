@@ -8,7 +8,7 @@ sessions, background agents, and Remote Control.
 ## Features
 
 - **Sessions Tab** — View, resume (tmux-first: `Enter` resumes into the per-project tmux window; `t` bare-terminal fallback; `R` backgrounds into tmux; ⧉ marks tmux-resident sessions), terminate, and delete Claude Code sessions across all projects; a cleanup submenu (`c`) prunes empty/short sessions and sweeps orphan artifact directories
-- **Projects Tab** — The startup tab: start a new tmux claude session in a project dir (`Enter`), start/stop RC servers per project (`o`/`s`), toggle auto-start, show running/stopped/dead states
+- **Projects Tab** — The startup tab: start a new tmux claude session in a project dir (`Enter`), start/stop RC servers per project (`o`/`s`), toggle per-project auto Remote Control (`c`), show running/stopped/dead states
 - **Background agents Tab** — List background agent jobs; take over, respawn, watch their timeline, stop, or remove them
 
 Built with [urwid](https://urwid.org/).
@@ -86,13 +86,8 @@ longer bundled with this package).
 | Environment Variable | Default | Description |
 |---|---|---|
 | `CSCTL_RC_SESSION` | `rc` | tmux session name for RC servers |
-| `CSCTL_RC_STAGGER` | `2` | Seconds between starting RC servers |
 | `CSCTL_CLEANUP_AGE_DAYS` | `14` | Minimum age in days for the age sweep in the Sessions cleanup submenu (must be an integer ≥ 0) |
 | `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via OSC 11 / `$COLORFGBG`) / `dark` / `light`. tmux typically doesn't answer the OSC 11 query, so inside tmux `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |
-| `XDG_CONFIG_HOME` | `~/.config` | Config directory base |
-
-The RC auto-start list is stored at
-`$XDG_CONFIG_HOME/csctl/rc-enabled`.
 
 ## License
 

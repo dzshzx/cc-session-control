@@ -17,7 +17,6 @@ from ..models import (
 )
 from . import proc, tmux
 from .project_settings import ProjectSettingsResult
-from .rc_enabled import EnabledListResult
 
 
 @dataclass(frozen=True)
@@ -27,13 +26,10 @@ class RCScanResult:
     projects: list[RCProject]
     settings: ProjectSettingsResult
     issues: tuple[InventoryIssue, ...] = ()
-    enabled_list: EnabledListResult[tuple[str, ...]] | None = None
 
     @property
     def complete(self) -> bool:
-        return not self.issues and (
-            self.enabled_list is None or self.enabled_list.success
-        )
+        return not self.issues
 
 
 @dataclass(frozen=True)
@@ -83,16 +79,6 @@ class StartResult:
         return self.state is StartState.STARTED
 
 
-@dataclass(frozen=True)
-class StartManyResult:
-    started: int = 0
-    unavailable: int = 0
-    untrusted: int = 0
-    failed: int = 0
-    results: tuple[StartResult, ...] = ()
-    enabled_list: EnabledListResult[tuple[str, ...]] | None = None
-
-
 def start_from_tmux(
     state: StartState,
     path: str,
@@ -114,27 +100,6 @@ def remote_control_command(path: str, name: str) -> str:
     return (
         f"cd {shlex.quote(path)} && exec claude remote-control "
         f"--name {shlex.quote(name)} --spawn same-dir"
-    )
-
-
-def summarize_starts(results: Sequence[StartResult]) -> StartManyResult:
-    """Retain every start result alongside stable aggregate counters."""
-
-    items = tuple(results)
-    return StartManyResult(
-        sum(item.state is StartState.STARTED for item in items),
-        sum(item.state is StartState.TRUST_UNAVAILABLE for item in items),
-        sum(item.state is StartState.UNTRUSTED for item in items),
-        sum(
-            item.state
-            not in {
-                StartState.STARTED,
-                StartState.TRUST_UNAVAILABLE,
-                StartState.UNTRUSTED,
-            }
-            for item in items
-        ),
-        items,
     )
 
 
@@ -167,22 +132,6 @@ class StopAllResult:
     @property
     def success(self) -> bool:
         return self.state is StopState.STOPPED
-
-
-@dataclass(frozen=True)
-class RemoveResult:
-    """Enabled-list authority plus the conditional managed-window outcome."""
-
-    enabled_list: EnabledListResult[bool]
-    stop: StopResult | None
-
-    @property
-    def list_removed(self) -> bool:
-        return bool(
-            self.enabled_list.success
-            and self.enabled_list.value is not None
-            and self.enabled_list.value
-        )
 
 
 def order_by_activity(

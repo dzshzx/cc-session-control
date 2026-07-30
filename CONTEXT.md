@@ -57,7 +57,7 @@ gate, which inherits trust down the directory tree (last semantically verified
 on Claude Code 2.1.218, 2026-07-23). This is an upstream-dependent contract;
 each release must rerun `docs/claude-code-compatibility.md` and record any
 unverified item. The absolute directory path is the project's identity
-everywhere (rc-enabled list, tmux window metadata, claude.json lookups); the
+everywhere (tmux window metadata, claude.json lookups); the
 display name is a derived basename. An entry with an explicit False flag under
 a trusted ancestor IS a project — that footprint means "dialog suppressed, never asked",
 not "declined" (declining writes no entry at all). Platform temp directories
@@ -65,7 +65,7 @@ not "declined" (declining writes no entry at all). Platform temp directories
 working space, not projects: trust discovery alone never lists them — the
 trust state itself stays untouched, so a deliberately trusted `/tmp` keeps
 suppressing dialogs for scratch sessions — while explicitly actionable
-entries (autostart list, existing rc window) stay listed.
+entries (existing rc window) stay listed.
 _Avoid_: workspace-relative short names as identity, reading the raw
 `hasTrustDialogAccepted` flag as the trust set, assuming a workspace root,
 treating a trusted temp root as a project

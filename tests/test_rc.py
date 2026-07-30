@@ -10,14 +10,8 @@ from __future__ import annotations
 
 import json
 
-from cc_session_control.config import cfg
 from cc_session_control.data import proc, rc
 from cc_session_control.data.proc import ProcIssue, ProcRC, ProcRCInventory
-from cc_session_control.data.rc_enabled import (
-    EnabledListOperation,
-    EnabledListResult,
-    EnabledListState,
-)
 from cc_session_control.data.tmux import TmuxIssue, TmuxWindow, WindowInventory
 from cc_session_control.models import RCServer, RCStartupSettingState
 
@@ -40,21 +34,6 @@ def _metadata_written(target: str) -> rc.tmux.TmuxWriteResult:
         rc.tmux.TmuxWriteStage.WINDOW_OPTION,
         rc.tmux.TmuxWriteState.SUCCEEDED,
         target=target,
-    )
-
-
-def _enabled_success(
-    operation: EnabledListOperation,
-    value,
-    *,
-    changed: bool = False,
-) -> EnabledListResult:
-    return EnabledListResult(
-        operation,
-        EnabledListState.SUCCEEDED,
-        value,
-        changed=changed,
-        committed=changed,
     )
 
 
@@ -195,66 +174,6 @@ def test_start_retains_created_target_when_metadata_write_fails(
     assert result.detail == "window-option: lost server connection"
 
 
-def test_start_many_staggers_after_metadata_failure_with_created_target(
-    monkeypatch,
-):
-    outcomes = iter(
-        (
-            rc.StartResult(
-                rc.StartState.METADATA_FAILED,
-                "/first",
-                target="remote-control:1",
-            ),
-            rc.StartResult(
-                rc.StartState.STARTED,
-                "/second",
-                target="remote-control:2",
-            ),
-        )
-    )
-    sleep_calls: list[int] = []
-    monkeypatch.setattr(rc, "start_one_result", lambda _path: next(outcomes))
-    monkeypatch.setattr(rc.time, "sleep", sleep_calls.append)
-    monkeypatch.setattr(cfg, "rc_stagger", 17)
-
-    result = rc.start_many_result(["/first", "/second"])
-
-    assert [item.state for item in result.results] == [
-        rc.StartState.METADATA_FAILED,
-        rc.StartState.STARTED,
-    ]
-    assert (result.started, result.failed) == (1, 1)
-    assert sleep_calls == [17]
-
-
-def test_start_many_does_not_stagger_after_failure_without_created_target(
-    monkeypatch,
-):
-    outcomes = iter(
-        (
-            rc.StartResult(rc.StartState.TMUX_FAILED, "/first"),
-            rc.StartResult(
-                rc.StartState.STARTED,
-                "/second",
-                target="remote-control:2",
-            ),
-        )
-    )
-    sleep_calls: list[int] = []
-    monkeypatch.setattr(rc, "start_one_result", lambda _path: next(outcomes))
-    monkeypatch.setattr(rc.time, "sleep", sleep_calls.append)
-    monkeypatch.setattr(cfg, "rc_stagger", 17)
-
-    result = rc.start_many_result(["/first", "/second"])
-
-    assert [item.state for item in result.results] == [
-        rc.StartState.TMUX_FAILED,
-        rc.StartState.STARTED,
-    ]
-    assert (result.started, result.failed) == (1, 1)
-    assert sleep_calls == []
-
-
 def test_stop_fails_incomplete_window_inventory_without_killing(monkeypatch):
     killed: list[str] = []
     monkeypatch.setattr(
@@ -289,11 +208,6 @@ def test_project_status_is_unknown_when_window_inventory_is_incomplete(
         {str(project): {"hasTrustDialogAccepted": True}},
     )
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(
-        rc,
-        "list_enabled_result",
-        lambda: _enabled_success(EnabledListOperation.LIST, ()),
-    )
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
     monkeypatch.setattr(
         rc,
@@ -532,11 +446,6 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
-    monkeypatch.setattr(
-        rc,
-        "list_enabled_result",
-        lambda: _enabled_success(EnabledListOperation.LIST, ()),
-    )
     monkeypatch.setattr(rc, "_tmux_window_inventory", lambda: WindowInventory())
     # tmp_path is under the real temp root — neutralize the membership filter.
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
@@ -563,11 +472,6 @@ def test_scan_preserves_per_project_setting_failure_without_fallback(
         {str(project): {"hasTrustDialogAccepted": True}},
     )
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(
-        rc,
-        "list_enabled_result",
-        lambda: _enabled_success(EnabledListOperation.LIST, ()),
-    )
     monkeypatch.setattr(rc, "_tmux_window_inventory", lambda: WindowInventory())
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
 
@@ -586,9 +490,7 @@ def test_order_by_activity_recent_first_never_active_sink():
             name=d.rsplit("/", 1)[-1],
             directory=d,
             trust_decision=TrustDecision.TRUSTED,
-            in_list=False,
             status="stopped",
-            auto_start=False,
         )
 
     def sess(cwd, mtime):
@@ -618,14 +520,13 @@ def test_order_by_activity_recent_first_never_active_sink():
 
 def test_scan_marks_missing_directory(tmp_path, monkeypatch):
     """A missing-dir project stays listed (dir_exists=False) only while it is
-    still actionable — in the autostart list or holding a tmux window. Pure
-    trust residue (only ~/.claude.json references the deleted dir) is dropped:
-    csctl can't act on it and never edits claude's files."""
+    still actionable — holding a tmux window. Pure trust residue (only
+    ~/.claude.json references the deleted dir) is dropped: csctl can't act on
+    it and never edits claude's files."""
     alive = tmp_path / "alive"
     alive.mkdir()
     deleted = str(tmp_path / "deleted")
     gone_running = str(tmp_path / "gone-running")
-    gone_enabled = str(tmp_path / "gone-enabled")
     cj = _write_claude_json(
         tmp_path,
         {
@@ -637,11 +538,6 @@ def test_scan_marks_missing_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
     monkeypatch.setattr(
         rc,
-        "list_enabled_result",
-        lambda: _enabled_success(EnabledListOperation.LIST, (gone_enabled,)),
-    )
-    monkeypatch.setattr(
-        rc,
         "_tmux_window_inventory",
         lambda: WindowInventory(
             (TmuxWindow("@1", "gone-running", False, 5, gone_running),)
@@ -651,10 +547,9 @@ def test_scan_marks_missing_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
 
     rows = {p.directory: p for p in rc.scan_result().projects}
-    assert set(rows) == {str(alive), gone_enabled, gone_running}
+    assert set(rows) == {str(alive), gone_running}
     assert deleted not in rows  # trust-only residue hidden
     assert rows[str(alive)].dir_exists is True
     assert rows[str(alive)].name == "alive"  # derived display name
-    assert rows[gone_enabled].dir_exists is False  # stale rc-enabled entry
     assert rows[gone_running].dir_exists is False  # window survives dir removal
     assert rows[gone_running].status == "running"

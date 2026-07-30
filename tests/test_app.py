@@ -333,9 +333,7 @@ def test_complete_batch_drives_real_views():
             name="p1",
             directory="/tmp/p1",
             trust_decision=TrustDecision.TRUSTED,
-            in_list=True,
             status="stopped",
-            auto_start=True,
         )
     ]
     snap = WorldSnapshot(sessions=sess, rc_projects=proj)

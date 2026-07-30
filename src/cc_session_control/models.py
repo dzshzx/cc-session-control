@@ -205,15 +205,13 @@ class RCProject:
     # THE sole trust representation — unavailable evidence stays distinct from
     # untrusted rather than collapsing into a plain bool.
     trust_decision: TrustDecision
-    in_list: bool
     status: Status
-    auto_start: bool
     rc_at_startup_setting: RCStartupSettingRead = field(
         default_factory=lambda: RCStartupSettingRead(RCStartupSettingState.MISSING)
     )
     spawn_mode: str | None = None  # per-project remoteControlSpawnMode (None=unset)
-    # False when the workspace directory is gone but claude.json / rc-enabled
-    # still reference the project — shown as 缺失, start-ops refused.
+    # False when the workspace directory is gone but claude.json still
+    # references the project — shown as 缺失, start-ops refused.
     dir_exists: bool = True
 
     @property

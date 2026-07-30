@@ -38,10 +38,8 @@ def test_readme_drops_retired_cli_surfaces(retired_command: str) -> None:
     "variable",
     [
         "CSCTL_RC_SESSION",
-        "CSCTL_RC_STAGGER",
         "CSCTL_CLEANUP_AGE_DAYS",
         "CSCTL_THEME",
-        "XDG_CONFIG_HOME",
     ],
 )
 def test_readme_lists_every_public_environment_setting(variable: str) -> None:
@@ -64,8 +62,6 @@ def test_readme_lists_every_public_environment_setting(variable: str) -> None:
         "`tmux_outcomes.py`",
         "`_tmux_window_inventory`",
         "`_window_for_inventory`",
-        "`EnabledListResult`",
-        "`operation` / `stage` / `detail` / `changed` / `committed`",
         "`take_over_result`",
         "`stop_job_result`",
         "`prepare_takeover`",
@@ -98,8 +94,13 @@ def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None
         "`respawn`",
         "`current_determinable`",
         "`proc.pid_exists`",
+        # Autostart-list feature retired in 0.8 — the docs must not resurrect it.
         "`list_enabled`",
-        "`toggle_autostart` primitive",
+        "`toggle_autostart`",
+        "`EnabledListResult`",
+        "`start_all_listed_result`",
+        "rc-enabled",
+        "开机自启",
         "`capture_pane`",
         "`residency_targets`",
         "`list_orphan_dirs`",

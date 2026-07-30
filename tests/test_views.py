@@ -408,7 +408,7 @@ def test_footer_keyhints_list_every_list_mode_key():
         assert f"{key} " in agents_hints, f"agents footer missing {key}"
 
     rc_hints = RCView(FakeApp()).keyhints()
-    for key in ("Enter", "o", "s", "a", "c", "A", "S", "?"):
+    for key in ("Enter", "o", "s", "c", "S", "?"):
         assert f"{key} " in rc_hints, f"rc footer missing {key}"
 
 

@@ -13,12 +13,6 @@ from cc_session_control.data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
-from cc_session_control.data.rc_enabled import (
-    EnabledListOperation,
-    EnabledListResult,
-    EnabledListStage,
-    EnabledListState,
-)
 from cc_session_control.data.refresh import RefreshFailure, build_refresh_result
 from cc_session_control.data.tmux import TmuxWindow, WindowInventory
 from cc_session_control.models import SessionProc
@@ -67,34 +61,6 @@ def _stub_sources(monkeypatch, procs):
         "scan_servers_result",
         lambda *, window_inventory: snapshot.rc.RCServerScanResult(),
     )
-
-
-def test_snapshot_keeps_partial_enabled_list_result(
-    monkeypatch,
-) -> None:
-    _stub_sources(monkeypatch, [])
-    failure = EnabledListResult(
-        EnabledListOperation.LIST,
-        EnabledListState.FAILED,
-        None,
-        changed=False,
-        committed=False,
-        stage=EnabledListStage.READ,
-        detail="permission denied",
-    )
-    monkeypatch.setattr(
-        snapshot.rc,
-        "scan_result",
-        lambda *, window_inventory: snapshot.rc.RCScanResult(
-            [],
-            ProjectSettingsResult(ProjectSettingsState.AVAILABLE, {}),
-            enabled_list=failure,
-        ),
-    )
-
-    snap = snapshot.build_world_snapshot()
-
-    assert snap.rc_enabled_list is failure
 
 
 def test_incomplete_liveness_snapshot_fails_generation(

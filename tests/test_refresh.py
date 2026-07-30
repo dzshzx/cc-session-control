@@ -335,17 +335,13 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
         name="older",
         directory="/tmp/older",
         trust_decision=TrustDecision.TRUSTED,
-        in_list=True,
         status="stopped",
-        auto_start=False,
     )
     active = RCProject(
         name="active",
         directory="/tmp/project",
         trust_decision=TrustDecision.TRUSTED,
-        in_list=True,
         status="stopped",
-        auto_start=False,
     )
     evidence = LivenessSnapshot()
     snapshot = WorldSnapshot(

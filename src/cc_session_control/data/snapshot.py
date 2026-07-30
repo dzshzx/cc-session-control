@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from ..models import AgentJob, InventoryIssue, RCProject, RCServer, Session
 from . import liveness, rc, sessions
 from .project_settings import ProjectSettingsResult, ProjectSettingsState
-from .rc_enabled import EnabledListResult
 from .sessions import SessionScanResult
 
 
@@ -51,7 +50,6 @@ class WorldSnapshot:
             {},
         ),
     )
-    rc_enabled_list: EnabledListResult[tuple[str, ...]] | None = None
     rc_servers: tuple[RCServer, ...] = ()
     rc_inventory_issues: tuple[InventoryIssue, ...] = ()
     liveness_snapshot: liveness.LivenessSnapshot | None = None
@@ -96,7 +94,6 @@ def build_world_snapshot() -> WorldSnapshot:
         agent_jobs=inputs.agent_jobs,
         rc_projects=tuple(rc_scan.projects),
         rc_project_settings=rc_scan.settings,
-        rc_enabled_list=rc_scan.enabled_list,
         rc_servers=tuple(server_scan.servers),
         rc_inventory_issues=server_scan.issues,
         liveness_snapshot=inputs,

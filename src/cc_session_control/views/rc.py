@@ -5,7 +5,7 @@ Shows two things:
      and `remoteControlSpawnMode`, plus Enter (start a NEW claude session in the
      project dir inside tmux, then enter it — the tmux-first launcher, ADR-0001),
      `o` (start the project RC server, the demoted secondary), and the
-     stop/autostart keys;
+     stop / auto-RC keys;
   2. project RC servers (RCServer) discovered via tmux ∪ /proc, badged
      managed/external — external servers are READ-ONLY (no takeover/restart key).
 
@@ -25,7 +25,6 @@ from ..data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
 )
-from ..data.rc_enabled import EnabledListResult
 from ..models import InventoryIssue, RCProject, RCServer, TrustDecision
 from ._base import ListTabView
 from ._colspec import ColSpec, header_columns, row_columns
@@ -65,7 +64,6 @@ _NEXT_TRISTATE = {None: True, True: False, False: None}
 # One spec drives the tab header + project rows (_colspec.py).
 _PROJECT_COLS: list[ColSpec] = [
     (10, "left", "状态"),
-    (8, "left", "开机自启"),
     (8, "left", "自动远控"),
     (10, "left", "启动模式"),
     (("weight", 2), "left", "项目"),
@@ -83,34 +81,27 @@ class RCRow(SelectableRow):
         attr = _STATUS_ATTR.get(project.status, "dead")
         directory = project.directory
         if not project.dir_exists:
-            # Stale reference: claude.json / rc-enabled still list the project
-            # but its workspace directory is gone. A running server (dir
-            # deleted underneath it) keeps its status; otherwise 缺失 wins.
+            # Stale reference: claude.json still lists the project but its
+            # workspace directory is gone. A running server (dir deleted
+            # underneath it) keeps its status; otherwise 缺失 wins.
             directory += "（目录缺失）"
             if project.status != "running":
                 status_text = "✖ 缺失"
                 attr = "status_err"
-        auto = "✓ 开" if project.auto_start else "✗ 关"
         rc_at = (
             _RC_TRISTATE[project.rc_at_startup]
             if project.rc_at_startup_setting.available
             else "读取失败"
         )
         spawn = project.spawn_mode or "—"
-        name = (
-            project.name
-            if project.in_list or project.status == "running"
-            else f"({project.name})"
-        )
 
         cols = row_columns(
             _PROJECT_COLS,
             [
                 status_text,
-                auto,
                 rc_at,
                 spawn,
-                name,
+                project.name,
                 directory,
             ],
         )
@@ -199,13 +190,6 @@ class RCView(ListTabView):
             help_lines=("  s      停止选中项目的远程控制服务（需确认）",),
         ),
         Key(
-            ("a",),
-            "a 开机自启",
-            "_key_autostart",
-            section="项目操作（仅对「项目」行生效）:",
-            help_lines=("  a      切换「开机自启」：A 键一键启动时是否带上本项目",),
-        ),
-        Key(
             ("c",),
             "c 自动远控",
             "_key_rc_toggle",
@@ -213,14 +197,6 @@ class RCView(ListTabView):
             help_lines=(
                 "  c      切换「自动远控」：claude 启动时自动开远程控制，手机即可接管",
             ),
-        ),
-        Key(
-            ("A",),
-            "A 全部启动",
-            "_key_start_all",
-            needs_selection=False,
-            section="批量操作:",
-            help_lines=("  A      启动所有「开机自启」项目",),
         ),
         Key(
             ("S",),
@@ -245,7 +221,7 @@ class RCView(ListTabView):
         sections=("项目操作（仅对「项目」行生效）:", "批量操作:"),
         suffix=(
             "目录缺失（✖ 缺失）:",
-            "  项目目录已删除，但自启列表仍引用它（或其远控服务还在跑）；用 a 键移出自启列表。",
+            "  项目目录已删除但其远控服务窗口还在时仍显示；停止该服务后此行消失。",
             "  只剩 claude 信任记录（~/.claude.json）引用的已删项目不再显示；信任记录需手动清理。",
             "",
             "RC 服务（只读）:",
@@ -262,7 +238,6 @@ class RCView(ListTabView):
         self._projects: list[RCProject] = []
         self._servers: list[RCServer] = []
         self._settings = ProjectSettingsResult(ProjectSettingsState.MISSING, {})
-        self._enabled_list: EnabledListResult[tuple[str, ...]] | None = None
         self._inventory_issues: tuple[InventoryIssue, ...] = ()
         self._help = False
 
@@ -282,7 +257,6 @@ class RCView(ListTabView):
         """Apply one complete generation on the urwid main loop."""
         self._projects = list(batch.ordered_projects)
         self._settings = batch.snapshot.rc_project_settings
-        self._enabled_list = batch.snapshot.rc_enabled_list
         self._servers = list(batch.snapshot.rc_servers)
         self._inventory_issues = batch.snapshot.rc_inventory_issues
         self._loaded = True
@@ -304,7 +278,6 @@ class RCView(ListTabView):
 
     def _status_text(self) -> str:
         running = sum(1 for p in self._projects if p.status == "running")
-        auto = sum(1 for p in self._projects if p.auto_start)
         rc_off = sum(1 for p in self._projects if p.rc_at_startup is False)
         rc_errors = sum(
             1 for p in self._projects if not p.rc_at_startup_setting.available
@@ -319,28 +292,12 @@ class RCView(ListTabView):
             if not self._settings.available
             else ""
         )
-        enabled_issue = (
-            self._enabled_list is not None and not self._enabled_list.success
-        )
-        inventory_count = len(self._inventory_issues) + int(enabled_issue)
-        enabled_detail = ""
-        if enabled_issue and self._enabled_list is not None:
-            stage = (
-                self._enabled_list.stage.value
-                if self._enabled_list.stage is not None
-                else "unknown"
-            )
-            committed = "；变更已提交，需刷新" if self._enabled_list.committed else ""
-            enabled_detail = (
-                f"（自启列表 {stage}：{self._enabled_list.detail}{committed}）"
-            )
+        inventory_count = len(self._inventory_issues)
         inventory_text = (
-            f" · ⚠ RC 清单不完整 {inventory_count}{enabled_detail}"
-            if inventory_count
-            else ""
+            f" · ⚠ RC 清单不完整 {inventory_count}" if inventory_count else ""
         )
         return (
-            f" 共 {len(self._projects)} 项目 · 运行 {running} · 开机自启 {auto}"
+            f" 共 {len(self._projects)} 项目 · 运行 {running}"
             f"{rc_text}{rc_error_text}{miss_text}{srv_text}{settings_text}"
             f"{inventory_text}"
         )
@@ -367,7 +324,7 @@ class RCView(ListTabView):
 
     def _key_start(self, p: RCProject) -> None:
         if not p.dir_exists:
-            self.app.notify("目录缺失 — 无法启动（可用 a 键移出自启列表）")
+            self.app.notify("目录缺失 — 无法启动")
             return
         if p.trust_decision is TrustDecision.UNAVAILABLE:
             self.app.notify("项目设置不可用 — 已拒绝启动")
@@ -401,13 +358,6 @@ class RCView(ListTabView):
             gated=False,
         )
 
-    def _key_autostart(self, p: RCProject) -> None:
-        path, name = p.directory, p.name
-        self.app.submit_action(
-            "project.toggle-autostart",
-            lambda: tui_actions.toggle_autostart(path, name),
-        )
-
     def _key_rc_toggle(self, p: RCProject) -> None:
         if not p.dir_exists:
             # write_rc_at_startup would mkdir the deleted project back to life.
@@ -428,12 +378,6 @@ class RCView(ListTabView):
         self.app.submit_action(
             "project.write-settings",
             lambda: tui_actions.write_auto_rc(path, name, new),
-        )
-
-    def _key_start_all(self) -> None:
-        self.app.submit_action(
-            "project.start-all",
-            tui_actions.start_all_projects,
         )
 
     def _key_stop_all(self) -> None:

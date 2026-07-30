@@ -1,4 +1,4 @@
-"""View unit tests: RC/projects-view — RCRow/RCView rendering, project actions (o/c/a/S/A/s), server rows, and the no-deregister capability guard."""
+"""View unit tests: RC/projects-view — RCRow/RCView rendering, project actions (o/c/S/s), server rows, and the no-deregister capability guard."""
 
 import ast
 import os
@@ -23,11 +23,6 @@ from cc_session_control.data.project_settings import (
     SettingWriteFailure,
     SettingWriteResult,
     SettingWriteState,
-)
-from cc_session_control.data.rc_enabled import (
-    EnabledListOperation,
-    EnabledListResult,
-    EnabledListState,
 )
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import (
@@ -65,7 +60,6 @@ def test_rc_row_marks_missing_directory():
 
 def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
     import cc_session_control.views.rc as rc_view_mod
-    from cc_session_control.data import rc as rc_mod
 
     writes = []
     monkeypatch.setattr(
@@ -73,17 +67,6 @@ def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
         "write_rc_at_startup",
         lambda directory, value: (
             writes.append((directory, value)) or _updated_setting(directory)
-        ),
-    )
-    monkeypatch.setattr(
-        rc_mod,
-        "toggle_autostart_result",
-        lambda _name: EnabledListResult(
-            EnabledListOperation.TOGGLE,
-            EnabledListState.SUCCEEDED,
-            False,
-            changed=True,
-            committed=True,
         ),
     )
 
@@ -98,9 +81,6 @@ def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
     assert app.result is None
     assert not writes
     assert sum("目录缺失" in m for m in app._notifications) == 3
-
-    view.handle_key("a")  # the removal path stays available
-    assert any("开机自启" in m for m in app._notifications)
 
 
 def test_rc_view_applies_complete_refresh_batch():
@@ -118,10 +98,8 @@ def test_rc_view_keyhints_uses_new_labels():
     hints = view.keyhints()
     assert "Enter 新建会话" in hints  # tmux-first primary (ADR-0001)
     assert "o 启动远控" in hints  # RC demoted to o
-    assert "开机自启" in hints
     assert "自动远控" in hints
     # batch keys are discoverable in the footer, each with its own label
-    assert "A 全部启动" in hints
     assert "S 全部停止" in hints
 
 
@@ -132,13 +110,12 @@ def test_rc_view_status_bar_counts_use_new_labels():
     _apply_projects(
         view,
         [
-            _make_project(name="p1", auto_start=True, rc_at_startup=None),
-            _make_project(name="p2", auto_start=True, rc_at_startup=False),
-            _make_project(name="p3", auto_start=False, rc_at_startup=False),
+            _make_project(name="p1", rc_at_startup=None),
+            _make_project(name="p2", rc_at_startup=False),
+            _make_project(name="p3", rc_at_startup=False),
         ],
     )
     text = view.status.original_widget.get_text()[0]
-    assert "开机自启 2" in text
     assert "自动远控关 2" in text
 
 
@@ -328,32 +305,6 @@ def test_rc_view_reports_typed_settings_write_failure(monkeypatch):
     assert any("配置写入失败（replace）" in item for item in app._notifications)
 
 
-def test_rc_view_a_key_notifies_with_new_label(monkeypatch):
-    from cc_session_control.data import rc as rc_mod
-
-    monkeypatch.setattr(
-        rc_mod,
-        "toggle_autostart_result",
-        lambda _name: EnabledListResult(
-            EnabledListOperation.TOGGLE,
-            EnabledListState.SUCCEEDED,
-            True,
-            changed=True,
-            committed=True,
-        ),
-    )
-
-    app = FakeApp()
-    view = RCView(app)
-    app.views = [view]
-    _apply_projects(view, [_make_project(name="p1")])
-
-    view.handle_key("a")
-
-    assert app._submitted_actions == ["project.toggle-autostart"]
-    assert any("开机自启" in m for m in app._notifications)
-
-
 def test_rc_S_key_confirms_then_stops_all(monkeypatch):
     from cc_session_control.data import rc as rc_mod
 
@@ -379,25 +330,6 @@ def test_rc_S_key_confirms_then_stops_all(monkeypatch):
     assert stopped["n"] == 1
     assert app._submitted_actions == ["project.stop-all"]
     assert any("已停止全部" in m for m in app._notifications)
-
-
-def test_rc_A_key_submits_start_all(monkeypatch):
-    from cc_session_control.data import rc as rc_mod
-
-    monkeypatch.setattr(
-        rc_mod,
-        "start_all_listed_result",
-        lambda: rc_mod.StartManyResult(started=2),
-    )
-    app = FakeApp()
-    view = RCView(app)
-    app.views = [view]
-    _apply_projects(view, [_make_project(name="p1")])
-
-    view.handle_key("A")
-
-    assert app._submitted_actions == ["project.start-all"]
-    assert app._notifications[-1] == "已启动 2 个项目"
 
 
 def test_rc_s_running_confirms_stop(monkeypatch):
@@ -539,7 +471,7 @@ def test_rc_view_server_rows_are_read_only(monkeypatch):
             break
     assert view._selected() is None  # not an RCProject -> nothing actionable
 
-    for key in ("enter", "s", "a", "c"):
+    for key in ("enter", "s", "c"):
         view.handle_key(key)
     assert started["n"] == 0
     assert app._notifications == []
