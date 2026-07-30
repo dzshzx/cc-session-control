@@ -22,10 +22,8 @@ from ..models import (
 from . import proc, rc_environment, rc_outcomes, tmux
 from .project_settings import (
     ProjectSettingsResult,
-    SettingWriteResult,
     read_project_settings,
     read_rc_at_startup,
-    write_rc_at_startup,
 )
 from .rc_enabled import EnabledListResult, EnabledListStore
 from .rc_outcomes import (
@@ -136,12 +134,6 @@ def project_trust(path: str) -> ProjectTrustResult:
     return ProjectTrustResult(effective_trust_decision(path, projects), settings)
 
 
-def trust_decision(path: str) -> TrustDecision:
-    """Compatibility decision-only view of ``project_trust``."""
-
-    return project_trust(path).decision
-
-
 def _basename(path: str) -> str:
     """Display name derived from the path — NEVER an identity key."""
     return os.path.basename(path.rstrip("/")) or path
@@ -175,15 +167,6 @@ def _window_for_inventory(
         ),
         None,
     )
-
-
-def set_rc_at_startup(
-    directory: str,
-    value: bool | None,
-) -> SettingWriteResult:
-    """Typed compatibility name for the atomic project-settings writer."""
-
-    return write_rc_at_startup(directory, value)
 
 
 def scan_result(
@@ -396,7 +379,7 @@ def _start_one_with_trust(
 def start_one_result(path: str) -> StartResult:
     """Start one RC server with tri-state trust evidence."""
 
-    return _start_one_with_trust(path, trust_decision(path))
+    return _start_one_with_trust(path, project_trust(path).decision)
 
 
 def stop_one_result(

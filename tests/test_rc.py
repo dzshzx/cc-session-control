@@ -139,8 +139,8 @@ def test_start_refuses_incomplete_window_inventory_without_spawning(
     spawned: list[tuple] = []
     monkeypatch.setattr(
         rc,
-        "trust_decision",
-        lambda _path: rc.TrustDecision.TRUSTED,
+        "project_trust",
+        lambda _path: rc.ProjectTrustResult(rc.TrustDecision.TRUSTED, None),
     )
     monkeypatch.setattr(
         rc,
@@ -562,8 +562,8 @@ def test_start_stop_remove_and_stop_all_invalidate_capture_cache(
     )
     monkeypatch.setattr(
         rc,
-        "trust_decision",
-        lambda path: rc.TrustDecision.TRUSTED,
+        "project_trust",
+        lambda path: rc.ProjectTrustResult(rc.TrustDecision.TRUSTED, None),
     )
     monkeypatch.setattr(
         rc.tmux,

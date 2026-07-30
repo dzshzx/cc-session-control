@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ..data import cleanup, rc
-from ..data.project_settings import SettingWriteState
+from ..data.project_settings import SettingWriteState, write_rc_at_startup
 from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session
 from . import agent_ops, session_ops
@@ -171,7 +171,7 @@ def write_auto_rc(
     name: str,
     value: bool | None,
 ) -> ActionResult:
-    result = rc.set_rc_at_startup(path, value)
+    result = write_rc_at_startup(path, value)
     if result.state is SettingWriteState.FAILED:
         reason = result.failure.value if result.failure is not None else "unknown"
         return ActionResult(

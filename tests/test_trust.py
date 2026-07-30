@@ -263,7 +263,7 @@ def test_scan_drops_temp_root_and_subtree(tmp_path, monkeypatch):
 
     assert rc.scan_result().projects == []
     # Trust itself is NOT touched — the start gate still passes.
-    assert rc.trust_decision(str(sub)) is TrustDecision.TRUSTED
+    assert rc.project_trust(str(sub)).decision is TrustDecision.TRUSTED
 
 
 def test_scan_keeps_enabled_temp_project(tmp_path, monkeypatch):

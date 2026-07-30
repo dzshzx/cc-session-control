@@ -426,7 +426,7 @@ class RCView(ListTabView):
 
     def _key_rc_toggle(self, p: RCProject) -> None:
         if not p.dir_exists:
-            # set_rc_at_startup would mkdir the deleted project back to life.
+            # write_rc_at_startup would mkdir the deleted project back to life.
             self.app.notify("目录缺失 — 不写入配置")
             return
         setting = p.rc_at_startup_setting

@@ -69,8 +69,8 @@ def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
 
     writes = []
     monkeypatch.setattr(
-        rc_view_mod.tui_actions.rc,
-        "set_rc_at_startup",
+        rc_view_mod.tui_actions,
+        "write_rc_at_startup",
         lambda directory, value: (
             writes.append((directory, value)) or _updated_setting(directory)
         ),
@@ -254,8 +254,8 @@ def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
 
     writes = []
     monkeypatch.setattr(
-        rc_view_mod.tui_actions.rc,
-        "set_rc_at_startup",
+        rc_view_mod.tui_actions,
+        "write_rc_at_startup",
         lambda directory, value: (
             writes.append((directory, value)) or _updated_setting(directory)
         ),
@@ -321,7 +321,7 @@ def test_rc_view_reports_typed_settings_write_failure(monkeypatch):
             "read-only filesystem",
         )
 
-    monkeypatch.setattr(rc_view_mod.tui_actions.rc, "set_rc_at_startup", fail_write)
+    monkeypatch.setattr(rc_view_mod.tui_actions, "write_rc_at_startup", fail_write)
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
@@ -635,8 +635,8 @@ def test_rc_view_c_key_full_tristate_cycle(monkeypatch):
 
     writes = []
     monkeypatch.setattr(
-        rc_view_mod.tui_actions.rc,
-        "set_rc_at_startup",
+        rc_view_mod.tui_actions,
+        "write_rc_at_startup",
         lambda directory, value: writes.append(value) or _updated_setting(directory),
     )
     app = FakeApp()
@@ -654,8 +654,8 @@ def test_rc_view_c_key_refuses_unavailable_setting_evidence(monkeypatch):
 
     writes = []
     monkeypatch.setattr(
-        rc_view_mod.tui_actions.rc,
-        "set_rc_at_startup",
+        rc_view_mod.tui_actions,
+        "write_rc_at_startup",
         lambda directory, value: writes.append(value),
     )
     source = Path("/project/.claude/settings.local.json")

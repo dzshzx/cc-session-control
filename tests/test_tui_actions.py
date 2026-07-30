@@ -541,8 +541,8 @@ def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        tui_actions.rc,
-        "set_rc_at_startup",
+        tui_actions,
+        "write_rc_at_startup",
         lambda *_: SettingWriteResult(
             SettingWriteState.FAILED,
             Path("/project/.claude/settings.local.json"),
