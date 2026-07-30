@@ -199,18 +199,16 @@ class AgentsView(ListTabView):
     # --- key handlers (bound by name in KEY_TABLE; dispatch lives in the base) ---
 
     def _key_respawn(self, job: AgentJob) -> None:
-        request = tui_actions.AgentRequest.from_job(job)
         self.app.submit_action(
             "agent.respawn",
-            lambda: tui_actions.respawn_agent(request),
+            lambda: tui_actions.respawn_agent(job),
         )
 
     def _submit_takeover(self, job: AgentJob, *, terminal: bool) -> None:
-        request = tui_actions.AgentRequest.from_job(job)
         name = job.name or job.short
         self.app.submit_completion(
             "agent.takeover.prepare",
-            lambda: agent_ops.prepare_takeover(request.to_job()),
+            lambda: agent_ops.prepare_takeover(job),
             lambda prepared: self._complete_takeover(
                 prepared,
                 name=name,
@@ -263,11 +261,10 @@ class AgentsView(ListTabView):
         self._submit_takeover(job, terminal=True)
 
     def _watch(self, job: AgentJob) -> None:
-        request = tui_actions.AgentRequest.from_job(job)
         name = job.name or job.short
         self.app.submit_completion(
             "agent.watch",
-            lambda: agent_ops.watch(request.to_job()),
+            lambda: agent_ops.watch(job),
             lambda result: self._complete_watch(result, name=name),
         )
 
@@ -293,10 +290,9 @@ class AgentsView(ListTabView):
         if job.host_alive:
             self.app.notify("运行中的后台 agent 不能删除，先停止")
             return
-        request = tui_actions.AgentRequest.from_job(job)
         self.app.submit_action(
             "agent.remove",
-            lambda: tui_actions.remove_agent(request),
+            lambda: tui_actions.remove_agent(job),
         )
 
     def _stop(self, job: AgentJob) -> None:
@@ -316,10 +312,9 @@ class AgentsView(ListTabView):
         change after confirmation remains distinguishable as not-running,
         refused, or failed instead of being flattened into "process missing".
         """
-        request = tui_actions.AgentRequest.from_job(job)
         self.app.submit_action(
             "agent.stop",
-            lambda: tui_actions.stop_agent(request),
+            lambda: tui_actions.stop_agent(job),
         )
 
     def _show_help(self) -> None:

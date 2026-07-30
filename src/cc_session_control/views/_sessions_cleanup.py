@@ -317,12 +317,7 @@ class CleanupMixin:
         preview = self._preview
         if preview is None:
             return
-        targets = tuple(
-            tui_actions.SessionRequest.from_session(target)
-            if isinstance(target, Session)
-            else target
-            for target in preview.targets
-        )
+        targets = preview.targets
         outcome = self.app.submit_action(
             f"session.cleanup.{preview.action.key}",
             lambda: tui_actions.run_cleanup(

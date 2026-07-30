@@ -1,10 +1,10 @@
-"""Typed TUI-action adapters preserve domain outcomes and request snapshots."""
+"""Typed TUI-action adapters preserve domain outcomes on frozen models."""
 
 from __future__ import annotations
 
 import subprocess
 import threading
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -83,23 +83,8 @@ def _install_execution_session(
     )
 
 
-def test_requests_round_trip_immutable_models() -> None:
-    session = _session()
-    job = _job()
-
-    session_request = tui_actions.SessionRequest.from_session(session)
-    agent_request = tui_actions.AgentRequest.from_job(job)
-    with pytest.raises(FrozenInstanceError):
-        session.sid = "changed"
-    with pytest.raises(AttributeError):
-        job.respawn_flags.append("--verbose")
-
-    assert session_request.to_session().sid == "sid-1"
-    assert agent_request.to_job().respawn_flags == ("--model", "opus")
-
-
 def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
-    request = tui_actions.SessionRequest.from_session(_session())
+    session = _session()
     monkeypatch.setattr(
         tui_actions.session_ops,
         "take_over_result",
@@ -107,7 +92,7 @@ def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
             tui_actions.session_ops.TakeOverState.REFUSED,
         ),
     )
-    refused = tui_actions.stop_session(request)
+    refused = tui_actions.stop_session(session)
     assert "liveness 降级" in refused.message
 
     monkeypatch.setattr(
@@ -117,12 +102,12 @@ def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
             tui_actions.session_ops.TakeOverState.FAILED,
         ),
     )
-    failed = tui_actions.stop_session(request)
+    failed = tui_actions.stop_session(session)
     assert failed.message == "停止失败"
 
 
 def test_stop_session_refuses_unknown_proc_probe_without_signal(monkeypatch) -> None:
-    request = tui_actions.SessionRequest.from_session(_session())
+    session = _session()
     issue = proc.ProcIssue(
         "process stat",
         "/proc/42/stat",
@@ -144,7 +129,7 @@ def test_stop_session_refuses_unknown_proc_probe_without_signal(monkeypatch) -> 
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not signal")),
     )
 
-    result = tui_actions.stop_session(request)
+    result = tui_actions.stop_session(session)
 
     assert "/proc/42/stat" in result.message
     assert "permission denied" in result.message
@@ -152,7 +137,6 @@ def test_stop_session_refuses_unknown_proc_probe_without_signal(monkeypatch) -> 
 
 def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) -> None:
     session = replace(_session(), alive=False, pid=None)
-    request = tui_actions.SessionRequest.from_session(session)
     spawn_calls: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
         tui_actions.session_ops.liveness,
@@ -173,7 +157,7 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
         ),
     )
 
-    result = tui_actions.background_session(request)
+    result = tui_actions.background_session(session)
 
     assert result.message == "已转入后台（tmux project:4）"
     assert result.needs_refresh is True
@@ -224,7 +208,6 @@ def test_live_background_session_requires_successful_takeover_before_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _session()
-    request = tui_actions.SessionRequest.from_session(session)
     spawn_calls: list[tuple[str, str, str]] = []
     _install_execution_session(monkeypatch, session)
     monkeypatch.setattr(
@@ -251,7 +234,7 @@ def test_live_background_session_requires_successful_takeover_before_spawn(
         ),
     )
 
-    result = tui_actions.background_session(request)
+    result = tui_actions.background_session(session)
 
     assert result.message == expected_message
     assert spawn_calls == expected_spawns
@@ -261,7 +244,6 @@ def test_live_background_session_without_pid_fails_closed_before_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = replace(_session(), pid=None)
-    request = tui_actions.SessionRequest.from_session(session)
     _install_execution_session(monkeypatch, session)
     monkeypatch.setattr(
         tui_actions.session_ops.liveness,
@@ -284,7 +266,7 @@ def test_live_background_session_without_pid_fails_closed_before_spawn(
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
     )
 
-    result = tui_actions.background_session(request)
+    result = tui_actions.background_session(session)
 
     assert "incomplete execution-time identity (pid)" in result.message
 
@@ -299,7 +281,6 @@ def test_live_background_session_uses_execution_time_session_generation(
         pid=9002,
         proc_start="fresh-start",
     )
-    request = tui_actions.SessionRequest.from_session(stale)
     _install_execution_session(monkeypatch, fresh)
     monkeypatch.setattr(
         tui_actions.session_ops.liveness,
@@ -332,7 +313,7 @@ def test_live_background_session_uses_execution_time_session_generation(
         ),
     )
 
-    result = tui_actions.background_session(request)
+    result = tui_actions.background_session(stale)
 
     assert result.message == "已转入后台（tmux fresh-project:4）"
     assert takeovers == [(9002, "fresh-start")]
@@ -384,9 +365,7 @@ def test_delete_adapter_reports_removed_plus_anchor_refusal_as_partial(
     )
     monkeypatch.setattr(tui_actions.cleanup, "remove_session", lambda _: execution)
 
-    result = tui_actions.delete_session(
-        tui_actions.SessionRequest.from_session(_session())
-    )
+    result = tui_actions.delete_session(_session())
 
     assert result.message.startswith("删除部分完成：")
     assert "anchored root identity changed" in result.message
@@ -650,9 +629,7 @@ def test_agent_respawn_does_not_claim_success_when_tmux_fails(monkeypatch) -> No
         ),
     )
 
-    result = tui_actions.respawn_agent(
-        tui_actions.AgentRequest.from_job(_job()),
-    )
+    result = tui_actions.respawn_agent(_job())
 
     assert result.message == "重启失败：无法创建 tmux 窗口"
 
@@ -666,15 +643,13 @@ def test_agent_respawn_reports_typed_tmux_failure_detail(monkeypatch) -> None:
         ),
     )
 
-    result = tui_actions.respawn_agent(
-        tui_actions.AgentRequest.from_job(_job()),
-    )
+    result = tui_actions.respawn_agent(_job())
 
     assert result.message == ("重启失败：session-probe: tmux timed out after 5 seconds")
 
 
 def test_agent_stop_preserves_all_domain_states(monkeypatch) -> None:
-    request = tui_actions.AgentRequest.from_job(_job())
+    job = _job()
     cases = [
         (
             tui_actions.agent_ops.AgentStopResult(
@@ -713,7 +688,7 @@ def test_agent_stop_preserves_all_domain_states(monkeypatch) -> None:
             "stop_job_result",
             lambda _job, result=domain_result: result,
         )
-        action = tui_actions.stop_agent(request)
+        action = tui_actions.stop_agent(job)
         assert action.message == message
         assert action.needs_refresh is True
 

@@ -323,20 +323,18 @@ class SessionsView(CleanupMixin, ListTabView):
 
     def _do_terminate(self, s: Session) -> None:
         """Stop body, run only after the y/n confirm accepts."""
-        request = tui_actions.SessionRequest.from_session(s)
         self.app.submit_action(
             "session.stop",
-            lambda: tui_actions.stop_session(request),
+            lambda: tui_actions.stop_session(s),
         )
 
     def _do_relaunch(self, s: Session) -> None:
         """转后台 body (after confirm when it takes over a live one): spawn the
         resume window in the per-project tmux session, do NOT enter it — the
         operator stays in csctl. No --remote-control (ADR-0001)."""
-        request = tui_actions.SessionRequest.from_session(s)
         self.app.submit_action(
             "session.background",
-            lambda: tui_actions.background_session(request),
+            lambda: tui_actions.background_session(s),
         )
 
     def _submit_ancestor_probe(
@@ -502,30 +500,28 @@ class SessionsView(CleanupMixin, ListTabView):
     def _complete_delete(
         self,
         evidence: proc.AncestorProbe,
-        request: tui_actions.SessionRequest,
+        s: Session,
     ) -> None:
         if not accept_ancestor_probe(self.app, evidence):
             return
         self.app.submit_action(
             "session.delete",
-            lambda: tui_actions.delete_session(request),
+            lambda: tui_actions.delete_session(s),
         )
 
     def _key_delete(self, s: Session) -> None:
         if s.alive:
             self.app.notify("运行中的会话不删，先停止")
             return
-        request = tui_actions.SessionRequest.from_session(s)
         self._submit_ancestor_probe(
             "session.delete.prepare",
-            lambda evidence: self._complete_delete(evidence, request),
+            lambda evidence: self._complete_delete(evidence, s),
         )
 
     def _key_yank(self, s: Session) -> None:
-        request = tui_actions.SessionRequest.from_session(s)
         self.app.submit_action(
             "session.copy-command",
-            lambda: tui_actions.copy_resume_command(request),
+            lambda: tui_actions.copy_resume_command(s),
         )
 
     def _key_toggle_hidden(self) -> None:

@@ -42,11 +42,12 @@ freeze navigation and could let worker threads mutate widgets.
 - `actions/runner.py::ActionRunner` accepts at most one mutation until its
   result is consumed. A concurrent request receives `Busy(active_key)` and the
   operator sees that another action is in progress.
-- A view snapshots its selected mutable model into an immutable request before
-  submission. The worker receives no App, walker, selection, or urwid widget.
-  It publishes an `ActionResult` (`success`, `partial`, `refused`, or
-  `failure`); only the main-loop pipe callback updates notices or requests one
-  follow-up refresh.
+- A view passes its selected frozen domain model (`Session`/`AgentJob`)
+  directly to the action adapter before submission — the models are already
+  immutable, so no snapshot copy is needed. The worker receives no App,
+  walker, selection, or urwid widget. It publishes an `ActionResult`
+  (`success`, `partial`, `refused`, or `failure`); only the main-loop pipe
+  callback updates notices or requests one follow-up refresh.
 - Key-triggered external reads and preparations use that same runner and publish
   an `ActionCompletion[T]`. `App.submit_completion` associates its typed
   callback only after `Accepted`; Busy/Closed submissions cannot replace the

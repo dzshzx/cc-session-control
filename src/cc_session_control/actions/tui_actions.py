@@ -1,7 +1,7 @@
 """Typed adapters for mutations that return to the TUI.
 
-Views project immutable published row models into action-specific frozen
-requests before submission. Workers receive only those requests and return
+Views pass the frozen ``Session``/``AgentJob`` domain models directly to
+these action adapters. Workers receive only those frozen models and return
 ``ActionResult`` data; they never receive or mutate an urwid widget, walker,
 selection, or App.
 """
@@ -9,7 +9,6 @@ selection, or App.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 
 from ..data import cleanup, rc
 from ..data.project_settings import SettingWriteState
@@ -19,119 +18,14 @@ from . import agent_ops, session_ops
 from .feedback import format_cleanup_notice, format_delete_notice
 from .runner import ActionResult
 
-
-@dataclass(frozen=True)
-class SessionRequest:
-    sid: str
-    cwd: str
-    label: str
-    mtime: float
-    prompts: int
-    pid: int | None
-    alive: bool
-    current: bool
-    proc_start: str
-    file: str
-    source: str
-    agent_short: str | None
-    tmux_target: str | None
-    tmux_inventory_complete: bool
-    tmux_inventory_detail: str
-
-    @classmethod
-    def from_session(cls, session: Session) -> SessionRequest:
-        return cls(
-            sid=session.sid,
-            cwd=session.cwd,
-            label=session.label,
-            mtime=session.mtime,
-            prompts=session.prompts,
-            pid=session.pid,
-            alive=session.alive,
-            current=session.current,
-            proc_start=session.proc_start,
-            file=session.file,
-            source=session.source,
-            agent_short=session.agent_short,
-            tmux_target=session.tmux_target,
-            tmux_inventory_complete=session.tmux_inventory_complete,
-            tmux_inventory_detail=session.tmux_inventory_detail,
-        )
-
-    def to_session(self) -> Session:
-        return Session(
-            sid=self.sid,
-            cwd=self.cwd,
-            label=self.label,
-            mtime=self.mtime,
-            prompts=self.prompts,
-            pid=self.pid,
-            alive=self.alive,
-            current=self.current,
-            proc_start=self.proc_start,
-            file=self.file,
-            source=self.source,
-            agent_short=self.agent_short,
-            tmux_target=self.tmux_target,
-            tmux_inventory_complete=self.tmux_inventory_complete,
-            tmux_inventory_detail=self.tmux_inventory_detail,
-        )
-
-
-@dataclass(frozen=True)
-class AgentRequest:
-    short: str
-    sid: str
-    resume_sid: str
-    state: str
-    tempo: str
-    cwd: str
-    name: str
-    env_suffix: str
-    respawn_flags: tuple[str, ...]
-    host_pid: int | None
-    host_alive: bool
-
-    @classmethod
-    def from_job(cls, job: AgentJob) -> AgentRequest:
-        return cls(
-            short=job.short,
-            sid=job.sid,
-            resume_sid=job.resume_sid,
-            state=job.state,
-            tempo=job.tempo,
-            cwd=job.cwd,
-            name=job.name,
-            env_suffix=job.env_suffix,
-            respawn_flags=tuple(job.respawn_flags),
-            host_pid=job.host_pid,
-            host_alive=job.host_alive,
-        )
-
-    def to_job(self) -> AgentJob:
-        return AgentJob(
-            short=self.short,
-            sid=self.sid,
-            resume_sid=self.resume_sid,
-            state=self.state,
-            tempo=self.tempo,
-            cwd=self.cwd,
-            name=self.name,
-            env_suffix=self.env_suffix,
-            respawn_flags=self.respawn_flags,
-            host_pid=self.host_pid,
-            host_alive=self.host_alive,
-        )
-
-
-type CleanupTarget = SessionRequest | str | int
+type CleanupTarget = Session | str | int
 type CleanupExecutor = Callable[[list], CleanupExecution]
 
 
-def stop_session(request: SessionRequest) -> ActionResult:
-    if request.pid is None:
+def stop_session(session: Session) -> ActionResult:
+    if session.pid is None:
         return ActionResult("停止失败", needs_refresh=True)
-    outcome = session_ops.take_over_result(request.pid, request.proc_start)
+    outcome = session_ops.take_over_result(session.pid, session.proc_start)
     if outcome.success:
         return ActionResult("已停止", needs_refresh=True)
     if outcome.state is session_ops.TakeOverState.REFUSED:
@@ -144,8 +38,8 @@ def stop_session(request: SessionRequest) -> ActionResult:
     return ActionResult(f"停止失败{detail}", needs_refresh=True)
 
 
-def background_session(request: SessionRequest) -> ActionResult:
-    outcome = session_ops.do_tmux_resume_result(request.to_session())
+def background_session(session: Session) -> ActionResult:
+    outcome = session_ops.do_tmux_resume_result(session)
     if outcome.target is None:
         detail = f"：{outcome.detail}" if outcome.detail else ""
         return ActionResult(f"转入后台失败{detail}", needs_refresh=True)
@@ -155,20 +49,20 @@ def background_session(request: SessionRequest) -> ActionResult:
     )
 
 
-def delete_session(request: SessionRequest) -> ActionResult:
-    result = cleanup.remove_session(request.to_session())
+def delete_session(session: Session) -> ActionResult:
+    result = cleanup.remove_session(session)
     return _delete_result(result)
 
 
-def copy_resume_command(request: SessionRequest) -> ActionResult:
-    command = session_ops.resume_cmd(request.to_session())
+def copy_resume_command(session: Session) -> ActionResult:
+    command = session_ops.resume_cmd(session)
     if session_ops.to_clipboard(command):
         return ActionResult("已复制")
     return ActionResult(f"复制失败: {command}")
 
 
-def respawn_agent(request: AgentRequest) -> ActionResult:
-    result = agent_ops.respawn_result(request.to_job())
+def respawn_agent(job: AgentJob) -> ActionResult:
+    result = agent_ops.respawn_result(job)
     if not result.success:
         detail = result.detail or "无法创建 tmux 窗口"
         return ActionResult(
@@ -181,12 +75,12 @@ def respawn_agent(request: AgentRequest) -> ActionResult:
     )
 
 
-def remove_agent(request: AgentRequest) -> ActionResult:
-    return _delete_result(agent_ops.remove_job(request.to_job()))
+def remove_agent(job: AgentJob) -> ActionResult:
+    return _delete_result(agent_ops.remove_job(job))
 
 
-def stop_agent(request: AgentRequest) -> ActionResult:
-    result = agent_ops.stop_job_result(request.to_job())
+def stop_agent(job: AgentJob) -> ActionResult:
+    result = agent_ops.stop_job_result(job)
     if result.state is agent_ops.AgentStopState.STOPPED:
         return ActionResult(
             "已发送停止信号（可能残留孤儿进程，请手动确认）",
@@ -345,11 +239,7 @@ def run_cleanup(
     targets: tuple[CleanupTarget, ...],
     done_template: str,
 ) -> ActionResult:
-    mutable_targets = [
-        target.to_session() if isinstance(target, SessionRequest) else target
-        for target in targets
-    ]
-    result = execute(mutable_targets)
+    result = execute(list(targets))
     return ActionResult(
         format_cleanup_notice(result, done_template), needs_refresh=True
     )
