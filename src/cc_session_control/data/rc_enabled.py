@@ -6,16 +6,21 @@ are one module so every caller observes one serialized generation.
 
 from __future__ import annotations
 
-import fcntl
 import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from types import TracebackType
-from typing import IO, Literal, TypeVar
+from typing import TypeVar
 
-from .atomic_write import AtomicWriteError, AtomicWriteStage, atomic_replace
+from .atomic_write import (
+    AdvisoryLockError,
+    AdvisoryLockStage,
+    AtomicWriteError,
+    AtomicWriteStage,
+    advisory_lock,
+    atomic_replace,
+)
 
 _T = TypeVar("_T")
 _Mutation = Callable[[list[str]], tuple[list[str], _T]]
@@ -85,64 +90,24 @@ _STAGE_TO_STAGE: Mapping[AtomicWriteStage, EnabledListStage] = {
     AtomicWriteStage.CLEANUP: EnabledListStage.CLEANUP,
 }
 
+_LOCK_STAGE_TO_STAGE: Mapping[AdvisoryLockStage, EnabledListStage] = {
+    AdvisoryLockStage.LOCK: EnabledListStage.LOCK,
+    AdvisoryLockStage.UNLOCK: EnabledListStage.UNLOCK,
+}
 
-class _EnabledListLock:
-    """Dedicated flock whose release and close failures stay observable."""
 
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self._file: IO[bytes] | None = None
+def _merge_release_notes(
+    exc: _EnabledListBoundaryError,
+) -> tuple[EnabledListStage, str]:
+    """Fold a shared-lock release note into the body's own boundary failure."""
 
-    def __enter__(self) -> None:
-        try:
-            self._file = self._path.open("a+b")
-        except (OSError, UnicodeError) as exc:
-            raise _EnabledListBoundaryError(
-                EnabledListStage.LOCK,
-                str(exc),
-            ) from exc
-        try:
-            fcntl.flock(self._file, fcntl.LOCK_EX)
-        except (OSError, UnicodeError) as exc:
-            detail = str(exc)
-            try:
-                self._file.close()
-            except OSError as close_exc:
-                detail += f"; close: {close_exc}"
-            raise _EnabledListBoundaryError(
-                EnabledListStage.LOCK,
-                detail,
-            ) from exc
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> Literal[False]:
-        if self._file is None:
-            return False
-        failures: list[str] = []
-        try:
-            fcntl.flock(self._file, fcntl.LOCK_UN)
-        except OSError as unlock_exc:
-            failures.append(f"flock: {unlock_exc}")
-        try:
-            self._file.close()
-        except OSError as close_exc:
-            failures.append(f"close: {close_exc}")
-        if not failures:
-            return False
-        detail = "; ".join(failures)
-        if isinstance(exc, _EnabledListBoundaryError):
-            raise _EnabledListBoundaryError(
-                EnabledListStage.UNLOCK,
-                f"{exc.stage.value}: {exc.detail}; unlock: {detail}",
-            ) from exc
-        if exc is not None:
-            exc.add_note(f"enabled-list lock release failed: {detail}")
-            return False
-        raise _EnabledListBoundaryError(EnabledListStage.UNLOCK, detail)
+    notes = getattr(exc, "__notes__", None)
+    if not notes:
+        return exc.stage, exc.detail
+    return (
+        EnabledListStage.UNLOCK,
+        f"{exc.stage.value}: {exc.detail}; " + "; ".join(notes),
+    )
 
 
 def _canonical(path: str) -> str:
@@ -247,9 +212,10 @@ class EnabledListStore:
             )
         result: EnabledListResult[_T] | None = None
         try:
-            with _EnabledListLock(self._lock_path):
+            with advisory_lock(self._lock_path):
                 result = self._locked_update_result(operation, mutate)
-        except _EnabledListBoundaryError as exc:
+        except AdvisoryLockError as exc:
+            stage = _LOCK_STAGE_TO_STAGE[exc.stage]
             detail = exc.detail
             if result is not None and not result.success:
                 previous = (
@@ -260,7 +226,16 @@ class EnabledListStore:
                 detail = f"{previous}: {result.detail}; unlock: {detail}"
             return self._failure(
                 operation,
-                exc.stage,
+                stage,
+                detail,
+                changed=result.changed if result is not None else False,
+                committed=result.committed if result is not None else False,
+            )
+        except _EnabledListBoundaryError as exc:
+            stage, detail = _merge_release_notes(exc)
+            return self._failure(
+                operation,
+                stage,
                 detail,
                 changed=result.changed if result is not None else False,
                 committed=result.committed if result is not None else False,

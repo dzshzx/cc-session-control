@@ -179,10 +179,10 @@ def test_update_lock_failure_is_typed_and_preserves_history(
     path.write_bytes(original)
 
     def deny_lock(file_descriptor: int, operation: int) -> None:
-        if operation == ledger.fcntl.LOCK_EX:
+        if operation == atomic_write.fcntl.LOCK_EX:
             raise OSError("lock unavailable")
 
-    monkeypatch.setattr(ledger.fcntl, "flock", deny_lock)
+    monkeypatch.setattr(atomic_write.fcntl, "flock", deny_lock)
 
     result = ledger.update([EnvRecord("session", "new")], now=30.0)
 
@@ -211,19 +211,19 @@ def test_update_lock_sequence_wraps_successful_atomic_write(
 ) -> None:
     path = _use_ledger_dir(tmp_path, monkeypatch)
     operations: list[int] = []
-    original_flock = ledger.fcntl.flock
+    original_flock = atomic_write.fcntl.flock
 
     def record_lock(file_descriptor: int, operation: int) -> None:
         operations.append(operation)
         original_flock(file_descriptor, operation)
 
-    monkeypatch.setattr(ledger.fcntl, "flock", record_lock)
+    monkeypatch.setattr(atomic_write.fcntl, "flock", record_lock)
 
     result = ledger.update([EnvRecord("session", "new")], now=30.0)
 
     assert result.state is ledger.LedgerUpdateState.WRITTEN
     assert path.exists()
-    assert operations == [ledger.fcntl.LOCK_EX, ledger.fcntl.LOCK_UN]
+    assert operations == [atomic_write.fcntl.LOCK_EX, atomic_write.fcntl.LOCK_UN]
 
 
 def test_update_lock_release_failure_is_not_reported_as_success(
@@ -231,14 +231,14 @@ def test_update_lock_release_failure_is_not_reported_as_success(
     monkeypatch,
 ) -> None:
     path = _use_ledger_dir(tmp_path, monkeypatch)
-    original_flock = ledger.fcntl.flock
+    original_flock = atomic_write.fcntl.flock
 
     def fail_release(file_descriptor: int, operation: int) -> None:
-        if operation == ledger.fcntl.LOCK_UN:
+        if operation == atomic_write.fcntl.LOCK_UN:
             raise OSError("unlock unavailable")
         original_flock(file_descriptor, operation)
 
-    monkeypatch.setattr(ledger.fcntl, "flock", fail_release)
+    monkeypatch.setattr(atomic_write.fcntl, "flock", fail_release)
 
     result = ledger.update([EnvRecord("session", "new")], now=30.0)
 

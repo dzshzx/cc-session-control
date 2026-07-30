@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import math
 import time
@@ -10,12 +9,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from types import MappingProxyType, TracebackType
-from typing import IO, Literal
+from types import MappingProxyType
 
 from ..config import cfg
 from ..models import BridgeEnv, EnvRecord
-from .atomic_write import AtomicWriteError, AtomicWriteStage, atomic_replace
+from .atomic_write import (
+    AdvisoryLockError,
+    AdvisoryLockStage,
+    AtomicWriteError,
+    AtomicWriteStage,
+    advisory_lock,
+    atomic_replace,
+)
 
 _RETENTION_SECONDS = 90 * 86400
 _MAX_ENTRIES = 500
@@ -132,52 +137,10 @@ class _LedgerBoundaryError(OSError):
         self.detail = detail
 
 
-class _LedgerLock:
-    """Dedicated advisory lock that never suppresses a body exception."""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.file: IO[str] | None = None
-
-    def __enter__(self) -> None:
-        try:
-            self.file = self.path.open("a", encoding="utf-8")
-        except OSError as exc:
-            raise _LedgerBoundaryError(LedgerFailure.LOCK, str(exc)) from exc
-        try:
-            fcntl.flock(self.file.fileno(), fcntl.LOCK_EX)
-        except OSError as exc:
-            detail = str(exc)
-            try:
-                self.file.close()
-            except OSError as close_exc:
-                detail += f"; lock file close failed: {close_exc}"
-            raise _LedgerBoundaryError(LedgerFailure.LOCK, detail) from exc
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> Literal[False]:
-        if self.file is None:
-            return False
-        failures: list[str] = []
-        try:
-            fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
-        except OSError as release_exc:
-            failures.append(f"flock: {release_exc}")
-        try:
-            self.file.close()
-        except OSError as close_exc:
-            failures.append(f"close: {close_exc}")
-        if failures:
-            detail = "; ".join(failures)
-            if exc is not None:
-                exc.add_note(f"ledger lock release failed: {detail}")
-                return False
-            raise _LedgerBoundaryError(LedgerFailure.UNLOCK, detail)
-        return False
+_LOCK_STAGE_TO_FAILURE: Mapping[AdvisoryLockStage, LedgerFailure] = {
+    AdvisoryLockStage.LOCK: LedgerFailure.LOCK,
+    AdvisoryLockStage.UNLOCK: LedgerFailure.UNLOCK,
+}
 
 
 def read() -> LedgerRead:
@@ -270,7 +233,7 @@ def update(
         return _failed(LedgerFailure.CREATE_DIRECTORY, str(exc))
 
     try:
-        with _LedgerLock(target.with_name(f"{target.name}.lock")):
+        with advisory_lock(target.with_name(f"{target.name}.lock")):
             previous = _read(target)
             if previous.state is LedgerReadState.PARTIAL:
                 return LedgerUpdate(
@@ -308,8 +271,8 @@ def update(
                     read_result=previous,
                 )
             return LedgerUpdate(LedgerUpdateState.WRITTEN, updated, previous)
-    except _LedgerBoundaryError as exc:
-        return _failed(exc.failure, exc.detail)
+    except AdvisoryLockError as exc:
+        return _failed(_LOCK_STAGE_TO_FAILURE[exc.stage], exc.detail)
 
 
 def _failed(

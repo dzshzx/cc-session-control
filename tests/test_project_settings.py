@@ -352,7 +352,7 @@ def test_rc_setting_lock_failure_is_typed_and_preserves_original(
     def fail_lock(*args, **kwargs):
         raise OSError("lock unavailable")
 
-    monkeypatch.setattr(project_settings.fcntl, "flock", fail_lock)
+    monkeypatch.setattr(atomic_write.fcntl, "flock", fail_lock)
     result = write_rc_at_startup(project, True)
 
     assert result.failure is SettingWriteFailure.LOCK
@@ -435,3 +435,65 @@ def test_rc_setting_atomic_boundary_failure_preserves_bytes_and_cleans_tmp(
     assert result.failure is failure
     assert settings.read_bytes() == original
     assert list(settings.parent.glob(".settings.local.json.*.tmp")) == []
+
+
+def test_rc_setting_post_commit_unlock_failure_is_now_typed_failed(
+    tmp_path,
+    monkeypatch,
+):
+    """Drift fix: a release failure after a successful write used to be
+    silently dropped (the write still reported UPDATED); it now surfaces as
+    a typed UNLOCK failure, matching rc_enabled/environment_ledger, even
+    though the write itself already landed on disk.
+    """
+    project = tmp_path / "app"
+    settings = project / ".claude" / "settings.local.json"
+    settings.parent.mkdir(parents=True)
+    original_flock = atomic_write.fcntl.flock
+
+    def fail_unlock(file_descriptor, operation):
+        if operation == atomic_write.fcntl.LOCK_UN:
+            raise OSError("unlock unavailable")
+        original_flock(file_descriptor, operation)
+
+    monkeypatch.setattr(atomic_write.fcntl, "flock", fail_unlock)
+    result = write_rc_at_startup(project, True)
+
+    assert result.state is SettingWriteState.FAILED
+    assert result.failure is SettingWriteFailure.UNLOCK
+    assert result.detail == "flock: unlock unavailable"
+    assert json.loads(settings.read_bytes())["remoteControlAtStartup"] is True
+
+
+def test_rc_setting_read_failure_and_unlock_failure_merge_diagnostics(
+    tmp_path,
+    monkeypatch,
+):
+    """Drift fix: a body failure plus a release failure now merges into one
+    UNLOCK-staged result carrying both diagnostics, as the other two domains
+    already did — instead of the release failure being dropped entirely.
+    """
+    project = tmp_path / "app"
+    settings = project / ".claude" / "settings.local.json"
+    settings.parent.mkdir(parents=True)
+    original = b'{"keep": true}\n'
+    settings.write_bytes(original)
+    real_read_bytes = Path.read_bytes
+
+    def fail_read(self):
+        if self == settings:
+            raise PermissionError("read denied")
+        return real_read_bytes(self)
+
+    def fail_unlock(file_descriptor, operation):
+        if operation == atomic_write.fcntl.LOCK_UN:
+            raise OSError("unlock unavailable")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read)
+    monkeypatch.setattr(atomic_write.fcntl, "flock", fail_unlock)
+    result = write_rc_at_startup(project, True)
+
+    assert result.state is SettingWriteState.FAILED
+    assert result.failure is SettingWriteFailure.UNLOCK
+    assert result.detail == "read: read denied; unlock: flock: unlock unavailable"
+    assert real_read_bytes(settings) == original

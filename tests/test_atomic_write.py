@@ -8,8 +8,11 @@ import pytest
 
 from cc_session_control.data import atomic_write
 from cc_session_control.data.atomic_write import (
+    AdvisoryLockError,
+    AdvisoryLockStage,
     AtomicWriteError,
     AtomicWriteStage,
+    advisory_lock,
     atomic_replace,
 )
 
@@ -140,3 +143,77 @@ def test_atomic_replace_cleanup_failure_folds_into_detail_without_swallowing(
     assert excinfo.value.stage is AtomicWriteStage.CLEANUP
     assert excinfo.value.detail == "replace: replace denied; unlink: unlink denied"
     assert path.read_text() == "old"
+
+
+def test_advisory_lock_enter_failure_raises_typed_lock_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_path = tmp_path / "target.lock"
+
+    def fail_lock(_file: object, _operation: int) -> None:
+        raise OSError("lock unavailable")
+
+    monkeypatch.setattr(atomic_write.fcntl, "flock", fail_lock)
+
+    with pytest.raises(AdvisoryLockError) as excinfo:
+        with advisory_lock(lock_path):
+            raise AssertionError("body must not run when the lock is unavailable")
+
+    assert excinfo.value.stage is AdvisoryLockStage.LOCK
+    assert excinfo.value.detail == "lock unavailable"
+
+
+def test_advisory_lock_body_success_and_unlock_failure_raises_fresh_unlock_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_path = tmp_path / "target.lock"
+    original_flock = atomic_write.fcntl.flock
+
+    def fail_unlock(file: object, operation: int) -> None:
+        if operation == atomic_write.fcntl.LOCK_UN:
+            raise OSError("unlock unavailable")
+        original_flock(file, operation)
+
+    monkeypatch.setattr(atomic_write.fcntl, "flock", fail_unlock)
+
+    body_ran = False
+    with pytest.raises(AdvisoryLockError) as excinfo:
+        with advisory_lock(lock_path):
+            body_ran = True
+
+    assert body_ran is True
+    assert excinfo.value.stage is AdvisoryLockStage.UNLOCK
+    assert excinfo.value.detail == "flock: unlock unavailable"
+
+
+def test_advisory_lock_body_failure_and_unlock_failure_merges_as_a_note(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A body exception keeps its own type; the release failure is folded in
+    as a note (PEP 678) rather than replacing it — this is what lets each
+    domain's own boundary-error type keep propagating uncaught release
+    diagnostics attached (T19), instead of losing the original failure.
+    """
+    lock_path = tmp_path / "target.lock"
+
+    def fail_unlock(_file: object, operation: int) -> None:
+        if operation == atomic_write.fcntl.LOCK_UN:
+            raise OSError("unlock unavailable")
+
+    monkeypatch.setattr(atomic_write.fcntl, "flock", fail_unlock)
+
+    with pytest.raises(ValueError) as excinfo:
+        with advisory_lock(lock_path):
+            raise ValueError("body failed")
+
+    assert str(excinfo.value) == "body failed"
+    assert excinfo.value.__notes__ == ["unlock: flock: unlock unavailable"]
+
+    # The lock file was still released (close succeeded) despite the failed
+    # unlock, so a subsequent acquisition does not deadlock.
+    monkeypatch.undo()
+    with advisory_lock(lock_path):
+        pass

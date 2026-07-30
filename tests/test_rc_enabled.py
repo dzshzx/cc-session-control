@@ -305,15 +305,13 @@ def test_typed_lock_failure_is_uncommitted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cc_session_control.data.rc_enabled as enabled_module
-
     path = tmp_path / "rc-enabled"
     path.write_bytes(b"# original\n")
 
     def fail_lock(_file: object, _operation: int) -> None:
         raise OSError("lock unavailable")
 
-    monkeypatch.setattr(enabled_module.fcntl, "flock", fail_lock)
+    monkeypatch.setattr(atomic_write.fcntl, "flock", fail_lock)
 
     result = _store(path).add_result(str(tmp_path / "new"))
 
@@ -382,8 +380,6 @@ def test_typed_create_file_and_lock_release_failures_retain_all_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cc_session_control.data.rc_enabled as enabled_module
-
     path = tmp_path / "rc-enabled"
     original_open = Path.open
 
@@ -401,11 +397,11 @@ def test_typed_create_file_and_lock_release_failures_retain_all_evidence(
         return original_open(target, mode, *args, **kwargs)
 
     def fail_unlock(_file: object, operation: int) -> None:
-        if operation == enabled_module.fcntl.LOCK_UN:
+        if operation == atomic_write.fcntl.LOCK_UN:
             raise OSError("unlock failed")
 
     monkeypatch.setattr(Path, "open", fail_boundaries)
-    monkeypatch.setattr(enabled_module.fcntl, "flock", fail_unlock)
+    monkeypatch.setattr(atomic_write.fcntl, "flock", fail_unlock)
 
     result = _store(path).list_result()
 
@@ -542,19 +538,17 @@ def test_post_commit_unlock_failure_is_failed_but_committed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cc_session_control.data.rc_enabled as enabled_module
-
     path = tmp_path / "rc-enabled"
     new = tmp_path / "new"
     path.write_bytes(b"# original\n")
-    original_flock = enabled_module.fcntl.flock
+    original_flock = atomic_write.fcntl.flock
 
     def fail_unlock(file: object, operation: int) -> None:
-        if operation == enabled_module.fcntl.LOCK_UN:
+        if operation == atomic_write.fcntl.LOCK_UN:
             raise OSError("unlock failed")
         original_flock(file, operation)
 
-    monkeypatch.setattr(enabled_module.fcntl, "flock", fail_unlock)
+    monkeypatch.setattr(atomic_write.fcntl, "flock", fail_unlock)
 
     result = _store(path).add_result(str(new))
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -12,7 +11,14 @@ from types import MappingProxyType
 from typing import Any
 
 from ..models import RCStartupSettingRead, RCStartupSettingState
-from .atomic_write import AtomicWriteError, AtomicWriteStage, atomic_replace
+from .atomic_write import (
+    AdvisoryLockError,
+    AdvisoryLockStage,
+    AtomicWriteError,
+    AtomicWriteStage,
+    advisory_lock,
+    atomic_replace,
+)
 
 
 class ProjectSettingsState(Enum):
@@ -92,6 +98,7 @@ class SettingWriteFailure(Enum):
     FSYNC = "fsync"
     REPLACE = "replace"
     CLEANUP = "cleanup"
+    UNLOCK = "unlock"
 
 
 @dataclass(frozen=True)
@@ -268,6 +275,27 @@ def _replace_settings(
     return SettingWriteResult(SettingWriteState.UPDATED, path)
 
 
+_LOCK_STAGE_TO_FAILURE: Mapping[AdvisoryLockStage, SettingWriteFailure] = {
+    AdvisoryLockStage.LOCK: SettingWriteFailure.LOCK,
+    AdvisoryLockStage.UNLOCK: SettingWriteFailure.UNLOCK,
+}
+
+
+def _locked_write(path: Path, value: bool | None) -> SettingWriteResult:
+    document = _load_settings_for_write(path)
+    if isinstance(document, SettingWriteResult):
+        return document
+
+    updated = dict(document)
+    if value is None:
+        updated.pop("remoteControlAtStartup", None)
+    else:
+        updated["remoteControlAtStartup"] = value
+    if updated == document:
+        return SettingWriteResult(SettingWriteState.UNCHANGED, path)
+    return _replace_settings(path, updated)
+
+
 def write_rc_at_startup(
     directory: str | Path,
     value: bool | None,
@@ -286,26 +314,20 @@ def write_rc_at_startup(
         )
 
     lock_path = settings_dir / ".settings.local.json.lock"
+    outcome: SettingWriteResult | None = None
     try:
-        lock_file = lock_path.open("a", encoding="utf-8")
-    except OSError as exc:
-        return _write_failure(path, SettingWriteFailure.LOCK, str(exc))
-
-    with lock_file:
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        except OSError as exc:
-            return _write_failure(path, SettingWriteFailure.LOCK, str(exc))
-
-        document = _load_settings_for_write(path)
-        if isinstance(document, SettingWriteResult):
-            return document
-
-        updated = dict(document)
-        if value is None:
-            updated.pop("remoteControlAtStartup", None)
-        else:
-            updated["remoteControlAtStartup"] = value
-        if updated == document:
-            return SettingWriteResult(SettingWriteState.UNCHANGED, path)
-        return _replace_settings(path, updated)
+        with advisory_lock(lock_path):
+            outcome = _locked_write(path, value)
+    except AdvisoryLockError as exc:
+        detail = exc.detail
+        if outcome is not None and not outcome.success:
+            previous = (
+                outcome.failure.value
+                if outcome.failure is not None
+                else outcome.state.value
+            )
+            detail = f"{previous}: {outcome.detail}; unlock: {detail}"
+        return _write_failure(path, _LOCK_STAGE_TO_FAILURE[exc.stage], detail)
+    if outcome is None:
+        raise RuntimeError("project-settings transaction produced no result")
+    return outcome
