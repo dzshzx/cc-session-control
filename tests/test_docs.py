@@ -35,7 +35,9 @@ def test_readme_cli_examples_are_accepted_by_the_parser(command: str) -> None:
     build_parser().parse_args(shlex.split(command))
 
 
-@pytest.mark.parametrize("retired_command", ["csctl prune", "csctl skill", "csctl rc "])
+@pytest.mark.parametrize(
+    "retired_command", ["csctl prune", "csctl skill", "csctl rc ", "csctl env"]
+)
 def test_readme_drops_retired_cli_surfaces(retired_command: str) -> None:
     assert retired_command not in README
     assert retired_command not in CLAUDE
@@ -115,6 +117,9 @@ def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None
         "`start_one`",
         "`job_host`",
         "`EnvRow`",
+        # Bridge-environment ledger pipeline dropped in 0.8 — the docs must
+        # not resurrect it.
+        "environments.jsonl",
     ],
 )
 def test_claude_architecture_rejects_retired_seam_claims(

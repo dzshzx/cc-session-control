@@ -37,10 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--theme",
         choices=("auto", "dark", "light"),
-        help=(
-            "TUI palette (default: auto-detect the terminal background; "
-            "env CSCTL_THEME)"
-        ),
+        help=("TUI palette (default: $COLORFGBG if set, else dark; env CSCTL_THEME)"),
     )
 
     commands = parser.add_subparsers(dest="command")

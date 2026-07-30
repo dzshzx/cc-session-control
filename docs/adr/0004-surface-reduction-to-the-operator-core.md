@@ -31,9 +31,10 @@ remaining justification.
   the claude-session-doctor skill — needs exactly `csctl resume` (including
   `--take-over`) and `csctl agents`. The `prune`, `env`, `skill`, and `rc`
   subcommands duplicated TUI capabilities the operator already uses there
-  and are removed: the Sessions cleanup submenu is the only cleanup surface
-  (now carrying all five plan-frozen actions, including the zombie and age
-  sweeps that were CLI-only), and the Projects tab is the only RC surface.
+  and are removed: with `prune` gone, the Sessions cleanup submenu — which
+  already carried all five plan-frozen actions, including the zombie and
+  age sweeps — becomes the sole cleanup surface, and the Projects tab the
+  sole RC surface.
   The bundled skill moved to the dzshzx/agent-skills repository and installs
   via the skills CLI instead of `csctl skill install`.
 - **Retire the autostart-list feature.** The `rc-enabled` list, its

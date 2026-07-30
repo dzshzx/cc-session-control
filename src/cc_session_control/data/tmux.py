@@ -1,9 +1,12 @@
 """Generic tmux adapter — THE single tmux seam.
 
-`_tmux_run_result` owns ordinary invocations. Compatibility wrappers keep the
-empty/False/None views while typed operations retain expected external
-failures. Add new tmux operations here, never as raw `subprocess` calls
-elsewhere.
+`_tmux_run_result` owns ordinary invocations; destructive/result-bearing
+operations consume its typed view and retain expected external failures.
+`select_window`/`switch_client` are the one retained bool-view exception,
+scoped to `enter_window`'s exec/attach navigation in
+`actions/session_ops.py`, where a failure is non-fatal and has no typed
+detail consumer. Add new tmux operations here, never as raw `subprocess`
+calls elsewhere.
 
 Bottom of the `data/` DAG: this module may import only `proc` from this
 package (plus stdlib) — it knows nothing about RC servers or sessions. `rc.py`
@@ -72,7 +75,9 @@ def _tmux_run_result(args: list[str]) -> _TmuxInvocation:
 
 
 def _tmux_run(args: list[str]) -> subprocess.CompletedProcess[str] | None:
-    """Compatibility result-only view for non-diagnostic tmux operations."""
+    """Result-only view backing `select_window`/`switch_client` — the sole
+    retained bool-view exception, scoped to the exec/attach navigation
+    boundary (see module docstring)."""
     return _tmux_run_result(args).completed
 
 
