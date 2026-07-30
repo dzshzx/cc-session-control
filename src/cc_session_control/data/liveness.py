@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
@@ -156,20 +156,6 @@ def liveness_inputs() -> LivenessSnapshot:
         agents_map=agents_scan.records,
         issues=tuple(issues),
     )
-
-
-def _scrub_dead_pids(
-    mapping: dict[str, int | None],
-    exists: Callable[[int | None], bool],
-) -> dict[str, int | None]:
-    """Blank out pids whose process no longer exists (pure; `exists` injected).
-
-    `claude agents --json` can keep reporting a pid after the worker died
-    (SIGKILL/crash before its registry caught up). A dead pid must not count as
-    alive — blanking it lets the existing "pid-less entries are not alive" rule
-    in `live_index` take over. Entries are kept, never dropped.
-    """
-    return {sid: (pid if exists(pid) else None) for sid, pid in mapping.items()}
 
 
 def _probe_agent_pids(
