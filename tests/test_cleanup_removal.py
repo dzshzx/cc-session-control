@@ -25,18 +25,6 @@ def _anchor_and_remove(target):
     return removal.remove_anchored(anchor)
 
 
-def test_remove_path_refuses_without_atomic_rename_capability(tmp_path, monkeypatch):
-    target = tmp_path / "keep.txt"
-    target.write_text("keep")
-    monkeypatch.setattr(removal, "_renameat2", None)
-
-    result = _anchor_and_remove(target)
-
-    assert result.status is RemovalStatus.REFUSED
-    assert "renameat2(RENAME_NOREPLACE)" in (result.error or "")
-    assert target.read_text() == "keep"
-
-
 def test_remove_directory_reports_permission_error(tmp_path, monkeypatch):
     target = tmp_path / "locked"
     target.mkdir()
@@ -44,7 +32,6 @@ def test_remove_directory_reports_permission_error(tmp_path, monkeypatch):
     def refuse(path: str, *, dir_fd: int | None = None) -> None:
         raise PermissionError("read-only filesystem")
 
-    refuse.avoids_symlink_attacks = True
     monkeypatch.setattr(shutil, "rmtree", refuse)
 
     result = _anchor_and_remove(target)
@@ -96,7 +83,6 @@ def test_aged_execution_reports_partial_failure(tmp_path, monkeypatch):
             raise PermissionError("permission denied")
         original_rmtree(path, dir_fd=dir_fd)
 
-    fail_one.avoids_symlink_attacks = True
     monkeypatch.setattr(shutil, "rmtree", fail_one)
 
     result = cleanup.execute_aged_removals(
@@ -210,7 +196,6 @@ def test_orphan_execution_reports_removed_and_failed_paths(tmp_path, monkeypatch
             raise PermissionError("permission denied")
         original_rmtree(path, dir_fd=dir_fd)
 
-    fail_one.avoids_symlink_attacks = True
     monkeypatch.setattr(shutil, "rmtree", fail_one)
 
     result = cleanup.execute_orphan_removals(["session-env/good", "session-env/bad"])

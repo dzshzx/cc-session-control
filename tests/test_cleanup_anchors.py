@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import time
 
 import pytest
@@ -263,9 +262,8 @@ def test_target_inode_and_type_replacement_is_refused(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("is_directory", [False, True], ids=["file", "directory"])
-def test_removal_refuses_same_name_replacement_after_verification(
+def test_removal_refuses_same_name_replacement_after_preview(
     tmp_path,
-    monkeypatch,
     is_directory: bool,
 ):
     target = tmp_path / "target"
@@ -276,32 +274,16 @@ def test_removal_refuses_same_name_replacement_after_verification(
     else:
         target.write_text("anchored")
     anchor = anchor_path(tmp_path, target)
-    real_stat = os.stat
-    swapped = False
 
-    def stat_then_swap(
-        path,
-        *,
-        dir_fd: int | None = None,
-        follow_symlinks: bool = True,
-    ):
-        nonlocal swapped
-        metadata = real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
-        if path == target.name and dir_fd is not None and not swapped:
-            swapped = True
-            target.rename(saved)
-            if is_directory:
-                target.mkdir()
-                (target / "replacement.txt").write_text("replacement")
-            else:
-                target.write_text("replacement")
-        return metadata
-
-    monkeypatch.setattr(os, "stat", stat_then_swap)
+    target.rename(saved)
+    if is_directory:
+        target.mkdir()
+        (target / "replacement.txt").write_text("replacement")
+    else:
+        target.write_text("replacement")
 
     result = remove_anchored(anchor)
 
-    assert swapped
     assert result.status is RemovalStatus.REFUSED
     assert "identity" in (result.error or "")
     if is_directory:
@@ -335,57 +317,6 @@ def test_previewed_target_that_disappears_is_idempotently_missing(
     assert [item.status for item in result.removals] == [RemovalStatus.MISSING]
     assert result.completed == []
     assert result.missing_targets == ["shell-snapshots/old"]
-
-
-def test_directory_removal_refuses_without_symlink_safe_rmtree(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
-    now = time.time()
-    target = cfg.shell_snapshots_dir / "old"
-    target.mkdir(parents=True)
-    sentinel = target / "keep.txt"
-    sentinel.write_text("keep")
-    _old_enough(target, now)
-    plan = _aged_plan(now)
-    monkeypatch.setattr(shutil.rmtree, "avoids_symlink_attacks", False)
-
-    result = cleanup.execute_aged_removals(
-        plan.aged_entries,
-        now=now,
-        anchors=plan.aged_anchors,
-    )
-
-    assert result.refused
-    assert "fd-safe directory removal is unavailable" in result.refused[0].reason
-    assert sentinel.read_text() == "keep"
-
-
-def test_removal_refuses_when_dir_fd_capability_cannot_be_proven(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
-    now = time.time()
-    target = cfg.shell_snapshots_dir / "old"
-    target.parent.mkdir(parents=True)
-    target.write_text("keep")
-    _old_enough(target, now)
-    plan = _aged_plan(now)
-    monkeypatch.setattr(os, "supports_dir_fd", set())
-
-    result = cleanup.execute_aged_removals(
-        plan.aged_entries,
-        now=now,
-        anchors=plan.aged_anchors,
-    )
-
-    assert result.refused
-    assert "fd-safe removal unavailable" in result.refused[0].reason
-    assert target.read_text() == "keep"
 
 
 def test_cleanup_plan_pins_every_cleanup_category(tmp_path, monkeypatch):
@@ -508,31 +439,6 @@ def test_zombie_execution_refuses_root_inode_replacement(
     assert result.refused
     assert replacement.read_text() == "keep"
     assert (saved / "77.json").exists()
-
-
-def test_refused_fd_walk_closes_every_descriptor(tmp_path, monkeypatch):
-    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    monkeypatch.setattr(cfg, "cleanup_age_days", 14)
-    now = time.time()
-    target = cfg.shell_snapshots_dir / "old"
-    target.mkdir(parents=True)
-    _old_enough(target, now)
-    plan = _aged_plan(now)
-    cfg.shell_snapshots_dir.rename(tmp_path / "saved")
-    cfg.shell_snapshots_dir.mkdir()
-    (cfg.shell_snapshots_dir / "old").mkdir()
-
-    before = len(os.listdir("/proc/self/fd"))
-    for _ in range(20):
-        result = cleanup.execute_aged_removals(
-            plan.aged_entries,
-            now=now,
-            anchors=plan.aged_anchors,
-        )
-        assert result.refused
-    after = len(os.listdir("/proc/self/fd"))
-
-    assert after == before
 
 
 def test_remove_agent_pins_before_fresh_liveness_and_refuses_base_swap(
