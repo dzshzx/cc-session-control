@@ -4,9 +4,11 @@
 operations consume its typed view and retain expected external failures.
 `select_window`/`switch_client` are the one retained bool-view exception,
 scoped to `enter_window`'s exec/attach navigation in
-`actions/session_ops.py`, where a failure is non-fatal and has no typed
-detail consumer. Add new tmux operations here, never as raw `subprocess`
-calls elsewhere.
+`actions/session_ops.py`: `select_window`'s failure is non-fatal and
+discarded; `switch_client`'s bool is a single success/failure bit with no
+typed detail consumer, whose failure the caller surfaces directly as an
+"...attaching failed." message. Add new tmux operations here, never as raw
+`subprocess` calls elsewhere.
 
 Bottom of the `data/` DAG: this module may import only `proc` from this
 package (plus stdlib) — it knows nothing about RC servers or sessions. `rc.py`
