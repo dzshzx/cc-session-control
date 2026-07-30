@@ -99,7 +99,6 @@ class Session:
     entrypoint: str = ""  # registry `entrypoint` (cli / claude-vscode / sdk-ts)
     source: str = ""  # coarse bucket: cli / vscode / sdk / bg
     rc_exposed: bool = False  # session remote control currently exposed
-    env_id: str | None = None  # bound bridge environment id, if any
     agent_short: str | None = None  # linked background-agent short id, if any
     status: str = ""  # registry `status` (busy / idle)
     # tmux residency (CONTEXT.md / ADR-0001): non-None means a live pid of this
