@@ -119,6 +119,7 @@ def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None
         "`pid_alive`",
         "`start_one`",
         "`job_host`",
+        "`EnvRow`",
     ],
 )
 def test_claude_architecture_rejects_retired_seam_claims(
