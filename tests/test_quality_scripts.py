@@ -98,7 +98,7 @@ def _write_coverage(path: Path, *, statements: float, branches: float) -> None:
 
 def test_coverage_ratchet_accepts_results_at_floors(tmp_path: Path, capsys) -> None:
     report = tmp_path / "coverage.json"
-    _write_coverage(report, statements=91.0, branches=82.0)
+    _write_coverage(report, statements=92.0, branches=82.0)
 
     assert _load_main("check_coverage")([str(report)]) == 0
     assert capsys.readouterr() == ("", "")
@@ -106,13 +106,13 @@ def test_coverage_ratchet_accepts_results_at_floors(tmp_path: Path, capsys) -> N
 
 def test_coverage_ratchet_reports_each_failed_metric(tmp_path: Path, capsys) -> None:
     report = tmp_path / "coverage.json"
-    _write_coverage(report, statements=90.99, branches=81.0)
+    _write_coverage(report, statements=91.99, branches=81.0)
 
     assert _load_main("check_coverage")([str(report)]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == (
-        "statement coverage 90.99% is below required 91.00%\n"
+        "statement coverage 91.99% is below required 92.00%\n"
         "branch coverage 81.00% is below required 82.00%\n"
     )
 
