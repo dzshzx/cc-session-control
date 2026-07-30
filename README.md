@@ -87,7 +87,7 @@ longer bundled with this package).
 |---|---|---|
 | `CSCTL_RC_SESSION` | `rc` | tmux session name for RC servers |
 | `CSCTL_CLEANUP_AGE_DAYS` | `14` | Minimum age in days for the age sweep in the Sessions cleanup submenu (must be an integer ≥ 0) |
-| `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via OSC 11 / `$COLORFGBG`) / `dark` / `light`. tmux typically doesn't answer the OSC 11 query, so inside tmux `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |
+| `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via `$COLORFGBG`, else `dark`) / `dark` / `light`. Most terminals (including tmux) don't set `$COLORFGBG`, so `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |
 
 ## License
 
