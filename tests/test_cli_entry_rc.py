@@ -44,7 +44,7 @@ def _project(
     return RCProject(
         name=path.name,
         directory=str(path),
-        trusted=True,
+        trust_decision=TrustDecision.TRUSTED,
         in_list=False,
         status=status,
         auto_start=False,

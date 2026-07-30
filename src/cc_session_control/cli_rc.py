@@ -24,7 +24,7 @@ def _enabled_list_failure[Value](result: EnabledListResult[Value]) -> str:
 
 
 def _cmd_status(args: Namespace) -> int:
-    from .data import liveness, rc
+    from .data import liveness, rc, rc_outcomes
     from .data.sessions import scan_result as scan_sessions_result
 
     liveness_snapshot = liveness.liveness_inputs()
@@ -49,24 +49,21 @@ def _cmd_status(args: Namespace) -> int:
             file=sys.stderr,
         )
     for liveness_issue in liveness_snapshot.issues:
-        where = f" ({liveness_issue.path})" if liveness_issue.path else ""
         print(
             "Warning: liveness inventory is partial: "
-            f"{liveness_issue.source}{where}: {liveness_issue.detail}",
+            + rc_outcomes.format_inventory_issues((liveness_issue,)),
             file=sys.stderr,
         )
     for rc_issue in rc_scan_result.issues:
-        where = f" ({rc_issue.path})" if rc_issue.path else ""
         print(
             "Warning: RC inventory is partial: "
-            f"{rc_issue.source}{where}: {rc_issue.detail}",
+            + rc_outcomes.format_inventory_issues((rc_issue,)),
             file=sys.stderr,
         )
     for transcript_issue in transcript_scan_result.issues:
         print(
             "Warning: transcript inventory is partial: "
-            f"{transcript_issue.source} ({transcript_issue.path}): "
-            f"{transcript_issue.detail}",
+            + rc_outcomes.format_inventory_issues((transcript_issue,)),
             file=sys.stderr,
         )
     setting_failure = False

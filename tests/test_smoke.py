@@ -34,7 +34,7 @@ def test_clipboard_importable():
 
 
 def test_models_importable():
-    from cc_session_control.models import RCProject, Session
+    from cc_session_control.models import RCProject, Session, TrustDecision
 
     s = Session(
         sid="test",
@@ -50,7 +50,7 @@ def test_models_importable():
     p = RCProject(
         name="proj",
         directory="/tmp/proj",
-        trusted=True,
+        trust_decision=TrustDecision.TRUSTED,
         in_list=False,
         status="stopped",
         auto_start=False,

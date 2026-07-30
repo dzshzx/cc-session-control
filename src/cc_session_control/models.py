@@ -203,9 +203,9 @@ class LiveInfo:
 class RCProject:
     name: str
     directory: str
-    # Compatibility bool for existing callers. New safety decisions must use
-    # ``trust_decision`` so unavailable evidence is not mislabeled untrusted.
-    trusted: bool
+    # THE sole trust representation — unavailable evidence stays distinct from
+    # untrusted rather than collapsing into a plain bool.
+    trust_decision: TrustDecision
     in_list: bool
     status: Status
     auto_start: bool
@@ -216,20 +216,6 @@ class RCProject:
     # False when the workspace directory is gone but claude.json / rc-enabled
     # still reference the project — shown as 缺失, start-ops refused.
     dir_exists: bool = True
-    trust_decision: TrustDecision | None = None
-
-    def __post_init__(self) -> None:
-        if self.trust_decision is None:
-            object.__setattr__(
-                self,
-                "trust_decision",
-                TrustDecision.TRUSTED if self.trusted else TrustDecision.UNTRUSTED,
-            )
-        object.__setattr__(
-            self,
-            "trusted",
-            self.trust_decision is TrustDecision.TRUSTED,
-        )
 
     @property
     def rc_at_startup(self) -> bool | None:

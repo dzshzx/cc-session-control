@@ -16,19 +16,9 @@ import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 
 from ..config import cfg
 from ..models import AgentJob, InventoryIssue, SessionProc, split_env_id
-
-
-class RegistryAvailability(StrEnum):
-    """How much of one registry source was available to a scan."""
-
-    AVAILABLE = "available"
-    PARTIAL = "partial"
-    UNAVAILABLE = "unavailable"
-
 
 #: Same (source, path, detail) record everywhere — one canonical issue type.
 RegistryIssue = InventoryIssue
@@ -40,11 +30,10 @@ class RegistryScan[Record]:
 
     records: tuple[Record, ...] = ()
     issues: tuple[RegistryIssue, ...] = ()
-    availability: RegistryAvailability = RegistryAvailability.AVAILABLE
 
     @property
     def complete(self) -> bool:
-        return self.availability is RegistryAvailability.AVAILABLE and not self.issues
+        return not self.issues
 
 
 _sessions_cache: RegistryScan[SessionProc] | None = None
@@ -93,12 +82,6 @@ def _parse_session_proc(document: object) -> tuple[SessionProc | None, str | Non
         ),
         None,
     )
-
-
-def _availability(issues: list[RegistryIssue]) -> RegistryAvailability:
-    if issues:
-        return RegistryAvailability.PARTIAL
-    return RegistryAvailability.AVAILABLE
 
 
 def _root_paths(
@@ -154,10 +137,7 @@ def scan_session_procs(max_age: float = 5.0) -> RegistryScan[SessionProc]:
         lambda entry: entry.name.endswith(".json") and entry.is_file(),
     )
     if root_issue is not None:
-        result = RegistryScan[SessionProc](
-            issues=(root_issue,),
-            availability=RegistryAvailability.UNAVAILABLE,
-        )
+        result = RegistryScan[SessionProc](issues=(root_issue,))
     else:
         rows, issues = _scan_records(
             paths,
@@ -167,7 +147,6 @@ def scan_session_procs(max_age: float = 5.0) -> RegistryScan[SessionProc]:
         result = RegistryScan(
             records=tuple(rows),
             issues=tuple(issues),
-            availability=_availability(issues),
         )
     _sessions_cache = result
     _sessions_time = now
@@ -228,10 +207,7 @@ def scan_agent_jobs(max_age: float = 5.0) -> RegistryScan[AgentJob]:
         lambda entry: entry.is_dir(),
     )
     if root_issue is not None:
-        result = RegistryScan[AgentJob](
-            issues=(root_issue,),
-            availability=RegistryAvailability.UNAVAILABLE,
-        )
+        result = RegistryScan[AgentJob](issues=(root_issue,))
     else:
         rows: list[AgentJob] = []
         issues: list[RegistryIssue] = []
@@ -255,7 +231,6 @@ def scan_agent_jobs(max_age: float = 5.0) -> RegistryScan[AgentJob]:
         result = RegistryScan(
             records=tuple(rows),
             issues=tuple(issues),
-            availability=_availability(issues),
         )
     _jobs_cache = result
     _jobs_time = now

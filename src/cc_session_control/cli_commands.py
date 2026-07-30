@@ -103,7 +103,7 @@ def _cmd_prune(args: Namespace) -> int:
             plan_status,
         )
 
-    from .data import liveness
+    from .data import liveness, rc_outcomes
     from .data.cleanup import (
         build_plan,
         execute_orphan_removals,
@@ -120,10 +120,9 @@ def _cmd_prune(args: Namespace) -> int:
     inputs = liveness.liveness_inputs()
     if not inputs.complete:
         for liveness_issue in inputs.issues:
-            where = f" ({liveness_issue.path})" if liveness_issue.path else ""
             print(
                 "Refused: liveness evidence is incomplete: "
-                f"{liveness_issue.source}{where}: {liveness_issue.detail}",
+                + rc_outcomes.format_inventory_issues((liveness_issue,)),
                 file=sys.stderr,
             )
         return 1
@@ -132,8 +131,7 @@ def _cmd_prune(args: Namespace) -> int:
         for transcript_issue in transcript_scan.issues:
             print(
                 "Refused: transcript evidence is incomplete: "
-                f"{transcript_issue.source} ({transcript_issue.path}): "
-                f"{transcript_issue.detail}",
+                + rc_outcomes.format_inventory_issues((transcript_issue,)),
                 file=sys.stderr,
             )
         return 1
@@ -212,17 +210,16 @@ def _cmd_prune_zombies(
     anchors: Mapping[int, RemovalAnchor] | None = None,
 ) -> int:
     """Preview one typed generation; revalidate again only before mutation."""
-    from .data import liveness
+    from .data import liveness, rc_outcomes
     from .data.cleanup import execute_zombie_removals, select_zombie_pids
 
     if zombies is None:
         evidence = liveness.liveness_inputs()
         if not evidence.complete:
             for issue in evidence.issues:
-                where = f" ({issue.path})" if issue.path else ""
                 print(
                     "Refused: liveness evidence is incomplete: "
-                    f"{issue.source}{where}: {issue.detail}",
+                    + rc_outcomes.format_inventory_issues((issue,)),
                     file=sys.stderr,
                 )
             return 1
@@ -269,7 +266,7 @@ def _cmd_prune_aged(
 def _cmd_resume(args: Namespace) -> int:
     from .actions import session_ops
     from .actions.resume_list import render
-    from .data import liveness
+    from .data import liveness, rc_outcomes
     from .data.sessions import scan_result
 
     take_over_sid: str | None = getattr(args, "take_over", None)
@@ -295,10 +292,9 @@ def _cmd_resume(args: Namespace) -> int:
     inputs = liveness.liveness_inputs()
     if not inputs.complete:
         for liveness_issue in inputs.issues:
-            where = f" ({liveness_issue.path})" if liveness_issue.path else ""
             print(
                 "Refused: liveness evidence is incomplete: "
-                f"{liveness_issue.source}{where}: {liveness_issue.detail}",
+                + rc_outcomes.format_inventory_issues((liveness_issue,)),
                 file=sys.stderr,
             )
         return 1
@@ -308,8 +304,7 @@ def _cmd_resume(args: Namespace) -> int:
         for transcript_issue in transcript_scan.issues:
             print(
                 "Refused: transcript inventory is incomplete: "
-                f"{transcript_issue.source} ({transcript_issue.path}): "
-                f"{transcript_issue.detail}",
+                + rc_outcomes.format_inventory_issues((transcript_issue,)),
                 file=sys.stderr,
             )
         return 1
@@ -354,6 +349,7 @@ def _cmd_skill(args: Namespace) -> int:
 
 
 def _cmd_agents(args: Namespace) -> int:
+    from .data import rc_outcomes
     from .data.liveness import liveness_inputs
 
     inputs = liveness_inputs()
@@ -367,17 +363,16 @@ def _cmd_agents(args: Namespace) -> int:
             name = job.name or job.short
             print(f"  {job.short}  [{state}]  tempo={tempo}  {name}  {job.cwd}")
     for issue in inputs.issues:
-        where = f" ({issue.path})" if issue.path else ""
         print(
-            f"Warning: agent inventory is partial: {issue.source}{where}: "
-            f"{issue.detail}",
+            "Warning: agent inventory is partial: "
+            + rc_outcomes.format_inventory_issues((issue,)),
             file=sys.stderr,
         )
     return int(not inputs.complete)
 
 
 def _cmd_env(args: Namespace) -> int:
-    from .data import environments, liveness, rc
+    from .data import environments, liveness, rc, rc_outcomes
 
     # Scan RC servers so the env_* namespace is covered too (it has no state
     # file — only a running server references it). The whole observe → upsert →
@@ -409,17 +404,15 @@ def _cmd_env(args: Namespace) -> int:
         print("Orphan environments: unavailable (partial liveness evidence)")
 
     for liveness_issue in recon.liveness_issues:
-        where = f" ({liveness_issue.path})" if liveness_issue.path else ""
         print(
             "Warning: environment inventory is partial: "
-            f"{liveness_issue.source}{where}: {liveness_issue.detail}",
+            + rc_outcomes.format_inventory_issues((liveness_issue,)),
             file=sys.stderr,
         )
     for inventory_issue in recon.inventory_issues:
-        where = f" ({inventory_issue.path})" if inventory_issue.path else ""
         print(
             "Warning: environment inventory is partial: "
-            f"{inventory_issue.source}{where}: {inventory_issue.detail}",
+            + rc_outcomes.format_inventory_issues((inventory_issue,)),
             file=sys.stderr,
         )
     for warning in recon.ledger.warnings:

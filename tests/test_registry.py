@@ -83,7 +83,6 @@ def test_scan_session_procs_keeps_partial_records_and_reports_malformed(
     result = registry.scan_session_procs(max_age=0.0)
 
     assert [row.sid for row in result.records] == ["sid-ok"]
-    assert result.availability is registry.RegistryAvailability.PARTIAL
     assert result.complete is False
     assert {issue.path for issue in result.issues} == {
         os.fspath(malformed),
@@ -116,7 +115,7 @@ def test_scan_session_procs_reports_read_oserror_but_ignores_file_race(
     result = registry.scan_session_procs(max_age=0.0)
 
     assert result.records == ()
-    assert result.availability is registry.RegistryAvailability.PARTIAL
+    assert result.complete is False
     assert len(result.issues) == 1
     assert result.issues[0].path == os.fspath(denied)
     assert "denied" in result.issues[0].detail
@@ -139,7 +138,6 @@ def test_scan_session_procs_file_race_alone_remains_complete(tmp_path, monkeypat
     result = registry.scan_session_procs(max_age=0.0)
 
     assert result.records == ()
-    assert result.availability is registry.RegistryAvailability.AVAILABLE
     assert result.complete is True
     assert result.issues == ()
 
@@ -159,7 +157,7 @@ def test_scan_session_procs_reports_unreadable_root(tmp_path, monkeypatch):
 
     result = registry.scan_session_procs(max_age=0.0)
 
-    assert result.availability is registry.RegistryAvailability.UNAVAILABLE
+    assert len(result.issues) == 1
     assert result.complete is False
     assert result.issues[0].path == os.fspath(sessions)
     assert "denied" in result.issues[0].detail
@@ -172,7 +170,6 @@ def test_scan_agent_jobs_missing_dir_is_complete(tmp_path, monkeypatch):
     result = registry.scan_agent_jobs(max_age=0.0)
 
     assert result.records == ()
-    assert result.availability is registry.RegistryAvailability.AVAILABLE
     assert result.complete is True
     assert result.issues == ()
 

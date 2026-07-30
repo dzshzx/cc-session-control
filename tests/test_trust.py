@@ -175,7 +175,7 @@ def test_scan_includes_inherited_subdir(tmp_path, monkeypatch):
 
     rows = {p.directory: p for p in rc.scan_result().projects}
     assert str(sub) in rows and str(parent) in rows
-    assert rows[str(sub)].trusted is True
+    assert rows[str(sub)].trust_decision is TrustDecision.TRUSTED
     assert rows[str(sub)].name == "new-proj"
 
 
@@ -228,7 +228,6 @@ def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
 
     assert scan_result.settings.state.value == "malformed"
     assert scan_result.projects[0].trust_decision is TrustDecision.UNAVAILABLE
-    assert scan_result.projects[0].trusted is False
     assert start_result.state is rc.StartState.TRUST_UNAVAILABLE
     assert launches == []
 

@@ -314,7 +314,7 @@ def test_exit_drops_late_completion_without_second_apply():
 
 
 def test_complete_batch_drives_real_views():
-    from cc_session_control.models import RCProject, Session
+    from cc_session_control.models import RCProject, Session, TrustDecision
 
     sess = [
         Session(
@@ -332,7 +332,7 @@ def test_complete_batch_drives_real_views():
         RCProject(
             name="p1",
             directory="/tmp/p1",
-            trusted=True,
+            trust_decision=TrustDecision.TRUSTED,
             in_list=True,
             status="stopped",
             auto_start=True,

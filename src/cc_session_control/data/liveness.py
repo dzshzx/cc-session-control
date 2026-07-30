@@ -12,20 +12,10 @@ import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from enum import StrEnum
 from types import MappingProxyType
 
 from ..models import AgentJob, InventoryIssue, LiveInfo, SessionProc
 from . import proc, registry
-
-
-class AgentsAvailability(StrEnum):
-    """How much of `claude agents --json` was available to one scan."""
-
-    AVAILABLE = "available"
-    PARTIAL = "partial"
-    UNAVAILABLE = "unavailable"
-
 
 #: Same (source, path, detail) record everywhere — one canonical issue type.
 AgentsIssue = InventoryIssue
@@ -39,7 +29,6 @@ class AgentsScan:
         default_factory=lambda: MappingProxyType({}),
     )
     issues: tuple[AgentsIssue, ...] = ()
-    availability: AgentsAvailability = AgentsAvailability.AVAILABLE
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "records", MappingProxyType(dict(self.records)))
@@ -47,7 +36,7 @@ class AgentsScan:
 
     @property
     def complete(self) -> bool:
-        return self.availability is AgentsAvailability.AVAILABLE and not self.issues
+        return not self.issues
 
 
 _cache: AgentsScan | None = None
@@ -205,14 +194,11 @@ def _probe_agent_pids(
 
 def _agents_failure(detail: str) -> AgentsScan:
     issue = AgentsIssue("claude agents --json", None, detail)
-    return AgentsScan(
-        issues=(issue,),
-        availability=AgentsAvailability.UNAVAILABLE,
-    )
+    return AgentsScan(issues=(issue,))
 
 
 def scan_agents(max_age: float = 5.0) -> AgentsScan:
-    """Scan `claude agents --json`, retaining typed availability and issues.
+    """Scan `claude agents --json`, retaining records and source issues.
 
     With `/proc` available, pids are checked against typed process evidence at
     cache-refresh time (see `_probe_agent_pids`). Confirmed-gone pids are
@@ -282,25 +268,15 @@ def scan_agents(max_age: float = 5.0) -> AgentsScan:
                             )
                             continue
                         records[sid] = pid
-                    availability = (
-                        AgentsAvailability.PARTIAL
-                        if issues
-                        else AgentsAvailability.AVAILABLE
-                    )
                     result = AgentsScan(
                         records=records,
                         issues=tuple(issues),
-                        availability=availability,
                     )
     if proc.has_proc():
         records, proc_issues = _probe_agent_pids(result.records)
-        availability = result.availability
-        if proc_issues and availability is AgentsAvailability.AVAILABLE:
-            availability = AgentsAvailability.PARTIAL
         result = AgentsScan(
             records=records,
             issues=(*result.issues, *proc_issues),
-            availability=availability,
         )
     _cache = result
     _cache_time = now

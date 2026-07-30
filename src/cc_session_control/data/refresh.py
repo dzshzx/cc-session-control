@@ -16,6 +16,7 @@ from . import rc
 from .age_cleanup import AgeCleanupPlan, build_age_plan
 from .cleanup import CleanupPlan, build_plan
 from .liveness import LivenessSnapshot
+from .rc_outcomes import format_inventory_issues
 from .removal import CleanupIssue
 from .snapshot import WorldSnapshot, build_world_snapshot
 
@@ -125,21 +126,13 @@ def build_refresh_result(
             source = first.source
             if first.path:
                 source += f" ({first.path})"
-            detail = "; ".join(
-                f"{issue.source}"
-                + (f" ({issue.path})" if issue.path else "")
-                + f": {issue.detail}"
-                for issue in evidence.issues
-            )
+            detail = format_inventory_issues(evidence.issues)
             return failure(source, detail)
         transcript_scan = snapshot.transcript_scan
         if not transcript_scan.complete:
             transcript_issue = transcript_scan.issues[0]
             source = f"{transcript_issue.source} ({transcript_issue.path})"
-            detail = "; ".join(
-                f"{issue.source} ({issue.path}): {issue.detail}"
-                for issue in transcript_scan.issues
-            )
+            detail = format_inventory_issues(transcript_scan.issues)
             return failure(source, detail)
         plan = cleanup_builder(
             snapshot.sessions,

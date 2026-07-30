@@ -230,7 +230,6 @@ def test_scan_agents_keeps_pid_and_reports_unknown_proc_evidence(monkeypatch):
     result = liveness.scan_agents(max_age=0.0)
 
     assert result.records == {"uncertain": 77}
-    assert result.availability is liveness.AgentsAvailability.PARTIAL
     assert result.complete is False
     assert result.issues == (
         liveness.AgentsIssue(
@@ -276,7 +275,7 @@ def test_scan_agents_reports_unavailable_source(monkeypatch, outcome, detail):
     result = liveness.scan_agents(max_age=0.0)
 
     assert result.records == {}
-    assert result.availability is liveness.AgentsAvailability.UNAVAILABLE
+    assert len(result.issues) == 1
     assert result.complete is False
     assert result.issues[0].source == "claude agents --json"
     assert detail in result.issues[0].detail
@@ -301,7 +300,7 @@ def test_scan_agents_keeps_valid_records_but_marks_bad_entries_partial(monkeypat
     result = liveness.scan_agents(max_age=0.0)
 
     assert result.records == {"safe": 11}
-    assert result.availability is liveness.AgentsAvailability.PARTIAL
+    assert len(result.issues) == 1
     assert result.complete is False
     assert "entry 1" in result.issues[0].detail
 

@@ -291,7 +291,6 @@ def test_rc_view_reports_unavailable_trust_in_status_and_start_refusal(
     projects = [
         _make_project(
             name="p1",
-            trusted=False,
             trust_decision=TrustDecision.UNAVAILABLE,
         ),
     ]

@@ -10,7 +10,7 @@ import pytest
 
 from cc_session_control.actions import agent_ops
 from cc_session_control.config import cfg
-from cc_session_control.data import cleanup, cleanup_liveness, liveness
+from cc_session_control.data import cleanup, liveness
 from cc_session_control.data.removal import (
     RemovalStatus,
     anchor_path,
@@ -597,7 +597,7 @@ def test_remove_session_pins_before_fresh_liveness_and_refuses_parent_swap(
         return liveness.LivenessSnapshot()
 
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         fresh_after_swap,
     )

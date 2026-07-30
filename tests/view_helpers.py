@@ -20,6 +20,7 @@ from cc_session_control.models import (
     RCServer,
     RCStartupSettingRead,
     RCStartupSettingState,
+    TrustDecision,
 )
 from cc_session_control.views.rc import RCView
 
@@ -107,7 +108,7 @@ def _make_project(**overrides):
     defaults = dict(
         name="myproj",
         directory="/tmp/myproj",
-        trusted=True,
+        trust_decision=TrustDecision.TRUSTED,
         in_list=True,
         status="stopped",
         auto_start=True,

@@ -11,7 +11,7 @@ from cc_session_control.data.rc_enabled import (
 )
 from cc_session_control.data.refresh import RefreshBatch
 from cc_session_control.data.snapshot import WorldSnapshot
-from cc_session_control.models import RCProject
+from cc_session_control.models import RCProject, TrustDecision
 from cc_session_control.views.rc import RCView
 
 
@@ -24,7 +24,7 @@ def _make_project(name: str) -> RCProject:
     return RCProject(
         name=name,
         directory="/tmp/myproj",
-        trusted=True,
+        trust_decision=TrustDecision.TRUSTED,
         in_list=True,
         status="stopped",
         auto_start=True,

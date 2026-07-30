@@ -12,7 +12,6 @@ from cc_session_control.actions import agent_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import (
     cleanup,
-    cleanup_liveness,
     liveness,
     proc,
     sessions,
@@ -89,7 +88,7 @@ def test_orphan_executor_ignores_stale_known_set_and_keeps_fresh_known_sid(
         session_procs=(SessionProc(pid=41, sid=sid, proc_alive=False),),
     )
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: evidence,
     )
@@ -121,7 +120,7 @@ def test_orphan_executor_keeps_transcript_created_after_preview(
     sid = "new-transcript-sid"
     evidence = liveness.LivenessSnapshot()
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: evidence,
     )
@@ -163,7 +162,7 @@ def test_orphan_executor_keeps_sid_discovered_from_empty_transcript_path(
     transcript.parent.mkdir(parents=True)
     transcript.write_text("", encoding="utf-8")
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(),
     )
@@ -188,7 +187,7 @@ def test_orphan_executor_refuses_all_targets_when_transcripts_are_incomplete(
         label, _, sid = entry.partition("/")
         (tmp_path / label / sid).mkdir(parents=True)
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(),
     )
@@ -232,7 +231,7 @@ def test_orphan_executor_refuses_deletion_on_malformed_transcript_json(
     transcript.parent.mkdir(parents=True)
     transcript.write_text('{"cwd":"/work/project"\n', encoding="utf-8")
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(),
     )
@@ -257,7 +256,7 @@ def test_zombie_executor_ignores_stale_dead_row_and_keeps_fresh_live_pid(
     fresh = SessionProc(pid=77, sid="revived", proc_alive=True)
     stale = SessionProc(pid=77, sid="revived", proc_alive=False)
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(session_procs=(fresh,)),
     )
@@ -284,7 +283,7 @@ def test_session_executor_ignores_stale_rows_and_keeps_fresh_current_sid(
     target = _session(tmp_path / "target.jsonl")
     current = SessionProc(pid=88, sid=target.sid, proc_alive=False)
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(
             session_procs=(current,),
@@ -313,7 +312,7 @@ def test_public_agent_artifact_removal_revalidates_live_sid(
     _bomb_removal(monkeypatch)
     sid = "live-agent-sid"
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(agents_map={sid: 99}),
     )
@@ -334,7 +333,7 @@ def test_public_executors_refuse_incomplete_typed_liveness(
     _bomb_removal(monkeypatch)
     issue = liveness.LivenessIssue("process stat", "/proc/9/stat", "unreadable")
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(issues=(issue,)),
     )
@@ -363,7 +362,7 @@ def test_public_executors_refuse_incomplete_typed_liveness(
 def test_aged_executor_does_not_acquire_unrelated_liveness(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: (_ for _ in ()).throw(
             AssertionError("age-only cleanup must not read liveness")

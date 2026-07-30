@@ -33,11 +33,7 @@ from .cleanup_anchors import (
 from .cleanup_anchors import (
     session_removal_anchors as _session_removal_anchors,
 )
-from .cleanup_liveness import (
-    fresh_liveness_inputs,
-    refuse_incomplete_liveness,
-)
-from .cleanup_selection import known_sids, known_sids_from_transcripts
+from .cleanup_selection import known_sids_from_transcripts
 from .cleanup_selection import select_prunable_sessions as _select_prunable_sessions
 from .removal import (
     CleanupExecution,
@@ -51,6 +47,32 @@ from .removal import (
 
 # Dirs keyed by full sessionId — orphan = name not in the known sid set.
 _SID_DIRS = ("session_env", "file_history", "tasks", "uploads")
+
+
+def fresh_liveness_inputs() -> liveness.LivenessSnapshot:
+    """Read every cleanup protection source with its cache disabled."""
+    return liveness.liveness_inputs()
+
+
+def refuse_incomplete_liveness(
+    result: CleanupExecution,
+    targets: Sequence[object],
+    evidence: liveness.LivenessSnapshot,
+) -> CleanupExecution:
+    """Fail closed while retaining every unavailable protection source."""
+    result.issues.extend(
+        CleanupIssue(
+            source=issue.source,
+            error=issue.detail,
+            path=issue.path,
+        )
+        for issue in evidence.issues
+    )
+    result.refuse(
+        list(targets) or ["liveness evidence"],
+        "liveness evidence incomplete; nothing deleted",
+    )
+    return result
 
 
 def _is_child_name(name: str) -> bool:
@@ -442,8 +464,8 @@ def build_plan(
     candidates = list({s.sid: s for s in [*empty, *short]}.values())
     # F47: pathname-only sids (empty/no-cwd transcripts) protect the preview
     # exactly like the execute side — plan truthfulness, 删除 ⊆ 预览.
-    protected_sids = known_sids(
-        sessions,
+    protected_sids = known_sids_from_transcripts(
+        (s.sid for s in sessions),
         evidence.session_procs,
         evidence.agent_jobs,
         evidence.agents_map,

@@ -825,13 +825,13 @@ def test_scan_preserves_per_project_setting_failure_without_fallback(
 
 
 def test_order_by_activity_recent_first_never_active_sink():
-    from cc_session_control.models import RCProject, Session
+    from cc_session_control.models import RCProject, Session, TrustDecision
 
     def proj(d):
         return RCProject(
             name=d.rsplit("/", 1)[-1],
             directory=d,
-            trusted=True,
+            trust_decision=TrustDecision.TRUSTED,
             in_list=False,
             status="stopped",
             auto_start=False,

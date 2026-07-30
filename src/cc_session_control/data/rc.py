@@ -240,14 +240,13 @@ def scan_result(
             RCProject(
                 name=_basename(path),
                 directory=path,
-                trusted=decision is TrustDecision.TRUSTED,
+                trust_decision=decision,
                 in_list=path in enabled,
                 status=status,
                 auto_start=path in enabled,
                 rc_at_startup_setting=read_rc_at_startup(path),
                 spawn_mode=str(spawn) if spawn else None,
                 dir_exists=dir_exists,
-                trust_decision=decision,
             )
         )
     return RCScanResult(

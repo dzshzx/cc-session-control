@@ -40,6 +40,7 @@ from cc_session_control.models import (
     RCServer,
     Session,
     SessionProc,
+    TrustDecision,
 )
 
 
@@ -184,7 +185,7 @@ def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
     project = RCProject(
         "project",
         "/tmp/project",
-        True,
+        TrustDecision.TRUSTED,
         True,
         "running",
         True,
@@ -373,7 +374,7 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
     older = RCProject(
         name="older",
         directory="/tmp/older",
-        trusted=True,
+        trust_decision=TrustDecision.TRUSTED,
         in_list=True,
         status="stopped",
         auto_start=False,
@@ -381,7 +382,7 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
     active = RCProject(
         name="active",
         directory="/tmp/project",
-        trusted=True,
+        trust_decision=TrustDecision.TRUSTED,
         in_list=True,
         status="stopped",
         auto_start=False,

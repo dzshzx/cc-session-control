@@ -10,7 +10,6 @@ import time
 from cc_session_control.config import cfg
 from cc_session_control.data import (
     cleanup,
-    cleanup_liveness,
     liveness,
     registry,
     removal,
@@ -264,7 +263,7 @@ def test_remove_session_rechecks_liveness_before_deleting(tmp_path, monkeypatch)
     )
     monkeypatch.setattr(cleanup.proc, "ancestor_pids", lambda: set())
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(
             session_procs=(SessionProc(pid=88, sid="sid-live", proc_alive=True),),
@@ -308,7 +307,7 @@ def test_remove_session_retains_proc_issue_without_deleting(tmp_path, monkeypatc
         ),
     )
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(issues=(issue,)),
     )
@@ -364,7 +363,7 @@ def test_session_execution_refuses_visible_liveness_io_failure(
         file=str(transcript),
     )
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(
             issues=(
@@ -401,7 +400,7 @@ def test_session_execution_does_not_swallow_liveness_programming_error(
         file=str(tmp_path / "sid.jsonl"),
     )
     monkeypatch.setattr(
-        cleanup_liveness.liveness,
+        cleanup.liveness,
         "liveness_inputs",
         lambda: (_ for _ in ()).throw(RuntimeError("broken liveness invariant")),
     )

@@ -86,7 +86,7 @@ def test_successful_rc_cli_flows_keep_exact_stream_contract(
     row = RCProject(
         "project",
         str(project),
-        True,
+        TrustDecision.TRUSTED,
         True,
         "stopped",
         True,
@@ -303,8 +303,8 @@ def test_rc_status_reports_incomplete_liveness_and_keeps_rows(
     evidence = liveness.LivenessSnapshot(issues=(issue,))
     acquisitions: list[liveness.LivenessSnapshot] = []
     scan_inputs: list[liveness.LivenessSnapshot] = []
-    older = RCProject("older", "/older", True, True, "dead", False)
-    newer = RCProject("newer", "/newer", True, True, "running", False)
+    older = RCProject("older", "/older", TrustDecision.TRUSTED, True, "dead", False)
+    newer = RCProject("newer", "/newer", TrustDecision.TRUSTED, True, "running", False)
     rows = (
         Session("old", "/older", "old", 1, 1, None, False, False),
         Session("new", "/newer", "new", 2, 1, None, False, False),
@@ -385,7 +385,7 @@ def test_rc_status_reports_unknown_inventory_and_returns_nonzero(
     project = RCProject(
         name="project",
         directory="/project",
-        trusted=True,
+        trust_decision=TrustDecision.TRUSTED,
         in_list=True,
         status="unknown",
         auto_start=False,
@@ -421,8 +421,8 @@ def test_rc_status_orders_known_rows_but_reports_partial_transcripts(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    older = RCProject("older", "/older", True, True, "dead", False)
-    newer = RCProject("newer", "/newer", True, True, "running", False)
+    older = RCProject("older", "/older", TrustDecision.TRUSTED, True, "dead", False)
+    newer = RCProject("newer", "/newer", TrustDecision.TRUSTED, True, "running", False)
     rows = (
         Session("old", "/older", "old", 1, 1, None, False, False),
         Session("new", "/newer", "new", 2, 1, None, False, False),

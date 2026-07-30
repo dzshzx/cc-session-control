@@ -8,23 +8,6 @@ from collections.abc import Set as AbstractSet
 from ..models import AgentJob, Session, SessionProc
 
 
-def known_sids(
-    sessions: Sequence[Session],
-    session_procs: Sequence[SessionProc],
-    agent_jobs: Sequence[AgentJob],
-    agents_map: Mapping[str, int | None],
-    cur: AbstractSet[int],
-) -> set[str]:
-    """Return the union of transcript, registry, live, and current sids."""
-    return known_sids_from_transcripts(
-        (session.sid for session in sessions),
-        session_procs,
-        agent_jobs,
-        agents_map,
-        cur,
-    )
-
-
 def known_sids_from_transcripts(
     transcript_sids: Iterable[str],
     session_procs: Sequence[SessionProc],
