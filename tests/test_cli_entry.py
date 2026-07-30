@@ -1,5 +1,5 @@
-"""Public CLI entry/dispatch behavior, resume/agents commands, and
-the TUI exit-intent handoff."""
+"""Public CLI entry/dispatch behavior, resume/agents commands, theme
+flag wiring, and the TUI exit-intent handoff."""
 
 from __future__ import annotations
 
@@ -471,6 +471,20 @@ def test_every_exit_intent_finalizes_once_after_tui_loop(
 
     assert cli.main([]) == 0
     assert events == ["loop", "intent"]
+
+
+def test_theme_flag_sets_cfg(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cfg, "theme", "auto")
+    args = cli.build_parser().parse_args(["--theme", "light"])
+    cli.apply_global_flags(args)
+    assert cfg.theme == "light"
+
+
+def test_theme_flag_absent_keeps_cfg(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cfg, "theme", "auto")
+    args = cli.build_parser().parse_args([])
+    cli.apply_global_flags(args)
+    assert cfg.theme == "auto"
 
 
 def test_invalid_theme_is_argparse_error() -> None:

@@ -1,7 +1,9 @@
-"""Documentation contracts for public CLI examples and architecture seams."""
+"""Documentation contracts for public CLI examples, architecture seams,
+and the CI workflows' external-action pinning policy."""
 
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path
 
@@ -11,6 +13,11 @@ from cc_session_control.cli import build_parser
 
 README = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
 CLAUDE = (Path(__file__).parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
+WORKFLOWS = Path(__file__).parents[1] / ".github" / "workflows"
+QUALITY_GATE_USE = "./.github/workflows/quality-gate.yml"
+PINNED_EXTERNAL_USE = re.compile(
+    r"^\s*uses:\s*[\w.-]+/[\w.-]+@([0-9a-f]{40})\s+#\s+(\S+)\s*$"
+)
 
 
 @pytest.mark.parametrize(
@@ -114,3 +121,23 @@ def test_claude_architecture_rejects_retired_seam_claims(
     stale_claim: str,
 ) -> None:
     assert stale_claim not in CLAUDE
+
+
+def test_every_external_action_is_pinned_to_a_tagged_commit() -> None:
+    # Security policy, not covered by CI merely running: GitHub Actions
+    # happily executes an unpinned `uses: owner/repo@main` reference, so
+    # a green CI run is no evidence this repo-wide pinning rule holds.
+    uses_lines = [
+        line
+        for workflow in sorted(WORKFLOWS.glob("*.y*ml"))
+        for line in workflow.read_text(encoding="utf-8").splitlines()
+        if line.lstrip().startswith("uses:")
+    ]
+
+    assert uses_lines
+    for line in uses_lines:
+        reference = line.split("uses:", 1)[1].strip()
+        if reference.startswith("./"):
+            assert reference == QUALITY_GATE_USE
+        else:
+            assert PINNED_EXTERNAL_USE.match(line), line

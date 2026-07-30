@@ -1,56 +1,17 @@
-"""CLI wiring tests for theme flags, the TUI exit-intent handoff,
-and `resume --take-over` safety (R7.1/R10)."""
+"""`csctl resume --take-over` execution-time re-resolution and safety
+guarantees (R7.1/R10): never kill a recycled or current-ancestor pid,
+refuse unsafe targets before touching kill/chdir/exec, and surface exec
+failures with context."""
 
-import types
 from dataclasses import replace
 
 import pytest
 
-from cc_session_control import cli, cli_commands
+from cc_session_control import cli
 from cc_session_control.actions import session_ops
-from cc_session_control.config import cfg
 from cc_session_control.data import liveness, sessions
 from cc_session_control.data.liveness import LivenessSnapshot
 from cc_session_control.models import Session
-
-
-def test_theme_flag_sets_cfg(monkeypatch):
-    monkeypatch.setattr(cfg, "theme", "auto")
-    args = cli.build_parser().parse_args(["--theme", "light"])
-    cli.apply_global_flags(args)
-    assert cfg.theme == "light"
-
-
-def test_theme_flag_absent_keeps_cfg(monkeypatch):
-    monkeypatch.setattr(cfg, "theme", "auto")
-    args = cli.build_parser().parse_args([])
-    cli.apply_global_flags(args)
-    assert cfg.theme == "auto"
-
-
-def test_tui_exit_intent_runs_only_after_main_loop_returns(monkeypatch):
-    from cc_session_control import app as app_mod
-    from cc_session_control.actions.session_ops import ExitIntent
-
-    events = []
-
-    class Intent(ExitIntent):
-        def run(self) -> int:
-            events.append("intent")
-            return 0
-
-    intent = Intent()
-
-    class FakeApp:
-        def run(self):
-            events.append("loop")
-            return intent
-
-    monkeypatch.setattr(app_mod, "App", FakeApp)
-
-    assert cli_commands._cmd_tui(types.SimpleNamespace()) == 0
-
-    assert events == ["loop", "intent"]
 
 
 def _takeover_session(tmp_path, **changes):
