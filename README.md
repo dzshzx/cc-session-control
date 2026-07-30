@@ -7,7 +7,7 @@ sessions, background agents, and Remote Control.
 
 ## Features
 
-- **Sessions Tab** — View, resume (tmux-first: `Enter` resumes into the per-project tmux window; `t` bare-terminal fallback; `R` backgrounds into tmux; ⧉ marks tmux-resident sessions), terminate, and delete Claude Code sessions across all projects; a cleanup submenu (`c`) prunes empty/short sessions and sweeps orphan artifact directories
+- **Sessions Tab** — View, resume (tmux-first: `Enter` resumes into the per-project tmux window; `t` bare-terminal fallback; `R` backgrounds into tmux; ⧉ marks tmux-resident sessions), terminate, and delete Claude Code sessions across all projects; a cleanup submenu (`c`) prunes empty/short sessions and sweeps orphan artifact directories, zombie session files, and aged global entries
 - **Projects Tab** — The startup tab: start a new tmux claude session in a project dir (`Enter`), start/stop RC servers per project (`o`/`s`), toggle per-project auto Remote Control (`c`), show running/stopped/dead states
 - **Background agents Tab** — List background agent jobs; take over, respawn, watch their timeline, stop, or remove them
 
