@@ -30,12 +30,8 @@ class TmuxWindow(NamedTuple):
     path: str
 
 
-@dataclass(frozen=True)
-class TmuxIssue:
-    """One expected tmux inventory failure."""
-
-    source: str
-    detail: str
+#: Same canonical (source, path, detail) issue record — path is None for tmux.
+TmuxIssue = InventoryIssue
 
 
 @dataclass(frozen=True)

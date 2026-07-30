@@ -148,7 +148,7 @@ def test_start_refuses_incomplete_window_inventory_without_spawning(
         rc,
         "_tmux_window_inventory",
         lambda: WindowInventory(
-            issues=(TmuxIssue("tmux list-windows", "tmux timed out"),),
+            issues=(TmuxIssue("tmux list-windows", None, "tmux timed out"),),
         ),
     )
     monkeypatch.setattr(
@@ -266,7 +266,7 @@ def test_stop_fails_incomplete_window_inventory_without_killing(monkeypatch):
         "_tmux_window_inventory",
         lambda: WindowInventory(
             records=(TmuxWindow("@1", "project", False, 101, "/project"),),
-            issues=(TmuxIssue("tmux list-windows", "malformed row 2"),),
+            issues=(TmuxIssue("tmux list-windows", None, "malformed row 2"),),
         ),
     )
     monkeypatch.setattr(
@@ -303,7 +303,7 @@ def test_project_status_is_unknown_when_window_inventory_is_incomplete(
         rc,
         "_tmux_window_inventory",
         lambda: WindowInventory(
-            issues=(TmuxIssue("tmux list-windows", "lost server connection"),),
+            issues=(TmuxIssue("tmux list-windows", None, "lost server connection"),),
         ),
     )
 

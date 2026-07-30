@@ -253,7 +253,7 @@ def scan_result(
     return RCScanResult(
         result,
         settings,
-        rc_outcomes.window_inventory_issues(inventory),
+        inventory.issues,
         enabled_result,
     )
 
@@ -331,7 +331,7 @@ def scan_servers_result(
         )
 
     issues = (
-        *rc_outcomes.window_inventory_issues(window_scan),
+        *window_scan.issues,
         *rc_outcomes.proc_inventory_issues(process_scan),
         *rc_outcomes.environment_capture_issues(environment_resolution),
     )
@@ -353,7 +353,7 @@ def _start_one_with_trust(
     inventory = (
         _tmux_window_inventory() if window_inventory is None else window_inventory
     )
-    issues = rc_outcomes.window_inventory_issues(inventory)
+    issues = inventory.issues
     if issues:
         return StartResult(
             StartState.INVENTORY_UNAVAILABLE,
@@ -414,7 +414,7 @@ def stop_one_result(
     inventory = (
         _tmux_window_inventory() if window_inventory is None else window_inventory
     )
-    issues = rc_outcomes.window_inventory_issues(inventory)
+    issues = inventory.issues
     if issues:
         return StopResult(
             StopState.FAILED,

@@ -135,13 +135,13 @@ def list_windows_inventory(session: str) -> WindowInventory:
     cp = invocation.completed
     if cp is None:
         return WindowInventory(
-            issues=(TmuxIssue("tmux list-windows", invocation.detail),),
+            issues=(TmuxIssue("tmux list-windows", None, invocation.detail),),
         )
     if cp.returncode != 0:
         if _target_not_found(invocation.detail):
             return WindowInventory()
         return WindowInventory(
-            issues=(TmuxIssue("tmux list-windows", invocation.detail),),
+            issues=(TmuxIssue("tmux list-windows", None, invocation.detail),),
         )
     out: list[TmuxWindow] = []
     issues: list[TmuxIssue] = []
@@ -151,6 +151,7 @@ def list_windows_inventory(session: str) -> WindowInventory:
             issues.append(
                 TmuxIssue(
                     "tmux list-windows",
+                    None,
                     f"malformed row {line_number}: {line!r}",
                 )
             )
@@ -161,6 +162,7 @@ def list_windows_inventory(session: str) -> WindowInventory:
             issues.append(
                 TmuxIssue(
                     "tmux list-windows",
+                    None,
                     f"malformed row {line_number}: invalid pane pid {parts[3]!r}",
                 )
             )

@@ -207,14 +207,6 @@ def order_by_activity(
     )
 
 
-def window_inventory_issues(
-    inventory: tmux.WindowInventory,
-) -> tuple[InventoryIssue, ...]:
-    return tuple(
-        InventoryIssue(issue.source, None, issue.detail) for issue in inventory.issues
-    )
-
-
 def proc_inventory_issues(
     inventory: proc.ProcRCInventory,
 ) -> tuple[InventoryIssue, ...]:
