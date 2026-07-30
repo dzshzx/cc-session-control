@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cc_session_control.data import project_settings
+from cc_session_control.data import atomic_write, project_settings
 from cc_session_control.data.project_settings import (
     ProjectSettingsState,
     SettingWriteFailure,
@@ -396,7 +396,7 @@ def test_rc_setting_temp_write_failure_preserves_original_and_cleans_tmp(
         raise OSError("temporary write denied")
 
     monkeypatch.setattr(
-        project_settings.tempfile,
+        atomic_write.tempfile,
         "NamedTemporaryFile",
         fail_temp,
     )
@@ -429,7 +429,7 @@ def test_rc_setting_atomic_boundary_failure_preserves_bytes_and_cleans_tmp(
     def fail(*args, **kwargs):
         raise OSError(f"{boundary} unavailable")
 
-    monkeypatch.setattr(project_settings.os, boundary, fail)
+    monkeypatch.setattr(atomic_write.os, boundary, fail)
     result = write_rc_at_startup(project, True)
 
     assert result.failure is failure

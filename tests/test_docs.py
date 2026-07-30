@@ -85,6 +85,7 @@ def test_readme_lists_every_public_environment_setting(variable: str) -> None:
         "`respawn_result`",
         "`proc.probe_pid`",
         "`proc.probe_current_ancestors().complete`",
+        "`atomic_write.py`",
     ],
 )
 def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None:
@@ -110,6 +111,8 @@ def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None
         "`respawn`",
         "`current_determinable`",
         "`proc.pid_exists`",
+        "`list_enabled`",
+        "`toggle_autostart` primitive",
         "`capture_pane`",
         "`residency_targets`",
         "`list_orphan_dirs`",

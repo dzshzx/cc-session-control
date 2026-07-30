@@ -12,9 +12,9 @@ import time
 from pathlib import Path
 
 from cc_session_control.config import cfg
+from cc_session_control.data import atomic_write, liveness, registry
 from cc_session_control.data import environment_ledger as ledger
 from cc_session_control.data import environments as env
-from cc_session_control.data import liveness, registry
 from cc_session_control.models import (
     AgentJob,
     EnvRecord,
@@ -439,7 +439,7 @@ def test_reconcile_write_failure_keeps_readable_orphans_and_current(
     _use_tmp_ledger(tmp_path, monkeypatch)
     env.upsert([EnvRecord("session", "OLD", "sid-old")], now=10.0)
     monkeypatch.setattr(
-        ledger.os,
+        atomic_write.os,
         "replace",
         lambda source, target: (_ for _ in ()).throw(
             OSError("read-only ledger"),

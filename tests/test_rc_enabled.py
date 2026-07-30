@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from cc_session_control.data import atomic_write
 from cc_session_control.data.rc_enabled import (
     EnabledListOperation,
     EnabledListResult,
@@ -464,15 +465,13 @@ def test_typed_write_failure_is_uncommitted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cc_session_control.data.rc_enabled as enabled_module
-
     path = tmp_path / "rc-enabled"
     path.write_bytes(b"# original\n")
 
-    def fail_fdopen(*_args: object, **_kwargs: object) -> object:
+    def fail_create(*_args: object, **_kwargs: object) -> object:
         raise OSError("write failed")
 
-    monkeypatch.setattr(enabled_module.os, "fdopen", fail_fdopen)
+    monkeypatch.setattr(atomic_write.tempfile, "NamedTemporaryFile", fail_create)
 
     result = _store(path).add_result(str(tmp_path / "new"))
 
@@ -498,15 +497,13 @@ def test_typed_commit_boundary_failure_is_uncommitted(
     boundary: str,
     stage: EnabledListStage,
 ) -> None:
-    import cc_session_control.data.rc_enabled as enabled_module
-
     path = tmp_path / "rc-enabled"
     path.write_bytes(b"# original\n")
 
     def fail(*_args: object, **_kwargs: object) -> object:
         raise OSError(f"{boundary} failed")
 
-    monkeypatch.setattr(enabled_module.os, boundary, fail)
+    monkeypatch.setattr(atomic_write.os, boundary, fail)
 
     result = _store(path).add_result(str(tmp_path / "new"))
 
@@ -523,8 +520,6 @@ def test_typed_cleanup_failure_retains_original_failure_without_false_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cc_session_control.data.rc_enabled as enabled_module
-
     path = tmp_path / "rc-enabled"
     path.write_bytes(b"# original\n")
     original_unlink = Path.unlink
@@ -537,14 +532,14 @@ def test_typed_cleanup_failure_retains_original_failure_without_false_commit(
             raise OSError("unlink failed")
         original_unlink(target, *args, **kwargs)
 
-    monkeypatch.setattr(enabled_module.os, "replace", fail_replace)
+    monkeypatch.setattr(atomic_write.os, "replace", fail_replace)
     monkeypatch.setattr(Path, "unlink", fail_temporary_unlink)
 
     result = _store(path).add_result(str(tmp_path / "new"))
 
     assert result.state is EnabledListState.FAILED
     assert result.stage is EnabledListStage.CLEANUP
-    assert result.detail == "replace: replace failed; cleanup: unlink: unlink failed"
+    assert result.detail == "replace: replace failed; unlink: unlink failed"
     assert result.changed is True
     assert result.committed is False
     assert path.read_bytes() == b"# original\n"

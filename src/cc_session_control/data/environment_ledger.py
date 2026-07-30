@@ -5,8 +5,6 @@ from __future__ import annotations
 import fcntl
 import json
 import math
-import os
-import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -17,6 +15,7 @@ from typing import IO, Literal
 
 from ..config import cfg
 from ..models import BridgeEnv, EnvRecord
+from .atomic_write import AtomicWriteError, AtomicWriteStage, atomic_replace
 
 _RETENTION_SECONDS = 90 * 86400
 _MAX_ENTRIES = 500
@@ -429,55 +428,17 @@ def _serialize(entries: dict[tuple[str, str], BridgeEnv]) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+_STAGE_TO_FAILURE: Mapping[AtomicWriteStage, LedgerFailure] = {
+    AtomicWriteStage.CREATE: LedgerFailure.WRITE,
+    AtomicWriteStage.WRITE: LedgerFailure.WRITE,
+    AtomicWriteStage.FSYNC: LedgerFailure.FSYNC,
+    AtomicWriteStage.REPLACE: LedgerFailure.REPLACE,
+    AtomicWriteStage.CLEANUP: LedgerFailure.CLEANUP,
+}
+
+
 def _atomic_replace(path: Path, text: str) -> None:
     try:
-        temporary = tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        )
-    except OSError as exc:
-        raise _LedgerBoundaryError(LedgerFailure.WRITE, str(exc)) from exc
-    temporary_path = Path(temporary.name)
-
-    try:
-        try:
-            temporary.write(text)
-            temporary.flush()
-        except (OSError, UnicodeError) as exc:
-            raise _LedgerBoundaryError(LedgerFailure.WRITE, str(exc)) from exc
-        try:
-            os.fsync(temporary.fileno())
-        except OSError as exc:
-            raise _LedgerBoundaryError(LedgerFailure.FSYNC, str(exc)) from exc
-        try:
-            temporary.close()
-        except OSError as exc:
-            raise _LedgerBoundaryError(LedgerFailure.WRITE, str(exc)) from exc
-        try:
-            os.replace(temporary_path, path)
-        except OSError as exc:
-            raise _LedgerBoundaryError(LedgerFailure.REPLACE, str(exc)) from exc
-    except _LedgerBoundaryError as outcome:
-        cleanup_errors: list[str] = []
-        if not temporary.closed:
-            try:
-                temporary.close()
-            except OSError as exc:
-                cleanup_errors.append(f"close: {exc}")
-        try:
-            temporary_path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            cleanup_errors.append(f"unlink: {exc}")
-        if cleanup_errors:
-            raise _LedgerBoundaryError(
-                LedgerFailure.CLEANUP,
-                f"{outcome.failure.value}: {outcome.detail}; "
-                + "; ".join(cleanup_errors),
-            ) from outcome
-        raise
+        atomic_replace(path, text)
+    except AtomicWriteError as exc:
+        raise _LedgerBoundaryError(_STAGE_TO_FAILURE[exc.stage], exc.detail) from exc

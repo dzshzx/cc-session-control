@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_control.config import cfg
+from cc_session_control.data import atomic_write
 from cc_session_control.data import environment_ledger as ledger
 from cc_session_control.models import EnvRecord
 
@@ -154,7 +155,7 @@ def test_update_read_failure_never_replaces_existing_history(
 
     monkeypatch.setattr(Path, "open", fail_ledger_read)
     monkeypatch.setattr(
-        ledger.os,
+        atomic_write.os,
         "replace",
         lambda source, target: replacements.append((source, target)),
     )
@@ -255,7 +256,7 @@ def test_update_fsync_failure_preserves_original_and_cleans_temporary(
     original = b'{"prefix":"cse","key":"history"}\n'
     path.write_bytes(original)
     monkeypatch.setattr(
-        ledger.os,
+        atomic_write.os,
         "fsync",
         lambda file_descriptor: (_ for _ in ()).throw(
             OSError("fsync unavailable"),
@@ -281,7 +282,7 @@ def test_update_temporary_creation_failure_is_typed_write_failure(
     original = b'{"prefix":"cse","key":"history"}\n'
     path.write_bytes(original)
     monkeypatch.setattr(
-        ledger.tempfile,
+        atomic_write.tempfile,
         "NamedTemporaryFile",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             OSError("temporary unavailable"),
@@ -304,7 +305,7 @@ def test_update_replace_failure_preserves_original_and_cleans_temporary(
     original = b'{"prefix":"cse","key":"history"}\n'
     path.write_bytes(original)
     monkeypatch.setattr(
-        ledger.os,
+        atomic_write.os,
         "replace",
         lambda source, target: (_ for _ in ()).throw(
             OSError("replace unavailable"),
@@ -328,14 +329,14 @@ def test_updates_use_distinct_same_directory_temporary_files(
 ) -> None:
     path = _use_ledger_dir(tmp_path, monkeypatch)
     temporary_paths: list[Path] = []
-    original_factory = ledger.tempfile.NamedTemporaryFile
+    original_factory = atomic_write.tempfile.NamedTemporaryFile
 
     def record_temporary(*args, **kwargs):
         temporary = original_factory(*args, **kwargs)
         temporary_paths.append(Path(temporary.name))
         return temporary
 
-    monkeypatch.setattr(ledger.tempfile, "NamedTemporaryFile", record_temporary)
+    monkeypatch.setattr(atomic_write.tempfile, "NamedTemporaryFile", record_temporary)
 
     first = ledger.update([EnvRecord("session", "one")], now=10.0)
     second = ledger.update(

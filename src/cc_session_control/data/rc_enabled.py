@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import fcntl
 import os
-import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import TracebackType
 from typing import IO, Literal, TypeVar
+
+from .atomic_write import AtomicWriteError, AtomicWriteStage, atomic_replace
 
 _T = TypeVar("_T")
 _Mutation = Callable[[list[str]], tuple[list[str], _T]]
@@ -77,117 +78,13 @@ class _EnabledListBoundaryError(OSError):
         self.detail = detail
 
 
-class _TemporaryReplacement:
-    """Own one temporary file and expose cleanup failure without masking bugs."""
-
-    def __init__(self, target: Path) -> None:
-        self._target = target
-        self._descriptor: int | None = None
-        self._path: Path | None = None
-        self._stream: IO[str] | None = None
-        self._replaced = False
-
-    def __enter__(self) -> _TemporaryReplacement:
-        try:
-            descriptor, name = tempfile.mkstemp(
-                dir=self._target.parent,
-                prefix=f".{self._target.name}.",
-                suffix=".tmp",
-            )
-        except (OSError, UnicodeError) as exc:
-            raise _EnabledListBoundaryError(
-                EnabledListStage.WRITE,
-                str(exc),
-            ) from exc
-        self._descriptor = descriptor
-        self._path = Path(name)
-        return self
-
-    def commit(self, content: str) -> None:
-        """Write, sync, close, and atomically replace the target."""
-
-        if self._descriptor is None or self._path is None:
-            raise RuntimeError("temporary replacement is not open")
-        try:
-            self._stream = os.fdopen(self._descriptor, "w", encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            raise _EnabledListBoundaryError(
-                EnabledListStage.WRITE,
-                str(exc),
-            ) from exc
-        self._descriptor = None
-        try:
-            self._stream.write(content)
-            self._stream.flush()
-        except (OSError, UnicodeError) as exc:
-            raise _EnabledListBoundaryError(
-                EnabledListStage.WRITE,
-                str(exc),
-            ) from exc
-        try:
-            os.fsync(self._stream.fileno())
-        except (OSError, UnicodeError) as exc:
-            raise _EnabledListBoundaryError(
-                EnabledListStage.FSYNC,
-                str(exc),
-            ) from exc
-        try:
-            self._stream.close()
-        except (OSError, UnicodeError) as exc:
-            raise _EnabledListBoundaryError(
-                EnabledListStage.WRITE,
-                str(exc),
-            ) from exc
-        try:
-            os.replace(self._path, self._target)
-        except (OSError, UnicodeError) as exc:
-            raise _EnabledListBoundaryError(
-                EnabledListStage.REPLACE,
-                str(exc),
-            ) from exc
-        self._replaced = True
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> Literal[False]:
-        if self._replaced:
-            return False
-        failures: list[str] = []
-        if self._stream is not None and not self._stream.closed:
-            try:
-                self._stream.close()
-            except (OSError, UnicodeError) as close_exc:
-                failures.append(f"close: {close_exc}")
-        elif self._descriptor is not None:
-            try:
-                os.close(self._descriptor)
-            except OSError as close_exc:
-                failures.append(f"close: {close_exc}")
-        if self._path is not None:
-            try:
-                self._path.unlink()
-            except FileNotFoundError:
-                pass
-            except (OSError, UnicodeError) as unlink_exc:
-                failures.append(f"unlink: {unlink_exc}")
-        if not failures:
-            return False
-        cleanup_detail = "; ".join(failures)
-        if isinstance(exc, _EnabledListBoundaryError):
-            raise _EnabledListBoundaryError(
-                EnabledListStage.CLEANUP,
-                f"{exc.stage.value}: {exc.detail}; cleanup: {cleanup_detail}",
-            ) from exc
-        if exc is not None:
-            exc.add_note(f"enabled-list temporary cleanup failed: {cleanup_detail}")
-            return False
-        raise _EnabledListBoundaryError(
-            EnabledListStage.CLEANUP,
-            cleanup_detail,
-        )
+_STAGE_TO_STAGE: Mapping[AtomicWriteStage, EnabledListStage] = {
+    AtomicWriteStage.CREATE: EnabledListStage.WRITE,
+    AtomicWriteStage.WRITE: EnabledListStage.WRITE,
+    AtomicWriteStage.FSYNC: EnabledListStage.FSYNC,
+    AtomicWriteStage.REPLACE: EnabledListStage.REPLACE,
+    AtomicWriteStage.CLEANUP: EnabledListStage.CLEANUP,
+}
 
 
 class _EnabledListLock:
@@ -450,5 +347,10 @@ class EnabledListStore:
 
     def _replace(self, lines: Sequence[str]) -> None:
         content = "".join(f"{line}\n" for line in lines)
-        with _TemporaryReplacement(self._path) as replacement:
-            replacement.commit(content)
+        try:
+            atomic_replace(self._path, content)
+        except AtomicWriteError as exc:
+            raise _EnabledListBoundaryError(
+                _STAGE_TO_STAGE[exc.stage],
+                exc.detail,
+            ) from exc

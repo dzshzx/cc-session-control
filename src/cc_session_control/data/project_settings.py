@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import fcntl
 import json
-import os
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import IO, Any
+from typing import Any
 
 from ..models import RCStartupSettingRead, RCStartupSettingState
+from .atomic_write import AtomicWriteError, AtomicWriteStage, atomic_replace
 
 
 class ProjectSettingsState(Enum):
@@ -219,6 +218,15 @@ def read_rc_at_startup(directory: str | Path) -> RCStartupSettingRead:
     return RCStartupSettingRead(RCStartupSettingState.MISSING)
 
 
+_STAGE_TO_FAILURE: Mapping[AtomicWriteStage, SettingWriteFailure] = {
+    AtomicWriteStage.CREATE: SettingWriteFailure.WRITE,
+    AtomicWriteStage.WRITE: SettingWriteFailure.WRITE,
+    AtomicWriteStage.FSYNC: SettingWriteFailure.FSYNC,
+    AtomicWriteStage.REPLACE: SettingWriteFailure.REPLACE,
+    AtomicWriteStage.CLEANUP: SettingWriteFailure.CLEANUP,
+}
+
+
 def _write_failure(
     path: Path,
     failure: SettingWriteFailure,
@@ -252,95 +260,12 @@ def _replace_settings(
     path: Path,
     document: dict[str, Any],
 ) -> SettingWriteResult:
+    content = json.dumps(document, indent=2) + "\n"
     try:
-        temporary = tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        )
-    except OSError as exc:
-        return _write_failure(path, SettingWriteFailure.WRITE, str(exc))
-    temporary_path = Path(temporary.name)
-
-    try:
-        json.dump(document, temporary, indent=2)
-        temporary.write("\n")
-        temporary.flush()
-    except OSError as exc:
-        return _cleanup_temporary(
-            path,
-            temporary_path,
-            temporary,
-            _write_failure(path, SettingWriteFailure.WRITE, str(exc)),
-        )
-
-    try:
-        os.fsync(temporary.fileno())
-    except OSError as exc:
-        return _cleanup_temporary(
-            path,
-            temporary_path,
-            temporary,
-            _write_failure(path, SettingWriteFailure.FSYNC, str(exc)),
-        )
-
-    try:
-        temporary.close()
-    except OSError as exc:
-        return _cleanup_temporary(
-            path,
-            temporary_path,
-            temporary,
-            _write_failure(path, SettingWriteFailure.WRITE, str(exc)),
-        )
-
-    try:
-        os.replace(temporary_path, path)
-    except OSError as exc:
-        return _cleanup_temporary(
-            path,
-            temporary_path,
-            temporary,
-            _write_failure(path, SettingWriteFailure.REPLACE, str(exc)),
-        )
+        atomic_replace(path, content)
+    except AtomicWriteError as exc:
+        return _write_failure(path, _STAGE_TO_FAILURE[exc.stage], exc.detail)
     return SettingWriteResult(SettingWriteState.UPDATED, path)
-
-
-def _cleanup_temporary(
-    path: Path,
-    temporary_path: Path,
-    temporary: IO[str],
-    outcome: SettingWriteResult,
-) -> SettingWriteResult:
-    """Remove a failed write's temporary file and expose cleanup failures."""
-
-    cleanup_errors: list[str] = []
-    if not temporary.closed:
-        try:
-            temporary.close()
-        except OSError as exc:
-            cleanup_errors.append(f"close: {exc}")
-    try:
-        temporary_path.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        cleanup_errors.append(f"unlink: {exc}")
-    if cleanup_errors:
-        original_failure = (
-            outcome.failure.value
-            if outcome.failure is not None
-            else outcome.state.value
-        )
-        return _write_failure(
-            path,
-            SettingWriteFailure.CLEANUP,
-            f"{original_failure}: {outcome.detail}; " + "; ".join(cleanup_errors),
-        )
-    return outcome
 
 
 def write_rc_at_startup(
