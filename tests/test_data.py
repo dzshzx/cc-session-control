@@ -950,7 +950,6 @@ def test_parse_transcript_rc_exposed_requires_proc_alive(tmp_path):
     s = _parse_transcript(path, idx=idx, cur=set(), job_shorts=set())
     assert s.alive is True
     assert s.rc_exposed is False
-    assert s.env_id is None
 
 
 def test_parse_transcript_sets_rc_exposed_when_proc_alive(tmp_path):
@@ -973,7 +972,6 @@ def test_parse_transcript_sets_rc_exposed_when_proc_alive(tmp_path):
     }
     s = _parse_transcript(path, idx=idx, cur=set(), job_shorts=set())
     assert s.rc_exposed is True
-    assert s.env_id == "session_env"
 
 
 def test_parse_transcript_hidden_tags(tmp_path):

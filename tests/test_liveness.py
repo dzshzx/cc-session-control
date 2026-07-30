@@ -135,38 +135,6 @@ def test_live_index_source_buckets():
     assert idx["d"].source == "cli"
 
 
-# --- _scrub_dead_pids: dead agents_map pids must not count as alive ---
-
-
-def test_scrub_blanks_dead_pids_keeps_entries():
-    mapping = {"deadsid": 4242, "livesid": 111, "settled": None}
-    out = liveness._scrub_dead_pids(mapping, exists=lambda pid: pid == 111)
-    assert out == {"deadsid": None, "livesid": 111, "settled": None}
-
-
-def test_scrubbed_dead_pid_does_not_override_proc_verdict():
-    # Registry proved the pid dead; a stale agents entry with a dead pid must
-    # not flip the sid back to alive once scrubbed.
-    dead_proc = _sp("sid", 4242, "123")
-    scrubbed = liveness._scrub_dead_pids({"sid": 9999}, exists=lambda pid: False)
-    idx = liveness.live_index([dead_proc], scrubbed)
-    assert idx["sid"].alive is False
-
-
-def test_scrubbed_agent_only_sid_not_alive():
-    scrubbed = liveness._scrub_dead_pids({"ghost": 9999}, exists=lambda pid: False)
-    idx = liveness.live_index([], scrubbed)
-    assert idx["ghost"].alive is False
-    assert idx["ghost"].pids == ()
-
-
-def test_scrub_keeps_live_pid_alive_path_intact():
-    scrubbed = liveness._scrub_dead_pids({"sid": 5555}, exists=lambda pid: True)
-    idx = liveness.live_index([_sp("sid", 4242, "123")], scrubbed)
-    assert idx["sid"].alive is True
-    assert idx["sid"].pid == 5555
-
-
 def test_alive_map_skips_scrub_without_proc(monkeypatch):
     # R10 degraded mode: agents_map is the only liveness source — no scrubbing.
     liveness.invalidate_cache()

@@ -78,9 +78,8 @@ FOOTER_PREFIX = " Tab 切换 · q 退出 · r 刷新 · "
 
 
 def _make_screen() -> urwid.raw_display.Screen:
-    # The theme query (OSC 11) runs here, before `loop.run()` puts the tty
-    # into urwid's hands; the palette itself lives in `theme.py` (ONE semantic
-    # attr set, dark/light generated from a single spec).
+    # Theme detection runs here; the palette itself lives in `theme.py` (ONE
+    # semantic attr set, dark/light generated from a single spec).
     mode = theme.detect_mode()
     screen = urwid.raw_display.Screen()
     try:

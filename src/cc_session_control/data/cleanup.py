@@ -6,12 +6,12 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 from ..config import cfg
-from ..models import Session, SessionProc
+from ..models import AgentJob, Session, SessionProc
 from . import liveness, proc, registry, transcripts
 from .age_cleanup import (
     AgeCleanupPlan,
@@ -33,8 +33,6 @@ from .cleanup_anchors import (
 from .cleanup_anchors import (
     session_removal_anchors as _session_removal_anchors,
 )
-from .cleanup_selection import known_sids_from_transcripts
-from .cleanup_selection import select_prunable_sessions as _select_prunable_sessions
 from .removal import (
     CleanupExecution,
     CleanupIssue,
@@ -47,6 +45,46 @@ from .removal import (
 
 # Dirs keyed by full sessionId — orphan = name not in the known sid set.
 _SID_DIRS = ("session_env", "file_history", "tasks", "uploads")
+
+
+def known_sids_from_transcripts(
+    transcript_sids: Iterable[str],
+    session_procs: Sequence[SessionProc],
+    agent_jobs: Sequence[AgentJob],
+    agents_map: Mapping[str, int | None],
+    cur: AbstractSet[int],
+) -> set[str]:
+    """Return every sid protected by transcripts or liveness evidence."""
+    known = set(transcript_sids)
+    known |= {sp.sid for sp in session_procs}
+    known |= {sp.sid for sp in session_procs if sp.proc_alive}
+    known |= {sp.sid for sp in session_procs if sp.pid in cur}
+    for job in agent_jobs:
+        if job.sid:
+            known.add(job.sid)
+        if job.resume_sid:
+            known.add(job.resume_sid)
+        if job.host_alive and job.sid:
+            known.add(job.sid)
+    known |= {sid for sid in agents_map if sid}
+    return known
+
+
+def _select_prunable_sessions(
+    sessions: Sequence[Session],
+    max_prompts: int,
+    now: float,
+) -> list[Session]:
+    """Select old, non-live sessions without acquiring protection evidence."""
+    alive_sids = {session.sid for session in sessions if session.alive}
+    return [
+        session
+        for session in sessions
+        if session.prompts <= max_prompts
+        and session.sid not in alive_sids
+        and not session.current
+        and (now - session.mtime) > 600
+    ]
 
 
 def fresh_liveness_inputs() -> liveness.LivenessSnapshot:

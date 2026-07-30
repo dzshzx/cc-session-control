@@ -105,7 +105,6 @@ def _project_transcript(
         entrypoint=entrypoint,
         source=source,
         rc_exposed=rc_exposed,
-        env_id=bridge if rc_exposed else None,
         agent_short=sid[:8] if sid[:8] in job_shorts else None,
         status=status,
     )

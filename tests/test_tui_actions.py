@@ -21,13 +21,7 @@ from cc_session_control.data.project_settings import (
     SettingWriteResult,
     SettingWriteState,
 )
-from cc_session_control.data.rc import StartManyResult, StartResult, StartState
-from cc_session_control.data.rc_enabled import (
-    EnabledListOperation,
-    EnabledListResult,
-    EnabledListStage,
-    EnabledListState,
-)
+from cc_session_control.data.rc import StartResult, StartState
 from cc_session_control.data.removal import (
     CleanupExecution,
     CleanupIssue,
@@ -395,128 +389,6 @@ def test_cleanup_adapter_reports_incomplete_liveness_in_chinese() -> None:
     assert "invalid JSON" in result.message
 
 
-def test_project_batch_result_distinguishes_partial_refused_and_failure(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        tui_actions.rc,
-        "start_all_listed_result",
-        lambda: StartManyResult(started=2, unavailable=1, failed=1),
-    )
-    partial = tui_actions.start_all_projects()
-    assert "已启动 2 个项目" in partial.message
-    assert "启动失败 1 个" in partial.message
-
-    monkeypatch.setattr(
-        tui_actions.rc,
-        "start_all_listed_result",
-        lambda: StartManyResult(untrusted=2),
-    )
-    refused = tui_actions.start_all_projects()
-    assert "未信任，拒绝 2 个" in refused.message
-
-    monkeypatch.setattr(
-        tui_actions.rc,
-        "start_all_listed_result",
-        lambda: StartManyResult(failed=2),
-    )
-    assert tui_actions.start_all_projects().message == "启动失败 2 个"
-
-
-def test_successful_rc_actions_keep_exact_result_contract(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Characterize public ActionResult fields before enabled-list migration."""
-
-    monkeypatch.setattr(tui_actions.rc.cfg, "rc_list", tmp_path / "rc-enabled")
-    assert tui_actions.toggle_autostart("/project", "project") == ActionResult(
-        "project 开机自启: 开",
-        True,
-    )
-
-    monkeypatch.setattr(
-        tui_actions.rc,
-        "start_all_listed_result",
-        lambda: StartManyResult(started=2),
-    )
-    assert tui_actions.start_all_projects() == ActionResult(
-        "已启动 2 个项目",
-        True,
-    )
-
-
-def test_toggle_autostart_reports_committed_unlock_failure_and_refreshes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    failure = EnabledListResult(
-        EnabledListOperation.TOGGLE,
-        EnabledListState.FAILED,
-        None,
-        changed=True,
-        committed=True,
-        stage=EnabledListStage.UNLOCK,
-        detail="flock: permission denied",
-    )
-    monkeypatch.setattr(
-        tui_actions.rc,
-        "toggle_autostart_result",
-        lambda _path: failure,
-        raising=False,
-    )
-
-    assert tui_actions.toggle_autostart("/project", "project") == ActionResult(
-        "开机自启写入失败（unlock）：flock: permission denied；"
-        "列表变更已提交，需刷新确认",
-        True,
-    )
-
-
-def test_start_all_reports_typed_list_failure_without_starting(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    failure = EnabledListResult(
-        EnabledListOperation.LIST,
-        EnabledListState.FAILED,
-        None,
-        changed=False,
-        committed=False,
-        stage=EnabledListStage.READ,
-        detail="permission denied",
-    )
-    monkeypatch.setattr(
-        tui_actions.rc,
-        "start_all_listed_result",
-        lambda: StartManyResult(enabled_list=failure),
-    )
-
-    assert tui_actions.start_all_projects() == ActionResult(
-        "启动列表读取失败（read）：permission denied",
-        False,
-    )
-
-
-def test_project_batch_reports_metadata_failure_target_and_detail(monkeypatch) -> None:
-    failure = StartResult(
-        StartState.METADATA_FAILED,
-        "/project",
-        "window-option: lost server connection",
-        target="rc:7",
-    )
-    monkeypatch.setattr(
-        tui_actions.rc,
-        "start_all_listed_result",
-        lambda: StartManyResult(failed=1, results=(failure,)),
-    )
-
-    result = tui_actions.start_all_projects()
-
-    assert result.message == (
-        "启动失败 1 个；/project 的 tmux 窗口 rc:7 已创建但元数据写入失败："
-        "window-option: lost server connection"
-    )
-
-
 def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
     monkeypatch.setattr(
         tui_actions.rc,
@@ -541,8 +413,8 @@ def test_start_and_setting_failures_remain_typed(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        tui_actions.rc,
-        "set_rc_at_startup",
+        tui_actions,
+        "write_rc_at_startup",
         lambda *_: SettingWriteResult(
             SettingWriteState.FAILED,
             Path("/project/.claude/settings.local.json"),
@@ -600,23 +472,6 @@ def test_deleted_project_after_setting_submission_is_a_visible_failure(
     assert result is not None
     assert result.message.startswith("配置写入失败（create-directory）:")
     assert list(tmp_path.iterdir()) == []
-
-
-def test_expected_autostart_io_failure_becomes_typed_failure(monkeypatch) -> None:
-    def fail(_path: str) -> EnabledListResult:
-        return EnabledListResult(
-            EnabledListOperation.TOGGLE,
-            EnabledListState.FAILED,
-            None,
-            changed=True,
-            committed=False,
-            stage=EnabledListStage.WRITE,
-            detail="read only",
-        )
-
-    monkeypatch.setattr(tui_actions.rc, "toggle_autostart_result", fail)
-    result = tui_actions.toggle_autostart("/project", "project")
-    assert result.message == "开机自启写入失败（write）：read only"
 
 
 def test_agent_respawn_does_not_claim_success_when_tmux_fails(monkeypatch) -> None:

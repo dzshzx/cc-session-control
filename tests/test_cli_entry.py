@@ -1,6 +1,5 @@
-"""Public CLI entry/dispatch behavior, resume/skill/agents/env commands, and
-the TUI exit-intent handoff (rc subcommand family split into
-`test_cli_entry_rc.py`)."""
+"""Public CLI entry/dispatch behavior, resume/agents commands, theme
+flag wiring, and the TUI exit-intent handoff."""
 
 from __future__ import annotations
 
@@ -11,24 +10,18 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from cli_entry_helpers import enabled_list as _enabled_list
 
 from cc_session_control import cli
-from cc_session_control.actions import session_ops, skill_ops
+from cc_session_control.actions import session_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import (
-    environments,
     liveness,
-    rc,
     registry,
     sessions,
 )
 from cc_session_control.models import (
     AgentJob,
-    BridgeEnv,
-    EnvRecord,
     Session,
-    SessionProc,
 )
 
 
@@ -64,15 +57,7 @@ def test_main_accepts_argv_and_returns_success(
     assert capsys.readouterr().out == "No matching sessions.\n"
 
 
-@pytest.mark.parametrize("argv", [["rc"], ["skill"]])
-def test_nested_command_is_required(argv: list[str]) -> None:
-    with pytest.raises(SystemExit) as stopped:
-        cli.main(argv)
-
-    assert stopped.value.code == 2
-
-
-@pytest.mark.parametrize("argv", [["unknown"], ["rc", "unknown"]])
+@pytest.mark.parametrize("argv", [["unknown"], ["prune"], ["skill"], ["rc", "status"]])
 def test_unknown_command_is_rejected(argv: list[str]) -> None:
     with pytest.raises(SystemExit) as stopped:
         cli.main(argv)
@@ -94,13 +79,13 @@ def test_handler_streams_are_injected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        rc,
-        "list_enabled_result",
-        lambda: _enabled_list(("/one", "/two")),
+        liveness,
+        "liveness_inputs",
+        lambda: liveness.LivenessSnapshot(),
     )
     stdout = io.StringIO()
     stderr = io.StringIO()
-    args = cli.build_parser().parse_args(["rc", "list"])
+    args = cli.build_parser().parse_args(["agents"])
 
     status = cli.dispatch(
         args,
@@ -110,7 +95,7 @@ def test_handler_streams_are_injected(
     )
 
     assert status == 0
-    assert stdout.getvalue() == "/one\n/two\n"
+    assert stdout.getvalue() == "No background agents found.\n"
     assert stderr.getvalue() == ""
 
 
@@ -346,50 +331,6 @@ def test_resume_complete_liveness_is_injected_once(
     assert injected == [evidence]
 
 
-def test_skill_install_uninstall_and_refusal_use_real_filesystem(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-
-    assert cli.main(["skill", "install"]) == 0
-    captured = capsys.readouterr()
-    target = cfg.skills_dir / skill_ops.SKILL_NAME / "SKILL.md"
-    assert captured.err == ""
-    assert "Installed skill" in captured.out
-    assert target.is_file()
-
-    assert cli.main(["skill", "install"]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "Refused:" in captured.err
-
-    assert cli.main(["skill", "uninstall"]) == 0
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert "Removed" in captured.out
-    assert not target.parent.exists()
-
-    assert cli.main(["skill", "uninstall"]) == 1
-    assert "Not installed:" in capsys.readouterr().err
-
-
-def test_skill_boundary_failure_is_visible_and_nonzero(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    def fail_install(*, force: bool) -> tuple[bool, str]:
-        raise OSError("read only")
-
-    monkeypatch.setattr(skill_ops, "install", fail_install)
-
-    assert cli.main(["skill", "install"]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "Skill operation failed: read only" in captured.err
-
-
 def test_agents_empty_and_status_rendering(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -468,109 +409,6 @@ def test_agents_keeps_partial_inventory_and_warns(
     assert "invalid JSON" in captured.err
 
 
-def test_env_renders_current_and_orphan_results(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    result = environments.Reconciliation(
-        current=[
-            BridgeEnv(
-                prefix="session",
-                key="current",
-                bound_sid="sid-current",
-                status="current",
-            ),
-        ],
-        orphans=[
-            BridgeEnv(
-                prefix="cse",
-                key="orphan",
-                bound_sid=None,
-            ),
-        ],
-    )
-    monkeypatch.setattr(
-        rc,
-        "scan_servers_result",
-        lambda: rc.RCServerScanResult(),
-    )
-    monkeypatch.setattr(
-        liveness,
-        "liveness_inputs",
-        lambda: liveness.LivenessSnapshot(),
-    )
-    monkeypatch.setattr(
-        environments,
-        "reconcile",
-        lambda _evidence, _servers, inventory_issues=(): result,
-    )
-
-    assert cli.main(["env"]) == 0
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert "Current bridge environments: 1" in captured.out
-    assert "session_current  sid=sid-current" in captured.out
-    assert "Orphan environments" in captured.out
-    assert "cse_orphan  sid=-" in captured.out
-
-
-def test_env_incomplete_liveness_is_partial_without_orphan_or_ledger_write(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(cfg, "config_dir", tmp_path)
-    environments.upsert(
-        [
-            EnvRecord(
-                prefix="cse",
-                key="OLD",
-                bound_sid="sid-old",
-            ),
-        ],
-        now=1.0,
-    )
-    original = cfg.environments_ledger.read_bytes()
-    evidence = liveness.LivenessSnapshot(
-        session_procs=(
-            SessionProc(
-                pid=1,
-                sid="sid-live",
-                bridge="session_LIVE",
-                proc_alive=True,
-            ),
-        ),
-        issues=(
-            liveness.LivenessIssue(
-                "session registry",
-                "/runtime/sessions/broken.json",
-                "invalid JSON",
-            ),
-        ),
-    )
-    snapshots = 0
-
-    def capture_evidence() -> liveness.LivenessSnapshot:
-        nonlocal snapshots
-        snapshots += 1
-        return evidence
-
-    monkeypatch.setattr(liveness, "liveness_inputs", capture_evidence)
-    monkeypatch.setattr(rc, "scan_servers_result", lambda: rc.RCServerScanResult())
-
-    assert cli.main(["env"]) == 1
-    captured = capsys.readouterr()
-    assert "Current bridge environments (partial): 1" in captured.out
-    assert "session_LIVE  sid=sid-live" in captured.out
-    assert "Orphan environments: unavailable" in captured.out
-    assert "cse_OLD" not in captured.out
-    assert "session registry" in captured.err
-    assert "/runtime/sessions/broken.json" in captured.err
-    assert "invalid JSON" in captured.err
-    assert cfg.environments_ledger.read_bytes() == original
-    assert snapshots == 1
-
-
 def test_no_command_runs_tui_and_handles_no_intent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -633,6 +471,20 @@ def test_every_exit_intent_finalizes_once_after_tui_loop(
 
     assert cli.main([]) == 0
     assert events == ["loop", "intent"]
+
+
+def test_theme_flag_sets_cfg(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cfg, "theme", "auto")
+    args = cli.build_parser().parse_args(["--theme", "light"])
+    cli.apply_global_flags(args)
+    assert cfg.theme == "light"
+
+
+def test_theme_flag_absent_keeps_cfg(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cfg, "theme", "auto")
+    args = cli.build_parser().parse_args([])
+    cli.apply_global_flags(args)
+    assert cfg.theme == "auto"
 
 
 def test_invalid_theme_is_argparse_error() -> None:

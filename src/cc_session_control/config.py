@@ -27,15 +27,7 @@ class Config:
     def __init__(self) -> None:
         self.claude_home: Path = Path.home() / ".claude"
         self.claude_json: Path = Path.home() / ".claude.json"
-        xdg = os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
-        self.config_dir: Path = Path(xdg) / "csctl"
-        self.rc_list: Path = self.config_dir / "rc-enabled"
         self.rc_session: str = os.environ.get("CSCTL_RC_SESSION", "rc")
-        self.rc_stagger: int = _integer_environment(
-            "CSCTL_RC_STAGGER",
-            2,
-            minimum=0,
-        )
         # Age threshold (days) for the time/global-keyed cleanup strategy.
         # 0 is a valid operator value (sweep every aged entry) — pre-0.8
         # releases accepted it, so validation only rejects negatives/garbage.
@@ -44,21 +36,12 @@ class Config:
             14,
             minimum=0,
         )
-        # TUI palette: "auto" (detect the terminal background) | "dark" | "light".
+        # TUI palette: "auto" ($COLORFGBG if set, else dark) | "dark" | "light".
         self.theme: str = os.environ.get("CSCTL_THEME", "auto")
 
     @property
     def projects_root(self) -> Path:
         return self.claude_home / "projects"
-
-    @property
-    def environments_ledger(self) -> Path:
-        """csctl's own append-only bridge-environment ledger (R6).
-
-        Lives under `config_dir` (csctl state, NOT Claude Code's `claude_home`).
-        A property so tests that monkeypatch `cfg.config_dir` flow through.
-        """
-        return self.config_dir / "environments.jsonl"
 
     # --- Claude Code state directories (single path authority) ---
     # All derive from claude_home so tests that monkeypatch cfg.claude_home flow
@@ -115,11 +98,6 @@ class Config:
     @property
     def tasks_dir(self) -> Path:
         return self.claude_home / "tasks"
-
-    @property
-    def skills_dir(self) -> Path:
-        """User-level Claude Code agent skills (`skills/<name>/SKILL.md`)."""
-        return self.claude_home / "skills"
 
 
 cfg = Config()

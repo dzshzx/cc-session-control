@@ -36,16 +36,21 @@ class TakeOverOutcome:
 
 
 class ExecutionSessionState(StrEnum):
-    """Execution-time exact-SID resolution states."""
+    """Execution-time exact-SID resolution states.
+
+    RESOLVED is discriminated by `.success`; LIVENESS_INCOMPLETE and
+    TRANSCRIPT_INCOMPLETE are discriminated by `do_resume_sid_result` to
+    prefix the detail. Every other rejection reason (missing sid, ambiguous
+    match, current-session guard, unusable cwd, incomplete live identity) is
+    never discriminated by any caller — only the detail string is — so they
+    collapse into REFUSED, which still carries the specific reason in
+    `detail`.
+    """
 
     RESOLVED = "resolved"
     LIVENESS_INCOMPLETE = "liveness_incomplete"
     TRANSCRIPT_INCOMPLETE = "transcript_incomplete"
-    MISSING = "missing"
-    AMBIGUOUS = "ambiguous"
-    CURRENT = "current"
-    INCOMPLETE_IDENTITY = "incomplete_identity"
-    UNUSABLE_CWD = "unusable_cwd"
+    REFUSED = "refused"
 
 
 @dataclass(frozen=True)
@@ -195,23 +200,23 @@ def resolve_execution_session(sid: str) -> ExecutionSessionResolution:
     )
     if not matches:
         return ExecutionSessionResolution(
-            ExecutionSessionState.MISSING,
+            ExecutionSessionState.REFUSED,
             detail=f"missing session id {sid!r}",
         )
     if len(matches) != 1:
         return ExecutionSessionResolution(
-            ExecutionSessionState.AMBIGUOUS,
+            ExecutionSessionState.REFUSED,
             detail=f"ambiguous session id {sid!r}; found {len(matches)} exact matches",
         )
     target = matches[0]
     if target.current:
         return ExecutionSessionResolution(
-            ExecutionSessionState.CURRENT,
+            ExecutionSessionState.REFUSED,
             detail=f"session {sid!r} is the current session",
         )
     if not target.cwd or not os.path.isdir(target.cwd):
         return ExecutionSessionResolution(
-            ExecutionSessionState.UNUSABLE_CWD,
+            ExecutionSessionState.REFUSED,
             detail=f"session {sid!r} has no usable execution-time cwd: {target.cwd!r}",
         )
     if target.alive:
@@ -222,7 +227,7 @@ def resolve_execution_session(sid: str) -> ExecutionSessionResolution:
             missing.append("proc_start")
         if missing:
             return ExecutionSessionResolution(
-                ExecutionSessionState.INCOMPLETE_IDENTITY,
+                ExecutionSessionState.REFUSED,
                 detail=(
                     f"live session {sid!r} has incomplete execution-time identity "
                     f"({', '.join(missing)})"

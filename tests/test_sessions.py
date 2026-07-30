@@ -149,7 +149,6 @@ def test_scan_unifies_sources(tmp_path, monkeypatch):
     assert cli.alive is True
     assert cli.current is True  # pid 1001 in ancestor set
     assert cli.rc_exposed is True  # bridge string AND alive
-    assert cli.env_id == "session_aaa"
     assert cli.agent_short is None
     assert cli.status == "busy"
     assert cli.pid == 1001
@@ -159,14 +158,12 @@ def test_scan_unifies_sources(tmp_path, monkeypatch):
     assert vsc.alive is True
     assert vsc.current is False
     assert vsc.rc_exposed is False  # no bridge
-    assert vsc.env_id is None
 
     sdk = rows[SDK_SID]
     assert sdk.source == "sdk"
     assert sdk.alive is False  # pid 1003 is a zombie file
     assert sdk.current is False
     assert sdk.rc_exposed is False  # bridge present but proc dead
-    assert sdk.env_id is None
     assert sdk.bridge_or_sdk is True  # D9: source==sdk surfaces it
 
     bg = rows[BG_SID]
@@ -286,7 +283,6 @@ def test_scan_transcript_only_session_is_dead(tmp_path, monkeypatch):
     assert s.current is False
     assert s.source == ""
     assert s.rc_exposed is False
-    assert s.env_id is None
     assert s.agent_short is None
 
 

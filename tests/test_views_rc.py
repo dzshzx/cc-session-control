@@ -1,4 +1,4 @@
-"""View unit tests: RC/projects-view — RCRow/RCView rendering, project actions (o/c/a/S/A/s), server rows, and the no-deregister capability guard."""
+"""View unit tests: RC/projects-view — RCRow/RCView rendering, project actions (o/c/S/s), server rows, and the no-deregister capability guard."""
 
 import ast
 import os
@@ -23,11 +23,6 @@ from cc_session_control.data.project_settings import (
     SettingWriteFailure,
     SettingWriteResult,
     SettingWriteState,
-)
-from cc_session_control.data.rc_enabled import (
-    EnabledListOperation,
-    EnabledListResult,
-    EnabledListState,
 )
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import (
@@ -65,25 +60,13 @@ def test_rc_row_marks_missing_directory():
 
 def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
     import cc_session_control.views.rc as rc_view_mod
-    from cc_session_control.data import rc as rc_mod
 
     writes = []
     monkeypatch.setattr(
-        rc_view_mod.tui_actions.rc,
-        "set_rc_at_startup",
+        rc_view_mod.tui_actions,
+        "write_rc_at_startup",
         lambda directory, value: (
             writes.append((directory, value)) or _updated_setting(directory)
-        ),
-    )
-    monkeypatch.setattr(
-        rc_mod,
-        "toggle_autostart_result",
-        lambda _name: EnabledListResult(
-            EnabledListOperation.TOGGLE,
-            EnabledListState.SUCCEEDED,
-            False,
-            changed=True,
-            committed=True,
         ),
     )
 
@@ -98,9 +81,6 @@ def test_rc_view_missing_dir_blocks_start_keys(monkeypatch):
     assert app.result is None
     assert not writes
     assert sum("目录缺失" in m for m in app._notifications) == 3
-
-    view.handle_key("a")  # the removal path stays available
-    assert any("开机自启" in m for m in app._notifications)
 
 
 def test_rc_view_applies_complete_refresh_batch():
@@ -118,10 +98,8 @@ def test_rc_view_keyhints_uses_new_labels():
     hints = view.keyhints()
     assert "Enter 新建会话" in hints  # tmux-first primary (ADR-0001)
     assert "o 启动远控" in hints  # RC demoted to o
-    assert "开机自启" in hints
     assert "自动远控" in hints
     # batch keys are discoverable in the footer, each with its own label
-    assert "A 全部启动" in hints
     assert "S 全部停止" in hints
 
 
@@ -132,13 +110,12 @@ def test_rc_view_status_bar_counts_use_new_labels():
     _apply_projects(
         view,
         [
-            _make_project(name="p1", auto_start=True, rc_at_startup=None),
-            _make_project(name="p2", auto_start=True, rc_at_startup=False),
-            _make_project(name="p3", auto_start=False, rc_at_startup=False),
+            _make_project(name="p1", rc_at_startup=None),
+            _make_project(name="p2", rc_at_startup=False),
+            _make_project(name="p3", rc_at_startup=False),
         ],
     )
     text = view.status.original_widget.get_text()[0]
-    assert "开机自启 2" in text
     assert "自动远控关 2" in text
 
 
@@ -163,8 +140,6 @@ def test_rc_view_status_counts_per_project_setting_failures():
 
 
 def test_rc_view_shows_unknown_inventory_status_and_warning():
-    from cc_session_control.data import environments
-
     issue = InventoryIssue(
         "tmux list-windows",
         None,
@@ -173,9 +148,7 @@ def test_rc_view_shows_unknown_inventory_status_and_warning():
     project = _make_project(status="unknown")
     snap = WorldSnapshot(
         rc_projects=[project],
-        environment_reconciliation=environments.Reconciliation(
-            inventory_issues=(issue,),
-        ),
+        rc_inventory_issues=(issue,),
     )
     app = FakeApp()
     view = RCView(app)
@@ -254,8 +227,8 @@ def test_rc_view_c_key_notifies_with_new_label(monkeypatch):
 
     writes = []
     monkeypatch.setattr(
-        rc_view_mod.tui_actions.rc,
-        "set_rc_at_startup",
+        rc_view_mod.tui_actions,
+        "write_rc_at_startup",
         lambda directory, value: (
             writes.append((directory, value)) or _updated_setting(directory)
         ),
@@ -321,7 +294,7 @@ def test_rc_view_reports_typed_settings_write_failure(monkeypatch):
             "read-only filesystem",
         )
 
-    monkeypatch.setattr(rc_view_mod.tui_actions.rc, "set_rc_at_startup", fail_write)
+    monkeypatch.setattr(rc_view_mod.tui_actions, "write_rc_at_startup", fail_write)
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
@@ -330,32 +303,6 @@ def test_rc_view_reports_typed_settings_write_failure(monkeypatch):
     view.handle_key("c")
 
     assert any("配置写入失败（replace）" in item for item in app._notifications)
-
-
-def test_rc_view_a_key_notifies_with_new_label(monkeypatch):
-    from cc_session_control.data import rc as rc_mod
-
-    monkeypatch.setattr(
-        rc_mod,
-        "toggle_autostart_result",
-        lambda _name: EnabledListResult(
-            EnabledListOperation.TOGGLE,
-            EnabledListState.SUCCEEDED,
-            True,
-            changed=True,
-            committed=True,
-        ),
-    )
-
-    app = FakeApp()
-    view = RCView(app)
-    app.views = [view]
-    _apply_projects(view, [_make_project(name="p1")])
-
-    view.handle_key("a")
-
-    assert app._submitted_actions == ["project.toggle-autostart"]
-    assert any("开机自启" in m for m in app._notifications)
 
 
 def test_rc_S_key_confirms_then_stops_all(monkeypatch):
@@ -383,25 +330,6 @@ def test_rc_S_key_confirms_then_stops_all(monkeypatch):
     assert stopped["n"] == 1
     assert app._submitted_actions == ["project.stop-all"]
     assert any("已停止全部" in m for m in app._notifications)
-
-
-def test_rc_A_key_submits_start_all(monkeypatch):
-    from cc_session_control.data import rc as rc_mod
-
-    monkeypatch.setattr(
-        rc_mod,
-        "start_all_listed_result",
-        lambda: rc_mod.StartManyResult(started=2),
-    )
-    app = FakeApp()
-    view = RCView(app)
-    app.views = [view]
-    _apply_projects(view, [_make_project(name="p1")])
-
-    view.handle_key("A")
-
-    assert app._submitted_actions == ["project.start-all"]
-    assert app._notifications[-1] == "已启动 2 个项目"
 
 
 def test_rc_s_running_confirms_stop(monkeypatch):
@@ -479,8 +407,8 @@ def test_server_row_managed_external_badge():
 
 
 def test_rc_view_renders_servers_but_no_env_ledger():
-    # The env ledger is deliberately NOT rendered in the TUI (csctl can't act on
-    # cloud environments) — only project rows + the RC server section remain.
+    # No env-ledger section exists (the pipeline was removed in 0.8; csctl
+    # can't act on cloud environments) — only project rows + RC servers remain.
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
@@ -543,7 +471,7 @@ def test_rc_view_server_rows_are_read_only(monkeypatch):
             break
     assert view._selected() is None  # not an RCProject -> nothing actionable
 
-    for key in ("enter", "s", "a", "c"):
+    for key in ("enter", "s", "c"):
         view.handle_key(key)
     assert started["n"] == 0
     assert app._notifications == []
@@ -585,26 +513,11 @@ def test_no_deregister_or_delete_env_symbols_in_src():
     assert offenders == []
 
 
-def test_environments_and_agent_ops_do_not_export_deregister():
+def test_agent_ops_does_not_export_deregister():
     from cc_session_control.actions import agent_ops
-    from cc_session_control.data import environments
 
-    for mod in (environments, agent_ops):
-        assert not hasattr(mod, "deregister")
-        assert not hasattr(mod, "delete_env")
-
-
-def test_rc_view_help_points_ledger_queries_at_cli():
-    # The env ledger left the TUI; the help must still be honest about WHY
-    # (csctl cannot deregister cloud envs) and point at `csctl env`.
-    app = FakeApp()
-    view = RCView(app)
-    app.views = [view]
-    view._show_help()
-    canvas = view._body.original_widget.render((100, 40), focus=False)
-    blob = b"\n".join(canvas.text).decode()
-    assert "无法注销" in blob
-    assert "csctl env" in blob
+    assert not hasattr(agent_ops, "deregister")
+    assert not hasattr(agent_ops, "delete_env")
 
 
 def test_rc_view_help_is_overlay_and_keeps_list(monkeypatch):
@@ -635,8 +548,8 @@ def test_rc_view_c_key_full_tristate_cycle(monkeypatch):
 
     writes = []
     monkeypatch.setattr(
-        rc_view_mod.tui_actions.rc,
-        "set_rc_at_startup",
+        rc_view_mod.tui_actions,
+        "write_rc_at_startup",
         lambda directory, value: writes.append(value) or _updated_setting(directory),
     )
     app = FakeApp()
@@ -654,8 +567,8 @@ def test_rc_view_c_key_refuses_unavailable_setting_evidence(monkeypatch):
 
     writes = []
     monkeypatch.setattr(
-        rc_view_mod.tui_actions.rc,
-        "set_rc_at_startup",
+        rc_view_mod.tui_actions,
+        "write_rc_at_startup",
         lambda directory, value: writes.append(value),
     )
     source = Path("/project/.claude/settings.local.json")

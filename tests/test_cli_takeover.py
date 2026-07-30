@@ -1,149 +1,17 @@
-"""CLI wiring tests for env reporting, theme flags, rc add trust reporting,
-the TUI exit-intent handoff, and `resume --take-over` safety (R7.1/R10)."""
+"""`csctl resume --take-over` execution-time re-resolution and safety
+guarantees (R7.1/R10): never kill a recycled or current-ancestor pid,
+refuse unsafe targets before touching kill/chdir/exec, and surface exec
+failures with context."""
 
-import types
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
-from cc_session_control import cli, cli_commands, cli_rc
+from cc_session_control import cli
 from cc_session_control.actions import session_ops
-from cc_session_control.config import cfg
 from cc_session_control.data import liveness, sessions
 from cc_session_control.data.liveness import LivenessSnapshot
 from cc_session_control.models import Session
-
-
-def test_env_command_reports_ledger_failure_on_stderr_and_exits_nonzero(
-    tmp_path,
-    monkeypatch,
-    capsys,
-):
-    from cc_session_control.data import rc
-
-    monkeypatch.setattr(cfg, "config_dir", tmp_path / "config")
-    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    cfg.config_dir.mkdir()
-    path = cfg.environments_ledger
-    path.write_text('{"prefix":"session","key":"OLD"}\n')
-    original_open = Path.open
-
-    def deny_ledger(target, *args, **kwargs):
-        if target == path:
-            raise PermissionError("history denied")
-        return original_open(target, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", deny_ledger)
-    monkeypatch.setattr(rc, "scan_servers_result", lambda: rc.RCServerScanResult())
-    # Hermetic liveness: CI runners have no `claude` binary, and a failed
-    # `claude agents --json` scan would make every result "(partial)".
-    monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
-    monkeypatch.setattr(liveness, "scan_agents", lambda *a, **k: liveness.AgentsScan())
-    status = cli.main(["env"])
-
-    captured = capsys.readouterr()
-    assert status == 1
-    assert "Current bridge environments: 0" in captured.out
-    assert "ledger history incomplete" in captured.out
-    assert (
-        "Warning: environment ledger operation read failed: history denied; "
-        "current rows remain visible while orphan history is incomplete"
-    ) in captured.err
-    assert not any("\u4e00" <= char <= "\u9fff" for char in captured.err)
-
-
-def test_env_command_reports_partial_ledger_as_blocked_and_preserves_bytes(
-    tmp_path,
-    monkeypatch,
-    capsys,
-):
-    from cc_session_control.data import rc
-
-    monkeypatch.setattr(cfg, "config_dir", tmp_path / "config")
-    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    cfg.config_dir.mkdir()
-    cfg.environments_ledger.write_text("{broken\n")
-    original = cfg.environments_ledger.read_bytes()
-    monkeypatch.setattr(rc, "scan_servers_result", lambda: rc.RCServerScanResult())
-    monkeypatch.setattr(liveness, "alive_map", lambda *a, **k: {})
-    monkeypatch.setattr(liveness, "scan_agents", lambda *a, **k: liveness.AgentsScan())
-
-    status = cli_commands._cmd_env(types.SimpleNamespace())
-
-    captured = capsys.readouterr()
-    assert status == 1
-    assert "ledger history incomplete" in captured.out
-    assert (
-        "Warning: environment ledger line 1 is malformed: "
-        "Expecting property name enclosed in double quotes: "
-        "line 1 column 2 (char 1); original ledger preserved and updates blocked; "
-        "orphan history is unavailable"
-    ) in captured.err
-    assert not any("\u4e00" <= char <= "\u9fff" for char in captured.err)
-    assert cfg.environments_ledger.read_bytes() == original
-
-
-def test_theme_flag_sets_cfg(monkeypatch):
-    monkeypatch.setattr(cfg, "theme", "auto")
-    args = cli.build_parser().parse_args(["--theme", "light"])
-    cli.apply_global_flags(args)
-    assert cfg.theme == "light"
-
-
-def test_theme_flag_absent_keeps_cfg(monkeypatch):
-    monkeypatch.setattr(cfg, "theme", "auto")
-    args = cli.build_parser().parse_args([])
-    cli.apply_global_flags(args)
-    assert cfg.theme == "auto"
-
-
-def test_rc_add_reports_unavailable_trust_without_calling_it_untrusted(
-    tmp_path,
-    monkeypatch,
-    capsys,
-):
-    from cc_session_control.data import rc
-
-    project = tmp_path / "app"
-    project.mkdir()
-    claude_json = tmp_path / ".claude.json"
-    claude_json.write_text("{broken")
-    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-
-    status = cli_rc._cmd_add(
-        types.SimpleNamespace(project=str(project)),
-    )
-
-    captured = capsys.readouterr()
-    assert status == 1
-    assert "Project settings unavailable" in captured.err
-    assert "Not trusted" not in captured.err
-
-
-def test_tui_exit_intent_runs_only_after_main_loop_returns(monkeypatch):
-    from cc_session_control import app as app_mod
-    from cc_session_control.actions.session_ops import ExitIntent
-
-    events = []
-
-    class Intent(ExitIntent):
-        def run(self) -> int:
-            events.append("intent")
-            return 0
-
-    intent = Intent()
-
-    class FakeApp:
-        def run(self):
-            events.append("loop")
-            return intent
-
-    monkeypatch.setattr(app_mod, "App", FakeApp)
-
-    assert cli_commands._cmd_tui(types.SimpleNamespace()) == 0
-
-    assert events == ["loop", "intent"]
 
 
 def _takeover_session(tmp_path, **changes):

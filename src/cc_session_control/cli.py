@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from typing import Protocol, TextIO
 
-from . import cli_commands, cli_rc
+from . import cli_commands
 from .cli_streams import run_with_streams
 
 
@@ -37,83 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--theme",
         choices=("auto", "dark", "light"),
-        help=(
-            "TUI palette (default: auto-detect the terminal background; "
-            "env CSCTL_THEME)"
-        ),
+        help=("TUI palette (default: $COLORFGBG if set, else dark; env CSCTL_THEME)"),
     )
 
     commands = parser.add_subparsers(dest="command")
-
-    rc_parser = commands.add_parser("rc", help="Remote Control management")
-    rc_commands = rc_parser.add_subparsers(dest="rc_command", required=True)
-    rc_status = rc_commands.add_parser(
-        "status",
-        help="Show RC status for all projects",
-    )
-    rc_status.set_defaults(handler=cli_rc._cmd_status)
-    rc_add = rc_commands.add_parser(
-        "add",
-        help="Add project to RC list and start",
-    )
-    rc_add.add_argument(
-        "project",
-        nargs="?",
-        default=".",
-        help="Project directory (default: current dir)",
-    )
-    rc_add.set_defaults(handler=cli_rc._cmd_add)
-    rc_rm = rc_commands.add_parser(
-        "rm",
-        help="Remove project from RC list and stop",
-    )
-    rc_rm.add_argument("project", help="Project directory")
-    rc_rm.set_defaults(handler=cli_rc._cmd_rm)
-    rc_up = rc_commands.add_parser("up", help="Start all listed projects")
-    rc_up.set_defaults(handler=cli_rc._cmd_up)
-    rc_stop = rc_commands.add_parser(
-        "stop",
-        help="Stop RC for a project",
-    )
-    rc_stop.add_argument("target", help="Project directory or 'all'")
-    rc_stop.set_defaults(handler=cli_rc._cmd_stop)
-    rc_list = rc_commands.add_parser(
-        "list",
-        help="Show enabled project list",
-    )
-    rc_list.set_defaults(handler=cli_rc._cmd_list)
-
-    prune = commands.add_parser("prune", help="Clean up sessions")
-    prune.add_argument(
-        "--max-prompts",
-        type=int,
-        default=0,
-        help="Max prompt count to prune (default: 0)",
-    )
-    prune.add_argument(
-        "--apply",
-        action="store_true",
-        help="Actually delete (default: dry run)",
-    )
-    prune.add_argument(
-        "--sweep-orphans",
-        action="store_true",
-        help="Clean orphan sid-keyed artifact directories",
-    )
-    prune.add_argument(
-        "--sweep-zombies",
-        action="store_true",
-        help=(
-            "Remove zombie sessions/<pid>.json files "
-            "(dead procs; keeps current + alive pids)"
-        ),
-    )
-    prune.add_argument(
-        "--sweep-aged",
-        action="store_true",
-        help=("Remove age-keyed global entries older than cleanup_age_days"),
-    )
-    prune.set_defaults(handler=cli_commands._cmd_prune)
 
     resume = commands.add_parser(
         "resume",
@@ -153,38 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resume.set_defaults(handler=cli_commands._cmd_resume)
 
-    skill = commands.add_parser(
-        "skill",
-        help="Manage the bundled Claude Code skill",
-    )
-    skill_commands = skill.add_subparsers(
-        dest="skill_command",
-        required=True,
-    )
-    skill_install = skill_commands.add_parser(
-        "install",
-        help="Install SKILL.md into ~/.claude/skills/",
-    )
-    skill_install.add_argument(
-        "--force",
-        action="store_true",
-        help="Replace an existing skill directory",
-    )
-    skill_install.set_defaults(handler=cli_commands._cmd_skill)
-    skill_uninstall = skill_commands.add_parser(
-        "uninstall",
-        help="Remove the installed skill directory",
-    )
-    skill_uninstall.set_defaults(handler=cli_commands._cmd_skill)
-
     agents = commands.add_parser("agents", help="List background agents")
     agents.set_defaults(handler=cli_commands._cmd_agents)
-
-    env = commands.add_parser(
-        "env",
-        help="List bridge environments (current + orphan)",
-    )
-    env.set_defaults(handler=cli_commands._cmd_env)
 
     return parser
 

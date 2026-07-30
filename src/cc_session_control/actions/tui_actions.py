@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ..data import cleanup, rc
-from ..data.project_settings import SettingWriteState
+from ..data.project_settings import SettingWriteState, write_rc_at_startup
 from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session
 from . import agent_ops, session_ops
@@ -123,7 +123,7 @@ def start_project(path: str, name: str) -> ActionResult:
         return ActionResult("已在运行", needs_refresh=True)
     if result.state is rc.StartState.NOT_DIRECTORY:
         return ActionResult(
-            "目录缺失 — 无法启动（可用 a 键移出自启列表）",
+            "目录缺失 — 无法启动",
             needs_refresh=True,
         )
     if result.state is rc.StartState.METADATA_FAILED:
@@ -147,31 +147,12 @@ def stop_project(path: str, name: str) -> ActionResult:
     return ActionResult(f"停止失败：{detail}", needs_refresh=True)
 
 
-def toggle_autostart(path: str, name: str) -> ActionResult:
-    result = rc.toggle_autostart_result(path)
-    if not result.success:
-        stage = result.stage.value if result.stage is not None else "unknown"
-        committed = "；列表变更已提交，需刷新确认" if result.committed else ""
-        return ActionResult(
-            f"开机自启写入失败（{stage}）：{result.detail}{committed}",
-            needs_refresh=result.committed,
-        )
-    if result.value is None:
-        raise AssertionError("successful enabled-list toggle must carry state")
-    enabled = result.value
-    state = "开" if enabled else "关"
-    return ActionResult(
-        f"{name} 开机自启: {state}",
-        needs_refresh=True,
-    )
-
-
 def write_auto_rc(
     path: str,
     name: str,
     value: bool | None,
 ) -> ActionResult:
-    result = rc.set_rc_at_startup(path, value)
+    result = write_rc_at_startup(path, value)
     if result.state is SettingWriteState.FAILED:
         reason = result.failure.value if result.failure is not None else "unknown"
         return ActionResult(
@@ -183,45 +164,6 @@ def write_auto_rc(
         f"{name} 自动远控: {shown}{suffix}",
         needs_refresh=True,
     )
-
-
-def start_all_projects() -> ActionResult:
-    result = rc.start_all_listed_result()
-    enabled_list = result.enabled_list
-    if enabled_list is not None and not enabled_list.success:
-        stage = (
-            enabled_list.stage.value if enabled_list.stage is not None else "unknown"
-        )
-        committed = "；列表变更已提交，需刷新确认" if enabled_list.committed else ""
-        return ActionResult(
-            f"启动列表读取失败（{stage}）：{enabled_list.detail}{committed}",
-            needs_refresh=enabled_list.committed,
-        )
-    parts = [f"已启动 {result.started} 个项目"] if result.started else []
-    if result.unavailable:
-        parts.append(f"项目设置不可用，拒绝 {result.unavailable} 个")
-    if result.untrusted:
-        parts.append(f"未信任，拒绝 {result.untrusted} 个")
-    if result.failed:
-        parts.append(f"启动失败 {result.failed} 个")
-    for item in result.results:
-        if item.state is rc.StartState.METADATA_FAILED and item.target:
-            detail = item.detail or "tmux 元数据写入失败"
-            parts.append(
-                f"{item.path} 的 tmux 窗口 {item.target} 已创建但元数据写入失败："
-                f"{detail}"
-            )
-        elif item.state not in {
-            rc.StartState.STARTED,
-            rc.StartState.TRUST_UNAVAILABLE,
-            rc.StartState.UNTRUSTED,
-        }:
-            detail = item.detail or "无诊断详情"
-            parts.append(f"{item.path}（{item.state.value}）：{detail}")
-    if not parts:
-        parts.append("已启动 0 个项目")
-    message = "；".join(parts)
-    return ActionResult(message, needs_refresh=True)
 
 
 def stop_all_projects() -> ActionResult:

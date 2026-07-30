@@ -24,7 +24,8 @@ def test_help_flag():
         text=True,
     )
     assert result.returncode == 0
-    assert "rc" in result.stdout
+    assert "resume" in result.stdout
+    assert "agents" in result.stdout
 
 
 def test_clipboard_importable():
@@ -51,9 +52,7 @@ def test_models_importable():
         name="proj",
         directory="/tmp/proj",
         trust_decision=TrustDecision.TRUSTED,
-        in_list=False,
         status="stopped",
-        auto_start=False,
     )
     assert p.name == "proj"
 
@@ -75,8 +74,7 @@ def test_app_instantiation():
 @pytest.mark.parametrize(
     ("name", "raw"),
     [
-        ("CSCTL_RC_STAGGER", "not-a-number"),
-        ("CSCTL_RC_STAGGER", "-1"),
+        ("CSCTL_CLEANUP_AGE_DAYS", "not-a-number"),
         ("CSCTL_CLEANUP_AGE_DAYS", "-1"),
     ],
 )
@@ -84,15 +82,10 @@ def test_invalid_integer_environment_exits_two_without_traceback(name, raw):
     env = os.environ.copy()
     env[name] = raw
 
+    # Any parsed command reaches `apply_global_flags` env validation before
+    # dispatch, so the process exits 2 without running the handler's IO.
     result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "cc_session_control",
-            "rc",
-            "add",
-            "/definitely/not/a/csctl/project",
-        ],
+        [sys.executable, "-m", "cc_session_control", "agents"],
         capture_output=True,
         text=True,
         env=env,
@@ -106,7 +99,7 @@ def test_invalid_integer_environment_exits_two_without_traceback(name, raw):
 @pytest.mark.parametrize("flag", ["--help", "--version"])
 def test_help_and_version_ignore_invalid_runtime_environment(flag):
     env = os.environ.copy()
-    env["CSCTL_RC_STAGGER"] = "broken"
+    env["CSCTL_CLEANUP_AGE_DAYS"] = "broken"
 
     result = subprocess.run(
         [sys.executable, "-m", "cc_session_control", flag],

@@ -11,27 +11,12 @@ boundaries.
 
 from __future__ import annotations
 
-from cc_session_control.data.rc_enabled import (
-    EnabledListOperation,
-    EnabledListResult,
-    EnabledListState,
-)
 from cc_session_control.models import (
     TrustDecision,
     effective_trust_decision,
 )
 
 WS = "/home/u/workspace"
-
-
-def _enabled_list(paths=()) -> EnabledListResult:
-    return EnabledListResult(
-        EnabledListOperation.LIST,
-        EnabledListState.SUCCEEDED,
-        tuple(paths),
-        changed=False,
-        committed=False,
-    )
 
 
 def test_own_true_flag_is_trusted():
@@ -135,7 +120,7 @@ def test_effective_trust_decision_keeps_unavailable_distinct_and_fail_closed():
 # --- scan-level membership (path-keyed, inheritance-aware) ------------------
 
 
-def _wire_scan(tmp_path, monkeypatch, projects, enabled=(), temp_roots=()):
+def _wire_scan(tmp_path, monkeypatch, projects, temp_roots=()):
     import json
     import os
 
@@ -144,7 +129,6 @@ def _wire_scan(tmp_path, monkeypatch, projects, enabled=(), temp_roots=()):
     cj = tmp_path / ".claude.json"
     cj.write_text(json.dumps({"projects": projects}))
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
-    monkeypatch.setattr(rc, "list_enabled_result", lambda: _enabled_list(enabled))
     monkeypatch.setattr(
         rc,
         "_tmux_window_inventory",
@@ -207,11 +191,6 @@ def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
     monkeypatch.setattr(
         rc,
-        "list_enabled_result",
-        lambda: _enabled_list((str(project),)),
-    )
-    monkeypatch.setattr(
-        rc,
         "_tmux_window_inventory",
         lambda: rc.tmux.WindowInventory(),
     )
@@ -226,8 +205,10 @@ def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
     scan_result = rc.scan_result()
     start_result = rc.start_one_result(str(project))
 
+    # Membership fails closed (no trusted set to enumerate), but the typed
+    # settings evidence stays observable and the start gate refuses to spawn.
     assert scan_result.settings.state.value == "malformed"
-    assert scan_result.projects[0].trust_decision is TrustDecision.UNAVAILABLE
+    assert scan_result.projects == []
     assert start_result.state is rc.StartState.TRUST_UNAVAILABLE
     assert launches == []
 
@@ -263,25 +244,7 @@ def test_scan_drops_temp_root_and_subtree(tmp_path, monkeypatch):
 
     assert rc.scan_result().projects == []
     # Trust itself is NOT touched — the start gate still passes.
-    assert rc.trust_decision(str(sub)) is TrustDecision.TRUSTED
-
-
-def test_scan_keeps_enabled_temp_project(tmp_path, monkeypatch):
-    troot = tmp_path / "t"
-    sub = troot / "demo"
-    sub.mkdir(parents=True)
-    rc = _wire_scan(
-        tmp_path,
-        monkeypatch,
-        {
-            str(troot): {"hasTrustDialogAccepted": True},
-        },
-        enabled=(str(sub),),
-        temp_roots={str(troot)},
-    )
-
-    rows = {p.directory for p in rc.scan_result().projects}
-    assert rows == {str(sub)}
+    assert rc.project_trust(str(sub)).decision is TrustDecision.TRUSTED
 
 
 def test_scan_keeps_temp_project_with_rc_window(tmp_path, monkeypatch):
@@ -337,63 +300,3 @@ def test_scan_temp_root_does_not_cover_sibling(tmp_path, monkeypatch):
     )
 
     assert {p.directory for p in rc.scan_result().projects} == {str(sibling)}
-
-
-# --- rc-enabled migration (legacy short names → absolute paths) -------------
-
-
-def test_migrate_lines_resolves_against_legacy_root(monkeypatch):
-    from cc_session_control.data import rc
-    from cc_session_control.data.rc_enabled import migrate_lines
-
-    monkeypatch.setenv("CSCTL_WORKSPACE", "/srv/projects")
-    out, changed = migrate_lines(
-        ["# comment", "", "foo", "/abs/path", "a/b"], rc._legacy_workspace_root
-    )
-    assert changed is True
-    assert out == [
-        "# comment",
-        "",
-        "/srv/projects/foo",
-        "/abs/path",
-        "/srv/projects/a/b",
-    ]
-
-
-def test_migrate_lines_idempotent():
-    from cc_session_control.data import rc
-    from cc_session_control.data.rc_enabled import migrate_lines
-
-    lines = ["# c", "/abs/one", "", "/abs/two"]
-    out, changed = migrate_lines(lines, rc._legacy_workspace_root)
-    assert changed is False
-    assert out == lines
-
-
-def test_list_enabled_migrates_rewrites_once_and_keeps_comments(tmp_path, monkeypatch):
-    from cc_session_control.data import rc
-
-    monkeypatch.setattr(rc.cfg, "config_dir", tmp_path)
-    monkeypatch.setattr(rc.cfg, "rc_list", tmp_path / "rc-enabled")
-    monkeypatch.setenv("CSCTL_WORKSPACE", str(tmp_path / "ws"))
-    (tmp_path / "rc-enabled").write_text("# keep me\nfoo\n/abs/bar\n")
-
-    migrated_foo = str(tmp_path / "ws" / "foo")
-    assert list(rc.list_enabled_result().value) == [migrated_foo, "/abs/bar"]
-    content = (tmp_path / "rc-enabled").read_text()
-    assert content == f"# keep me\n{migrated_foo}\n/abs/bar\n"
-    assert list(rc.list_enabled_result().value) == [
-        migrated_foo,
-        "/abs/bar",
-    ]  # stable re-read
-
-
-def test_list_rm_keeps_comments(tmp_path, monkeypatch):
-    from cc_session_control.data import rc
-
-    monkeypatch.setattr(rc.cfg, "config_dir", tmp_path)
-    monkeypatch.setattr(rc.cfg, "rc_list", tmp_path / "rc-enabled")
-    (tmp_path / "rc-enabled").write_text("# note\n/a\n/b\n")
-
-    rc.list_rm_result("/a")
-    assert (tmp_path / "rc-enabled").read_text() == "# note\n/b\n"

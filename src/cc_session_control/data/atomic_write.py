@@ -1,6 +1,6 @@
 """Bottom-layer atomic same-directory tmp-file replacement and advisory locking.
 
-Every settings/ledger writer in this package needs the same two primitives:
+Every settings writer in this package needs the same two primitives:
 
 - write to a hidden tmp file beside the target, flush, fsync, close, then
   ``os.replace`` it into place — cleaning up the tmp file and surfacing

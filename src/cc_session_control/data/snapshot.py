@@ -5,10 +5,10 @@ registries independently. `build_world_snapshot` computes that world ONCE on
 the worker thread; `data.refresh.build_refresh_result` derives one complete batch
 from it before the App main loop gives that batch to every view.
 
-This is the TOP of the data layer — it composes `sessions` / `rc` / `liveness` /
-`environments`. Only the data layer's top-level `refresh` module imports it, so
-there is no cycle. Recoverable external failures are typed by their owning data
-module. Expected boundary I/O failures become an explicit `RefreshFailure`;
+This is the TOP of the data layer — it composes `sessions` / `rc` / `liveness`.
+Only the data layer's top-level `refresh` module imports it, so there is no
+cycle. Recoverable external failures are typed by their owning data module.
+Expected boundary I/O failures become an explicit `RefreshFailure`;
 programming and invariant errors are not converted into empty view data.
 """
 
@@ -16,10 +16,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..models import AgentJob, RCProject, RCServer, Session
-from . import environments, liveness, rc, sessions
+from ..models import AgentJob, InventoryIssue, RCProject, RCServer, Session
+from . import liveness, rc, sessions
 from .project_settings import ProjectSettingsResult, ProjectSettingsState
-from .rc_enabled import EnabledListResult
 from .sessions import SessionScanResult
 
 
@@ -30,10 +29,9 @@ class WorldSnapshot:
     `sessions` is the full transcript-driven scan (SessionsView), `agent_jobs`
     the background jobs enriched with host liveness (AgentsView), and
     `rc_projects`/`rc_servers` the Remote Control world (RCView).
-    `environment_reconciliation` carries the bridge-environment ledger's two
-    observation tiers (`.observed` alive-gated, `.file_referenced` bridge-truthy
-    membership), the ledger update outcome, and any integrity warning so the
-    Projects status can expose degraded history.
+    `rc_inventory_issues` carries the RC server scan's tmux + `/proc`
+    incompleteness evidence so the Projects status can expose a degraded
+    inventory.
 
     `liveness_snapshot` is the one typed liveness evidence `build_world_snapshot`
     already computes for the scan (`.session_procs` with `/proc` liveness already
@@ -52,11 +50,8 @@ class WorldSnapshot:
             {},
         ),
     )
-    rc_enabled_list: EnabledListResult[tuple[str, ...]] | None = None
     rc_servers: tuple[RCServer, ...] = ()
-    environment_reconciliation: environments.Reconciliation = field(
-        default_factory=environments.Reconciliation,
-    )
+    rc_inventory_issues: tuple[InventoryIssue, ...] = ()
     liveness_snapshot: liveness.LivenessSnapshot | None = None
     transcript_scan: SessionScanResult = field(default_factory=SessionScanResult)
 
@@ -65,6 +60,11 @@ class WorldSnapshot:
         object.__setattr__(self, "agent_jobs", tuple(self.agent_jobs))
         object.__setattr__(self, "rc_projects", tuple(self.rc_projects))
         object.__setattr__(self, "rc_servers", tuple(self.rc_servers))
+        object.__setattr__(
+            self,
+            "rc_inventory_issues",
+            tuple(self.rc_inventory_issues),
+        )
 
 
 def build_world_snapshot() -> WorldSnapshot:
@@ -89,28 +89,13 @@ def build_world_snapshot() -> WorldSnapshot:
     window_inventory = rc._tmux_window_inventory()
     rc_scan = rc.scan_result(window_inventory=window_inventory)
     server_scan = rc.scan_servers_result(window_inventory=window_inventory)
-    rc_servers = server_scan.servers
-    # R6 ledger reconciliation (the whole point of the ledger): ONE pipeline —
-    # observe (file-referenced membership) → upsert → observe_live (alive-gated
-    # CURRENT) — owned by `environments.reconcile`, so the ordering invariant
-    # never lives here. An env that later toggles away (RC turned off / job
-    # removed / server stopped) stays in the ledger but drops out of the
-    # file-referenced set, surfacing as an orphan / manual-delete candidate.
-    # Cheap and safe on the worker thread: the ledger write is write-on-change
-    # + flock + compacted, so re-observing the same set is a no-op rewrite.
-    recon = environments.reconcile(
-        inputs,
-        rc_servers,
-        inventory_issues=server_scan.issues,
-    )
     return WorldSnapshot(
         sessions=tuple(all_sessions),
         agent_jobs=inputs.agent_jobs,
         rc_projects=tuple(rc_scan.projects),
         rc_project_settings=rc_scan.settings,
-        rc_enabled_list=rc_scan.enabled_list,
-        rc_servers=tuple(rc_servers),
-        environment_reconciliation=recon,
+        rc_servers=tuple(server_scan.servers),
+        rc_inventory_issues=server_scan.issues,
         liveness_snapshot=inputs,
         transcript_scan=transcript_scan,
     )

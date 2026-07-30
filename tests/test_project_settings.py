@@ -443,8 +443,8 @@ def test_rc_setting_post_commit_unlock_failure_is_now_typed_failed(
 ):
     """Drift fix: a release failure after a successful write used to be
     silently dropped (the write still reported UPDATED); it now surfaces as
-    a typed UNLOCK failure, matching rc_enabled/environment_ledger, even
-    though the write itself already landed on disk.
+    a typed UNLOCK failure, even though the write itself already landed on
+    disk.
     """
     project = tmp_path / "app"
     settings = project / ".claude" / "settings.local.json"

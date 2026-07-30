@@ -57,7 +57,7 @@ gate, which inherits trust down the directory tree (last semantically verified
 on Claude Code 2.1.218, 2026-07-23). This is an upstream-dependent contract;
 each release must rerun `docs/claude-code-compatibility.md` and record any
 unverified item. The absolute directory path is the project's identity
-everywhere (rc-enabled list, tmux window metadata, claude.json lookups); the
+everywhere (tmux window metadata, claude.json lookups); the
 display name is a derived basename. An entry with an explicit False flag under
 a trusted ancestor IS a project — that footprint means "dialog suppressed, never asked",
 not "declined" (declining writes no entry at all). Platform temp directories
@@ -65,7 +65,7 @@ not "declined" (declining writes no entry at all). Platform temp directories
 working space, not projects: trust discovery alone never lists them — the
 trust state itself stays untouched, so a deliberately trusted `/tmp` keeps
 suppressing dialogs for scratch sessions — while explicitly actionable
-entries (autostart list, existing rc window) stay listed.
+entries (existing rc window) stay listed.
 _Avoid_: workspace-relative short names as identity, reading the raw
 `hasTrustDialogAccepted` flag as the trust set, assuming a workspace root,
 treating a trusted temp root as a project
@@ -119,16 +119,11 @@ random snapshot usually shows only absent-or-string); re-enabling mints
 **another** new id. `sessions/<pid>.json` keeps only the *current* binding
 (single field, overwritten), so toggled-away environments vanish from structured
 state and survive only as noisy mentions in transcripts. Consequences:
-- csctl can reliably enumerate **currently bound** environments (bridge truthy
-  AND the owning pid alive, verified by `procStart`) — the alive-gated `observe_live`.
-- To make toggled-away / orphaned environments traceable, csctl maintains its own
-  **append-only ledger** (`$XDG_CONFIG_HOME/csctl/environments.jsonl`): every
-  refresh records the **file-referenced** set (any env a `sessions/*.json` /
-  `jobs/*/state.json` / running RC server references now, alive or not), so an env
-  that later drops out of that set surfaces as an **orphan = ledger − file-referenced**
-  (the manual-delete checklist). The ledger still **cannot back-fill** environments
-  minted while csctl was not running (no `null`/history on disk), so the orphan
-  list is inherently incomplete.
+- csctl can reliably surface **currently bound** environments (bridge truthy
+  AND the owning pid alive, verified by `procStart`) — the session RC badge and
+  the background agent's env suffix.
+- Toggled-away / historical environments leave **no structured trace** on disk
+  (no `null`/history), so csctl does not track them.
 - Claude Code exposes **no local command to deregister** a cloud / mobile entry;
   deletion stays manual on claude.ai/code.
 _Avoid_: claiming csctl can delete a cloud environment, or that file presence /

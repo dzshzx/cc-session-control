@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.8.0 (2026-07-30)
+
+### Removed (BREAKING)
+
+- **Bridge-environment ledger pipeline dropped**: `csctl env`,
+  `environments.py`, `environment_ledger.py`, `rc_environment.py`, and the
+  on-disk ledger (`$XDG_CONFIG_HOME/csctl/environments.jsonl`) are gone.
+  csctl never had a way to deregister a cloud environment, so the ledger's
+  orphan list could never become actionable and was already incomplete by
+  its own admission (environments minted while csctl was not running were
+  never recorded). `Bridge Environment` (the `session_*`/`cse_*` namespaces,
+  `is_rc_exposed`) stays a modeled concept — csctl just keeps no history of
+  it.
+- **Headless CLI narrowed to `resume` + `agents`**: `csctl prune`,
+  `csctl env`, `csctl skill install/uninstall`, and the whole `csctl rc *`
+  subtree are removed. Each duplicated a capability the operator already
+  has in the TUI — cleanup (Sessions `c` submenu), RC start/stop (Projects
+  `o`/`s`/`c`), and the bundled skill (now distributed via the skills CLI)
+  — leaving the headless surface to its one real consumer, the
+  claude-session-doctor skill.
+- **Autostart list retired**: the `rc-enabled` list, `csctl rc up`, the
+  Projects `a`/`A` keys, and the 开机自启 column/status count are gone —
+  starting Remote Control is on-demand only (`o`). `cfg.rc_stagger`
+  (`CSCTL_RC_STAGGER`) and `cfg.config_dir`/`XDG_CONFIG_HOME` are removed
+  along with their last consumer.
+- **OSC 11 terminal-theme auto-detection dropped**: `detect_mode()` is now
+  `cfg.theme`/`CSCTL_THEME`/`--theme` → `$COLORFGBG` → dark. Under
+  tmux-first, the query's only beneficiary (a bare first launch) rarely got
+  an answer anyway, so every startup no longer pays for a probe that mostly
+  produced no verdict.
+
+See `docs/adr/0004-surface-reduction-to-the-operator-core.md` for the full
+rationale and the usage evidence behind each removal.
+
+### Changed
+
+- **Removal hardening downgraded to lstat identity revalidation**: the
+  `renameat2(RENAME_NOREPLACE)` claim/rollback and the fd-chain
+  `O_NOFOLLOW` root walk are gone, per a threat-model ruling that "a local
+  attacker swaps paths between preview and execute" is out of scope for a
+  single-operator panel over its own `~/.claude`. Three protection layers
+  remain: business revalidation on fresh evidence (delete ⊆ preview), root
+  containment, and lstat identity (device/inode/file type) frozen with the
+  plan and re-checked at execution — any mismatch, including a target that
+  became a symlink, is refused.
+- **Meta-test and dead-surface cleanup**: CI-shape snapshot tests and a
+  residual CLI test module were merged/dropped, several
+  structurally-duplicated adapters collapsed (`AgeCleanupPlan`,
+  `cleanup_selection`, `ExecutionSessionState`), and a third tier of
+  production-dead compatibility wrappers (zero src callers) removed across
+  `environments`, `agent_ops`, `session_ops`, `rc`, `proc`, and
+  `WorldSnapshot`.
+
+### Upgrading from 0.7.x
+
+- `csctl prune ...` → TUI Sessions tab, `c` cleanup submenu (same five
+  cleanup classes, preview-first).
+- `csctl rc add/rm/up/stop/status/list` → Remote Control is purely
+  on-demand now: TUI Projects tab `o` starts, `s` stops, `c` toggles the
+  per-project `remoteControlAtStartup` flag. The autostart list is retired;
+  a leftover `$XDG_CONFIG_HOME/csctl/rc-enabled` (default
+  `~/.config/csctl/rc-enabled`) is inert and safe to delete.
+- `csctl env` → removed; cloud environments are managed on
+  claude.ai/code (csctl never had deregister capability). A leftover
+  ledger at `~/.config/csctl/environments.jsonl` is safe to delete.
+- `csctl skill install/uninstall` → install via the skills CLI instead:
+  `skills add dzshzx/agent-skills --skill=claude-session-doctor`. Delete
+  the old `~/.claude/skills/claude-session-doctor` copy before
+  reinstalling.
+- Light terminal themes → auto-detection is gone; set `CSCTL_THEME=light`
+  or pass `--theme light`.
+
 ## 0.7.6 (2026-07-30)
 
 ### Changed

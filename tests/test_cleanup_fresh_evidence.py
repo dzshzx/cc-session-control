@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import inspect
-from types import SimpleNamespace
 
 import pytest
 
-from cc_session_control import cli_commands
 from cc_session_control.actions import agent_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import (
     cleanup,
     liveness,
     proc,
-    sessions,
     transcripts,
 )
 from cc_session_control.data.removal import CleanupExecution, CleanupPlan
@@ -372,46 +369,6 @@ def test_aged_executor_does_not_acquire_unrelated_liveness(tmp_path, monkeypatch
     result = cleanup.execute_aged_removals([])
 
     assert not result.incomplete
-
-
-def test_cli_orphan_apply_does_not_inject_transcript_evidence(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setattr(cfg, "claude_home", tmp_path)
-    _complete_ancestors(monkeypatch)
-    orphan = cfg.session_env_dir / "ghost"
-    orphan.mkdir(parents=True)
-    monkeypatch.setattr(
-        liveness,
-        "liveness_inputs",
-        lambda: liveness.LivenessSnapshot(),
-    )
-    scan_calls: list[object] = []
-    monkeypatch.setattr(
-        sessions,
-        "scan_result",
-        lambda inputs=None: scan_calls.append(inputs) or sessions.SessionScanResult(),
-    )
-    called: dict[str, object] = {}
-
-    def execute(entries, **kwargs):
-        called.update(entries=entries, kwargs=kwargs)
-        return CleanupExecution(completed=list(entries))
-
-    monkeypatch.setattr(cleanup, "execute_orphan_removals", execute)
-    args = SimpleNamespace(
-        max_prompts=0,
-        apply=True,
-        sweep_orphans=True,
-        sweep_zombies=False,
-        sweep_aged=False,
-    )
-
-    assert cli_commands._cmd_prune(args) == 0
-    assert len(scan_calls) == 1
-    assert called["entries"] == ["session-env/ghost"]
-    assert set(called["kwargs"]) == {"anchors"}
 
 
 def test_tui_orphan_adapter_does_not_inject_transcript_evidence(monkeypatch):

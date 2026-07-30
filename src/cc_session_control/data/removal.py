@@ -1,11 +1,13 @@
-"""Typed cleanup results and the filesystem-removal seam."""
+"""Typed cleanup results and the filesystem-removal seam.
+
+Plan freeze records each target's lstat identity (dev/inode/file type);
+execution re-lstats and refuses on any mismatch. Adversarial in-execution
+races are out of scope for this single-operator local tool.
+"""
 
 from __future__ import annotations
 
-import ctypes
-import errno
 import os
-import secrets
 import shutil
 import stat
 from collections.abc import Iterable, Mapping
@@ -17,18 +19,6 @@ from types import MappingProxyType
 from ..models import Session
 
 type Pathish = str | os.PathLike[str]
-
-_RENAME_NOREPLACE = 1
-try:
-    # No libc self-handle → typed renameat2 refusal, not an import crash.
-    _libc = ctypes.CDLL(None, use_errno=True)
-except OSError:
-    _renameat2 = None
-else:
-    _renameat2 = getattr(_libc, "renameat2", None)
-    if _renameat2 is not None:
-        _renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p] * 2 + [ctypes.c_uint]
-        _renameat2.restype = ctypes.c_int
 
 
 class RemovalStatus(StrEnum):
@@ -308,61 +298,12 @@ def anchor_path(configured_root: Pathish, target: Pathish) -> RemovalAnchor:
     )
 
 
-def _supports(capabilities: set[object], name: str) -> bool:
-    return any(getattr(item, "__name__", None) == name for item in capabilities)
-
-
-def _fd_capability_error() -> str | None:
-    required_constants = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW")
-    missing = [name for name in required_constants if not hasattr(os, name)]
-    if missing:
-        return "missing " + ", ".join(missing)
-    dir_fd: set[object] = getattr(os, "supports_dir_fd", set())
-    if not all(_supports(dir_fd, name) for name in ("open", "stat", "unlink")):
-        return "dir_fd open/stat/unlink support is unavailable"
-    follow: set[object] = getattr(os, "supports_follow_symlinks", set())
-    if not _supports(follow, "stat"):
-        return "no-follow stat support is unavailable"
-    return None
-
-
-def _open_flags() -> int:
-    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-
-
-def _open_child(name: str, parent_fd: int, opened: list[int]) -> int:
-    descriptor = os.open(name, _open_flags(), dir_fd=parent_fd)
-    opened.append(descriptor)
-    return descriptor
-
-
-def _open_root(anchor: RemovalAnchor, opened: list[int]) -> int:
-    descriptor = os.open("/", _open_flags())
-    opened.append(descriptor)
-    for component in anchor.canonical_root.parts[1:]:
-        descriptor = _open_child(component, descriptor, opened)
-    return descriptor
-
-
-def _changed_path_error(exc: OSError) -> bool:
-    return isinstance(exc, (FileNotFoundError, NotADirectoryError)) or exc.errno in {
-        getattr(os, "ELOOP", 40),
-    }
-
-
 def _refused(anchor: RemovalAnchor, reason: str) -> PathRemoval:
     return PathRemoval(anchor.display_path, RemovalStatus.REFUSED, reason)
 
 
 def _failed(anchor: RemovalAnchor, exc: OSError) -> PathRemoval:
     return PathRemoval(anchor.display_path, RemovalStatus.FAILED, str(exc))
-
-
-@dataclass(frozen=True)
-class _VerifiedTarget:
-    parent_fd: int
-    metadata: os.stat_result
-    name: str
 
 
 def _current_paths_match(anchor: RemovalAnchor) -> str | None:
@@ -377,208 +318,73 @@ def _current_paths_match(anchor: RemovalAnchor) -> str | None:
     return None
 
 
-def _verified_target(
+def _revalidated_target(
     anchor: RemovalAnchor,
-    opened: list[int],
-) -> _VerifiedTarget | PathRemoval:
-    try:
-        root_fd = _open_root(anchor, opened)
-    except OSError as exc:
-        if anchor.root_identity is None and isinstance(exc, FileNotFoundError):
-            return PathRemoval(anchor.display_path, RemovalStatus.MISSING)
-        if _changed_path_error(exc):
-            return _refused(anchor, f"anchored root path changed: {exc}")
-        return _failed(anchor, exc)
+) -> tuple[Path, os.stat_result] | PathRemoval:
+    """Re-lstat the anchored root and target and require the preview identity."""
+    path_error = _current_paths_match(anchor)
+    if path_error is not None:
+        return _refused(anchor, path_error)
 
-    root_metadata = os.fstat(root_fd)
+    try:
+        root_metadata = os.stat(anchor.canonical_root, follow_symlinks=False)
+    except FileNotFoundError:
+        if anchor.root_identity is None:
+            return PathRemoval(anchor.display_path, RemovalStatus.MISSING)
+        return _refused(anchor, "anchored root path changed: root no longer exists")
+    except NotADirectoryError as exc:
+        return _refused(anchor, f"anchored root path changed: {exc}")
+    except OSError as exc:
+        return _failed(anchor, exc)
     if anchor.root_identity is None:
         return _refused(anchor, "anchored root appeared after preview")
     if not anchor.root_identity.matches(root_metadata):
         return _refused(anchor, "anchored root identity changed after preview")
 
-    parent_fd = root_fd
+    target = anchor.canonical_root / anchor.relative_target
     try:
-        for component in anchor.relative_target.parts[:-1]:
-            parent_fd = _open_child(component, parent_fd, opened)
-    except OSError as exc:
-        if anchor.target_identity is None and isinstance(exc, FileNotFoundError):
-            return PathRemoval(anchor.display_path, RemovalStatus.MISSING)
-        if _changed_path_error(exc):
-            return _refused(anchor, f"anchored target ancestor changed: {exc}")
-        return _failed(anchor, exc)
-
-    basename = anchor.relative_target.name
-    try:
-        target_metadata = os.stat(basename, dir_fd=parent_fd, follow_symlinks=False)
+        target_metadata = os.stat(target, follow_symlinks=False)
     except FileNotFoundError:
         return PathRemoval(anchor.display_path, RemovalStatus.MISSING)
+    except NotADirectoryError as exc:
+        return _refused(anchor, f"anchored target ancestor changed: {exc}")
     except OSError as exc:
         return _failed(anchor, exc)
     if anchor.target_identity is None:
         return _refused(anchor, "target appeared after preview")
     if not anchor.target_identity.matches(target_metadata):
         return _refused(anchor, "target identity or type changed after preview")
-    return _VerifiedTarget(parent_fd, target_metadata, basename)
-
-
-def _rename_noreplace(source: str, destination: str, dir_fd: int) -> None:
-    function = _renameat2
-    if function is None:
-        raise OSError("renameat2(RENAME_NOREPLACE) support is unavailable")
-    ctypes.set_errno(0)
-    if function(
-        dir_fd,
-        os.fsencode(source),
-        dir_fd,
-        os.fsencode(destination),
-        _RENAME_NOREPLACE,
-    ):
-        error_number = ctypes.get_errno()
-        raise OSError(error_number, os.strerror(error_number), source)
-
-
-def _restore_claim(
-    anchor: RemovalAnchor,
-    claimed: _VerifiedTarget,
-    status: RemovalStatus,
-    error: str,
-    missing_if_gone: bool = False,
-) -> PathRemoval:
-    try:
-        _rename_noreplace(claimed.name, anchor.relative_target.name, claimed.parent_fd)
-    except OSError as exc:
-        if missing_if_gone and isinstance(exc, FileNotFoundError):
-            return PathRemoval(anchor.display_path, RemovalStatus.MISSING)
-        return PathRemoval(
-            anchor.display_path,
-            RemovalStatus.FAILED,
-            f"{error}; could not restore claimed target {claimed.name}: {exc}",
-        )
-    return PathRemoval(anchor.display_path, status, error)
-
-
-def _claim_verified(
-    anchor: RemovalAnchor,
-    verified: _VerifiedTarget,
-) -> _VerifiedTarget | PathRemoval:
-    claimed_name = f".csctl-remove-{secrets.token_hex(16)}"
-    try:
-        _rename_noreplace(verified.name, claimed_name, verified.parent_fd)
-    except FileNotFoundError:
-        return PathRemoval(anchor.display_path, RemovalStatus.MISSING)
-    except OSError as exc:
-        if exc.errno in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
-            return _refused(anchor, f"atomic removal claim is unavailable: {exc}")
-        return _failed(anchor, exc)
-
-    claimed = _VerifiedTarget(verified.parent_fd, verified.metadata, claimed_name)
-    try:
-        metadata = os.stat(
-            claimed_name, dir_fd=verified.parent_fd, follow_symlinks=False
-        )
-    except OSError as exc:
-        return _restore_claim(
-            anchor, claimed, RemovalStatus.FAILED, f"cannot verify claim: {exc}"
-        )
-    identity = anchor.target_identity
-    if identity is None or not identity.matches(metadata):
-        return _restore_claim(
-            anchor,
-            claimed,
-            RemovalStatus.REFUSED,
-            "target identity or type changed during atomic removal claim",
-        )
-    return _VerifiedTarget(verified.parent_fd, metadata, claimed_name)
-
-
-def _remove_verified(
-    anchor: RemovalAnchor,
-    verified: _VerifiedTarget,
-) -> PathRemoval:
-    directory = stat.S_ISDIR(verified.metadata.st_mode)
-    if directory and not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
-        return _refused(anchor, "fd-safe directory removal is unavailable")
-    claimed = _claim_verified(anchor, verified)
-    if isinstance(claimed, PathRemoval):
-        return claimed
-    try:
-        if stat.S_ISDIR(claimed.metadata.st_mode):
-            shutil.rmtree(claimed.name, dir_fd=claimed.parent_fd)
-        else:
-            os.unlink(claimed.name, dir_fd=claimed.parent_fd)
-    except FileNotFoundError:
-        return _restore_claim(
-            anchor,
-            claimed,
-            RemovalStatus.FAILED,
-            "claimed target disappeared during removal",
-            missing_if_gone=True,
-        )
-    except OSError as exc:
-        return _restore_claim(anchor, claimed, RemovalStatus.FAILED, str(exc))
-    return PathRemoval(anchor.display_path, RemovalStatus.REMOVED)
-
-
-def _close_descriptors(opened: list[int]) -> OSError | None:
-    first_error: OSError | None = None
-    for descriptor in reversed(opened):
-        try:
-            os.close(descriptor)
-        except OSError as exc:
-            if first_error is None:
-                first_error = exc
-    return first_error
-
-
-def _preflight(anchor: RemovalAnchor) -> PathRemoval | None:
-    capability_error = _fd_capability_error()
-    if capability_error is not None:
-        return _refused(anchor, f"fd-safe removal unavailable: {capability_error}")
-    path_error = _current_paths_match(anchor)
-    if path_error is not None:
-        return _refused(anchor, path_error)
-    return None
+    return target, target_metadata
 
 
 def inspect_anchored(anchor: RemovalAnchor) -> os.stat_result | PathRemoval:
-    """Read target metadata through the same verified fd chain used to remove."""
-    refusal = _preflight(anchor)
-    if refusal is not None:
-        return refusal
-    opened: list[int] = []
-    inspection = _verified_target(anchor, opened)
-    close_error = _close_descriptors(opened)
-    if close_error is not None:
-        return PathRemoval(
-            anchor.display_path,
-            RemovalStatus.FAILED,
-            f"descriptor close failed: {close_error}",
-        )
-    if isinstance(inspection, PathRemoval):
-        return inspection
-    return inspection.metadata
+    """Read target metadata only while the preview identity still matches."""
+    revalidated = _revalidated_target(anchor)
+    if isinstance(revalidated, PathRemoval):
+        return revalidated
+    _, metadata = revalidated
+    return metadata
 
 
 def remove_anchored(anchor: RemovalAnchor) -> PathRemoval:
-    """Atomically claim and remove only the preview-anchored target identity."""
-    if _renameat2 is None:
-        return _refused(anchor, "renameat2(RENAME_NOREPLACE) support is unavailable")
-    refusal = _preflight(anchor)
-    if refusal is not None:
-        return refusal
+    """Remove the anchored target only while its preview identity matches.
 
-    opened: list[int] = []
-    verified = _verified_target(anchor, opened)
-    outcome = (
-        verified
-        if isinstance(verified, PathRemoval)
-        else _remove_verified(anchor, verified)
-    )
-    close_error = _close_descriptors(opened)
-    if close_error is not None:
-        return PathRemoval(
-            anchor.display_path,
-            RemovalStatus.FAILED,
-            f"descriptor close failed: {close_error}",
-        )
-    return outcome
+    A previewed symlink is unlinked itself (never followed); a target that
+    became a symlink — or changed dev/inode/type — since preview is REFUSED.
+    """
+    revalidated = _revalidated_target(anchor)
+    if isinstance(revalidated, PathRemoval):
+        return revalidated
+    target, metadata = revalidated
+    try:
+        if stat.S_ISDIR(metadata.st_mode):
+            shutil.rmtree(target)
+        else:
+            os.unlink(target)
+    except FileNotFoundError as exc:
+        if os.path.lexists(target):
+            return _failed(anchor, exc)
+        return PathRemoval(anchor.display_path, RemovalStatus.MISSING)
+    except OSError as exc:
+        return _failed(anchor, exc)
+    return PathRemoval(anchor.display_path, RemovalStatus.REMOVED)
