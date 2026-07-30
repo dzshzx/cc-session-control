@@ -350,7 +350,9 @@ def run_cleanup(
         for target in targets
     ]
     result = execute(mutable_targets)
-    return ActionResult(format_cleanup_notice(result, done_template), needs_refresh=True)
+    return ActionResult(
+        format_cleanup_notice(result, done_template), needs_refresh=True
+    )
 
 
 def _delete_result(result: CleanupExecution) -> ActionResult:

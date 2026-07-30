@@ -15,7 +15,7 @@ import urwid
 
 from ..models import Session
 from ._colspec import ColSpec, header_columns, row_columns
-from ._rows import truncate_cells
+from ._rows import SelectableRow, truncate_cells
 
 # Transcript-derived hidden tags -> compact Chinese row marker.
 _HIDDEN_MARKERS = {
@@ -115,7 +115,7 @@ def _rel_time(mtime: float) -> str:
     return time.strftime("%m-%d %H:%M", time.localtime(mtime))
 
 
-class SessionRow(urwid.WidgetWrap):
+class SessionRow(SelectableRow):
     def __init__(self, session: Session) -> None:
         self.session = session
         status_cell, attr = _status_parts(session)
@@ -149,14 +149,8 @@ class SessionRow(urwid.WidgetWrap):
         )
         super().__init__(mapped)
 
-    def selectable(self) -> bool:
-        return True
 
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
-
-
-class _ActionRow(urwid.WidgetWrap):
+class _ActionRow(SelectableRow):
     def __init__(self, action_key: str, label: str, count: int) -> None:
         self.action_key = action_key
         cols = urwid.Columns(
@@ -170,12 +164,6 @@ class _ActionRow(urwid.WidgetWrap):
             cols, "dead", focus_map={"dead": "selected", None: "selected"}
         )
         super().__init__(mapped)
-
-    def selectable(self) -> bool:
-        return True
-
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
 
 
 _SESSION_HEADER = header_columns(SESSION_COLS)

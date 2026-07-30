@@ -36,7 +36,7 @@ from ._base import ListTabView
 from ._colspec import ColSpec, header_columns, row_columns
 from ._confirm import confirm_stop
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
-from ._rows import TextRow
+from ._rows import SelectableRow, TextRow
 
 if TYPE_CHECKING:
     from ..app import App
@@ -78,7 +78,7 @@ _PROJECT_COLS: list[ColSpec] = [
 ]
 
 
-class RCRow(urwid.WidgetWrap):
+class RCRow(SelectableRow):
     def __init__(self, project: RCProject) -> None:
         self.project = project
         # Focus identity for the shared rebuild — activity ordering may move
@@ -121,12 +121,6 @@ class RCRow(urwid.WidgetWrap):
         )
         mapped = urwid.AttrMap(cols, attr, focus_map=_RC_FOCUS)
         super().__init__(mapped)
-
-    def selectable(self) -> bool:
-        return True
-
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
 
 
 class _DividerRow(urwid.WidgetWrap):

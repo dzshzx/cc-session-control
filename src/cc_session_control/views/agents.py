@@ -22,7 +22,7 @@ from ._base import ListTabView
 from ._colspec import ColSpec, header_columns, row_columns
 from ._confirm import confirm_stop, confirm_takeover, confirm_tmux_takeover
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
-from ._rows import TextRow
+from ._rows import SelectableRow, TextRow
 
 if TYPE_CHECKING:
     from ..app import App
@@ -44,7 +44,7 @@ _AGENT_COLS: list[ColSpec] = [
 _AGENTS_HEADER = header_columns(_AGENT_COLS)
 
 
-class AgentRow(urwid.WidgetWrap):
+class AgentRow(SelectableRow):
     def __init__(self, job: AgentJob) -> None:
         self.job = job
         mark = "●" if job.host_alive else "○"
@@ -67,12 +67,6 @@ class AgentRow(urwid.WidgetWrap):
             focus_map={"alive": "selected", "dead": "selected", None: "selected"},
         )
         super().__init__(mapped)
-
-    def selectable(self) -> bool:
-        return True
-
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
 
 
 class AgentsView(ListTabView):

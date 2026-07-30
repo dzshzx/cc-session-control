@@ -44,15 +44,19 @@ def truncate_cells(
     return _cell_prefix(text, width - marker_width) + marker
 
 
-class TextRow(urwid.WidgetWrap):
-    def __init__(self, text: str) -> None:
-        mapped = urwid.AttrMap(
-            urwid.Text(text), "dead", focus_map={"dead": "selected", None: "selected"}
-        )
-        super().__init__(mapped)
+class SelectableRow(urwid.WidgetWrap):
+    """Focusable row that swallows no keys — the view's KEY_TABLE handles them."""
 
     def selectable(self) -> bool:
         return True
 
     def keypress(self, size: tuple, key: str) -> str | None:
         return key
+
+
+class TextRow(SelectableRow):
+    def __init__(self, text: str) -> None:
+        mapped = urwid.AttrMap(
+            urwid.Text(text), "dead", focus_map={"dead": "selected", None: "selected"}
+        )
+        super().__init__(mapped)
