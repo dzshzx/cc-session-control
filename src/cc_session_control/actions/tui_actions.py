@@ -327,14 +327,6 @@ def start_all_projects() -> ActionResult:
     if not parts:
         parts.append("已启动 0 个项目")
     message = "；".join(parts)
-    if result.started and (result.unavailable or result.untrusted or result.failed):
-        return ActionResult(message, needs_refresh=True)
-    if result.started:
-        return ActionResult(message, needs_refresh=True)
-    if result.failed:
-        return ActionResult(message, needs_refresh=True)
-    if result.unavailable or result.untrusted:
-        return ActionResult(message, needs_refresh=True)
     return ActionResult(message, needs_refresh=True)
 
 
@@ -358,26 +350,8 @@ def run_cleanup(
         for target in targets
     ]
     result = execute(mutable_targets)
-    message = format_cleanup_notice(result, done_template)
-    if result.completed and not result.incomplete:
-        return ActionResult(message, needs_refresh=True)
-    if result.completed or (result.removed and result.incomplete):
-        return ActionResult(message, needs_refresh=True)
-    if result.refused or result.skipped:
-        return ActionResult(message, needs_refresh=True)
-    if result.failed:
-        return ActionResult(message, needs_refresh=True)
-    return ActionResult(message, needs_refresh=True)
+    return ActionResult(format_cleanup_notice(result, done_template), needs_refresh=True)
 
 
 def _delete_result(result: CleanupExecution) -> ActionResult:
-    message = format_delete_notice(result)
-    if result.completed and not result.incomplete:
-        return ActionResult(message, needs_refresh=True)
-    if result.removed and result.incomplete:
-        return ActionResult(message, needs_refresh=True)
-    if result.refused or result.skipped:
-        return ActionResult(message, needs_refresh=True)
-    if result.failed:
-        return ActionResult(message, needs_refresh=True)
-    return ActionResult(message, needs_refresh=True)
+    return ActionResult(format_delete_notice(result), needs_refresh=True)
