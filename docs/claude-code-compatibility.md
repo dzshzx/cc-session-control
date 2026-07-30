@@ -10,8 +10,8 @@ new Claude Code version still emits them.
 | Scope | Claude Code | Date | Evidence |
 |---|---:|---:|---|
 | Trust inheritance and `~/.claude.json` footprint | 2.1.218 | 2026-07-23 | Parent `true` suppresses the child dialog; the child may be recorded with explicit `false`; declining writes no project entry |
-| Isolated read-only command probe | 2.1.220 | 2026-07-29 | `claude --version`; `claude agents --help` exited 0 with `--json`; `claude agents --json` exited 0 with `[]` under an empty temporary home |
-| Authenticated `remote-control --help` | not reverified | 2026-07-29 | Under an unauthenticated temporary home, it exited 1 with a login-required diagnostic before rendering help |
+| Isolated read-only command probe | 2.1.220 | 2026-07-30 | For the v0.8.0 release (probe ran post-tag): `claude --version`; `claude agents --help` exited 0 with `--json`; `claude agents --json` exited 0 with valid-JSON `[]` under an empty temporary home |
+| Authenticated `remote-control --help` | not reverified | 2026-07-30 | Under an unauthenticated temporary home, it exited 1 with a login-required diagnostic before rendering help |
 
 The 2.1.220 probe did **not** revalidate trust inheritance, non-empty registry
 fields, or the authenticated Remote Control help contract. Do not advance the
