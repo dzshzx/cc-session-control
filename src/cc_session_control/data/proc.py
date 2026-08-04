@@ -108,14 +108,17 @@ class ProcCli:
 
     `starttime` is the kernel starttime captured AT SCAN TIME so a later
     `take_over_result(pid, starttime)` recheck defeats pid reuse exactly like
-    the registry `procStart` does for Claude sessions. Deliberately NO cwd:
-    argv-exact matching never guesses by directory, and an unreadable cwd of
-    an unrelated process must not degrade the walk.
+    the registry `procStart` does for Claude sessions. `cwd` is best-effort
+    (`readlink /proc/<pid>/cwd`) and feeds ONLY the unbound-live hint for
+    bare TUIs; argv-exact matching still never guesses by directory, and an
+    unreadable cwd stays "" silently — it must not degrade the walk (an
+    inventory issue would disable execution-time takeovers, R10-style).
     """
 
     pid: int
     argv: tuple[str, ...]
     starttime: str
+    cwd: str = ""
 
 
 @dataclass(frozen=True)
@@ -421,7 +424,14 @@ def scan_cli_argv_inventory(basenames: frozenset[str]) -> ProcCliInventory:
             detail = stat_issue.detail if stat_issue else "missing starttime"
             issues.append(_cli_issue(stat.path, detail))
             continue
-        records.append(ProcCli(pid=pid, argv=tuple(argv), starttime=stat.starttime))
+        # Best-effort cwd for the unbound-live hint: ANY readlink failure
+        # (disappearance race, permissions, odd procfs) silently leaves ""
+        # — the argv record itself must survive so bound liveness never
+        # depends on a readable cwd, and no issue is emitted (see ProcCli).
+        cwd, _cwd_issue, _gone = _read_inventory_link(f"{_PROC}/{pid}/cwd")
+        records.append(
+            ProcCli(pid=pid, argv=tuple(argv), starttime=stat.starttime, cwd=cwd or "")
+        )
     return ProcCliInventory(tuple(records), tuple(issues))
 
 

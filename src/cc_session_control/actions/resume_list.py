@@ -70,8 +70,17 @@ def paginate(
 
 
 def format_session(s: Session) -> list[str]:
-    """Render one session as display lines: status header, label, command."""
-    state = "live" if s.alive else "dead"
+    """Render one session as display lines: status header, label, command.
+
+    `live?` marks the unbound-live hint (an unbindable bare TUI of the same
+    provider runs in the session's directory): honest uncertainty, not
+    liveness — the resume command stays the plain non-destructive one."""
+    if s.alive:
+        state = "live"
+    elif s.unbound_live_hint:
+        state = "live?"
+    else:
+        state = "dead"
     provider = f"[{s.provider}] " if s.provider != "claude" else ""
     flags = f"  [hidden:{','.join(sorted(s.hidden))}]" if s.hidden else ""
     when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
@@ -97,6 +106,11 @@ def format_session(s: Session) -> list[str]:
                     "NOT stop the running process; a second attach to the "
                     "same session surfaces in the CLI's own UI"
                 )
+        elif s.unbound_live_hint:
+            lines.append(
+                f"    ^ a live unbound {s.provider} process exists in this "
+                "directory — resuming may double-attach the same session"
+            )
     return lines
 
 

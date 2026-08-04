@@ -90,9 +90,11 @@ def _status_parts(session: Session) -> tuple[str, str]:
     """(状态 cell text, row attr) — shape + word + color, three channels.
 
     Frontend spec: state may not ride on color alone; the word carries the
-    meaning (忙 = generating/tool-running, 闲 = waiting for input, 停 = no
-    process), the ●/○ shape survives colorless terminals, and only the
-    established ●=on / ○=off convention is used (no ◐ — ambiguous, and an
+    meaning (忙 = generating/tool-running, 闲 = waiting for input, 活 =
+    argv-bound non-Claude live whose busy/idle is unknowable, 停 = no
+    process, 未知 = an unbound live cx/km process may hold this session),
+    the ●/○/? shape survives colorless terminals, and only the established
+    ●=on / ○=off convention is used (no ◐ — ambiguous, and an
     East-Asian-Ambiguous width risk, the P5 glyph lesson).
 
     A live tmux-resident session (ADR-0001) additionally shows the ⧉ badge —
@@ -101,16 +103,25 @@ def _status_parts(session: Session) -> tuple[str, str]:
     P5 lesson banned. A live session whose inventory is incomplete shows the
     width-stable ASCII `?`, visibly distinct from confirmed bare residency.
     Data comes from the snapshot's tmux fields; the resume actions read the
-    SAME evidence."""
+    SAME evidence. The fourth state reads `Session.unbound_live_hint` (the
+    same field the confirm layer reads) and reuses the semantic `status_err`
+    warning attr — honest uncertainty, NOT liveness."""
     cur = "▸" if session.current else " "
     if session.alive:
-        word = "忙" if session.status == "busy" else "闲"
+        if session.provider != "claude":
+            # Non-Claude registries carry no busy/idle status — "闲" would
+            # claim "waiting for input" about a session that may be mid-task.
+            word = "活"
+        else:
+            word = "忙" if session.status == "busy" else "闲"
         badge = ""
         if session.tmux_target:
             badge = " ⧉"
         elif not session.tmux_inventory_complete:
             badge = " ?"
         return f"{cur}● {word}{badge}", ("status_busy" if word == "忙" else "alive")
+    if session.unbound_live_hint:
+        return f"{cur}? 未知", "status_err"
     return f"{cur}○ 停", "dead"
 
 
@@ -162,6 +173,7 @@ class SessionRow(SelectableRow):
             focus_map={
                 "status_busy": "selected",
                 "alive": "selected",
+                "status_err": "selected",
                 "dead": "selected",
                 None: "selected",
             },

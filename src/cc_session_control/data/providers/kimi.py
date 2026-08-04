@@ -24,10 +24,39 @@ from collections.abc import Set as AbstractSet
 from ...config import cfg
 from ...models import InventoryIssue, Session
 from ..proc import ProcCliInventory
-from .argv_live import build_argv_index, flag_value
+from .argv_live import (
+    apply_unbound_hints,
+    build_argv_index,
+    flag_value,
+    unbound_live_cwds,
+)
 from .base import LivenessGrade, ProviderCaps, ProviderScan
 
 BASENAME = "kimi"
+
+# Non-interactive shapes from `kimi --help` (verified 0.31.x-line, this
+# machine, 2026-08-04): servers/utility subcommands plus the one-shot
+# `--prompt` print mode never hold an interactive REPL, so they must not
+# feed the unbound-live hint. The bare REPL, `--continue`, and the `-S`
+# picker (no id) DO — they are exactly the unbindable shapes ADR-0005
+# documents.
+_NON_TUI_SUBCOMMANDS = frozenset(
+    {
+        "export",
+        "provider",
+        "acp",
+        "web",
+        "server",
+        "login",
+        "doctor",
+        "vis",
+        "migrate",
+        "upgrade",
+        "update",
+        "help",
+    }
+)
+_NON_TUI_FLAGS = frozenset({"-p", "--prompt", "-V", "--version", "-h", "--help"})
 
 
 def extract_sid(argv: tuple[str, ...]) -> str | None:
@@ -38,6 +67,18 @@ def extract_sid(argv: tuple[str, ...]) -> str | None:
     if value and not value.startswith("-"):
         return value
     return None
+
+
+def is_tui_shape(argv: tuple[str, ...]) -> bool:
+    """PURE: does this kimi argv look like a session-holding interactive
+    REPL? Feeds ONLY the unbound-live hint — never liveness. Same
+    conservative token matching as the codex twin: a false denylist hit
+    only costs a missed hint, never a server entering the hint source."""
+    if not argv or os.path.basename(argv[0]) != BASENAME:
+        return False
+    return not any(
+        tok in _NON_TUI_SUBCOMMANDS or tok in _NON_TUI_FLAGS for tok in argv[1:]
+    )
 
 
 def _issue(path: str, detail: str) -> InventoryIssue:
@@ -118,8 +159,9 @@ class KimiProvider:
         except OSError as exc:
             return ProviderScan(issues=(_issue(os.fspath(index_path), str(exc)),))
 
-        rows = tuple(
-            self._project(sid, entry, live, issues) for sid, entry in entries.items()
+        rows = apply_unbound_hints(
+            (self._project(sid, entry, live, issues) for sid, entry in entries.items()),
+            unbound_live_cwds(cli_inventory.records, extract_sid, is_tui_shape),
         )
         return ProviderScan(rows, tuple(issues))
 

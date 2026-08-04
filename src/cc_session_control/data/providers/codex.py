@@ -30,10 +30,49 @@ from collections.abc import Set as AbstractSet
 from ...config import cfg
 from ...models import InventoryIssue, Session
 from ..proc import ProcCliInventory
-from .argv_live import ArgvExtractor, build_argv_index
+from .argv_live import (
+    ArgvExtractor,
+    apply_unbound_hints,
+    build_argv_index,
+    unbound_live_cwds,
+)
 from .base import LivenessGrade, ProviderCaps, ProviderScan
 
 BASENAME = "codex"
+
+# Subcommands from `codex --help` (verified 0.146.0-line, this machine,
+# 2026-08-04) that never hold an interactive session: headless runs,
+# daemons/servers, and store/config utilities. `resume`/`fork` are absent on
+# purpose — they ARE session-holding TUIs, like the bare `codex [PROMPT]`
+# form. "proxy" is kept from the ADR-0005 daemon list even though current
+# help no longer shows it (an extra denylist token only costs a missed hint).
+_NON_TUI_SUBCOMMANDS = frozenset(
+    {
+        "exec",
+        "review",
+        "login",
+        "logout",
+        "mcp",
+        "plugin",
+        "mcp-server",
+        "app-server",
+        "remote-control",
+        "completion",
+        "update",
+        "doctor",
+        "sandbox",
+        "debug",
+        "apply",
+        "archive",
+        "delete",
+        "unarchive",
+        "exec-server",
+        "cloud",
+        "features",
+        "help",
+        "proxy",
+    }
+)
 
 _UUID_RE = re.compile(
     r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
@@ -86,6 +125,21 @@ def extract_resume_target(argv: tuple[str, ...]) -> str | None:
     if not after or after[0].startswith("-"):
         return None
     return after[0]
+
+
+def is_tui_shape(argv: tuple[str, ...]) -> bool:
+    """PURE: does this codex argv look like a session-holding interactive
+    TUI (bare `codex [PROMPT]`, `codex resume …`, `codex fork …`)?
+
+    Feeds ONLY the unbound-live hint (`unbound_live_cwds`) — never liveness.
+    Token-presence matching mirrors clap's own subcommand resolution and
+    keeps `extract_resume_target`'s conservative discipline: a flag value or
+    quoted prompt that happens to spell a denylisted subcommand only costs a
+    missed hint (safe direction), never a daemon entering the hint source.
+    """
+    if not argv or os.path.basename(argv[0]) != BASENAME:
+        return False
+    return not any(tok in _NON_TUI_SUBCOMMANDS for tok in argv[1:])
 
 
 def sid_extractor(name_to_sid: Mapping[str, str]) -> ArgvExtractor:
@@ -178,7 +232,9 @@ def _read_meta(path: str) -> tuple[dict | None, bool, bool]:
     except ValueError:
         return None, False, False
     payload = record.get("payload")
-    return (payload, False, False) if isinstance(payload, dict) else (None, False, False)
+    return (
+        (payload, False, False) if isinstance(payload, dict) else (None, False, False)
+    )
 
 
 def _clean_label(text: str) -> str:
@@ -205,7 +261,10 @@ def _first_user_message(path: str) -> str | None:
             total_bytes = 0
             for line_number, raw in enumerate(fh, start=1):
                 total_bytes += len(raw)
-                if line_number > _BODY_SCAN_MAX_LINES or total_bytes > _BODY_SCAN_MAX_BYTES:
+                if (
+                    line_number > _BODY_SCAN_MAX_LINES
+                    or total_bytes > _BODY_SCAN_MAX_BYTES
+                ):
                     return None
                 if _USER_MSG_MARK not in raw:
                     continue
@@ -265,9 +324,8 @@ class CodexProvider:
     ) -> ProviderScan:
         issues: list[InventoryIssue] = []
         names = _read_index(issues)
-        live = build_argv_index(
-            cli_inventory.records, sid_extractor(_name_index(names)), cur
-        )
+        extract = sid_extractor(_name_index(names))
+        live = build_argv_index(cli_inventory.records, extract, cur)
 
         root = cfg.codex_home / "sessions"
         if not root.is_dir():
@@ -325,7 +383,11 @@ class CodexProvider:
                     "session_meta first line (upstream format change?)",
                 )
             )
-        return ProviderScan(tuple(best.values()), tuple(issues))
+        rows = apply_unbound_hints(
+            best.values(),
+            unbound_live_cwds(cli_inventory.records, extract, is_tui_shape),
+        )
+        return ProviderScan(rows, tuple(issues))
 
     def _row_payload(self, path: str) -> tuple[dict | None, bool, bool]:
         return _read_meta(path)

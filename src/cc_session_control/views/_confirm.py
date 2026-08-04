@@ -99,12 +99,24 @@ def confirm_takeover(
     degrade refusal fires BEFORE the confirm modal — off `/proc` a live
     takeover cannot safely kill the old pid, and refusing here beats exiting
     the TUI only to have `do_resume_result` print its refusal. Resuming/relaunching a
-    DEAD session kills nothing: no gate, no confirm (B3). ``gated=False`` is
-    reserved for callers carrying a complete typed liveness preparation, so
+    DEAD session kills nothing: no gate, no confirm (B3) — EXCEPT the honest
+    unbound-live-hint confirm: a row flagged `Session.unbound_live_hint` may
+    already be held by an unbindable bare TUI in its directory, so Enter/t/R
+    confirm the double-attach risk first (still no kill, hence no R10 gate;
+    a fork is a fresh copy and keeps falling straight through). ``gated=False``
+    is reserved for callers carrying a complete typed liveness preparation, so
     confirmation does not mix generations. Otherwise the caller supplies the
     current-ancestor probe prepared off-loop.
     """
+    shown = truncate_cells(s.label if name is None else name, CONFIRM_NAME_CELLS)
     if not would_take_over(s, fork):
+        if s.unbound_live_hint and not fork:
+            app.confirm(
+                f"{verb}「{shown}」？该目录存在未绑定的 {s.provider} "
+                "运行进程，恢复可能双开同一会话。",
+                on_yes,
+            )
+            return
         on_yes()
         return
     if gated:
@@ -114,7 +126,6 @@ def confirm_takeover(
             )
         if not accept_ancestor_probe(app, evidence):
             return
-    shown = truncate_cells(s.label if name is None else name, CONFIRM_NAME_CELLS)
     app.confirm(f"{verb}「{shown}」？将先终止原进程。", on_yes)
 
 
