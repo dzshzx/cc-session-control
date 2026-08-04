@@ -401,6 +401,15 @@ def remove_session(
 ) -> CleanupExecution:
     """Delete anchored session artifacts after fresh R10/M3 protection gates."""
     result = CleanupExecution()
+    if s.provider != "claude":
+        # Cleanup models Claude state only (ADR-0005): a non-Claude row's
+        # `file` anchor points INTO the owning CLI's own store (codex rollout,
+        # kimi state.json) — csctl never deletes state it does not fully model.
+        result.refuse(
+            [s.sid],
+            f"provider {s.provider!r} sessions are not csctl-deletable",
+        )
+        return result
     try:
         pinned = anchors if anchors is not None else session_removal_anchors([s])[s.sid]
     except OSError as exc:

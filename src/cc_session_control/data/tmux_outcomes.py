@@ -188,6 +188,18 @@ class ResidencyInventory:
     def complete(self) -> bool:
         return not self.issues
 
+    @property
+    def issue_detail(self) -> str:
+        """THE one `source (path): detail; …` rendering of residency issues —
+        every injector (claude scan, provider snapshot merge, execution-time
+        re-resolution) reads this instead of re-joining inline."""
+        return "; ".join(
+            f"{issue.source}"
+            + (f" ({issue.path})" if issue.path else "")
+            + f": {issue.detail}"
+            for issue in self.issues
+        )
+
 
 @dataclass(frozen=True)
 class SessionWindowResult:

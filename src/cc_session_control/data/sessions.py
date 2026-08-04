@@ -139,12 +139,7 @@ def _inject_tmux_residency(
     targets = inventory.targets
     if not targets and inventory.complete:
         return rows
-    detail = "; ".join(
-        f"{issue.source}"
-        + (f" ({issue.path})" if issue.path else "")
-        + f": {issue.detail}"
-        for issue in inventory.issues
-    )
+    detail = inventory.issue_detail
     resident: list[Session] = []
     for row in rows:
         target = next(

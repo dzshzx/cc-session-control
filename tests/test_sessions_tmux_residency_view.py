@@ -69,8 +69,12 @@ def test_alive_rows_distinguish_resident_bare_and_unknown_at_stable_width() -> N
     assert bare == " ● 闲"
     assert unknown == " ● 闲 ?"
     for rendered in map(_row_text, sessions):
+        # Column anchors stay width-stable: the provider badge (cc) opens the
+        # CLI column at 10; the 来源 badge ("CLI") starts after CLI col + gutter.
+        provider_start = rendered.index("cc")
+        assert urwid.calc_width(rendered, 0, provider_start) == 10
         source_start = rendered.index("CLI")
-        assert urwid.calc_width(rendered, 0, source_start) == 10
+        assert urwid.calc_width(rendered, 0, source_start) == 15
 
 
 def test_status_reports_deduplicated_tmux_inventory_degradation() -> None:

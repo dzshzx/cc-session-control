@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Multi-CLI workbench (ADR-0005)**: csctl now manages Codex CLI and Kimi
+  Code sessions alongside Claude Code. A new `data/providers/` layer owns
+  per-CLI adapters (typed capabilities, argv synthesis, disk discovery):
+  - Sessions tab lists all providers with a CLI column (`cc`/`cx`/`km`),
+    per-CLI counts, provider filter terms, and non-fatal source-degradation
+    display; `f` fork is capability-gated (codex: native `codex fork`;
+    kimi: refused — in-session `/fork` only).
+  - Projects tab launcher goes multi-CLI: `Enter` = new claude, `x` = new
+    codex, `k` = new kimi session in the project's tmux window.
+  - Headless `csctl resume` lists all providers with ready-to-copy native
+    resume commands (`codex resume <sid>` / `kimi --session <sid>`);
+    non-Claude rows are tagged.
+  - Non-Claude liveness is argv-exact: a process binds to a session only
+    when its argv carries the session id (how csctl itself dispatches into
+    tmux). Bare TUIs and codex daemons are never stop/takeover targets;
+    live non-Claude takeover re-resolves fresh evidence at execution time.
+  - `CSCTL_PROVIDERS` restricts the provider allowlist; `CODEX_HOME` /
+    `KIMI_CODE_HOME` (official variables) relocate discovery.
+  - Cleanup remains Claude-only by design; Agents and Projects-RC surfaces
+    remain Claude-specific.
+
 ## 0.8.0 (2026-07-30)
 
 ### Removed (BREAKING)

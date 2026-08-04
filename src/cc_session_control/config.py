@@ -27,6 +27,16 @@ class Config:
     def __init__(self) -> None:
         self.claude_home: Path = Path.home() / ".claude"
         self.claude_json: Path = Path.home() / ".claude.json"
+        # Non-Claude CLI state homes (ADR-0005). Same single-path-authority
+        # rule (providers read these, never inline `Path.home() / ".codex"`),
+        # honoring each CLI's OFFICIAL relocation variable so csctl scans
+        # wherever the CLI itself actually writes.
+        self.codex_home: Path = Path(
+            os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+        )
+        self.kimi_home: Path = Path(
+            os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code"
+        )
         self.rc_session: str = os.environ.get("CSCTL_RC_SESSION", "rc")
         # Age threshold (days) for the time/global-keyed cleanup strategy.
         # 0 is a valid operator value (sweep every aged entry) — pre-0.8
@@ -38,6 +48,17 @@ class Config:
         )
         # TUI palette: "auto" ($COLORFGBG if set, else dark) | "dark" | "light".
         self.theme: str = os.environ.get("CSCTL_THEME", "auto")
+        # Allowed agent-CLI providers (ADR-0005). A listed provider is only
+        # ACTIVE when its home directory also exists; unknown names are
+        # ignored here so the registry stays the single provider authority.
+        self.providers: tuple[str, ...] = tuple(
+            name.strip()
+            for name in os.environ.get(
+                "CSCTL_PROVIDERS",
+                "claude,codex,kimi",
+            ).split(",")
+            if name.strip()
+        )
 
     @property
     def projects_root(self) -> Path:

@@ -9,7 +9,7 @@ from argparse import Namespace
 def _cmd_resume(args: Namespace) -> int:
     from .actions import session_ops
     from .actions.resume_list import render
-    from .data import liveness, rc_outcomes
+    from .data import liveness, providers, rc_outcomes
     from .data.sessions import scan_result
 
     take_over_sid: str | None = getattr(args, "take_over", None)
@@ -52,8 +52,19 @@ def _cmd_resume(args: Namespace) -> int:
             )
         return 1
 
+    # Non-Claude providers join the same list (ADR-0005); their source issues
+    # degrade to warnings — a broken codex index must not block Claude resumes.
+    provider_rows, provider_issues = providers.scan_non_claude(inputs.cur)
+    for provider_issue in provider_issues:
+        print(
+            "Warning: provider inventory is partial: "
+            + rc_outcomes.format_inventory_issues((provider_issue,)),
+            file=sys.stderr,
+        )
+    rows = providers.merge_sessions(transcript_scan.sessions, provider_rows)
+
     render_result = render(
-        list(transcript_scan.sessions),
+        list(rows),
         keyword=args.keyword,
         page=args.page,
         limit=args.limit,

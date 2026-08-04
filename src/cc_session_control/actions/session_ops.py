@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .. import clipboard
-from ..data import liveness, proc, sessions, tmux
+from ..data import liveness, proc, providers, sessions, tmux
 from ..data.liveness import invalidate_cache
 from ..models import Session, issue_detail
 
@@ -116,19 +116,19 @@ def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
 
 
 def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
-    """Shared resume recipe: the cwd to enter, the claude argv, and whether
+    """Shared resume recipe: the cwd to enter, the resume argv, and whether
     to kill the old session first.
 
-    Returns (cwd, args, should_kill). Unified kill semantics: a fork is a copy
-    and leaves the original running, while a plain resume takes the session
-    over — so we kill only when it is alive, not the current session, and we
-    are NOT forking. Runtime resume operations and `would_take_over` obey this
-    single decision; copied live commands defer the whole decision to the
+    Returns (cwd, args, should_kill). The argv comes from the session's
+    provider (ADR-0005) — never inline a CLI command here. Unified kill
+    semantics stay provider-neutral: a fork is a copy and leaves the original
+    running, while a plain resume takes the session over — so we kill only
+    when it is alive, not the current session, and we are NOT forking.
+    Runtime resume operations and `would_take_over` obey this single
+    decision; copied live commands defer the whole decision to the
     execution-time `csctl resume --take-over` scan.
     """
-    args = ["claude", "--resume", s.sid]
-    if fork:
-        args.append("--fork-session")
+    args = providers.get(s.provider).resume_argv(s.sid, fork)
     should_kill = s.alive and not s.current and not fork
     return s.cwd, args, should_kill
 
@@ -152,9 +152,12 @@ def resume_cmd(s: Session, fork: bool = False) -> str:
     status while a copied command waits in a clipboard. Carry only its durable
     sid and make ``csctl resume --take-over`` reacquire that evidence at
     execution time. Dead resumes and forks are non-destructive, so their
-    direct commands remain useful.
+    direct commands remain useful. The take-over deferral is Claude-only
+    (ADR-0005: the headless resolver reads registry + transcripts); a
+    non-Claude command is always the direct provider resume — it never
+    serializes a kill, so the destructive-state argument does not apply.
     """
-    if s.alive and not fork:
+    if s.provider == "claude" and s.alive and not fork:
         return shlex.join(["csctl", "resume", "--take-over", s.sid])
 
     cwd, args, _ = _resume_plan(s, fork)
@@ -248,6 +251,24 @@ def _session_for_execution(
             ExecutionSessionState.RESOLVED,
             session=session,
         )
+    if session.provider != "claude":
+        # The Claude resolver below reads registry + transcripts; a live
+        # non-Claude takeover re-resolves through its provider's argv scan
+        # instead — same guarantee, different evidence: kill only on a fresh
+        # whole Session, never on snapshot identity (ADR-0005).
+        argv_resolution = providers.resolve_argv_execution(
+            session.provider,
+            session.sid,
+        )
+        if not argv_resolution.success:
+            return ExecutionSessionResolution(
+                ExecutionSessionState.REFUSED,
+                detail=argv_resolution.detail,
+            )
+        return ExecutionSessionResolution(
+            ExecutionSessionState.RESOLVED,
+            session=argv_resolution.session,
+        )
     return resolve_execution_session(session.sid)
 
 
@@ -270,7 +291,8 @@ def _do_resume_resolved_result(s: Session, fork: bool = False) -> ResumeOutcome:
             return ResumeOutcome(False, takeover_failure)
     if cwd and os.path.isdir(cwd):
         os.chdir(cwd)
-    os.execvp("claude", args)
+    # argv[0] IS the provider's binary (ADR-0005) — never a hardcoded CLI.
+    os.execvp(args[0], args)
     return ResumeOutcome(True)
 
 
@@ -325,7 +347,10 @@ def _spawn_in_tmux_result(
         takeover_failure = _required_takeover_failure(target_session)
         if takeover_failure:
             return TmuxResumeOutcome(None, takeover_failure)
-    window = f"{target_session.sid[:8]}-fork" if fork else target_session.sid[:8]
+    window = providers.get(target_session.provider).window_name(
+        target_session.sid,
+        fork,
+    )
     cmd = tmux_foreground_cmd(target_session, fork)
     result = tmux.run_in_tmux_result(
         tmux.session_name_for(target_session.cwd),
@@ -366,18 +391,29 @@ def do_tmux_resume_result(s: Session, fork: bool = False) -> TmuxResumeOutcome:
     return _spawn_in_tmux_result(s, fork=fork)
 
 
-def do_tmux_new_result(directory: str) -> tmux.TmuxWriteResult:
-    """Start a NEW claude session in `directory`, inside that project's own
-    tmux session, retaining the exact create stage and failure detail.
+def do_tmux_new_result(
+    directory: str,
+    provider_key: str = "claude",
+) -> tmux.TmuxWriteResult:
+    """Start a NEW session of `provider_key`'s CLI in `directory`, inside
+    that project's own tmux session, retaining the exact create stage and
+    failure detail.
 
-    The 项目-tab Enter key: same skeleton as `do_tmux_resume_result` but nothing exists
-    yet — no kill, no confirm, no R10 gate (no process is terminated). Plain
-    `claude` with NO --remote-control (same tradeoff as `tmux_foreground_cmd`:
-    every RC process mints a new cloud environment entry). No trust gate
-    either: the user lands inside the window, so claude's own trust dialog
-    shows interactively."""
-    cmd = f"cd {shlex.quote(directory)} && claude"
-    return tmux.run_in_tmux_result(tmux.session_name_for(directory), "claude", cmd)
+    The 项目-tab launcher keys: same skeleton as `do_tmux_resume_result` but
+    nothing exists yet — no kill, no confirm, no R10 gate (no process is
+    terminated). The argv comes from the provider (ADR-0005); for claude it
+    stays plain `claude` with NO --remote-control (same tradeoff as
+    `tmux_foreground_cmd`: every RC process mints a new cloud environment
+    entry). No trust gate either: the user lands inside the window, so each
+    CLI's own trust/onboarding dialog shows interactively."""
+    provider = providers.get(provider_key)
+    line = shlex.join(provider.new_session_argv())
+    cmd = f"cd {shlex.quote(directory)} && {line}"
+    return tmux.run_in_tmux_result(
+        tmux.session_name_for(directory),
+        provider.key,
+        cmd,
+    )
 
 
 # --- exit intents (the payload crossing the exit-then-exec seam) ------------
@@ -486,12 +522,14 @@ class TmuxResumeIntent(ExitIntent):
 
 @dataclass(frozen=True)
 class TmuxNewIntent(ExitIntent):
-    """项目-tab Enter: start a NEW claude in tmux, then enter (pure spawn)."""
+    """项目-tab launcher: start a NEW session of one provider's CLI in tmux,
+    then enter (pure spawn)."""
 
     directory: str
+    provider: str = "claude"
 
     def run(self) -> int:
-        result = do_tmux_new_result(self.directory)
+        result = do_tmux_new_result(self.directory, self.provider)
         if not result.success:
             detail = f": {result.diagnostic}" if result.diagnostic else ""
             print(

@@ -1,21 +1,43 @@
 # cc-session-control
 
-This context defines the operator language for managing Claude Code sessions,
-agents, and Remote Control environments from one local machine.
+This context defines the operator language for managing agent-CLI sessions
+(Claude Code, Codex CLI, Kimi Code), agents, and Remote Control environments
+from one local machine.
 
 ## Language
 
 **Local Global Workbench**:
-A machine-wide management surface for seeing and acting on Claude Code sessions,
-agents, and Remote Control environments across projects. Works tmux-first: its
-primary verbs dispatch sessions into per-project tmux windows (ADR-0001).
-_Avoid_: current project view, current session view
+A machine-wide management surface for seeing and acting on agent-CLI sessions
+across providers and projects, plus Claude Code agents and Remote Control
+environments. Works tmux-first: its primary verbs dispatch sessions into
+per-project tmux windows (ADR-0001).
+_Avoid_: current project view, current session view, Claude-only panel
 
-**Claude Code Session**:
-A resumable Claude Code conversation or execution context whose state may be
-visible through transcripts, agent listings, Remote Control, or background
-execution surfaces. The session is the durable record; agents and runtimes are
-ways that record is or was being executed.
+**Provider**:
+The adapter owning ONE agent CLI inside the workbench (ADR-0005): its
+identity key (`claude` / `codex` / `kimi`), typed capabilities (fork,
+takeover, liveness grade, background agents, RC, cleanup), argv synthesis
+(resume / new session / tmux window name), and — for non-Claude CLIs — disk
+session discovery. `Session.provider` is part of session identity: sids are
+unique only within a provider. A capability a provider lacks is refused with
+a typed reason, never emulated.
+_Avoid_: profile, plugin, treating every CLI as equally deep
+
+**Argv-exact Liveness**:
+The only takeover-grade pid↔session binding for non-Claude providers: a
+process argv that CARRIES the session id (`codex resume <sid>`,
+`kimi --session <sid>`). Workbench-dispatched sessions are exactly matchable
+by construction; bare-launched TUIs and CLI daemons (codex app-server etc.)
+stay unbound and are never stop/takeover targets.
+_Avoid_: cwd-guessing as liveness, pane-text busy regexes
+
+**Session** (formerly "Claude Code Session"):
+A resumable agent-CLI conversation or execution context whose state may be
+visible through the owning CLI's on-disk records, agent listings, Remote
+Control, or background execution surfaces. The session is the durable record;
+agents and runtimes are ways that record is or was being executed. Rich
+liveness/registry semantics below (busy/idle status, bridge, background
+agents) are Claude-specific; non-Claude sessions carry the argv-exact subset.
 _Avoid_: chat, transcript file
 
 **Agent**:

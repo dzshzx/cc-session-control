@@ -21,6 +21,7 @@ import urwid
 
 from ..actions import tui_actions
 from ..actions.session_ops import TmuxNewIntent
+from ..data import providers
 from ..data.project_settings import (
     ProjectSettingsResult,
     ProjectSettingsState,
@@ -174,6 +175,23 @@ class RCView(ListTabView):
             ),
         ),
         Key(
+            ("x",),
+            "x 新codex",
+            "_key_tmux_new_codex",
+            section="项目操作（仅对「项目」行生效）:",
+            help_lines=(
+                "  x      在项目目录新建 tmux codex 会话并进入（多 CLI 启动器，",
+                "         ADR-0005；codex 未启用时拒绝）",
+            ),
+        ),
+        Key(
+            ("k",),
+            "k 新kimi",
+            "_key_tmux_new_kimi",
+            section="项目操作（仅对「项目」行生效）:",
+            help_lines=("  k      在项目目录新建 tmux kimi 会话并进入（同上）",),
+        ),
+        Key(
             ("o",),
             "o 启动远控",
             "_key_start",
@@ -314,13 +332,27 @@ class RCView(ListTabView):
     # --- key handlers (bound by name in KEY_TABLE; dispatch lives in the base) ---
 
     def _key_tmux_new(self, p: RCProject) -> None:
+        # New claude session in the project dir, inside tmux, entered
+        # immediately — nothing is killed, so no confirm / R10 / trust gate
+        # (each CLI's own trust dialog shows interactively in the window).
+        self._launch_new(p, "claude")
+
+    def _key_tmux_new_codex(self, p: RCProject) -> None:
+        self._launch_new(p, "codex")
+
+    def _key_tmux_new_kimi(self, p: RCProject) -> None:
+        self._launch_new(p, "kimi")
+
+    def _launch_new(self, p: RCProject, provider_key: str) -> None:
+        """Shared multi-CLI launcher body (ADR-0005): pure spawn, no gates
+        beyond directory existence and provider activation."""
         if not p.dir_exists:
             self.app.notify("目录缺失 — 无法新建会话")
             return
-        # New claude session in the project dir, inside tmux, entered
-        # immediately — nothing is killed, so no confirm / R10 / trust gate
-        # (claude's own trust dialog shows interactively in the window).
-        self.app.exit_with(TmuxNewIntent(p.directory))
+        if not providers.is_active(provider_key):
+            self.app.notify(f"{provider_key} 未启用或未安装 — 无法新建会话")
+            return
+        self.app.exit_with(TmuxNewIntent(p.directory, provider=provider_key))
 
     def _key_start(self, p: RCProject) -> None:
         if not p.dir_exists:

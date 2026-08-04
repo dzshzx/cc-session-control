@@ -13,6 +13,7 @@ import time
 
 import urwid
 
+from ..data import providers
 from ..models import Session
 from ._colspec import ColSpec, header_columns, row_columns
 from ._rows import SelectableRow, truncate_cells
@@ -36,6 +37,7 @@ _SOURCE_BADGES = {
 # to-line anchor is stable.
 SESSION_COLS: list[ColSpec] = [
     (8, "left", "状态"),
+    (3, "left", "CLI"),
     (4, "left", "来源"),
     (4, "left", "远控"),
     (11, "right", "时间"),
@@ -43,6 +45,22 @@ SESSION_COLS: list[ColSpec] = [
     (("weight", 3), "left", "标题"),
     (("weight", 1), "left", "项目"),
 ]
+
+
+def _provider_badge(session: Session) -> str:
+    """The owning CLI's short tag (cc / cx / km) — ADR-0005 provider column.
+
+    `providers.get` stays loud on an unknown key: a garbage provider value is
+    a programming error, not renderable uncertainty."""
+    return providers.get(session.provider).label
+
+
+def _prompts_cell(session: Session) -> str:
+    """`pN` for Claude rows; non-Claude discovery reads rollout/state heads
+    only, so the prompt count is UNKNOWN (shown `-`), not zero."""
+    if session.provider != "claude":
+        return "-"
+    return f"p{session.prompts}"
 
 
 def _hidden_marker(session: Session) -> str:
@@ -129,10 +147,11 @@ class SessionRow(SelectableRow):
             SESSION_COLS,
             [
                 status_cell,
+                _provider_badge(session),
                 _source_badge(session),
                 _flags(session),
                 when,
-                f"p{session.prompts}",
+                _prompts_cell(session),
                 label,
                 cwd,
             ],
