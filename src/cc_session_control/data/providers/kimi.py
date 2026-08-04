@@ -11,8 +11,12 @@ content to search; `Session.mtime` still comes from `state.json`'s stat, not
 the wire log's. Resume: `kimi --session <sid>` (short `-S`); fork exists
 only as the in-session `/fork`, so `caps.fork` is False and a fork argv
 request is a programming error. A bare `kimi` REPL leaves no pid↔session
-evidence (no fd, no env — probed), so only `--session` argv matches bind;
-those are the only kill targets.
+evidence (no fd, no env — probed), and 0.31.1 rewrites its own title at
+runtime, destroying even a dispatched session's `--session` argv (C1,
+observed 2026-08-04) — so bindings (the only kill targets) come from
+`--session` argv matches where the argv survives, plus csctl's own
+`@csctl_sid`/`@csctl_provider` window metadata for dispatched windows,
+identity-checked via argv0/comm/exe (`is_provider_process`).
 """
 
 from __future__ import annotations
@@ -23,16 +27,22 @@ from collections.abc import Set as AbstractSet
 
 from ...config import cfg
 from ...models import InventoryIssue, Session
-from ..proc import ProcCliInventory
+from .. import proc
+from ..proc import ProcCli, ProcCliInventory
+from ..tmux_outcomes import PaneInventory
 from .argv_live import (
     apply_unbound_hints,
-    build_argv_index,
+    bound_pids,
+    build_live_index,
     flag_value,
     unbound_live_cwds,
 )
 from .base import LivenessGrade, ProviderCaps, ProviderScan
 
 BASENAME = "kimi"
+# The comm/argv0 an active kimi 0.31.1 process rewrites itself to (observed
+# 2026-08-04: cmdline collapses to `kimi-code` + padding, comm follows).
+TITLE_COMM = "kimi-code"
 
 # Non-interactive shapes from `kimi --help` (verified 0.31.x-line, this
 # machine, 2026-08-04): servers/utility subcommands plus the one-shot
@@ -69,15 +79,28 @@ def extract_sid(argv: tuple[str, ...]) -> str | None:
     return None
 
 
-def is_tui_shape(argv: tuple[str, ...]) -> bool:
-    """PURE: does this kimi argv look like a session-holding interactive
-    REPL? Feeds ONLY the unbound-live hint — never liveness. Same
-    conservative token matching as the codex twin: a false denylist hit
-    only costs a missed hint, never a server entering the hint source."""
-    if not argv or os.path.basename(argv[0]) != BASENAME:
-        return False
-    return not any(
-        tok in _NON_TUI_SUBCOMMANDS or tok in _NON_TUI_FLAGS for tok in argv[1:]
+def is_provider_process(record: ProcCli) -> bool:
+    """PURE: Kimi Code process identity (C1). argv0 basename alone stopped
+    sufficing on 0.31.1 — the runtime rewrites its own title, collapsing
+    cmdline to `kimi-code`; comm follows the rewrite while exe still points
+    at the real binary — so any of argv0 `kimi`, comm `kimi-code`, or exe
+    basename `kimi` marks identity (an unreadable comm/exe is "" and simply
+    loses that alternative)."""
+    if record.argv and os.path.basename(record.argv[0]) == BASENAME:
+        return True
+    if record.comm == TITLE_COMM:
+        return True
+    return bool(record.exe) and os.path.basename(record.exe) == BASENAME
+
+
+def is_tui_process(record: ProcCli) -> bool:
+    """PURE: session-holding interactive kimi REPL — process identity AND a
+    non-daemon argv shape. Feeds the unbound-live hint and metadata-binding
+    candidacy, never liveness by itself. Same conservative token matching as
+    the codex twin: a false denylist hit only costs a missed hint/binding,
+    never a server entering either source."""
+    return is_provider_process(record) and not any(
+        tok in _NON_TUI_SUBCOMMANDS or tok in _NON_TUI_FLAGS for tok in record.argv[1:]
     )
 
 
@@ -110,9 +133,12 @@ class KimiProvider:
     key = "kimi"
     label = "km"
     basename = BASENAME
+    # The /proc walk must also net title-rewritten processes (argv0 becomes
+    # `kimi-code`) — identity is then re-verified per record (C1).
+    capture_basenames = frozenset({BASENAME, TITLE_COMM})
     caps = ProviderCaps(
-        takeover=True,  # argv-exact matches only
-        liveness=LivenessGrade.ARGV,
+        takeover=True,  # argv-exact + dispatch-metadata matches only
+        liveness=LivenessGrade.TMUX,  # the title rewrite destroys argv evidence
     )
 
     def available(self) -> bool:
@@ -137,9 +163,18 @@ class KimiProvider:
         self,
         cli_inventory: ProcCliInventory,
         cur: AbstractSet[int],
+        panes: PaneInventory | None = None,
     ) -> ProviderScan:
         issues: list[InventoryIssue] = []
-        live = build_argv_index(cli_inventory.records, extract_sid, cur)
+        live = build_live_index(
+            cli_inventory.records,
+            extract_sid,
+            cur,
+            panes=panes,
+            provider_key=self.key,
+            is_tui_process=is_tui_process,
+            ancestors_of=proc.probe_ancestors,
+        )
         index_path = cfg.kimi_home / "session_index.jsonl"
         entries: dict[str, dict] = {}
         try:
@@ -161,7 +196,12 @@ class KimiProvider:
 
         rows = apply_unbound_hints(
             (self._project(sid, entry, live, issues) for sid, entry in entries.items()),
-            unbound_live_cwds(cli_inventory.records, extract_sid, is_tui_shape),
+            unbound_live_cwds(
+                cli_inventory.records,
+                extract_sid,
+                is_tui_process,
+                bound_pids(live),
+            ),
         )
         return ProviderScan(rows, tuple(issues))
 

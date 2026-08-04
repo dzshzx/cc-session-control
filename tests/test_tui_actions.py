@@ -175,7 +175,7 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
     monkeypatch.setattr(
         tui_actions.session_ops.tmux,
         "run_in_tmux_result",
-        lambda tmux_session, window, cmd: (
+        lambda tmux_session, window, cmd, **_kwargs: (
             spawn_calls.append((tmux_session, window, cmd))
             or _created_target("project:4")
         ),
@@ -252,7 +252,7 @@ def test_live_background_session_requires_successful_takeover_before_spawn(
     monkeypatch.setattr(
         tui_actions.session_ops.tmux,
         "run_in_tmux_result",
-        lambda tmux_session, window, cmd: (
+        lambda tmux_session, window, cmd, **_kwargs: (
             spawn_calls.append((tmux_session, window, cmd))
             or _created_target("project:4")
         ),
@@ -287,7 +287,9 @@ def test_live_background_session_without_pid_fails_closed_before_spawn(
     monkeypatch.setattr(
         tui_actions.session_ops.tmux,
         "run_in_tmux_result",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("must not spawn")
+        ),
     )
 
     result = tui_actions.background_session(session)
@@ -331,7 +333,7 @@ def test_live_background_session_uses_execution_time_session_generation(
     monkeypatch.setattr(
         tui_actions.session_ops.tmux,
         "run_in_tmux_result",
-        lambda tmux_session, window, cmd: (
+        lambda tmux_session, window, cmd, **_kwargs: (
             spawns.append((tmux_session, window, cmd))
             or _created_target("fresh-project:4")
         ),

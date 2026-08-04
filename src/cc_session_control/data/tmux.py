@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from . import proc
 from .tmux_outcomes import (
@@ -159,7 +159,10 @@ def set_window_option_result(
 
 # -P -F makes tmux print the exact target of the window it just created, so
 # callers enter THAT window even when names collide (no select-by-name guess).
-_TARGET_FMT = "#{session_name}:#{window_index}"
+# The trailing #{window_id} is the server-unique address follow-up window
+# writes use: a racing kill/create can hand a name:index to a different
+# window, a window id it cannot.
+_TARGET_FMT = "#{session_name}:#{window_index}\t#{window_id}"
 
 
 def _spawn_result(
@@ -238,8 +241,63 @@ def session_name_for(cwd: str) -> str:
     return name or "claude"
 
 
-def run_in_tmux_result(session: str, window: str, cmd: str) -> TmuxWriteResult:
-    """Create a target while preserving probe/create stage and diagnostics."""
+# C1: the dispatch-identity window options every csctl spawn declares and
+# `list_panes_inventory` reads back — the tmux-metadata liveness source for
+# CLIs whose processes rewrite their own argv (kimi title rewrite).
+_SID_OPTION = "@csctl_sid"
+_PROVIDER_OPTION = "@csctl_provider"
+
+
+def _declare_dispatch_metadata(
+    result: TmuxWriteResult,
+    sid: str,
+    provider: str,
+) -> TmuxWriteResult:
+    """Write the dispatch-identity options on a freshly created window.
+
+    Writes address the server-unique `window_id`, never the name:index
+    `target`: a racing kill/create can reassign that index, landing the
+    options on a stranger window — a wrong kill target. A write failure
+    never fails the spawn: the created target is returned with the failure
+    retained in `detail` — the binding simply stays absent (fail safe). A
+    partial write (one option only) also fails safe: the read side requires
+    BOTH options to bind. A spawn printout without a window id skips the
+    writes the same way — no binding beats a misaddressed one."""
+    if not result.success or result.target is None:
+        return result
+    options = [
+        (option, value)
+        for option, value in ((_PROVIDER_OPTION, provider), (_SID_OPTION, sid))
+        if value
+    ]
+    if not options:
+        return result
+    if result.window_id is None:
+        return replace(
+            result,
+            detail="window metadata: spawn printed no window id; binding skipped",
+        )
+    failures: list[str] = []
+    for option, value in options:
+        write = set_window_option_result(result.window_id, option, value)
+        if not write.success:
+            failures.append(f"{option}: {write.detail or 'write failed'}")
+    if not failures:
+        return result
+    return replace(result, detail="window metadata: " + "; ".join(failures))
+
+
+def run_in_tmux_result(
+    session: str,
+    window: str,
+    cmd: str,
+    sid: str = "",
+    provider: str = "",
+) -> TmuxWriteResult:
+    """Create a target while preserving probe/create stage and diagnostics.
+
+    Non-empty `sid`/`provider` are declared on the created window as
+    `@csctl_sid`/`@csctl_provider` (see `_declare_dispatch_metadata`)."""
 
     invocation = _tmux_run_result(["has-session", "-t", session])
     cp = invocation.completed
@@ -250,22 +308,35 @@ def run_in_tmux_result(session: str, window: str, cmd: str) -> TmuxWriteResult:
             detail=invocation.detail,
         )
     if cp.returncode == 0:
-        return _tmux_new_window_result(session, window, cmd)
-    if not _target_not_found(invocation.detail):
+        created = _tmux_new_window_result(session, window, cmd)
+    elif not _target_not_found(invocation.detail):
         return TmuxWriteResult(
             TmuxWriteStage.SESSION_PROBE,
             TmuxWriteState.FAILED,
             detail=invocation.detail,
         )
-    return _tmux_new_session_result(session, window, cmd)
+    else:
+        created = _tmux_new_session_result(session, window, cmd)
+    return _declare_dispatch_metadata(created, sid, provider)
+
+
+_PANES_FMT = (
+    "#{session_name}:#{window_index}\t#{pane_dead}\t#{pane_pid}"
+    f"\t#{{{_SID_OPTION}}}\t#{{{_PROVIDER_OPTION}}}"
+)
 
 
 def list_panes_inventory() -> PaneInventory:
-    """Typed global pane inventory for residency safety decisions."""
+    """Typed global pane inventory for residency safety decisions.
 
-    invocation = _tmux_run_result(
-        ["list-panes", "-a", "-F", "#{session_name}:#{window_index}\t#{pane_pid}"]
-    )
+    THE one pane walk (C1): each pane also carries the window's declared
+    dispatch identity (`@csctl_sid`/`@csctl_provider`, "" when unset), so
+    residency joins and metadata liveness binding share one tmux call.
+    Dead panes (remain-on-exit residue) are excluded, not an issue: their
+    recorded pid is vacated and may be reused by an unrelated process, so
+    they must never feed a residency or metadata join."""
+
+    invocation = _tmux_run_result(["list-panes", "-a", "-F", _PANES_FMT])
     cp = invocation.completed
     if cp is None:
         return PaneInventory(
@@ -280,10 +351,14 @@ def list_panes_inventory() -> PaneInventory:
     out: list[TmuxPane] = []
     issues: list[ResidencyIssue] = []
     for line_number, line in enumerate(cp.stdout.splitlines(), start=1):
-        target, _, pid_s = line.partition("\t")
+        parts = line.split("\t")
+        target = parts[0].strip() if parts else ""
+        dead = parts[1].strip() if len(parts) == 5 else ""
         try:
-            pid = int(pid_s.strip())
+            pid = int(parts[2].strip()) if len(parts) == 5 else 0
         except ValueError:
+            pid = 0
+        if len(parts) != 5 or not target or pid <= 0 or dead not in {"0", "1"}:
             issues.append(
                 ResidencyIssue(
                     "tmux list-panes",
@@ -292,30 +367,23 @@ def list_panes_inventory() -> PaneInventory:
                 )
             )
             continue
-        if not target.strip() or pid <= 0:
-            issues.append(
-                ResidencyIssue(
-                    "tmux list-panes",
-                    None,
-                    f"malformed row {line_number}: {line!r}",
-                )
-            )
+        if dead == "1":
             continue
-        out.append(TmuxPane(target.strip(), pid))
+        out.append(TmuxPane(target, pid, parts[3].strip(), parts[4].strip()))
     return PaneInventory(tuple(out), tuple(issues))
 
 
 def window_containing(
-    panes: Sequence[tuple[str, int]],
+    panes: Sequence[TmuxPane],
     ancestors: set[int],
 ) -> str | None:
-    """PURE: the pane target whose pane_pid appears in `ancestors`, or None.
+    """PURE: the pane target whose pane pid appears in `ancestors`, or None.
 
     A session process hosted by a tmux pane has that pane's pid in its
     ancestor chain (the pane pid is the window's root process)."""
-    for target, pane_pid in panes:
-        if pane_pid in ancestors:
-            return target
+    for pane in panes:
+        if pane.pid in ancestors:
+            return pane.target
     return None
 
 

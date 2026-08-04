@@ -169,13 +169,18 @@ def test_rc_view_shows_unknown_inventory_status_and_warning():
 
 
 def test_rc_view_enter_exits_with_tmux_new():
-    # Enter = 新建 tmux 会话并进入 (primary); o = 启动远控 (demoted, gated).
+    # Enter = CLI 选择器 → 新建 tmux 会话并进入 (primary; the conftest pins
+    # claude as the only active provider, so the chooser's default first row
+    # is claude and Enter-Enter ≡ the pre-chooser direct launch);
+    # o = 启动远控 (demoted, gated).
     app = FakeApp()
     view = RCView(app)
     app.views = [view]
     _apply_projects(view, [_make_project(name="p1", directory="/tmp/p1")])
 
-    view.handle_key("enter")
+    view.handle_key("enter")  # opens the chooser
+    assert app.result is None
+    view.handle_key("enter")  # confirms the default claude row
 
     assert app.result == TmuxNewIntent("/tmp/p1")
     assert app._submitted_actions == []

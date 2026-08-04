@@ -1,34 +1,48 @@
-"""Argv-exact liveness shared by non-Claude providers (ADR-0005).
+"""Non-Claude pid↔session liveness evidence (ADR-0005 + C1 amendment).
 
-Codex/kimi have no registry equivalent, so their only takeover-grade
-pid↔session evidence is a process argv that CARRIES the session id
-(`codex resume <sid>` / `kimi --session <sid>`). csctl's own tmux dispatch
-always resumes by id, so every workbench-managed session is exactly
-matchable; bare TUIs (argv without a sid) stay unbound and are never kill
-targets. Each provider supplies a PURE `extract(argv) -> sid | None`; the
-join here is IO-free — `data.proc.scan_cli_argv_inventory` provides the one
-walk per generation.
+Codex/kimi have no registry equivalent. Two takeover-grade sources join a
+pid to a session id, argv first:
+
+- **argv-exact**: a process argv that CARRIES the session id
+  (`codex resume <sid>` / `kimi --session <sid>`).
+- **tmux dispatch metadata** (supplement): kimi rewrites its own process
+  title at runtime, destroying that argv evidence for the very sessions
+  csctl dispatched — so csctl's spawns declare `@csctl_sid`/`@csctl_provider`
+  window options and `build_metadata_index` joins a declaring pane back to
+  the pane process that matches the provider's process-identity set.
+
+Bare TUIs (no argv sid, no declaring pane) stay unbound and are never kill
+targets. Each provider supplies PURE predicates; `build_argv_index` stays
+IO-free, and the metadata join's only IO is the injected ancestor prober
+(`data.proc.scan_cli_argv_inventory` provides the one walk per generation,
+`data.tmux.list_panes_inventory` the one pane walk).
 """
 
 from __future__ import annotations
 
 import os.path
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 
 from ...models import Session
-from ..proc import ProcCli
+from ..proc import AncestorProbe, ProcCli
+from ..tmux_outcomes import PaneInventory
 
 #: PURE per-provider argv matcher: the session id this process is running,
 #: or None when the argv does not prove one.
 ArgvExtractor = Callable[[tuple[str, ...]], str | None]
 
-#: PURE per-provider argv-shape predicate: does this argv look like a
-#: session-holding interactive TUI of the provider's CLI? Daemons and
-#: utility subcommands answer False — they are not "unbound TUIs" and must
-#: never feed the unbound-live hint.
-TuiShapePredicate = Callable[[tuple[str, ...]], bool]
+#: PURE per-provider process predicate: does this /proc record look like a
+#: session-holding interactive TUI of the provider's CLI (process identity
+#: via argv0/comm/exe PLUS a non-daemon argv shape)? Daemons and utility
+#: subcommands answer False — they are not "unbound TUIs" and must never
+#: feed the unbound-live hint nor become metadata-binding candidates.
+TuiProcessPredicate = Callable[[ProcCli], bool]
+
+#: Targeted-IO ancestor prober the metadata join receives (production:
+#: `proc.probe_ancestors`; tests inject pure fakes).
+AncestorProber = Callable[[int], AncestorProbe]
 
 
 @dataclass(frozen=True)
@@ -67,22 +81,133 @@ def build_argv_index(
     return index
 
 
+def _pane_tui_process(
+    pane_pid: int,
+    candidates: Sequence[ProcCli],
+    ancestors_of: AncestorProber,
+) -> ProcCli | None:
+    """The one candidate a declaring pane proves: its root process, else its
+    UNIQUE TUI-shaped descendant (the spawn shell may wrap the CLI). Zero or
+    several descendants prove nothing (fail closed)."""
+    for record in candidates:
+        if record.pid == pane_pid:
+            return record
+    under = [r for r in candidates if pane_pid in ancestors_of(r.pid).pids]
+    return under[0] if len(under) == 1 else None
+
+
+def build_metadata_index(
+    panes: PaneInventory | None,
+    provider_key: str,
+    records: Iterable[ProcCli],
+    is_tui_process: TuiProcessPredicate,
+    argv_bound_pids: AbstractSet[int],
+    cur: AbstractSet[int],
+    ancestors_of: AncestorProber,
+) -> dict[str, ArgvMatch]:
+    """sid → binding proven by csctl's OWN dispatch metadata (C1).
+
+    A pane whose window carries `@csctl_sid` + a matching `@csctl_provider`
+    binds the sid to the pane process `_pane_tui_process` identifies —
+    `proc_start` is the walk's scan-time capture, so the kill-time
+    `probe_pid` recheck defeats pid reuse exactly like argv matches. Every
+    doubt binds nothing: no panes / an incomplete pane inventory, a missing
+    option, an identity or shape mismatch, and a vanished pane process all
+    fail closed; so does ambiguity in EITHER direction — a sid claimed by
+    panes over distinct pids, and a pid claimed by panes for distinct sids
+    (one process runs one session; a disputed pid binds nobody, never a
+    coin-flip pick). Argv-bound pids are excluded so metadata can never
+    re-bind proven processes; window names never participate.
+    """
+    if panes is None or not panes.complete:
+        return {}
+    candidates = tuple(
+        r for r in records if r.pid not in argv_bound_pids and is_tui_process(r)
+    )
+    if not candidates:
+        return {}
+    bound: dict[str, ProcCli] = {}
+    ambiguous: set[str] = set()
+    sids_claiming_pid: dict[int, set[str]] = {}
+    for pane in panes.records:
+        if pane.provider != provider_key or not pane.sid:
+            continue
+        record = _pane_tui_process(pane.pid, candidates, ancestors_of)
+        if record is None:
+            continue
+        sids_claiming_pid.setdefault(record.pid, set()).add(pane.sid)
+        if bound.setdefault(pane.sid, record).pid != record.pid:
+            ambiguous.add(pane.sid)
+    return {
+        sid: ArgvMatch(
+            sid=sid,
+            pid=record.pid,
+            proc_start=record.starttime,
+            current=record.pid in cur,
+        )
+        for sid, record in bound.items()
+        if sid not in ambiguous and len(sids_claiming_pid[record.pid]) == 1
+    }
+
+
+def build_live_index(
+    records: Iterable[ProcCli],
+    extract: ArgvExtractor,
+    cur: AbstractSet[int],
+    *,
+    panes: PaneInventory | None,
+    provider_key: str,
+    is_tui_process: TuiProcessPredicate,
+    ancestors_of: AncestorProber,
+) -> dict[str, ArgvMatch]:
+    """THE combined sid → binding view both providers' `discover` consumes:
+    argv-exact bindings first, dispatch-metadata bindings as a supplement
+    (a sid argv already proved is never overridden — codex with intact argv
+    is byte-identical to the pre-C1 behavior)."""
+    records = tuple(records)
+    live = build_argv_index(records, extract, cur)
+    metadata = build_metadata_index(
+        panes,
+        provider_key,
+        records,
+        is_tui_process,
+        bound_pids(live),
+        cur,
+        ancestors_of,
+    )
+    for sid, match in metadata.items():
+        live.setdefault(sid, match)
+    return live
+
+
+def bound_pids(index: dict[str, ArgvMatch]) -> frozenset[int]:
+    """PURE: the pids a live index accounts for (hint exclusion input)."""
+    return frozenset(match.pid for match in index.values())
+
+
 def unbound_live_cwds(
     records: Iterable[ProcCli],
     extract: ArgvExtractor,
-    is_tui_shape: TuiShapePredicate,
+    is_tui_process: TuiProcessPredicate,
+    bound: AbstractSet[int] = frozenset(),
 ) -> frozenset[str]:
-    """PURE: normalized cwds of live TUI-shaped processes whose argv proves
-    NO sid — the unbound-live hint source (the fourth status state).
+    """PURE: normalized cwds of live TUI processes whose argv proves NO sid
+    and whose pid no binding accounts for — the unbound-live hint source
+    (the fourth status state).
 
-    A record whose cwd could not be read (empty) is silently absent, and
-    daemon/utility shapes never enter. Downstream this set only marks rows
-    as *possibly* held; it never contributes liveness.
+    A record whose cwd could not be read (empty) is silently absent;
+    daemon/utility shapes never enter; and a pid in `bound` (argv- OR
+    metadata-bound) is accounted for, so it stops hinting sibling rows.
+    Downstream this set only marks rows as *possibly* held; it never
+    contributes liveness.
     """
     return frozenset(
         os.path.normpath(record.cwd)
         for record in records
-        if record.cwd and extract(record.argv) is None and is_tui_shape(record.argv)
+        if record.cwd
+        and record.pid not in bound
+        and extract(record.argv) is None
+        and is_tui_process(record)
     )
 
 

@@ -38,16 +38,13 @@ class TakeOverOutcome:
 class ExecutionSessionState(StrEnum):
     """Execution-time exact-SID resolution states.
 
-    RESOLVED is discriminated by `.success`; LIVENESS_INCOMPLETE and
-    TRANSCRIPT_INCOMPLETE are discriminated by `do_resume_sid_result` to
-    prefix the detail, and MISSING is discriminated there too so it can
-    append a best-effort non-Claude provider hint (a real codex/kimi sid
-    must not be reported as a plain "missing session id", since
-    `--take-over` only ever scans Claude state). Every other rejection
-    reason (ambiguous match, current-session guard, unusable cwd, incomplete
-    live identity) is never discriminated by any caller — only the detail
-    string is — so they collapse into REFUSED, which still carries the
-    specific reason in `detail`.
+    RESOLVED is discriminated by `.success`; LIVENESS_INCOMPLETE /
+    TRANSCRIPT_INCOMPLETE / MISSING are discriminated by
+    `do_resume_sid_result` (detail prefixes; MISSING also appends the
+    non-Claude provider hint — `--take-over` only ever scans Claude state).
+    Every other rejection (ambiguous match, current-session guard, unusable
+    cwd, incomplete live identity) collapses into REFUSED, which still
+    carries the specific reason in `detail`.
     """
 
     RESOLVED = "resolved"
@@ -120,13 +117,12 @@ def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
     to kill the old session first.
 
     Returns (cwd, args, should_kill). The argv comes from the session's
-    provider (ADR-0005) — never inline a CLI command here. Unified kill
-    semantics stay provider-neutral: a fork is a copy and leaves the original
-    running, while a plain resume takes the session over — so we kill only
-    when it is alive, not the current session, and we are NOT forking.
-    Runtime resume operations and `would_take_over` obey this single
-    decision; copied live commands defer the whole decision to the
-    execution-time `csctl resume --take-over` scan.
+    provider (ADR-0005) — never inline a CLI command here. Unified,
+    provider-neutral kill semantics: a fork is a copy and leaves the
+    original running, a plain resume takes the session over — kill only when
+    alive, not current, and NOT forking. Runtime resume operations and
+    `would_take_over` obey this single decision; copied live commands defer
+    it to the execution-time `csctl resume --take-over` scan.
     """
     args = providers.get(s.provider).resume_argv(s.sid, fork)
     should_kill = s.alive and not s.current and not fork
@@ -153,9 +149,8 @@ def resume_cmd(s: Session, fork: bool = False) -> str:
     only the durable sid: ``csctl resume --take-over`` reacquires evidence
     at execution time. Dead resumes, forks, and non-Claude rows copy direct
     provider commands (ADR-0005) — none serialize a kill. An archived row
-    copies its provider's official un-archive command instead: a direct
-    resume from an archived store is unverified upstream semantics.
-    """
+    copies its provider's official un-archive command instead (a direct
+    archived-store resume is unverified upstream semantics)."""
     if s.archived:
         return shlex.join(providers.unarchive_argv(s.provider, s.sid))
     if s.provider == "claude" and s.alive and not fork:
@@ -379,6 +374,10 @@ def _spawn_in_tmux_result(
         tmux.session_name_for(target_session.cwd),
         window,
         cmd,
+        # A fork window hosts a NEW sid unknown at spawn — declaring the
+        # parent sid would mint a wrong kill target (ADR-0005 fork rule).
+        sid="" if fork else target_session.sid,
+        provider=target_session.provider,
     )
     target = result.target if result.success else None
     return TmuxResumeOutcome(target, result.diagnostic)
@@ -436,6 +435,7 @@ def do_tmux_new_result(
         tmux.session_name_for(directory),
         provider.key,
         cmd,
+        provider=provider.key,  # no sid exists yet — provider tag only
     )
 
 

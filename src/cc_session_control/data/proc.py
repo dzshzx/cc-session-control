@@ -113,12 +113,20 @@ class ProcCli:
     bare TUIs; argv-exact matching still never guesses by directory, and an
     unreadable cwd stays "" silently — it must not degrade the walk (an
     inventory issue would disable execution-time takeovers, R10-style).
+    `comm`/`exe` (C1) are equally best-effort identity annotations
+    (`/proc/<pid>/comm`, `readlink /proc/<pid>/exe`) for the per-provider
+    process-identity predicates: kimi rewrites its own argv at runtime, so
+    cmdline alone cannot identify its processes. An unreadable comm/exe
+    stays "" silently for the same reason as cwd — that record merely loses
+    those identity alternatives.
     """
 
     pid: int
     argv: tuple[str, ...]
     starttime: str
     cwd: str = ""
+    comm: str = ""
+    exe: str = ""
 
 
 @dataclass(frozen=True)
@@ -424,13 +432,22 @@ def scan_cli_argv_inventory(basenames: frozenset[str]) -> ProcCliInventory:
             detail = stat_issue.detail if stat_issue else "missing starttime"
             issues.append(_cli_issue(stat.path, detail))
             continue
-        # Best-effort cwd for the unbound-live hint: ANY readlink failure
+        # Best-effort cwd/comm/exe annotations: ANY read failure
         # (disappearance race, permissions, odd procfs) silently leaves ""
         # — the argv record itself must survive so bound liveness never
-        # depends on a readable cwd, and no issue is emitted (see ProcCli).
+        # depends on them, and no issue is emitted (see ProcCli).
         cwd, _cwd_issue, _gone = _read_inventory_link(f"{_PROC}/{pid}/cwd")
+        comm, _comm_issue, _gone = _read_inventory_text(f"{_PROC}/{pid}/comm")
+        exe, _exe_issue, _gone = _read_inventory_link(f"{_PROC}/{pid}/exe")
         records.append(
-            ProcCli(pid=pid, argv=tuple(argv), starttime=stat.starttime, cwd=cwd or "")
+            ProcCli(
+                pid=pid,
+                argv=tuple(argv),
+                starttime=stat.starttime,
+                cwd=cwd or "",
+                comm=(comm or "").strip(),
+                exe=exe or "",
+            )
         )
     return ProcCliInventory(tuple(records), tuple(issues))
 

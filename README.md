@@ -18,8 +18,10 @@ all three, plus Claude Code background agents and Remote Control.
   terminate, and delete; a cleanup submenu (`c`) prunes empty/short Claude
   sessions and sweeps orphan artifact directories, zombie session files, and
   aged global entries (cleanup models Claude state only)
-- **Projects Tab** — The startup tab / launcher: start a new tmux session in
-  a project dir with claude (`Enter`), codex (`x`), or kimi (`k`); start/stop
+- **Projects Tab** — The startup tab / launcher: `Enter` opens a CLI chooser
+  (active providers only, claude focused first — so Enter-Enter starts
+  claude) to begin a new tmux session in the project dir; `x`/`k` jump
+  straight to codex/kimi; start/stop
   Claude RC servers per project (`o`/`s`), toggle per-project auto Remote
   Control (`c`), show running/stopped/dead states
 - **Background agents Tab** — List Claude Code background agent jobs; take
@@ -29,9 +31,9 @@ Non-Claude liveness is deliberately conservative (ADR-0005): a codex/kimi
 process is bound to its session only when its argv carries the session id
 (`codex resume <sid>` / `kimi --session <sid>`) — which is how csctl
 dispatches an EXISTING session back into tmux. A brand-new session started
-from the launcher (`x`/`k`) is bare argv with no session id yet, so it is
-never bound either, same as any other bare-launched TUI; neither is ever a
-stop/takeover target.
+from the launcher (the `Enter` chooser or `x`/`k`) is bare argv with no
+session id yet, so it is never bound either, same as any other bare-launched
+TUI; neither is ever a stop/takeover target.
 
 Built with [urwid](https://urwid.org/).
 

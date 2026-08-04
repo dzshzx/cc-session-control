@@ -19,6 +19,7 @@ from typing import Protocol, runtime_checkable
 
 from ...models import InventoryIssue, Session
 from ..proc import ProcCliInventory
+from ..tmux_outcomes import PaneInventory
 
 
 class LivenessGrade(Enum):
@@ -27,12 +28,18 @@ class LivenessGrade(Enum):
     FULL: registry + targeted /proc probes (Claude — `sessions/<pid>.json`
     carries `procStart`). ARGV: /proc cmdline scan binds only processes whose
     argv carries the session id (`codex resume <sid>` / `kimi -S <sid>`) —
-    exact for workbench-dispatched sessions, blind to bare TUIs. NONE: no
-    binding; sessions are resumable records, never kill targets.
+    exact for workbench-dispatched sessions, blind to bare TUIs. TMUX: ARGV
+    supplemented by csctl's own dispatch metadata — the CLI rewrites its
+    process title at runtime (kimi 0.31.1), destroying cmdline evidence, so
+    dispatched windows bind exactly through the `@csctl_sid`/`@csctl_provider`
+    options csctl declared at spawn (pane process identity-checked via
+    argv0/comm/exe); bare TUIs stay blind. NONE: no binding; sessions are
+    resumable records, never kill targets.
     """
 
     FULL = "full"
     ARGV = "argv"
+    TMUX = "tmux"
     NONE = "none"
 
 
@@ -177,13 +184,20 @@ class DiskDiscovery(Protocol):
 
     `discover` consumes the SHARED per-generation `/proc` argv inventory
     (one walk serves every provider; extractors are pure) plus the csctl
-    ancestor pid set for current-session protection.
+    ancestor pid set for current-session protection, plus — C1 — the shared
+    pane inventory carrying each window's dispatch metadata (None = no tmux
+    evidence this call; metadata bindings then simply stay absent).
     """
 
     basename: str  # argv0 basename this CLI's processes carry
+    # Every argv0 basename the /proc walk must net for this CLI — a superset
+    # of `basename` when the runtime rewrites its own title (kimi 0.31.1
+    # collapses cmdline to `kimi-code`); identity is re-verified per record.
+    capture_basenames: frozenset[str]
 
     def discover(
         self,
         cli_inventory: ProcCliInventory,
         cur: AbstractSet[int],
+        panes: PaneInventory | None = None,
     ) -> ProviderScan: ...

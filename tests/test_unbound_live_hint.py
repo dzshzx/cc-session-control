@@ -97,43 +97,56 @@ class TestScanCapturesCwd:
         assert record.cwd == ""
 
 
-# --- pure TUI-shape predicates (daemons never enter the hint source) --------
+# --- pure TUI-process predicates (daemons never enter the hint source) ------
 
 
 class TestCodexTuiShape:
     def test_session_holding_shapes_match(self):
-        assert codex_mod.is_tui_shape(("codex",))
-        assert codex_mod.is_tui_shape(("codex", "resume"))
-        assert codex_mod.is_tui_shape(("codex", "resume", "--last"))
-        assert codex_mod.is_tui_shape(("codex", "fork", UUID1))
-        assert codex_mod.is_tui_shape(("codex", "写个脚本"))
+        assert codex_mod.is_tui_process(_proc(1, "codex"))
+        assert codex_mod.is_tui_process(_proc(1, "codex", "resume"))
+        assert codex_mod.is_tui_process(_proc(1, "codex", "resume", "--last"))
+        assert codex_mod.is_tui_process(_proc(1, "codex", "fork", UUID1))
+        assert codex_mod.is_tui_process(_proc(1, "codex", "写个脚本"))
 
     def test_daemon_and_utility_shapes_never_match(self):
-        assert not codex_mod.is_tui_shape(("codex", "app-server"))
-        assert not codex_mod.is_tui_shape(("codex", "exec", "do stuff"))
-        assert not codex_mod.is_tui_shape(("codex", "mcp-server"))
-        assert not codex_mod.is_tui_shape(("codex", "proxy"))
-        assert not codex_mod.is_tui_shape(("codex", "review"))
+        assert not codex_mod.is_tui_process(_proc(1, "codex", "app-server"))
+        assert not codex_mod.is_tui_process(_proc(1, "codex", "exec", "do stuff"))
+        assert not codex_mod.is_tui_process(_proc(1, "codex", "mcp-server"))
+        assert not codex_mod.is_tui_process(_proc(1, "codex", "proxy"))
+        assert not codex_mod.is_tui_process(_proc(1, "codex", "review"))
 
     def test_wrong_basename_never_matches(self):
-        assert not codex_mod.is_tui_shape(("kimi",))
-        assert not codex_mod.is_tui_shape(())
+        assert not codex_mod.is_tui_process(_proc(1, "kimi"))
+        assert not codex_mod.is_tui_process(_proc(1))
 
 
 class TestKimiTuiShape:
     def test_session_holding_shapes_match(self):
-        assert kimi_mod.is_tui_shape(("kimi",))
-        assert kimi_mod.is_tui_shape(("kimi", "--continue"))
-        assert kimi_mod.is_tui_shape(("kimi", "-S"))  # bare interactive picker
+        assert kimi_mod.is_tui_process(_proc(1, "kimi"))
+        assert kimi_mod.is_tui_process(_proc(1, "kimi", "--continue"))
+        # bare interactive picker
+        assert kimi_mod.is_tui_process(_proc(1, "kimi", "-S"))
+
+    def test_title_rewritten_repl_matches_via_identity_set(self):
+        # C1: the observed 0.31.1 rewrite — cmdline collapses to `kimi-code`,
+        # comm follows, exe still points at the real binary.
+        rewritten = ProcCli(
+            pid=1,
+            argv=("kimi-code",),
+            starttime="1",
+            comm="kimi-code",
+            exe="/home/x/.kimi-code/bin/kimi",
+        )
+        assert kimi_mod.is_tui_process(rewritten)
 
     def test_server_and_headless_shapes_never_match(self):
-        assert not kimi_mod.is_tui_shape(("kimi", "web"))
-        assert not kimi_mod.is_tui_shape(("kimi", "acp"))
-        assert not kimi_mod.is_tui_shape(("kimi", "-p", "one prompt"))
+        assert not kimi_mod.is_tui_process(_proc(1, "kimi", "web"))
+        assert not kimi_mod.is_tui_process(_proc(1, "kimi", "acp"))
+        assert not kimi_mod.is_tui_process(_proc(1, "kimi", "-p", "one prompt"))
 
-    def test_wrong_basename_never_matches(self):
-        assert not kimi_mod.is_tui_shape(("codex",))
-        assert not kimi_mod.is_tui_shape(())
+    def test_wrong_identity_never_matches(self):
+        assert not kimi_mod.is_tui_process(_proc(1, "codex"))
+        assert not kimi_mod.is_tui_process(_proc(1))
 
 
 # --- hint detection through provider discovery ------------------------------

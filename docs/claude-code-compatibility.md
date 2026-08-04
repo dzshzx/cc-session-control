@@ -170,9 +170,13 @@ per release (read-only probes; never write into a CLI's real home):
 | Kimi `session_index.jsonl` (`sessionId` / `sessionDir` / `workDir`) + per-session `state.json` (`title` / `lastPrompt` / `workDir` / `updatedAt`) | 0.31.1 | 2026-08-04 | Index + state.json samples |
 | `kimi --session <id>` / `-S` resume; no CLI fork (in-session `/fork` only) | 0.31.1 | 2026-08-04 | `kimi --help` |
 | Kimi REPL exposes NO fd/env session binding | 0.31.1 | 2026-08-04 | Live `/proc/<pid>/{fd,environ}` probes |
+| Kimi runtime REWRITES its own process title: an active dispatched session's cmdline collapses to `kimi-code` + whitespace padding — the `--session <sid>` argv is destroyed; comm = `kimi-code`, exe → `~/.kimi-code/bin/kimi` | 0.31.1 | 2026-08-04 | Live `/proc/<pid>/{cmdline,comm,exe}` of a csctl-dispatched session (pid 3587394, window `km-2661a1d4`); a bare `kimi` process observed 2026-08-03 still showed cmdline `kimi` (rewrite timing varies) |
 
 Re-verify with the same read-only probes (`--help` outputs, first-line
-samples, `/proc` fd checks against a live TUI). A provider whose contract
-breaks degrades to typed provider issues in the Sessions status line — it
-must never blank the Claude view; adapt the owning provider module with new
-fixtures before release.
+samples, `/proc` fd/cmdline/comm/exe checks against a live TUI). The
+tmux window-metadata binding (`@csctl_sid`/`@csctl_provider`, ADR-0005 C1
+amendment) and kimi's process-identity set (comm `kimi-code` / exe basename
+`kimi`) key on the title-rewrite observation above — re-verify it per
+release. A provider whose contract breaks degrades to typed provider issues
+in the Sessions status line — it must never blank the Claude view; adapt
+the owning provider module with new fixtures before release.

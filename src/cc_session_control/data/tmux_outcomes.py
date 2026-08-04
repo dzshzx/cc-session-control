@@ -83,12 +83,18 @@ class TmuxWriteState(Enum):
 
 @dataclass(frozen=True)
 class TmuxWriteResult:
-    """Typed tmux write outcome with the created target when one exists."""
+    """Typed tmux write outcome with the created target when one exists.
+
+    `target` is the enterable `session:index` the attach/notify consumers
+    use; `window_id` (spawn stages only) is the server-unique `@N` id — THE
+    collision-safe address for follow-up window writes, since a racing
+    kill/create can reassign a name:index to a different window."""
 
     stage: TmuxWriteStage
     state: TmuxWriteState
     target: str | None = None
     detail: str = ""
+    window_id: str | None = None
 
     @property
     def success(self) -> bool:
@@ -110,7 +116,12 @@ def create_target_result(
     stdout: str,
     detail: str,
 ) -> TmuxWriteResult:
-    """Build one create result from invocation primitives."""
+    """Build one create result from invocation primitives.
+
+    Spawn `-P -F` printouts are `<session>:<index>\\t<window_id>` — the
+    enterable target plus the server-unique window id. A printout without
+    the window-id column leaves `window_id` None, so follow-up window
+    writes fail safe instead of falling back to name:index addressing."""
 
     if returncode is None or returncode != 0:
         return TmuxWriteResult(
@@ -118,7 +129,8 @@ def create_target_result(
             TmuxWriteState.FAILED,
             detail=detail,
         )
-    target = stdout.strip()
+    target, _, window_id = stdout.strip().partition("\t")
+    target = target.strip()
     if not target:
         return TmuxWriteResult(
             stage,
@@ -129,6 +141,7 @@ def create_target_result(
         stage,
         TmuxWriteState.SUCCEEDED,
         target=target,
+        window_id=window_id.strip() or None,
     )
 
 
@@ -149,10 +162,18 @@ def window_option_result(
 
 
 class TmuxPane(NamedTuple):
-    """One pane root pid and its enterable session/window target."""
+    """One pane root pid and its enterable session/window target.
+
+    `sid`/`provider` are the window's `@csctl_sid`/`@csctl_provider` user
+    options (C1): the dispatch identity csctl itself declared at spawn, "" on
+    windows without it. They feed the tmux-metadata liveness binding for CLIs
+    whose processes rewrite their own argv (kimi title rewrite); window NAMES
+    stay cosmetic and never bind."""
 
     target: str
     pid: int
+    sid: str = ""
+    provider: str = ""
 
 
 #: Same (source, path, detail) record everywhere — one canonical issue type.
