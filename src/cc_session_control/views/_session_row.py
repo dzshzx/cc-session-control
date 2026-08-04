@@ -30,6 +30,10 @@ _SOURCE_BADGES = {
     "vscode": "IDE",
     "sdk": "SDK",
     "bg": "BG",
+    # ChatGPT mobile/remote-launched codex sessions (ADR-0005 provider
+    # layer): typically app-server-hosted, often show dead in /proc, so the
+    # "CLI" badge would wrongly imply a direct terminal接回 is available.
+    "remote": "远程",
 }
 
 # One spec drives both the header and every row (see _colspec.py). Text columns
