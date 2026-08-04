@@ -9,7 +9,7 @@ elsewhere.
 
 from __future__ import annotations
 
-from ..config import cfg
+from ...config import cfg
 from .base import LivenessGrade, ProviderCaps
 
 

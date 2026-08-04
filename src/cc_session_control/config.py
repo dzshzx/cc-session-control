@@ -27,6 +27,16 @@ class Config:
     def __init__(self) -> None:
         self.claude_home: Path = Path.home() / ".claude"
         self.claude_json: Path = Path.home() / ".claude.json"
+        # Non-Claude CLI state homes (ADR-0005). Same single-path-authority
+        # rule (providers read these, never inline `Path.home() / ".codex"`),
+        # honoring each CLI's OFFICIAL relocation variable so csctl scans
+        # wherever the CLI itself actually writes.
+        self.codex_home: Path = Path(
+            os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+        )
+        self.kimi_home: Path = Path(
+            os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code"
+        )
         self.rc_session: str = os.environ.get("CSCTL_RC_SESSION", "rc")
         # Age threshold (days) for the time/global-keyed cleanup strategy.
         # 0 is a valid operator value (sweep every aged entry) — pre-0.8
@@ -109,20 +119,6 @@ class Config:
     @property
     def tasks_dir(self) -> Path:
         return self.claude_home / "tasks"
-
-    # --- Non-Claude CLI state homes (ADR-0005; same single-path-authority
-    # rule: providers read these, never inline `Path.home() / ".codex"`).
-    # Each honors its CLI's OFFICIAL relocation variable (codex-rs reads
-    # CODEX_HOME; Kimi Code reads KIMI_CODE_HOME) so csctl scans wherever the
-    # CLI itself actually writes. ---
-
-    @property
-    def codex_home(self) -> Path:
-        return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-
-    @property
-    def kimi_home(self) -> Path:
-        return Path(os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code")
 
 
 cfg = Config()

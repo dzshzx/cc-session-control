@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .. import clipboard, providers
-from ..data import liveness, proc, sessions, tmux
+from .. import clipboard
+from ..data import liveness, proc, providers, sessions, tmux
 from ..data.liveness import invalidate_cache
 from ..models import Session, issue_detail
 
@@ -249,16 +249,22 @@ def _session_for_execution(
             session=session,
         )
     if session.provider != "claude":
-        # The destructive execution-time resolver below is Claude's
-        # (registry + transcripts). A live non-Claude takeover needs its
-        # provider's own re-resolution (argv re-scan) — until that exists,
-        # fail closed rather than kill on snapshot identity.
+        # The Claude resolver below reads registry + transcripts; a live
+        # non-Claude takeover re-resolves through its provider's argv scan
+        # instead — same guarantee, different evidence: kill only on a fresh
+        # whole Session, never on snapshot identity (ADR-0005).
+        argv_resolution = providers.resolve_argv_execution(
+            session.provider,
+            session.sid,
+        )
+        if not argv_resolution.success:
+            return ExecutionSessionResolution(
+                ExecutionSessionState.REFUSED,
+                detail=argv_resolution.detail,
+            )
         return ExecutionSessionResolution(
-            ExecutionSessionState.REFUSED,
-            detail=(
-                f"live takeover for provider {session.provider!r} "
-                "is not supported yet"
-            ),
+            ExecutionSessionState.RESOLVED,
+            session=argv_resolution.session,
         )
     return resolve_execution_session(session.sid)
 

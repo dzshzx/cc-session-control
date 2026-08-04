@@ -134,8 +134,17 @@ def build_refresh_result(
             source = f"{transcript_issue.source} ({transcript_issue.path})"
             detail = format_inventory_issues(transcript_scan.issues)
             return failure(source, detail)
+        # Cleanup models Claude state only (ADR-0005): non-Claude rows must
+        # not enter the plan's session universe (their sids would neither
+        # protect nor match any ~/.claude artifact). The pure-Claude common
+        # case passes the generation tuple through UNCOPIED.
+        claude_rows = snapshot.sessions
+        if any(row.provider != "claude" for row in claude_rows):
+            claude_rows = tuple(
+                row for row in claude_rows if row.provider == "claude"
+            )
         plan = cleanup_builder(
-            snapshot.sessions,
+            claude_rows,
             evidence,
             transcript_sids=transcript_scan.sids,
             age_plan=age_plan,

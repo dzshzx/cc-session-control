@@ -12,11 +12,13 @@ cover what actions and views need uniformly across CLIs.
 
 from __future__ import annotations
 
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, runtime_checkable
 
-from ..models import InventoryIssue, Session
+from ..proc import ProcCliInventory
+from ...models import InventoryIssue, Session
 
 
 class LivenessGrade(Enum):
@@ -97,6 +99,17 @@ class AgentProvider(Protocol):
 
 @runtime_checkable
 class DiskDiscovery(Protocol):
-    """Disk session discovery for providers without a claude-grade engine."""
+    """Disk session discovery for providers without a claude-grade engine.
 
-    def discover(self) -> ProviderScan: ...
+    `discover` consumes the SHARED per-generation `/proc` argv inventory
+    (one walk serves every provider; extractors are pure) plus the csctl
+    ancestor pid set for current-session protection.
+    """
+
+    basename: str  # argv0 basename this CLI's processes carry
+
+    def discover(
+        self,
+        cli_inventory: ProcCliInventory,
+        cur: AbstractSet[int],
+    ) -> ProviderScan: ...

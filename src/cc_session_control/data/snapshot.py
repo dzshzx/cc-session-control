@@ -14,10 +14,10 @@ programming and invariant errors are not converted into empty view data.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ..models import AgentJob, InventoryIssue, RCProject, RCServer, Session
-from . import liveness, rc, sessions
+from . import liveness, providers, rc, sessions, tmux
 from .project_settings import ProjectSettingsResult, ProjectSettingsState
 from .sessions import SessionScanResult
 
@@ -42,6 +42,10 @@ class WorldSnapshot:
     """
 
     sessions: tuple[Session, ...] = ()
+    # Non-fatal degradation evidence from non-Claude provider discovery
+    # (ADR-0005): a broken codex/kimi source narrows the list, never blanks
+    # the generation. Claude transcript issues keep failing the generation.
+    provider_issues: tuple[InventoryIssue, ...] = ()
     agent_jobs: tuple[AgentJob, ...] = ()
     rc_projects: tuple[RCProject, ...] = ()
     rc_project_settings: ProjectSettingsResult = field(
@@ -57,6 +61,7 @@ class WorldSnapshot:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sessions", tuple(self.sessions))
+        object.__setattr__(self, "provider_issues", tuple(self.provider_issues))
         object.__setattr__(self, "agent_jobs", tuple(self.agent_jobs))
         object.__setattr__(self, "rc_projects", tuple(self.rc_projects))
         object.__setattr__(self, "rc_servers", tuple(self.rc_servers))
@@ -85,12 +90,14 @@ def build_world_snapshot() -> WorldSnapshot:
             liveness_snapshot=inputs,
             transcript_scan=transcript_scan,
         )
-    all_sessions = transcript_scan.sessions
+    provider_rows, provider_issues = providers.scan_non_claude(inputs.cur)
+    all_sessions = _merged_sessions(transcript_scan.sessions, provider_rows)
     window_inventory = rc._tmux_window_inventory()
     rc_scan = rc.scan_result(window_inventory=window_inventory)
     server_scan = rc.scan_servers_result(window_inventory=window_inventory)
     return WorldSnapshot(
-        sessions=tuple(all_sessions),
+        sessions=all_sessions,
+        provider_issues=provider_issues,
         agent_jobs=inputs.agent_jobs,
         rc_projects=tuple(rc_scan.projects),
         rc_project_settings=rc_scan.settings,
@@ -98,4 +105,48 @@ def build_world_snapshot() -> WorldSnapshot:
         rc_inventory_issues=server_scan.issues,
         liveness_snapshot=inputs,
         transcript_scan=transcript_scan,
+    )
+
+
+def _merged_sessions(
+    claude_rows: tuple[Session, ...],
+    provider_rows: tuple[Session, ...],
+) -> tuple[Session, ...]:
+    """Merge provider rows (residency-injected) into one mtime-ordered list.
+
+    Claude rows already carry tmux residency from `sessions.scan_result`'s
+    per-generation inventory; non-Claude alive rows get theirs from ONE
+    additional targeted inventory call, made only when such pids exist at all
+    (the common zero-live case adds no tmux subprocess)."""
+    if not provider_rows:
+        return claude_rows  # pure-Claude generation flows through uncopied
+    provider_rows = _inject_provider_residency(provider_rows)
+    merged = [*claude_rows, *provider_rows]
+    merged.sort(key=lambda r: r.mtime, reverse=True)
+    return tuple(merged)
+
+
+def _inject_provider_residency(
+    rows: tuple[Session, ...],
+) -> tuple[Session, ...]:
+    alive_pids = {row.pid for row in rows if row.alive and row.pid}
+    if not alive_pids:
+        return rows
+    inventory = tmux.residency_inventory(alive_pids)
+    detail = "; ".join(
+        f"{issue.source}"
+        + (f" ({issue.path})" if issue.path else "")
+        + f": {issue.detail}"
+        for issue in inventory.issues
+    )
+    return tuple(
+        replace(
+            row,
+            tmux_target=inventory.targets.get(row.pid) if row.pid else None,
+            tmux_inventory_complete=inventory.complete,
+            tmux_inventory_detail=detail,
+        )
+        if row.alive
+        else row
+        for row in rows
     )

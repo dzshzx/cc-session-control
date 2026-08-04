@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from cc_session_control import providers
 from cc_session_control.actions import session_ops
 from cc_session_control.config import cfg
+from cc_session_control.data import providers
+from cc_session_control.data.providers.base import LivenessGrade
 from cc_session_control.models import Session
-from cc_session_control.providers.base import LivenessGrade
 
 
 def _session(**overrides):
@@ -87,11 +87,38 @@ class TestActionDispatch:
         with pytest.raises(KeyError):
             session_ops._resume_plan(s)
 
-    def test_live_non_claude_execution_fails_closed(self):
+    def test_live_non_claude_execution_re_resolves_via_argv(self, monkeypatch):
         s = _session(provider="codex", alive=True, pid=4242)
+        fresh = _session(provider="codex", alive=True, pid=5555, proc_start="77")
+        seen: list[tuple[str, str]] = []
+
+        def fake_resolve(provider_key, sid):
+            seen.append((provider_key, sid))
+            return providers.ArgvResolution(session=fresh)
+
+        monkeypatch.setattr(
+            session_ops.providers,
+            "resolve_argv_execution",
+            fake_resolve,
+        )
+        resolution = session_ops._session_for_execution(s, fork=False)
+        assert seen == [("codex", s.sid)]
+        assert resolution.success
+        assert resolution.session is fresh
+
+    def test_live_non_claude_execution_fails_closed_on_refusal(
+        self,
+        monkeypatch,
+    ):
+        s = _session(provider="codex", alive=True, pid=4242)
+        monkeypatch.setattr(
+            session_ops.providers,
+            "resolve_argv_execution",
+            lambda provider_key, sid: providers.ArgvResolution(detail="nope"),
+        )
         resolution = session_ops._session_for_execution(s, fork=False)
         assert not resolution.success
-        assert "codex" in resolution.detail
+        assert resolution.detail == "nope"
 
     def test_dead_non_claude_execution_resolves_as_is(self):
         s = _session(provider="codex", alive=False)

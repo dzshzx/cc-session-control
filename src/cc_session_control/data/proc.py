@@ -102,6 +102,33 @@ class ProcRCInventory:
         return not self.issues
 
 
+@dataclass(frozen=True)
+class ProcCli:
+    """One agent-CLI process found by the argv walk (ADR-0005).
+
+    `starttime` is the kernel starttime captured AT SCAN TIME so a later
+    `take_over_result(pid, starttime)` recheck defeats pid reuse exactly like
+    the registry `procStart` does for Claude sessions.
+    """
+
+    pid: int
+    argv: tuple[str, ...]
+    starttime: str
+    cwd: str = ""
+
+
+@dataclass(frozen=True)
+class ProcCliInventory:
+    """Known agent-CLI processes plus `/proc` walk completeness."""
+
+    records: tuple[ProcCli, ...] = ()
+    issues: tuple[ProcIssue, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
+
+
 def has_proc() -> bool:
     """True if `/proc` is readable (Linux/WSL). Liveness degrades when False."""
     return os.path.isdir(_PROC)
@@ -341,6 +368,73 @@ def _read_inventory_link(
         if exc.errno == errno.ENOENT:
             return None, None, True
         return None, _rc_issue(path, str(exc)), False
+
+
+def _cli_issue(path: str, detail: str) -> ProcIssue:
+    return ProcIssue("CLI process inventory", path, detail)
+
+
+def scan_cli_argv_inventory(basenames: frozenset[str]) -> ProcCliInventory:
+    """Walk `/proc` once for every process whose argv0 basename is in
+    `basenames`, capturing argv + starttime + cwd (ADR-0005 argv-exact
+    liveness for non-Claude providers).
+
+    One walk serves ALL non-Claude providers per generation — callers pass
+    the union of CLI basenames and match argv shapes themselves (pure
+    per-provider extractors). Degrades to an issue off Linux; per-pid
+    disappearance races are ignored like the RC walk does.
+    """
+    if not has_proc():
+        return ProcCliInventory(
+            issues=(_cli_issue(_PROC, f"{_PROC} is unavailable"),),
+        )
+    records: list[ProcCli] = []
+    issues: list[ProcIssue] = []
+    try:
+        entries = os.listdir(_PROC)
+    except OSError as exc:
+        return ProcCliInventory(issues=(_cli_issue(_PROC, str(exc)),))
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        cmdline_path = f"{_PROC}/{pid}/cmdline"
+        cmdline, issue, disappeared = _read_inventory_text(cmdline_path)
+        if disappeared:
+            continue
+        if issue is not None:
+            issues.append(
+                _cli_issue(cmdline_path, issue.detail),
+            )
+            continue
+        if cmdline is None:
+            raise AssertionError("available process cmdline must carry text")
+        argv = _split_cmdline(cmdline)
+        if not argv or os.path.basename(argv[0]) not in basenames:
+            continue
+        stat = read_proc_stat(pid)
+        if stat.state is ProcReadState.GONE:
+            continue
+        if stat.state is not ProcReadState.AVAILABLE or stat.starttime is None:
+            stat_issue = stat.issue
+            detail = stat_issue.detail if stat_issue else "missing starttime"
+            issues.append(_cli_issue(stat.path, detail))
+            continue
+        cwd_path = f"{_PROC}/{pid}/cwd"
+        cwd, issue, disappeared = _read_inventory_link(cwd_path)
+        if disappeared:
+            continue
+        if issue is not None:
+            issues.append(_cli_issue(cwd_path, issue.detail))
+        records.append(
+            ProcCli(
+                pid=pid,
+                argv=tuple(argv),
+                starttime=stat.starttime,
+                cwd=cwd or "",
+            )
+        )
+    return ProcCliInventory(tuple(records), tuple(issues))
 
 
 def scan_rc_server_inventory() -> ProcRCInventory:
