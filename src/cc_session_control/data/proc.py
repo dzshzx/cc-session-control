@@ -108,13 +108,14 @@ class ProcCli:
 
     `starttime` is the kernel starttime captured AT SCAN TIME so a later
     `take_over_result(pid, starttime)` recheck defeats pid reuse exactly like
-    the registry `procStart` does for Claude sessions.
+    the registry `procStart` does for Claude sessions. Deliberately NO cwd:
+    argv-exact matching never guesses by directory, and an unreadable cwd of
+    an unrelated process must not degrade the walk.
     """
 
     pid: int
     argv: tuple[str, ...]
     starttime: str
-    cwd: str = ""
 
 
 @dataclass(frozen=True)
@@ -420,19 +421,8 @@ def scan_cli_argv_inventory(basenames: frozenset[str]) -> ProcCliInventory:
             detail = stat_issue.detail if stat_issue else "missing starttime"
             issues.append(_cli_issue(stat.path, detail))
             continue
-        cwd_path = f"{_PROC}/{pid}/cwd"
-        cwd, issue, disappeared = _read_inventory_link(cwd_path)
-        if disappeared:
-            continue
-        if issue is not None:
-            issues.append(_cli_issue(cwd_path, issue.detail))
         records.append(
-            ProcCli(
-                pid=pid,
-                argv=tuple(argv),
-                starttime=stat.starttime,
-                cwd=cwd or "",
-            )
+            ProcCli(pid=pid, argv=tuple(argv), starttime=stat.starttime)
         )
     return ProcCliInventory(tuple(records), tuple(issues))
 

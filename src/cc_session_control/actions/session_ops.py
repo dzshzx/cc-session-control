@@ -291,7 +291,8 @@ def _do_resume_resolved_result(s: Session, fork: bool = False) -> ResumeOutcome:
             return ResumeOutcome(False, takeover_failure)
     if cwd and os.path.isdir(cwd):
         os.chdir(cwd)
-    os.execvp("claude", args)
+    # argv[0] IS the provider's binary (ADR-0005) — never a hardcoded CLI.
+    os.execvp(args[0], args)
     return ResumeOutcome(True)
 
 

@@ -544,6 +544,11 @@ class SessionsView(CleanupMixin, ListTabView):
         )
 
     def _key_delete(self, s: Session) -> None:
+        if not providers.get(s.provider).caps.cleanup:
+            # ADR-0005: csctl never deletes state it does not fully model —
+            # a codex/kimi row's file anchor points into that CLI's own store.
+            self.app.notify(f"{s.provider} 会话由其 CLI 自己管理，csctl 不删除")
+            return
         if s.alive:
             self.app.notify("运行中的会话不删，先停止")
             return

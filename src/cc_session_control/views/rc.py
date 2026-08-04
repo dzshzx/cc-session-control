@@ -349,9 +349,7 @@ class RCView(ListTabView):
         if not p.dir_exists:
             self.app.notify("目录缺失 — 无法新建会话")
             return
-        if not any(
-            prov.key == provider_key for prov in providers.active_providers()
-        ):
+        if not providers.is_active(provider_key):
             self.app.notify(f"{provider_key} 未启用或未安装 — 无法新建会话")
             return
         self.app.exit_with(TmuxNewIntent(p.directory, provider=provider_key))

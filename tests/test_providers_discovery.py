@@ -23,9 +23,14 @@ def _proc(pid: int, *argv: str, starttime: str = "100") -> ProcCli:
 
 
 class TestCodexExtract:
-    def test_resume_and_fork_match(self):
+    def test_resume_matches(self):
         assert extract_sid(("codex", "resume", UUID1)) == UUID1
-        assert extract_sid(("/usr/bin/codex", "fork", UUID1)) == UUID1
+        assert extract_sid(("/usr/bin/codex", "resume", UUID1)) == UUID1
+
+    def test_fork_never_binds_the_parent_sid(self):
+        # `codex fork <sid>` is minting a NEW session; binding the parent sid
+        # to the fork's pid would make the parent a wrong takeover target.
+        assert extract_sid(("codex", "fork", UUID1)) is None
 
     def test_bare_and_daemon_argvs_never_match(self):
         assert extract_sid(("codex",)) is None
@@ -320,7 +325,7 @@ class TestResolveArgvExecution:
         assert not resolution.success
         assert "current session" in resolution.detail
 
-    def test_happy_path_returns_fresh_whole_session(
+    def test_happy_path_returns_fresh_whole_session_with_residency(
         self,
         monkeypatch,
         codex_home,
@@ -347,8 +352,62 @@ class TestResolveArgvExecution:
                 records=(_proc(999999, "codex", "resume", UUID1, starttime="88"),),
             ),
         )
+        from cc_session_control.data.tmux_outcomes import ResidencyInventory
+
+        seen_pids: list[set[int]] = []
+
+        def fake_residency(pids):
+            seen_pids.append(set(pids))
+            return ResidencyInventory(targets={999999: "proj:2"})
+
+        monkeypatch.setattr(providers.tmux, "residency_inventory", fake_residency)
         resolution = providers.resolve_argv_execution("codex", UUID1)
         assert resolution.success
         assert resolution.session is not None
         assert resolution.session.pid == 999999
         assert resolution.session.proc_start == "88"
+        # Residency is gathered fresh — the spawn-path guard and in-place
+        # attach must see real evidence, not the model defaults.
+        assert seen_pids == [{999999}]
+        assert resolution.session.tmux_target == "proj:2"
+        assert resolution.session.tmux_inventory_complete
+
+
+class TestSourceDegradationSurfaces:
+    def test_kimi_malformed_state_json_is_an_issue(self, kimi_home):
+        sid = f"session_{UUID1}"
+        session_dir = _write_kimi_session(kimi_home, sid, None)
+        import os
+
+        with open(os.path.join(session_dir, "state.json"), "w") as fh:
+            fh.write("{not json")
+        scan = KimiProvider().discover(ProcCliInventory(), cur=frozenset())
+        assert not scan.complete
+        assert any("state.json" in (i.path or "") for i in scan.issues)
+        (row,) = scan.sessions  # the row still lists, degraded to index fields
+        assert row.label == "(untitled)"
+
+    def test_codex_unparseable_first_line_is_one_aggregated_issue(
+        self,
+        codex_home,
+    ):
+        day = codex_home / "sessions" / "2026" / "08" / "01"
+        day.mkdir(parents=True, exist_ok=True)
+        (day / "rollout-bad.jsonl").write_text("garbage, not session_meta\n")
+        (day / "rollout-empty.jsonl").write_text("")  # benign lazy-created
+        scan = CodexProvider().discover(ProcCliInventory(), cur=frozenset())
+        assert not scan.complete
+        (issue,) = scan.issues
+        assert "1 rollout file(s)" in issue.detail
+
+    def test_fresh_install_scans_clean(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cfg, "codex_home", tmp_path / "codex-fresh")
+        monkeypatch.setattr(cfg, "kimi_home", tmp_path / "kimi-fresh")
+        (tmp_path / "codex-fresh").mkdir()
+        (tmp_path / "kimi-fresh").mkdir()
+        assert CodexProvider().available()
+        assert KimiProvider().available()
+        codex_scan = CodexProvider().discover(ProcCliInventory(), frozenset())
+        kimi_scan = KimiProvider().discover(ProcCliInventory(), frozenset())
+        assert codex_scan.sessions == () and codex_scan.complete
+        assert kimi_scan.sessions == () and kimi_scan.complete

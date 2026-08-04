@@ -61,14 +61,10 @@ def _cmd_resume(args: Namespace) -> int:
             + rc_outcomes.format_inventory_issues((provider_issue,)),
             file=sys.stderr,
         )
-    rows = sorted(
-        [*transcript_scan.sessions, *provider_rows],
-        key=lambda s: s.mtime,
-        reverse=True,
-    )
+    rows = providers.merge_sessions(transcript_scan.sessions, provider_rows)
 
     render_result = render(
-        rows,
+        list(rows),
         keyword=args.keyword,
         page=args.page,
         limit=args.limit,

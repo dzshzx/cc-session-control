@@ -106,8 +106,14 @@ The provider designs below are grounded in probes of the actual CLIs
   execution time instead.
 - **Discovery stays honest about cost and hiding.** Codex discovery reads
   only rollout first lines + the index (no full-file parses); subagent
-  rollouts (`thread_source: subagent`) map to the existing hidden filter, as
-  SDK sessions do for Claude. Kimi discovery is index + `state.json` only.
+  rollouts (`thread_source: subagent`) are SKIPPED entirely — they are
+  internal execution artifacts, not operator work units, and their
+  `session_id` points at the parent thread; `codex exec` headless runs
+  (`originator: codex_exec`) map onto the existing SDK hide filter instead,
+  as `claude -p` sessions do. Kimi discovery is index + `state.json` only.
+  Provider source failures surface as non-fatal typed issues (unreadable
+  subtrees, malformed `state.json`, unparseable rollout heads) — degraded
+  sources narrow the list visibly, never silently.
 - **The launcher goes multi-CLI; membership does not (yet).** The Projects
   tab keeps Claude-trust membership (ADR-0003) but its launcher offers a new
   session per active provider; each CLI shows its own trust/onboarding
@@ -129,5 +135,14 @@ The provider designs below are grounded in probes of the actual CLIs
 - Desktop/IDE-hosted codex sessions (app-server-held rollouts) currently
   read as not-alive. Surfacing them as "hosted, read-only" via the
   app-server's fd table is a known follow-up, not in this change.
+- A copied resume command for a LIVE non-Claude session is the plain
+  provider resume (`codex resume <sid>`): the Claude-only
+  `csctl resume --take-over` deferral cannot cover it, and a plain resume
+  serializes no kill — the CLI itself surfaces any collision. The launcher
+  binds one explicit key per provider (`x`/`k`) — a deliberate UI choice at
+  three CLIs, revisited if the registry grows.
+- `codex fork <sid>` argv deliberately does NOT bind liveness: the fork
+  process is minting a NEW session, so binding the parent sid to the fork's
+  pid would make the parent a wrong takeover target.
 - Upstream contracts multiply: codex/kimi disk formats and resume flags
   join the compatibility checklist re-verified per release.

@@ -121,9 +121,7 @@ def _merged_sessions(
     if not provider_rows:
         return claude_rows  # pure-Claude generation flows through uncopied
     provider_rows = _inject_provider_residency(provider_rows)
-    merged = [*claude_rows, *provider_rows]
-    merged.sort(key=lambda r: r.mtime, reverse=True)
-    return tuple(merged)
+    return providers.merge_sessions(claude_rows, provider_rows)
 
 
 def _inject_provider_residency(
@@ -133,18 +131,12 @@ def _inject_provider_residency(
     if not alive_pids:
         return rows
     inventory = tmux.residency_inventory(alive_pids)
-    detail = "; ".join(
-        f"{issue.source}"
-        + (f" ({issue.path})" if issue.path else "")
-        + f": {issue.detail}"
-        for issue in inventory.issues
-    )
     return tuple(
         replace(
             row,
             tmux_target=inventory.targets.get(row.pid) if row.pid else None,
             tmux_inventory_complete=inventory.complete,
-            tmux_inventory_detail=detail,
+            tmux_inventory_detail=inventory.issue_detail,
         )
         if row.alive
         else row

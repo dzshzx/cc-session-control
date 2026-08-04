@@ -9,10 +9,10 @@ absent CLI simply contributes no rows.
 from __future__ import annotations
 
 import os.path
-from collections.abc import Set as AbstractSet
-from dataclasses import dataclass
+from collections.abc import Iterable, Set as AbstractSet
+from dataclasses import dataclass, replace
 
-from .. import proc
+from .. import proc, tmux
 from ...models import InventoryIssue, Session
 from .base import (
     AgentProvider,
@@ -35,6 +35,8 @@ __all__ = [
     "all_providers",
     "active_providers",
     "get",
+    "is_active",
+    "merge_sessions",
     "scan_non_claude",
     "resolve_argv_execution",
 ]
@@ -61,6 +63,20 @@ def get(key: str) -> AgentProvider:
         if p.key == key:
             return p
     raise KeyError(f"unknown provider {key!r}")
+
+
+def is_active(key: str) -> bool:
+    """Whether `key` is allowed AND locally present — THE activation
+    predicate (launcher gates read this, never re-derive)."""
+    return any(p.key == key for p in active_providers())
+
+
+def merge_sessions(*row_groups: Iterable[Session]) -> tuple[Session, ...]:
+    """THE one cross-provider merge: newest-first by mtime (snapshot and the
+    headless resume listing both consume this, never re-sort inline)."""
+    merged = [row for group in row_groups for row in group]
+    merged.sort(key=lambda r: r.mtime, reverse=True)
+    return tuple(merged)
 
 
 def scan_non_claude(
@@ -111,6 +127,10 @@ def resolve_argv_execution(provider_key: str, sid: str) -> ArgvResolution:
     unusable cwds, and incomplete argv-walk evidence (fail closed, R10-like).
     """
     provider = get(provider_key)
+    if not provider.caps.takeover:
+        return ArgvResolution(
+            detail=f"provider {provider_key!r} does not support takeover",
+        )
     if not isinstance(provider, DiskDiscovery):
         return ArgvResolution(
             detail=f"provider {provider_key!r} has no execution-time discovery",
@@ -142,4 +162,23 @@ def resolve_argv_execution(provider_key: str, sid: str) -> ArgvResolution:
             detail=f"session {sid!r} has no usable execution-time cwd: "
             f"{target.cwd!r}",
         )
-    return ArgvResolution(session=target)
+    return ArgvResolution(session=_with_residency(target))
+
+
+def _with_residency(target: Session) -> Session:
+    """Fill tmux residency on a freshly re-resolved live row.
+
+    Without this the model defaults (`tmux_target=None`,
+    `tmux_inventory_complete=True`) would FABRICATE completeness: the
+    spawn-path guard and the in-place attach check would silently no-op and a
+    resident session could be SIGTERMed instead of entered (same guarantee as
+    the Claude resolver, whose scan injects residency itself)."""
+    if not target.alive or not target.pid:
+        return target
+    inventory = tmux.residency_inventory({target.pid})
+    return replace(
+        target,
+        tmux_target=inventory.targets.get(target.pid),
+        tmux_inventory_complete=inventory.complete,
+        tmux_inventory_detail=inventory.issue_detail,
+    )

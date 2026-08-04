@@ -125,3 +125,34 @@ class TestActionDispatch:
         resolution = session_ops._session_for_execution(s, fork=False)
         assert resolution.success
         assert resolution.session is s
+
+    def test_terminal_resume_execs_the_provider_binary(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """Regression: `t` on a codex row must exec codex, never claude."""
+        execs: list[tuple[str, list[str]]] = []
+        monkeypatch.setattr(
+            session_ops.os,
+            "execvp",
+            lambda binary, args: execs.append((binary, args)),
+        )
+        s = _session(provider="codex", alive=False, cwd=str(tmp_path))
+        outcome = session_ops._do_resume_resolved_result(s)
+        assert outcome.success
+        ((binary, args),) = execs
+        assert binary == "codex"
+        assert args == ["codex", "resume", s.sid]
+
+    def test_delete_refuses_non_claude_sessions(self):
+        """csctl never deletes state it does not model (ADR-0005): a codex
+        row's file anchor points into ~/.codex — the data boundary refuses."""
+        from cc_session_control.data import cleanup
+
+        s = _session(provider="codex", file="/tmp/rollout.jsonl")
+        execution = cleanup.remove_session(s)
+        assert execution.refused
+        assert any(
+            "not csctl-deletable" in r.reason for r in execution.refused
+        )

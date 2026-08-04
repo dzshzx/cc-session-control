@@ -39,14 +39,17 @@ _FIRST_LINE_CAP = 64 * 1024
 def extract_sid(argv: tuple[str, ...]) -> str | None:
     """PURE: the sid a codex process argv proves it is running.
 
-    Matches only the resume/fork subcommand shapes with an explicit UUID —
-    daemons (`app-server`, `proxy`, `codex-threadripper`) and bare TUIs never
-    match, so they are never kill targets.
+    Matches ONLY the resume subcommand shape with an explicit UUID — daemons
+    (`app-server`, `proxy`, `codex-threadripper`) and bare TUIs never match,
+    so they are never kill targets. `codex fork <sid>` deliberately does NOT
+    match either: the fork process is minting a NEW session, so binding the
+    PARENT sid to the fork's pid would make the parent read alive with the
+    child's pid (a wrong takeover target).
     """
     if len(argv) < 3 or os.path.basename(argv[0]) != BASENAME:
         return None
     rest = argv[1:]
-    if "resume" not in rest and "fork" not in rest:
+    if "resume" not in rest:
         return None
     for tok in rest:
         if _UUID_RE.match(tok):
@@ -82,18 +85,20 @@ def _read_index(issues: list[InventoryIssue]) -> dict[str, str]:
     return names
 
 
-def _read_meta(path: str) -> dict | None:
-    """The parsed `session_meta` payload of one rollout, or None."""
+def _read_meta(path: str) -> tuple[dict | None, bool]:
+    """(parsed `session_meta` payload or None, first-line-was-empty)."""
     with open(path, "rb") as fh:
         raw = fh.readline(_FIRST_LINE_CAP)
+    if not raw.strip():
+        return None, True
     if _META_MARK not in raw:
-        return None
+        return None, False
     try:
         record = json.loads(raw)
     except ValueError:
-        return None
+        return None, False
     payload = record.get("payload")
-    return payload if isinstance(payload, dict) else None
+    return (payload, False) if isinstance(payload, dict) else (None, False)
 
 
 class CodexProvider:
@@ -107,7 +112,10 @@ class CodexProvider:
     )
 
     def available(self) -> bool:
-        return (cfg.codex_home / "sessions").is_dir()
+        # Home existence, per ADR-0005 — a fresh install with zero sessions
+        # must still activate (launcher `x`); discover() tolerates the
+        # missing sessions tree.
+        return cfg.codex_home.is_dir()
 
     def resume_argv(self, sid: str, fork: bool = False) -> list[str]:
         return ["codex", "fork" if fork else "resume", sid]
@@ -129,23 +137,33 @@ class CodexProvider:
         live = build_argv_index(cli_inventory.records, extract_sid, cur)
 
         root = cfg.codex_home / "sessions"
+        if not root.is_dir():
+            return ProviderScan()  # fresh install — nothing recorded yet
         best: dict[str, Session] = {}
-        try:
-            walker = os.walk(root)
-        except OSError as exc:  # pragma: no cover - os.walk defers errors
-            return ProviderScan(issues=(_issue(os.fspath(root), str(exc)),))
-        for dirpath, _dirnames, filenames in walker:
+        unparseable = 0
+
+        def _walk_error(exc: OSError) -> None:
+            # os.walk swallows errors by default; an unreadable subtree must
+            # surface as degradation, never silently narrow the list.
+            issues.append(_issue(getattr(exc, "filename", "") or "", str(exc)))
+
+        for dirpath, _dirnames, filenames in os.walk(root, onerror=_walk_error):
             for filename in filenames:
                 if not filename.endswith(".jsonl"):
                     continue
                 path = os.path.join(dirpath, filename)
                 try:
                     mtime = os.stat(path).st_mtime
-                    payload = self._row_payload(path)
+                    payload, empty = self._row_payload(path)
                 except OSError as exc:
                     issues.append(_issue(path, str(exc)))
                     continue
                 if payload is None:
+                    # An empty first line is a benign lazily-created rollout;
+                    # a NON-empty unparseable one may be upstream format
+                    # drift — counted and surfaced once below.
+                    if not empty:
+                        unparseable += 1
                     continue
                 row = self._project(payload, path, mtime, names, live)
                 if row is None:
@@ -153,9 +171,17 @@ class CodexProvider:
                 kept = best.get(row.sid)
                 if kept is None or row.mtime > kept.mtime:
                     best[row.sid] = row
+        if unparseable:
+            issues.append(
+                _issue(
+                    os.fspath(root),
+                    f"{unparseable} rollout file(s) without a parseable "
+                    "session_meta first line (upstream format change?)",
+                )
+            )
         return ProviderScan(tuple(best.values()), tuple(issues))
 
-    def _row_payload(self, path: str) -> dict | None:
+    def _row_payload(self, path: str) -> tuple[dict | None, bool]:
         return _read_meta(path)
 
     def _project(

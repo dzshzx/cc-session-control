@@ -39,15 +39,25 @@ def _issue(path: str, detail: str) -> InventoryIssue:
     return InventoryIssue("kimi sessions", path, detail)
 
 
-def _read_state(session_dir: str) -> dict | None:
-    """`state.json` of one session dir; None when absent/unreadable/torn."""
+def _read_state(
+    session_dir: str,
+) -> tuple[dict | None, InventoryIssue | None]:
+    """`state.json` of one session dir as (state, degradation evidence).
+
+    A MISSING file degrades silently (the append-only index outlives deleted
+    session dirs — flagging every historical gap would degrade forever); an
+    unreadable or malformed one surfaces as an issue (AGENTS.md 外部失败)."""
     path = os.path.join(session_dir, "state.json")
     try:
         with open(path, "rb") as fh:
             state = json.load(fh)
-    except (OSError, ValueError):
-        return None
-    return state if isinstance(state, dict) else None
+    except FileNotFoundError:
+        return None, None
+    except (OSError, ValueError) as exc:
+        return None, _issue(path, str(exc))
+    if not isinstance(state, dict):
+        return None, _issue(path, "state.json is not a JSON object")
+    return state, None
 
 
 class KimiProvider:
@@ -60,7 +70,10 @@ class KimiProvider:
     )
 
     def available(self) -> bool:
-        return (cfg.kimi_home / "session_index.jsonl").is_file()
+        # Home existence, per ADR-0005 — a fresh install with zero sessions
+        # must still activate (launcher `k`); discover() tolerates the
+        # missing index.
+        return cfg.kimi_home.is_dir()
 
     def resume_argv(self, sid: str, fork: bool = False) -> list[str]:
         if fork:
@@ -101,13 +114,24 @@ class KimiProvider:
             return ProviderScan(issues=(_issue(os.fspath(index_path), str(exc)),))
 
         rows = tuple(
-            self._project(sid, entry, live) for sid, entry in entries.items()
+            self._project(sid, entry, live, issues)
+            for sid, entry in entries.items()
         )
         return ProviderScan(rows, tuple(issues))
 
-    def _project(self, sid: str, entry: dict, live: dict) -> Session:
+    def _project(
+        self,
+        sid: str,
+        entry: dict,
+        live: dict,
+        issues: list[InventoryIssue],
+    ) -> Session:
         session_dir = entry.get("sessionDir")
-        state = _read_state(session_dir) if isinstance(session_dir, str) else None
+        state = None
+        if isinstance(session_dir, str):
+            state, state_issue = _read_state(session_dir)
+            if state_issue is not None:
+                issues.append(state_issue)
         mtime = 0.0
         if isinstance(session_dir, str):
             try:

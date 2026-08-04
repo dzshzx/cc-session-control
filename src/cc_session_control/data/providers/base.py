@@ -38,8 +38,16 @@ class LivenessGrade(Enum):
 
 @dataclass(frozen=True)
 class ProviderCaps:
-    """Typed verb gates — a capability a provider lacks is absent/refused in
-    the UI with a typed detail, never emulated (ADR-0005)."""
+    """Typed verb gates — a capability a provider lacks is absent/refused
+    with a typed detail, never emulated (ADR-0005).
+
+    Consumed today: `fork` (Sessions `f`), `cleanup` (Sessions `d` + the
+    data-boundary refusal in `cleanup.remove_session`), `takeover`
+    (`resolve_argv_execution` refuses providers without it).
+    `background_agents` / `remote_control` are declarative: the Agents and
+    Projects-RC tabs read Claude-specific data sources directly, so these
+    document the contract a future non-Claude surface must consult rather
+    than gating an existing verb."""
 
     fork: bool = False
     takeover: bool = False
