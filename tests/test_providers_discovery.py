@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 
+from cc_session_control.actions import resume_list
 from cc_session_control.config import cfg
 from cc_session_control.data import providers
 from cc_session_control.data.proc import ProcCli, ProcCliInventory
@@ -255,6 +258,42 @@ class TestKimiDiscover:
     def test_no_index_means_no_rows(self, kimi_home):
         scan = KimiProvider().discover(ProcCliInventory(), cur=frozenset())
         assert scan.sessions == () and scan.complete
+
+    def test_file_targets_the_real_conversation_not_state_json(self, kimi_home):
+        # state.json only carries title/lastPrompt/workDir metadata — the
+        # actual conversation content csctl needs for body search lives in
+        # agents/main/wire.jsonl.
+        sid = f"session_{UUID1}"
+        session_dir = Path(
+            _write_kimi_session(kimi_home, sid, {"title": "标题"})
+        )
+        wire_dir = session_dir / "agents" / "main"
+        wire_dir.mkdir(parents=True)
+        (wire_dir / "wire.jsonl").write_text(
+            '{"role": "user", "text": "discuss ZEBRA-CROSSING-TOKEN here"}\n'
+        )
+        scan = KimiProvider().discover(ProcCliInventory(), cur=frozenset())
+        (row,) = scan.sessions
+        assert row.file == str(wire_dir / "wire.jsonl")
+        # mtime keeps coming from state.json's stat, not the wire log's.
+        assert row.mtime == os.stat(session_dir / "state.json").st_mtime
+
+    def test_body_search_finds_a_word_only_present_in_wire_jsonl(self, kimi_home):
+        sid = f"session_{UUID2}"
+        session_dir = Path(
+            _write_kimi_session(kimi_home, sid, {"title": "unrelated title"})
+        )
+        wire_dir = session_dir / "agents" / "main"
+        wire_dir.mkdir(parents=True)
+        (wire_dir / "wire.jsonl").write_text(
+            '{"role": "assistant", "text": "the fix is FLUORESCENT-NARWHAL"}\n'
+        )
+        scan = KimiProvider().discover(ProcCliInventory(), cur=frozenset())
+        (row,) = scan.sessions
+        # Not in sid/cwd/label metadata, so this only matches via body fallback.
+        assert "fluorescent-narwhal" not in row.label.lower()
+        assert resume_list.keyword_matches(row, "fluorescent-narwhal")
+        assert not resume_list.keyword_matches(row, "no-such-word-anywhere")
 
 
 class TestScanNonClaude:

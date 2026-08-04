@@ -3,11 +3,16 @@
 Upstream contracts (verified on Kimi Code 0.31.1, re-verify per release):
 `$KIMI_CODE_HOME/session_index.jsonl` maps `sessionId` → `sessionDir` /
 `workDir`; each session dir holds `state.json` (`title`, `lastPrompt`,
-`workDir`, `updatedAt`). Resume: `kimi --session <sid>` (short `-S`); fork
-exists only as the in-session `/fork`, so `caps.fork` is False and a fork
-argv request is a programming error. A bare `kimi` REPL leaves no
-pid↔session evidence (no fd, no env — probed), so only `--session` argv
-matches bind; those are the only kill targets.
+`workDir`, `updatedAt` — metadata only) and `agents/main/wire.jsonl`, the
+main agent's actual conversation log (subagents get their own
+`agents/agent-N/wire.jsonl`, not covered here). `Session.file` points at the
+wire log so headless resume's transcript-body search fallback has real
+content to search; `Session.mtime` still comes from `state.json`'s stat, not
+the wire log's. Resume: `kimi --session <sid>` (short `-S`); fork exists
+only as the in-session `/fork`, so `caps.fork` is False and a fork argv
+request is a programming error. A bare `kimi` REPL leaves no pid↔session
+evidence (no fd, no env — probed), so only `--session` argv matches bind;
+those are the only kill targets.
 """
 
 from __future__ import annotations
@@ -165,7 +170,10 @@ class KimiProvider:
             current=bool(match and match.current),
             provider=self.key,
             proc_start=match.proc_start if match else "",
-            file=os.path.join(session_dir, "state.json")
+            # state.json is metadata only (title/lastPrompt/workDir); the
+            # actual conversation body — what headless resume's transcript
+            # fallback search needs — lives in the main agent's wire log.
+            file=os.path.join(session_dir, "agents", "main", "wire.jsonl")
             if isinstance(session_dir, str)
             else "",
             source="cli",
