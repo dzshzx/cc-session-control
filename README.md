@@ -27,9 +27,11 @@ all three, plus Claude Code background agents and Remote Control.
 
 Non-Claude liveness is deliberately conservative (ADR-0005): a codex/kimi
 process is bound to its session only when its argv carries the session id
-(`codex resume <sid>` / `kimi --session <sid>` — which is how csctl itself
-dispatches them into tmux). Bare-launched TUIs are never stop/takeover
-targets.
+(`codex resume <sid>` / `kimi --session <sid>`) — which is how csctl
+dispatches an EXISTING session back into tmux. A brand-new session started
+from the launcher (`x`/`k`) is bare argv with no session id yet, so it is
+never bound either, same as any other bare-launched TUI; neither is ever a
+stop/takeover target.
 
 Built with [urwid](https://urwid.org/).
 

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 
+from cc_session_control.actions import resume_list
 from cc_session_control.config import cfg
 from cc_session_control.data import providers
 from cc_session_control.data.proc import ProcCli, ProcCliInventory
 from cc_session_control.data.providers import kimi as kimi_mod
-from cc_session_control.data.providers.codex import CodexProvider, extract_sid
+from cc_session_control.data.providers.codex import CodexProvider
 from cc_session_control.data.providers.kimi import KimiProvider
 
 UUID1 = "019fc784-c365-70e0-af94-a6a0b15f05b8"
@@ -21,25 +24,8 @@ def _proc(pid: int, *argv: str, starttime: str = "100") -> ProcCli:
     return ProcCli(pid=pid, argv=tuple(argv), starttime=starttime)
 
 
-class TestCodexExtract:
-    def test_resume_matches(self):
-        assert extract_sid(("codex", "resume", UUID1)) == UUID1
-        assert extract_sid(("/usr/bin/codex", "resume", UUID1)) == UUID1
-
-    def test_fork_never_binds_the_parent_sid(self):
-        # `codex fork <sid>` is minting a NEW session; binding the parent sid
-        # to the fork's pid would make the parent a wrong takeover target.
-        assert extract_sid(("codex", "fork", UUID1)) is None
-
-    def test_bare_and_daemon_argvs_never_match(self):
-        assert extract_sid(("codex",)) is None
-        assert extract_sid(("codex", "resume")) is None
-        assert extract_sid(("codex", "app-server", "proxy")) is None
-        assert extract_sid(("codex", "-c", "features.x=true", "app-server")) is None
-        assert extract_sid(("kimi", "resume", UUID1)) is None
-
-    def test_uuid_is_required_not_any_token(self):
-        assert extract_sid(("codex", "resume", "not-a-uuid")) is None
+# Codex argv-binding extract tests live in test_codex_resume_binding.py
+# (resume-grammar + name-lookup seams, candidate B5).
 
 
 class TestKimiExtract:
@@ -255,6 +241,40 @@ class TestKimiDiscover:
     def test_no_index_means_no_rows(self, kimi_home):
         scan = KimiProvider().discover(ProcCliInventory(), cur=frozenset())
         assert scan.sessions == () and scan.complete
+
+    def test_file_targets_the_real_conversation_not_state_json(self, kimi_home):
+        # state.json only carries title/lastPrompt/workDir metadata — the
+        # actual conversation content csctl needs for body search lives in
+        # agents/main/wire.jsonl.
+        sid = f"session_{UUID1}"
+        session_dir = Path(_write_kimi_session(kimi_home, sid, {"title": "标题"}))
+        wire_dir = session_dir / "agents" / "main"
+        wire_dir.mkdir(parents=True)
+        (wire_dir / "wire.jsonl").write_text(
+            '{"role": "user", "text": "discuss ZEBRA-CROSSING-TOKEN here"}\n'
+        )
+        scan = KimiProvider().discover(ProcCliInventory(), cur=frozenset())
+        (row,) = scan.sessions
+        assert row.file == str(wire_dir / "wire.jsonl")
+        # mtime keeps coming from state.json's stat, not the wire log's.
+        assert row.mtime == os.stat(session_dir / "state.json").st_mtime
+
+    def test_body_search_finds_a_word_only_present_in_wire_jsonl(self, kimi_home):
+        sid = f"session_{UUID2}"
+        session_dir = Path(
+            _write_kimi_session(kimi_home, sid, {"title": "unrelated title"})
+        )
+        wire_dir = session_dir / "agents" / "main"
+        wire_dir.mkdir(parents=True)
+        (wire_dir / "wire.jsonl").write_text(
+            '{"role": "assistant", "text": "the fix is FLUORESCENT-NARWHAL"}\n'
+        )
+        scan = KimiProvider().discover(ProcCliInventory(), cur=frozenset())
+        (row,) = scan.sessions
+        # Not in sid/cwd/label metadata, so this only matches via body fallback.
+        assert "fluorescent-narwhal" not in row.label.lower()
+        assert resume_list.keyword_matches(row, "fluorescent-narwhal")
+        assert not resume_list.keyword_matches(row, "no-such-word-anywhere")
 
 
 class TestScanNonClaude:

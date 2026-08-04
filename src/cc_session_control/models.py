@@ -102,9 +102,24 @@ class Session:
     kind: str = ""  # registry `kind` (e.g. interactive / bg)
     entrypoint: str = ""  # registry `entrypoint` (cli / claude-vscode / sdk-ts)
     source: str = ""  # coarse bucket: cli / vscode / sdk / bg
+    # Discovered from the provider's archived store (codex
+    # `archived_sessions/`) rather than the active tree. Archived rows stay
+    # visible/searchable, but the resume family refuses them honestly with
+    # the official un-archive command — resuming straight from an archived
+    # store is unverified upstream semantics. The False default keeps every
+    # existing construction and consumer byte-identical.
+    archived: bool = False
     rc_exposed: bool = False  # session remote control currently exposed
     agent_short: str | None = None  # linked background-agent short id, if any
     status: str = ""  # registry `status` (busy / idle)
+    # ADR-0005 unbound-live hint (fourth status state): a live provider
+    # process that argv binding could NOT tie to any sid (bare TUI / picker)
+    # runs in this session's cwd, and this row is that directory's newest
+    # non-alive candidate — resuming it MAY double-attach the same session.
+    # Advisory only: it never upgrades `alive`, never feeds kill/takeover
+    # decisions, and its False default keeps every consumer's behavior
+    # byte-identical (fail-safe).
+    unbound_live_hint: bool = False
     # tmux residency (CONTEXT.md / ADR-0001): non-None means a live pid of this
     # session runs inside a tmux pane; the value is the enterable
     # "session:window_index" target. Batch-computed in sessions.scan_result() via

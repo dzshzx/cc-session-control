@@ -12,15 +12,23 @@ walk per generation.
 
 from __future__ import annotations
 
+import os.path
 from collections.abc import Callable, Iterable
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from ...models import Session
 from ..proc import ProcCli
 
 #: PURE per-provider argv matcher: the session id this process is running,
 #: or None when the argv does not prove one.
 ArgvExtractor = Callable[[tuple[str, ...]], str | None]
+
+#: PURE per-provider argv-shape predicate: does this argv look like a
+#: session-holding interactive TUI of the provider's CLI? Daemons and
+#: utility subcommands answer False — they are not "unbound TUIs" and must
+#: never feed the unbound-live hint.
+TuiShapePredicate = Callable[[tuple[str, ...]], bool]
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,61 @@ def build_argv_index(
             current=record.pid in cur,
         )
     return index
+
+
+def unbound_live_cwds(
+    records: Iterable[ProcCli],
+    extract: ArgvExtractor,
+    is_tui_shape: TuiShapePredicate,
+) -> frozenset[str]:
+    """PURE: normalized cwds of live TUI-shaped processes whose argv proves
+    NO sid — the unbound-live hint source (the fourth status state).
+
+    A record whose cwd could not be read (empty) is silently absent, and
+    daemon/utility shapes never enter. Downstream this set only marks rows
+    as *possibly* held; it never contributes liveness.
+    """
+    return frozenset(
+        os.path.normpath(record.cwd)
+        for record in records
+        if record.cwd and extract(record.argv) is None and is_tui_shape(record.argv)
+    )
+
+
+def apply_unbound_hints(
+    rows: Iterable[Session],
+    hint_cwds: AbstractSet[str],
+) -> tuple[Session, ...]:
+    """PURE: flag, per hint cwd, the newest-mtime NOT-argv-bound row as
+    possibly held by an unbound live process (`Session.unbound_live_hint`).
+
+    One process holds one session, so the newest non-alive row in that
+    directory is the best guess ("可能" wording downstream) — older siblings
+    and argv-bound alive rows stay unflagged. The flag is honest uncertainty
+    for the UI/confirm layer only: `alive` is untouched, so stop/takeover/
+    kill semantics cannot change (fail-safe). `hint_cwds` comes normalized
+    from `unbound_live_cwds`; rows are one provider's, so sids are unique.
+    """
+    rows = tuple(rows)
+    if not hint_cwds:
+        return rows
+    newest: dict[str, Session] = {}
+    for row in rows:
+        if row.alive or not row.cwd:
+            continue
+        cwd = os.path.normpath(row.cwd)
+        if cwd not in hint_cwds:
+            continue
+        kept = newest.get(cwd)
+        if kept is None or row.mtime > kept.mtime:
+            newest[cwd] = row
+    flagged = {row.sid for row in newest.values()}
+    if not flagged:
+        return rows
+    return tuple(
+        replace(row, unbound_live_hint=True) if row.sid in flagged else row
+        for row in rows
+    )
 
 
 def flag_value(argv: tuple[str, ...], *flags: str) -> str | None:

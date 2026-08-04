@@ -40,16 +40,20 @@ class ExecutionSessionState(StrEnum):
 
     RESOLVED is discriminated by `.success`; LIVENESS_INCOMPLETE and
     TRANSCRIPT_INCOMPLETE are discriminated by `do_resume_sid_result` to
-    prefix the detail. Every other rejection reason (missing sid, ambiguous
-    match, current-session guard, unusable cwd, incomplete live identity) is
-    never discriminated by any caller — only the detail string is — so they
-    collapse into REFUSED, which still carries the specific reason in
-    `detail`.
+    prefix the detail, and MISSING is discriminated there too so it can
+    append a best-effort non-Claude provider hint (a real codex/kimi sid
+    must not be reported as a plain "missing session id", since
+    `--take-over` only ever scans Claude state). Every other rejection
+    reason (ambiguous match, current-session guard, unusable cwd, incomplete
+    live identity) is never discriminated by any caller — only the detail
+    string is — so they collapse into REFUSED, which still carries the
+    specific reason in `detail`.
     """
 
     RESOLVED = "resolved"
     LIVENESS_INCOMPLETE = "liveness_incomplete"
     TRANSCRIPT_INCOMPLETE = "transcript_incomplete"
+    MISSING = "missing"
     REFUSED = "refused"
 
 
@@ -67,19 +71,15 @@ class ExecutionSessionResolution:
 def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
     """THE kill primitive behind every takeover/stop: R10 gate → kill-time
     liveness recheck → SIGTERM → settle → invalidate the liveness cache.
-
     One implementation so the gate order and the kill semantics cannot fork
-    across the resume/terminate/stop variants (they had already started to:
-    only terminate/stop skipped the settle sleep for an already-gone pid).
-    The recheck (`proc.probe_pid` against `proc_start`; mere existence when the
-    start is unknown) closes the pid-reuse window — a confirm modal can sit
-    open for minutes, and a recycled pid must never be SIGTERMed.
-
-    Results: "killed" (signalled + settled), "gone" (already dead / recycled —
-    nothing to kill), "refused" (R10: current undeterminable), "failed"
-    (signal error, e.g. permissions). A required takeover may continue only
-    after "killed" or "gone"; "refused" and "failed" both fail closed.
-    """
+    across the resume/terminate/stop variants. The recheck (`proc.probe_pid`
+    against `proc_start`; mere existence when the start is unknown) closes
+    the pid-reuse window — a confirm modal can sit open for minutes, and a
+    recycled pid must never be SIGTERMed. Results: "killed" (signalled +
+    settled), "gone" (already dead / recycled — nothing to kill), "refused"
+    (R10: current undeterminable), "failed" (signal error). A required
+    takeover may continue only after "killed" or "gone"; "refused" and
+    "failed" both fail closed."""
     ancestors = proc.probe_current_ancestors()
     if not ancestors.complete:
         return TakeOverOutcome(
@@ -148,18 +148,18 @@ def would_take_over(s: Session, fork: bool = False) -> bool:
 def resume_cmd(s: Session, fork: bool = False) -> str:
     """Return a ready-to-copy command without serializing destructive state.
 
-    A live session can change pid, process generation, cwd, or current-session
-    status while a copied command waits in a clipboard. Carry only its durable
-    sid and make ``csctl resume --take-over`` reacquire that evidence at
-    execution time. Dead resumes and forks are non-destructive, so their
-    direct commands remain useful. The take-over deferral is Claude-only
-    (ADR-0005: the headless resolver reads registry + transcripts); a
-    non-Claude command is always the direct provider resume — it never
-    serializes a kill, so the destructive-state argument does not apply.
+    A live session can change pid, generation, cwd, or current status while
+    a copied command sits in a clipboard, so a live Claude resume carries
+    only the durable sid: ``csctl resume --take-over`` reacquires evidence
+    at execution time. Dead resumes, forks, and non-Claude rows copy direct
+    provider commands (ADR-0005) — none serialize a kill. An archived row
+    copies its provider's official un-archive command instead: a direct
+    resume from an archived store is unverified upstream semantics.
     """
+    if s.archived:
+        return shlex.join(providers.unarchive_argv(s.provider, s.sid))
     if s.provider == "claude" and s.alive and not fork:
         return shlex.join(["csctl", "resume", "--take-over", s.sid])
-
     cwd, args, _ = _resume_plan(s, fork)
     parts: list[str] = []
     if cwd:
@@ -203,7 +203,7 @@ def resolve_execution_session(sid: str) -> ExecutionSessionResolution:
     )
     if not matches:
         return ExecutionSessionResolution(
-            ExecutionSessionState.REFUSED,
+            ExecutionSessionState.MISSING,
             detail=f"missing session id {sid!r}",
         )
     if len(matches) != 1:
@@ -306,6 +306,27 @@ def do_resume_result(s: Session, fork: bool = False) -> ResumeOutcome:
     return _do_resume_resolved_result(resolution.session, fork)
 
 
+def _missing_sid_provider_hint(sid: str) -> str:
+    """Best-effort suffix for a Claude "missing session id" rejection: is
+    `sid` actually a non-Claude session? `--take-over` only ever scans
+    Claude state (ADR-0005), so a real codex/kimi sid would otherwise be
+    misreported as simply missing. An archived match gets the official
+    un-archive command, never a direct resume (unverified upstream
+    semantics — the same refusal chain as `resume_cmd`). This never changes
+    the refusal — only the message — and the provider probe drops its own
+    typed issues (see `providers.find_non_claude_session`)."""
+    owned = providers.find_non_claude_session(sid)
+    if owned is None:
+        return ""
+    if owned.archived:
+        command = shlex.join(providers.unarchive_argv(owned.provider, sid))
+        advice = " (archived); --take-over is Claude-only — unarchive it first"
+    else:
+        command = shlex.join(providers.get(owned.provider).resume_argv(sid))
+        advice = "; --take-over is Claude-only — resume it directly"
+    return f"; session {sid!r} belongs to {owned.provider}{advice}: {command}"
+
+
 def do_resume_sid_result(sid: str) -> ResumeOutcome:
     """Resolve an exact SID once, then perform a terminal takeover."""
     resolution = resolve_execution_session(sid)
@@ -315,6 +336,8 @@ def do_resume_sid_result(sid: str) -> ResumeOutcome:
             detail = f"liveness evidence is incomplete: {detail}"
         elif resolution.state is ExecutionSessionState.TRANSCRIPT_INCOMPLETE:
             detail = f"transcript inventory is incomplete: {detail}"
+        elif resolution.state is ExecutionSessionState.MISSING:
+            detail += _missing_sid_provider_hint(sid)
         return ResumeOutcome(False, detail)
     if resolution.session is None:
         raise AssertionError("successful session resolution must carry a Session")

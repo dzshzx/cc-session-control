@@ -50,6 +50,12 @@ The provider designs below are grounded in probes of the actual CLIs
   (`app-server`, `proxy`, `codex-threadripper`, Windows-side `/mnt/c/...`
   binaries) share the `codex` basename and must be excluded from session
   matching by argv shape.
+- **Amendment (2026-08-04):** `archived_sessions/` is no longer skipped:
+  discovery now walks that flat store too through the same first-line
+  parse, marking its rows archived; resume-family verbs refuse archived
+  rows and hand back the official `codex unarchive <sid>` instead.
+  Plain-`.jsonl`-only reading is unchanged (`.jsonl.zst` stays unread).
+  The bullet above is left as originally written.
 - **Kimi Code 0.31.1**: `~/.kimi-code/session_index.jsonl` maps `sessionId`
   → `sessionDir`/`workDir`; each `sessions/wd_<name>_<hash>/session_<uuid>/`
   holds `state.json` (`title`, `lastPrompt`, `workDir`, `createdAt`,
@@ -97,6 +103,25 @@ The provider designs below are grounded in probes of the actual CLIs
   of a secretly-running session collides visibly in the CLI's own UI, while
   a wrong SIGTERM would be unrecoverable). The R10 rule extends unchanged:
   no `/proc`, no destructive verbs.
+- **Clarification (2026-08-04):** "matchable by construction" above covers
+  only id-carrying RESUME dispatch — csctl resuming an existing session back
+  into tmux, or a live takeover's execution-time re-scan. The Projects-tab
+  launcher's NEW-session dispatch (`x`/`k`) uses each provider's bare
+  `new_session_argv()` with no session id yet, so launcher-created sessions
+  are unbound (same as any other bare-launched TUI) until later resumed by
+  id. This note corrects only the claim's scope; the bullet above is left as
+  originally decided.
+- **Amendment (2026-08-04):** codex argv binding is stricter than "argv
+  carries the session id". Only a real `resume` invocation binds: the target
+  is the single token right after the `resume` token, and an `exec` token
+  before `resume` never binds — a UUID inside a `codex exec` prompt is not
+  evidence, and binding it would make the headless exec process a wrong
+  SIGTERM target. The target may also be a session name (`codex resume
+  <name>` — upstream help: "Session id (UUID) or session name"), resolved
+  through `session_index.jsonl` only when that name maps to exactly one id;
+  unknown or ambiguous names, flag-shaped targets (`codex resume --last`)
+  and the bare picker stay unbound (fail closed). The bullet above is left
+  as originally decided.
 - **Takeover semantics generalize, with the same single decision point.**
   `should_kill = alive ∧ ¬current ∧ ¬fork` is provider-neutral;
   `take_over_result`'s kill-time recheck applies to any exact-matched pid.
@@ -114,6 +139,11 @@ The provider designs below are grounded in probes of the actual CLIs
   Provider source failures surface as non-fatal typed issues (unreadable
   subtrees, malformed `state.json`, unparseable rollout heads) — degraded
   sources narrow the list visibly, never silently.
+- **Amendment (2026-08-04):** "reads only rollout first lines" has narrowed
+  to "bounded reads, never full-file parses": when neither the index nor
+  the first line yields a label, codex discovery continues reading the
+  rollout body for the first user message under hard caps (64 lines /
+  128 KB). The bullet above is left as originally decided.
 - **The launcher goes multi-CLI; membership does not (yet).** The Projects
   tab keeps Claude-trust membership (ADR-0003) but its launcher offers a new
   session per active provider; each CLI shows its own trust/onboarding

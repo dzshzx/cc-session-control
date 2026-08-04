@@ -19,6 +19,7 @@ from ..models import InventoryIssue, Session, issue_detail
 from ._base import ListTabView
 from ._confirm import (
     accept_ancestor_probe,
+    archived_notice,
     confirm_stop,
     confirm_takeover,
     confirm_tmux_takeover,
@@ -28,6 +29,7 @@ from ._rows import TextRow
 from ._session_row import (
     _SESSION_HEADER,
     SessionRow,
+    _archived_marker,
     _hidden_marker,
 )
 from ._sessions_cleanup import CleanupMixin, _CleanupPreview
@@ -145,13 +147,18 @@ class SessionsView(CleanupMixin, ListTabView):
 
     HELP_LAYOUT = HelpLayout(
         prefix=(
-            "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 · ○ 停 = 无进程",
+            "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 ·",
+            "        ● 活 = 运行中（cx/km 专属：已绑定进程，忙闲不可知）·",
+            "        ○ 停 = 无进程（cx/km 行为「未发现可绑定进程」）·",
+            "        ? 未知 = 疑似运行（cx/km 专属：目录内有未绑定进程，",
+            "        可能正持有该会话，接回/转后台会先确认双开风险）",
             "        ▸ = 当前会话（启动 csctl 的会话，受保护） · 📱 = 已开远控",
             "        ⧉ = tmux 驻留（会话进程在 tmux 窗口里，断线不死）",
             "        ? = tmux 驻留未知（盘点不完整，不能确认驻留或裸终端）",
             "CLI 列: cc = Claude Code · cx = Codex · km = Kimi Code",
-            "        （codex/kimi 仅精确绑定 csctl 派发的会话进程；裸启动的",
-            "        进程不绑定、不会被停止/接管，见 ADR-0005）",
+            "        （codex/kimi 仅精确绑定按 id resume 派发的会话进程；",
+            "        launcher 新建与裸启动的进程均不绑定、不会被停止/",
+            "        接管，见 ADR-0005）",
             "",
         ),
         sections=("会话操作:", "清理与过滤:"),
@@ -318,6 +325,8 @@ class SessionsView(CleanupMixin, ListTabView):
                     + s.provider
                     + " "
                     + providers.get(s.provider).label
+                    + " "
+                    + _archived_marker(s)
                     + " "
                     + _hidden_marker(s)
                     + " "
@@ -544,10 +553,21 @@ class SessionsView(CleanupMixin, ListTabView):
         )
 
     def _key_delete(self, s: Session) -> None:
-        if not providers.get(s.provider).caps.cleanup:
+        provider = providers.get(s.provider)
+        if not provider.caps.cleanup and not isinstance(
+            provider, providers.DeleteVerbs
+        ):
             # ADR-0005: csctl never deletes state it does not fully model —
-            # a codex/kimi row's file anchor points into that CLI's own store.
-            self.app.notify(f"{s.provider} 会话由其 CLI 自己管理，csctl 不删除")
+            # and this CLI has no official delete command to delegate to.
+            self.app.notify(
+                f"{s.provider} 会话由其 CLI 自己管理，csctl 不删除"
+                f"（{s.provider} 无官方删除命令）"
+            )
+            return
+        if s.archived:
+            # B7 refusal chain: deleting from the archived store is
+            # unverified upstream semantics — official unarchive first.
+            self.app.notify(archived_notice(s))
             return
         if s.alive:
             self.app.notify("运行中的会话不删，先停止")

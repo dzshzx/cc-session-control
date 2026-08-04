@@ -45,8 +45,16 @@ def keyword_matches(s: Session, keyword: str) -> bool:
         return True
     if not s.file:
         return False
-    with open(s.file, errors="ignore") as fh:
-        return any(kw in line.lower() for line in fh)
+    try:
+        with open(s.file, errors="ignore") as fh:
+            return any(kw in line.lower() for line in fh)
+    except (FileNotFoundError, NotADirectoryError):
+        # The transcript file (or a directory component of its path) is gone.
+        # Some providers' session indexes routinely outlive the underlying
+        # session directory (e.g. kimi has no official delete command, so a
+        # manual `rm` is the only cleanup path) — treat that row as simply
+        # not matching rather than failing the whole search.
+        return False
 
 
 def paginate(
@@ -62,12 +70,24 @@ def paginate(
 
 
 def format_session(s: Session) -> list[str]:
-    """Render one session as display lines: status header, label, command."""
-    state = "live" if s.alive else "dead"
+    """Render one session as display lines: status header, label, command.
+
+    `live?` marks the unbound-live hint (an unbindable bare TUI of the same
+    provider runs in the session's directory): honest uncertainty, not
+    liveness — the resume command stays the plain non-destructive one.
+    `(archived)` rows carry the un-archive command (resume_cmd's archived
+    branch) plus a note, matching the TUI `y` copy payload."""
+    if s.alive:
+        state = "live"
+    elif s.unbound_live_hint:
+        state = "live?"
+    else:
+        state = "dead"
     provider = f"[{s.provider}] " if s.provider != "claude" else ""
+    archived = "(archived) " if s.archived else ""
     flags = f"  [hidden:{','.join(sorted(s.hidden))}]" if s.hidden else ""
     when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
-    lines = [f"[{state}] {when}  {provider}{s.sid}{flags}", f"    {s.label}"]
+    lines = [f"[{state}] {when}  {provider}{archived}{s.sid}{flags}", f"    {s.label}"]
     if s.current:
         lines.append(
             "    <- you are IN this session (no resume needed; "
@@ -75,11 +95,26 @@ def format_session(s: Session) -> list[str]:
         )
     else:
         lines.append(f"    {resume_cmd(s)}")
-        if s.alive:
+        if s.archived:
+            lines.append("    ^ archived — unarchive first, then resume")
+        elif s.alive:
+            if s.provider == "claude":
+                lines.append(
+                    "    ^ live session: this command re-checks the live "
+                    "process and safety evidence at execution time, then "
+                    "uses the guarded takeover path (single timeline, no "
+                    "fork)"
+                )
+            else:
+                lines.append(
+                    "    ^ live session: direct resume command — it does "
+                    "NOT stop the running process; a second attach to the "
+                    "same session surfaces in the CLI's own UI"
+                )
+        elif s.unbound_live_hint:
             lines.append(
-                "    ^ live session: this command re-checks the live process "
-                "and safety evidence at execution time, then uses the guarded "
-                "takeover path (single timeline, no fork)"
+                f"    ^ a live unbound {s.provider} process exists in this "
+                "directory — resuming may double-attach the same session"
             )
     return lines
 

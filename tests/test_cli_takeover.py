@@ -3,12 +3,14 @@ guarantees (R7.1/R10): never kill a recycled or current-ancestor pid,
 refuse unsafe targets before touching kill/chdir/exec, and surface exec
 failures with context."""
 
+import json
 from dataclasses import replace
 
 import pytest
 
 from cc_session_control import cli
 from cc_session_control.actions import session_ops
+from cc_session_control.config import cfg
 from cc_session_control.data import liveness, sessions
 from cc_session_control.data.liveness import LivenessSnapshot
 from cc_session_control.models import Session
@@ -181,6 +183,91 @@ def test_resume_take_over_refuses_unsafe_target_before_kill_or_exec(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert expected in captured.err
+
+
+def test_resume_take_over_refuses_non_claude_sid_with_provider_hint(
+    tmp_path, monkeypatch, capsys
+):
+    # `--take-over` is Claude-only (ADR-0005); a real codex/kimi sid must not
+    # be misreported as "missing" — the rejection should point the operator
+    # at the provider that actually owns it and its direct resume command.
+    sid = "019fc784-c365-70e0-af94-a6a0b15f05b8"
+    codex_home = tmp_path / "codex"
+    rollout_dir = codex_home / "sessions" / "2026" / "08" / "01"
+    rollout_dir.mkdir(parents=True)
+    record = {
+        "timestamp": "t",
+        "type": "session_meta",
+        "payload": {
+            "id": sid,
+            "session_id": sid,
+            "cwd": str(tmp_path),
+            "thread_source": "user",
+        },
+    }
+    (rollout_dir / f"rollout-{sid}.jsonl").write_text(json.dumps(record) + "\n")
+    monkeypatch.setattr(cfg, "codex_home", codex_home)
+    monkeypatch.setattr(cfg, "providers", ("claude", "codex"))
+    _install_takeover_rows(monkeypatch, ())  # no Claude session owns this sid
+
+    status = cli.main(["resume", "--take-over", sid])
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert captured.out == ""
+    assert "belongs to codex" in captured.err
+    assert f"codex resume {sid}" in captured.err
+
+
+def test_resume_take_over_refuses_archived_codex_sid_with_unarchive_hint(
+    tmp_path, monkeypatch, capsys
+):
+    # An ARCHIVED codex sid must never be advised into a direct resume —
+    # resuming straight from the archived store is unverified upstream
+    # semantics (B7); every surface hands back the official un-archive step.
+    sid = "019fc784-c365-70e0-af94-a6a0b15f05b9"
+    codex_home = tmp_path / "codex"
+    archived_dir = codex_home / "archived_sessions"
+    archived_dir.mkdir(parents=True)
+    record = {
+        "timestamp": "t",
+        "type": "session_meta",
+        "payload": {
+            "id": sid,
+            "session_id": sid,
+            "cwd": str(tmp_path),
+            "thread_source": "user",
+        },
+    }
+    (archived_dir / f"rollout-{sid}.jsonl").write_text(json.dumps(record) + "\n")
+    monkeypatch.setattr(cfg, "codex_home", codex_home)
+    monkeypatch.setattr(cfg, "providers", ("claude", "codex"))
+    _install_takeover_rows(monkeypatch, ())  # no Claude session owns this sid
+
+    status = cli.main(["resume", "--take-over", sid])
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert captured.out == ""
+    assert "belongs to codex (archived)" in captured.err
+    assert f"unarchive it first: codex unarchive {sid}" in captured.err
+    assert "resume it directly" not in captured.err
+
+
+def test_resume_take_over_missing_sid_with_no_provider_match_stays_plain(
+    tmp_path, monkeypatch, capsys
+):
+    # Same missing-Claude-sid case as above, but no provider owns it either
+    # (autouse fixture keeps codex/kimi inactive) — the detail must stay the
+    # plain "missing session id" message, not a fabricated provider hint.
+    _install_takeover_rows(monkeypatch, ())
+
+    status = cli.main(["resume", "--take-over", "stable-sid"])
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "missing session id" in captured.err
+    assert "belongs to" not in captured.err
 
 
 def test_resume_take_over_exec_failure_is_contextual(tmp_path, monkeypatch, capsys):

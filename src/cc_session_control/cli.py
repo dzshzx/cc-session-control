@@ -75,7 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SID",
         help=(
             "Re-resolve one exact session id and resume it through the "
-            "execution-time takeover safety gates"
+            "execution-time takeover safety gates (Claude sessions only; "
+            "resume a codex/kimi session directly with its own CLI instead)"
         ),
     )
     resume.set_defaults(handler=cli_commands._cmd_resume)

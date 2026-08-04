@@ -49,14 +49,47 @@ def test_keyword_matches_metadata_then_body(tmp_path):
     assert not resume_list.keyword_matches(s, "no-such-word")
 
 
-def test_keyword_body_fallback_survives_missing_file(tmp_path):
-    s = _session(tmp_path)
+def test_keyword_body_missing_file_is_no_match_not_refusal(tmp_path):
+    # kimi's append-only session index routinely outlives a manually removed
+    # session directory (no official delete command) — a deleted transcript
+    # must degrade that one row to "no match", not fail the whole search.
+    s = _session(tmp_path, label="fix the login bug")
     s = types.SimpleNamespace(**{**s.__dict__, "file": str(tmp_path / "gone.jsonl")})
+    result = resume_list.render([s], keyword="no-such-word")
+    assert result.complete
+    assert result.issues == ()
+    assert "No matching sessions" in result.text
+
+
+def test_keyword_metadata_hit_skips_missing_body_file(tmp_path):
+    # A metadata hit (label/cwd/sid) must short-circuit before ever opening
+    # the transcript file, so a missing file can't block a metadata match.
+    s = _session(tmp_path, label="fix the login bug")
+    s = types.SimpleNamespace(**{**s.__dict__, "file": str(tmp_path / "gone.jsonl")})
+    result = resume_list.render([s], keyword="login")
+    assert result.complete
+    assert result.issues == ()
+    assert "fix the login bug" in result.text
+
+
+def test_keyword_body_permission_error_is_still_a_refusal(tmp_path, monkeypatch):
+    # Missing files degrade to no-match, but other OSErrors (e.g. a transcript
+    # file that exists but can't be read) must still refuse the search rather
+    # than silently mask a real access problem.
+    s = _session(tmp_path, body='{"text": "whatever"}\n')
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if str(path) == s.file:
+            raise PermissionError(13, "Permission denied", s.file)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fake_open)
     result = resume_list.render([s], keyword="anything")
     assert not result.complete
     assert result.text == ""
     assert result.issues[0].source == "session transcript body"
-    assert result.issues[0].path == str(tmp_path / "gone.jsonl")
+    assert result.issues[0].path == s.file
 
 
 def test_paginate_clamps_and_slices(tmp_path):
@@ -94,6 +127,20 @@ def test_format_live_session_gives_takeover_command(tmp_path):
     assert "4242" not in text
     assert "kill" not in text
     assert "re-checks the live process" in text
+
+
+def test_format_non_claude_live_session_is_honest_about_no_takeover(tmp_path):
+    # ADR-0005: non-Claude live rows print a direct provider resume command,
+    # not the Claude-only guarded takeover path — the annotation must not
+    # claim re-check/guard/single-timeline semantics that do not apply.
+    s = _session(tmp_path, alive=True, pid=4242)
+    s = types.SimpleNamespace(**{**s.__dict__, "provider": "codex"})
+    text = "\n".join(resume_list.format_session(s))
+    assert "[live]" in text
+    assert "re-checks the live process" not in text
+    assert "guarded" not in text
+    assert "single-timeline" not in text
+    assert "does NOT stop the running process" in text
 
 
 def test_format_current_session_never_prints_kill(tmp_path):

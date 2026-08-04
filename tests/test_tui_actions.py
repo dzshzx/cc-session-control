@@ -77,6 +77,36 @@ def _install_execution_session(
     )
 
 
+def test_copy_resume_command_notifies_plainly_for_claude(monkeypatch) -> None:
+    monkeypatch.setattr(tui_actions.session_ops, "to_clipboard", lambda _cmd: True)
+
+    result = tui_actions.copy_resume_command(_session())
+
+    assert result.message == "已复制"
+
+
+def test_copy_resume_command_notes_no_takeover_for_non_claude_live(
+    monkeypatch,
+) -> None:
+    # ADR-0005: a non-Claude live row copies a direct provider resume
+    # command, not a Claude-only guarded takeover — the notice must not
+    # claim the copied command stops the running process.
+    monkeypatch.setattr(tui_actions.session_ops, "to_clipboard", lambda _cmd: True)
+    session = replace(_session(), provider="codex")
+
+    result = tui_actions.copy_resume_command(session)
+
+    assert "不会终止原进程" in result.message
+
+
+def test_copy_resume_command_reports_clipboard_failure(monkeypatch) -> None:
+    monkeypatch.setattr(tui_actions.session_ops, "to_clipboard", lambda _cmd: False)
+
+    result = tui_actions.copy_resume_command(_session())
+
+    assert result.message.startswith("复制失败")
+
+
 def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
     session = _session()
     monkeypatch.setattr(

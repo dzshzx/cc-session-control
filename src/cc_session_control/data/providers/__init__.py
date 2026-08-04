@@ -17,6 +17,11 @@ from ...models import InventoryIssue, Session
 from .. import proc, tmux
 from .base import (
     AgentProvider,
+    ArchiveVerbs,
+    CliDeleteResult,
+    CliDeleteStage,
+    CliDeleteState,
+    DeleteVerbs,
     DiskDiscovery,
     LivenessGrade,
     ProviderCaps,
@@ -28,6 +33,11 @@ from .kimi import KimiProvider
 
 __all__ = [
     "AgentProvider",
+    "ArchiveVerbs",
+    "CliDeleteResult",
+    "CliDeleteStage",
+    "CliDeleteState",
+    "DeleteVerbs",
     "DiskDiscovery",
     "LivenessGrade",
     "ProviderCaps",
@@ -40,6 +50,9 @@ __all__ = [
     "merge_sessions",
     "scan_non_claude",
     "resolve_argv_execution",
+    "find_non_claude_session",
+    "unarchive_argv",
+    "execute_cli_delete",
 ]
 
 _ALL: tuple[AgentProvider, ...] = (ClaudeProvider(), CodexProvider(), KimiProvider())
@@ -105,6 +118,108 @@ def scan_non_claude(
         rows.extend(scan.sessions)
         issues.extend(scan.issues)
     return tuple(rows), tuple(issues)
+
+
+def unarchive_argv(key: str, sid: str) -> list[str]:
+    """THE un-archive argv dispatch (`session_ops.resume_cmd`'s archived
+    branch and the archived `--take-over` hint consume it): loud on a
+    provider without archive verbs — only `ArchiveVerbs` providers ever
+    mark rows `Session.archived`, so a mismatch is a programming error,
+    not renderable uncertainty."""
+    provider = get(key)
+    if not isinstance(provider, ArchiveVerbs):
+        raise TypeError(f"provider {key!r} has no archive verbs")
+    return provider.unarchive_argv(sid)
+
+
+def _delete_refusal(stage: CliDeleteStage, detail: str) -> CliDeleteResult:
+    return CliDeleteResult(CliDeleteState.REFUSED, stage, detail)
+
+
+def execute_cli_delete(provider_key: str, sid: str) -> CliDeleteResult:
+    """Execution-time protection + delegated official delete (Sessions `d`).
+
+    Mirror of `resolve_argv_execution`'s fresh-evidence discipline: the CLI
+    only ever runs against a freshly re-scanned row that is confirmed dead,
+    not current, and not archived (`codex delete` against the archived store
+    is unverified upstream semantics — B7's refusal chain holds). Incomplete
+    ancestors / argv-walk / discovery evidence refuses (fail closed, R10 —
+    the same `probe_current_ancestors().complete` gate the cleanup family
+    keys on). Loud on a provider without delete verbs: only `DeleteVerbs`
+    rows ever reach this dispatch, so a mismatch is a programming error."""
+    provider = get(provider_key)
+    if not isinstance(provider, DeleteVerbs):
+        raise TypeError(f"provider {provider_key!r} has no delete verbs")
+    if not isinstance(provider, DiskDiscovery):
+        return _delete_refusal(
+            CliDeleteStage.EVIDENCE,
+            f"provider {provider_key!r} has no execution-time discovery",
+        )
+    ancestors = proc.probe_current_ancestors()
+    if not ancestors.complete:
+        detail = "; ".join(i.detail for i in ancestors.issues)
+        return _delete_refusal(
+            CliDeleteStage.EVIDENCE, f"ancestor evidence incomplete: {detail}"
+        )
+    inventory = proc.scan_cli_argv_inventory(frozenset({provider.basename}))
+    if not inventory.complete:
+        detail = "; ".join(i.detail for i in inventory.issues)
+        return _delete_refusal(
+            CliDeleteStage.EVIDENCE, f"process evidence incomplete: {detail}"
+        )
+    scan = provider.discover(inventory, ancestors.pids)
+    if not scan.complete:
+        detail = "; ".join(i.detail for i in scan.issues)
+        return _delete_refusal(
+            CliDeleteStage.EVIDENCE, f"session discovery incomplete: {detail}"
+        )
+    matches = tuple(row for row in scan.sessions if row.sid == sid)
+    if not matches:
+        return _delete_refusal(
+            CliDeleteStage.PROTECTION,
+            f"session {sid!r} not found in fresh discovery",
+        )
+    if len(matches) != 1:
+        return _delete_refusal(
+            CliDeleteStage.PROTECTION,
+            f"ambiguous session id {sid!r}; found {len(matches)} matches",
+        )
+    target = matches[0]
+    if target.current:
+        return _delete_refusal(
+            CliDeleteStage.PROTECTION, f"session {sid!r} is the current session"
+        )
+    if target.alive:
+        return _delete_refusal(
+            CliDeleteStage.PROTECTION, f"session {sid!r} is live; stop it first"
+        )
+    if target.archived:
+        return _delete_refusal(
+            CliDeleteStage.PROTECTION,
+            f"session {sid!r} is archived; unarchive it first",
+        )
+    return provider.delete_session_result(sid)
+
+
+def find_non_claude_session(sid: str) -> Session | None:
+    """Best-effort: the disk row (with its `provider`/`archived` identity)
+    of the active non-Claude provider owning `sid`. Liveness is irrelevant
+    here (an empty `/proc` argv inventory and an empty ancestor set are
+    fine) — this only answers "does this sid belong to codex/kimi" to
+    enrich an already-failed Claude-only lookup (e.g. the `--take-over`
+    rejection message), never to gate a new decision. Per-provider discovery
+    issues are intentionally dropped: this is an error-path hint on top of a
+    lookup that already failed, not a new fact source that must itself stay
+    complete."""
+    empty_inventory = proc.ProcCliInventory()
+    for provider in active_providers():
+        if provider.key == "claude" or not isinstance(provider, DiskDiscovery):
+            continue
+        scan = provider.discover(empty_inventory, frozenset())
+        match = next((row for row in scan.sessions if row.sid == sid), None)
+        if match is not None:
+            return match
+    return None
 
 
 @dataclass(frozen=True)

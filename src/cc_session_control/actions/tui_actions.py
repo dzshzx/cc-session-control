@@ -10,12 +10,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ..data import cleanup, rc
+from ..data import cleanup, providers, rc
 from ..data.project_settings import SettingWriteState, write_rc_at_startup
 from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session
 from . import agent_ops, session_ops
-from .feedback import format_cleanup_notice, format_delete_notice
+from .feedback import (
+    format_cleanup_notice,
+    format_cli_delete_notice,
+    format_delete_notice,
+)
 from .runner import ActionResult
 
 type CleanupTarget = Session | str | int
@@ -50,15 +54,31 @@ def background_session(session: Session) -> ActionResult:
 
 
 def delete_session(session: Session) -> ActionResult:
-    result = cleanup.remove_session(session)
-    return _delete_result(result)
+    if providers.get(session.provider).caps.cleanup:
+        return _delete_result(cleanup.remove_session(session))
+    # Delegated official-CLI delete (`codex delete <sid>`): a bypass BESIDE
+    # the cleanup data boundary, not a relaxation of it — csctl's own removal
+    # seam keeps refusing non-Claude state (`cleanup.remove_session`), and
+    # deletion authority stays with the owning CLI. Loud (TypeError) for a
+    # provider without delete verbs — the view gate keeps those out.
+    result = providers.execute_cli_delete(session.provider, session.sid)
+    return ActionResult(format_cli_delete_notice(result), needs_refresh=True)
 
 
 def copy_resume_command(session: Session) -> ActionResult:
     command = session_ops.resume_cmd(session)
-    if session_ops.to_clipboard(command):
-        return ActionResult("已复制")
-    return ActionResult(f"复制失败: {command}")
+    if not session_ops.to_clipboard(command):
+        return ActionResult(f"复制失败: {command}")
+    if session.archived:
+        # The copied payload IS the provider's official un-archive command
+        # (resume_cmd's archived branch) — say so, never imply a resume.
+        return ActionResult("已复制 unarchive 命令（会话已归档）")
+    if session.provider != "claude" and session.alive:
+        # Non-Claude live rows copy a direct provider resume command
+        # (ADR-0005) — it never stops the running process, unlike the
+        # Claude-only guarded takeover the plain notice implies elsewhere.
+        return ActionResult("已复制（直接 resume 命令，不会终止原进程）")
+    return ActionResult("已复制")
 
 
 def respawn_agent(job: AgentJob) -> ActionResult:

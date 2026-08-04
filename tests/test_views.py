@@ -759,6 +759,14 @@ def test_session_row_source_badge_maps_vscode_to_ide():
     assert "IDE" in text
 
 
+def test_session_row_source_badge_maps_remote_to_chinese_label():
+    # B9a: codex ChatGPT mobile/remote-launched sessions get an honest badge
+    # instead of the misleading "CLI" one (app-server-hosted, often dead in
+    # /proc — "CLI" would wrongly imply a direct terminal takeover).
+    text = _row_text(SessionRow(_make_session(source="remote")))
+    assert "远程" in text
+
+
 def test_hide_filter_unions_source_sdk(monkeypatch):
     # A session flagged sdk via the REGISTRY source (not a transcript `hidden`
     # tag) must still be hidden by the `h` toggle (D9 union via bridge_or_sdk).

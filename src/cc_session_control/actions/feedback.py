@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..data.providers.base import CliDeleteResult, CliDeleteStage, CliDeleteState
 from ..data.removal import CleanupExecution
 
 
@@ -75,3 +76,15 @@ def format_delete_notice(result: CleanupExecution) -> str:
     if result.skipped:
         return f"未删除：{result.skipped[0].reason}"
     return "无可删除内容"
+
+
+def format_cli_delete_notice(result: CliDeleteResult) -> str:
+    """Summarize one delegated official-CLI deletion (mirrors the Claude
+    delete wording: success / evidence-incomplete / verdict / failure)."""
+    if result.state is CliDeleteState.DELETED:
+        return "已删除"
+    if result.state is CliDeleteState.REFUSED:
+        if result.stage is CliDeleteStage.EVIDENCE:
+            return f"保护证据不完整，未删除：{result.detail}"
+        return f"未删除：{result.detail}"
+    return f"删除失败（{result.stage.value}）：{result.detail}"

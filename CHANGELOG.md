@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.8.2 (2026-08-04)
+
+Closes out the codex/kimi coverage-gap audit (batches A+B): discovery depth,
+honest liveness display, and official-verb delegation for non-Claude sessions.
+
+### Added
+
+- **Codex label body fallback**: rollouts without a `session_index` thread
+  name take their label from the first user message in the rollout body
+  (bounded read: 64 lines / 128 KB) instead of showing `(untitled)` — on the
+  audited machine that was 250 of 252 rows.
+- **Codex archived sessions discovered**: `~/.codex/archived_sessions/` rows
+  are listed with an archived marker; resume-family verbs refuse and hand
+  back the official `codex unarchive <sid>` (headless rows are tagged
+  `(archived)`; `y` copies the unarchive command).
+- **Codex delete delegation**: `d` on a dead, non-archived codex row runs the
+  official `codex delete <sid>` (bounded subprocess, typed result, fresh
+  execution-time guards). csctl's own removal seam still never touches
+  non-Claude state; kimi keeps refusing (no official delete verb upstream).
+- **Codex name-resume binding**: processes started as
+  `codex resume <thread-name>` bind via a unique session_index name→id
+  reverse lookup; ambiguous or unknown names bind nothing (fail closed).
+- **Fourth liveness state for non-Claude rows**: when an unbound live
+  same-CLI process shares a session's directory, the newest candidate row
+  shows `? 未知` and Enter/t/R ask a no-kill confirm about the double-attach
+  risk (headless: `[live?]`). Bound live non-Claude rows now read `● 活`
+  (busy/idle is unknowable upstream) instead of a false `● 闲`.
+- **Codex source badges**: vscode / ChatGPT-Android-remote originators render
+  as IDE / 远程 badges instead of a misleading CLI badge (sdk hiding for
+  `codex_exec` is unchanged).
+
+### Fixed
+
+- A deleted kimi session directory no longer turns every
+  `csctl resume <keyword>` into a refusal: a missing body file is a
+  no-match, while other read errors still refuse loudly.
+- Kimi body search now reads the real conversation
+  (`agents/main/wire.jsonl`) instead of `state.json` metadata, so keywords
+  that only appear in the dialogue finally match kimi sessions.
+- Codex kill-target safety: an unquoted `codex exec … resume … <uuid>`
+  prompt no longer binds the exec process to that session (UUIDs bind only
+  in the resume-target position, `exec` before `resume` never binds).
+- Codex first-line read cap raised 64→256 KB, with an honest over-cap issue
+  message instead of a misleading "upstream format change?" hint.
+- Honest non-Claude wording everywhere it lied: headless live rows no longer
+  claim Claude's guarded-takeover semantics; `y` notes the copied command
+  does not stop the running process; `--take-over` on a non-Claude sid names
+  the owning CLI (archived sids get the unarchive command) and its help is
+  marked Claude-only; help screen, README, CONTEXT, and ADR-0005 no longer
+  claim launcher-created sessions are matchable.
+
 ## 0.8.1 (2026-08-04)
 
 ### Added

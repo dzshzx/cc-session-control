@@ -3,11 +3,16 @@
 Upstream contracts (verified on Kimi Code 0.31.1, re-verify per release):
 `$KIMI_CODE_HOME/session_index.jsonl` maps `sessionId` → `sessionDir` /
 `workDir`; each session dir holds `state.json` (`title`, `lastPrompt`,
-`workDir`, `updatedAt`). Resume: `kimi --session <sid>` (short `-S`); fork
-exists only as the in-session `/fork`, so `caps.fork` is False and a fork
-argv request is a programming error. A bare `kimi` REPL leaves no
-pid↔session evidence (no fd, no env — probed), so only `--session` argv
-matches bind; those are the only kill targets.
+`workDir`, `updatedAt` — metadata only) and `agents/main/wire.jsonl`, the
+main agent's actual conversation log (subagents get their own
+`agents/agent-N/wire.jsonl`, not covered here). `Session.file` points at the
+wire log so headless resume's transcript-body search fallback has real
+content to search; `Session.mtime` still comes from `state.json`'s stat, not
+the wire log's. Resume: `kimi --session <sid>` (short `-S`); fork exists
+only as the in-session `/fork`, so `caps.fork` is False and a fork argv
+request is a programming error. A bare `kimi` REPL leaves no pid↔session
+evidence (no fd, no env — probed), so only `--session` argv matches bind;
+those are the only kill targets.
 """
 
 from __future__ import annotations
@@ -19,10 +24,39 @@ from collections.abc import Set as AbstractSet
 from ...config import cfg
 from ...models import InventoryIssue, Session
 from ..proc import ProcCliInventory
-from .argv_live import build_argv_index, flag_value
+from .argv_live import (
+    apply_unbound_hints,
+    build_argv_index,
+    flag_value,
+    unbound_live_cwds,
+)
 from .base import LivenessGrade, ProviderCaps, ProviderScan
 
 BASENAME = "kimi"
+
+# Non-interactive shapes from `kimi --help` (verified 0.31.x-line, this
+# machine, 2026-08-04): servers/utility subcommands plus the one-shot
+# `--prompt` print mode never hold an interactive REPL, so they must not
+# feed the unbound-live hint. The bare REPL, `--continue`, and the `-S`
+# picker (no id) DO — they are exactly the unbindable shapes ADR-0005
+# documents.
+_NON_TUI_SUBCOMMANDS = frozenset(
+    {
+        "export",
+        "provider",
+        "acp",
+        "web",
+        "server",
+        "login",
+        "doctor",
+        "vis",
+        "migrate",
+        "upgrade",
+        "update",
+        "help",
+    }
+)
+_NON_TUI_FLAGS = frozenset({"-p", "--prompt", "-V", "--version", "-h", "--help"})
 
 
 def extract_sid(argv: tuple[str, ...]) -> str | None:
@@ -33,6 +67,18 @@ def extract_sid(argv: tuple[str, ...]) -> str | None:
     if value and not value.startswith("-"):
         return value
     return None
+
+
+def is_tui_shape(argv: tuple[str, ...]) -> bool:
+    """PURE: does this kimi argv look like a session-holding interactive
+    REPL? Feeds ONLY the unbound-live hint — never liveness. Same
+    conservative token matching as the codex twin: a false denylist hit
+    only costs a missed hint, never a server entering the hint source."""
+    if not argv or os.path.basename(argv[0]) != BASENAME:
+        return False
+    return not any(
+        tok in _NON_TUI_SUBCOMMANDS or tok in _NON_TUI_FLAGS for tok in argv[1:]
+    )
 
 
 def _issue(path: str, detail: str) -> InventoryIssue:
@@ -113,8 +159,9 @@ class KimiProvider:
         except OSError as exc:
             return ProviderScan(issues=(_issue(os.fspath(index_path), str(exc)),))
 
-        rows = tuple(
-            self._project(sid, entry, live, issues) for sid, entry in entries.items()
+        rows = apply_unbound_hints(
+            (self._project(sid, entry, live, issues) for sid, entry in entries.items()),
+            unbound_live_cwds(cli_inventory.records, extract_sid, is_tui_shape),
         )
         return ProviderScan(rows, tuple(issues))
 
@@ -165,7 +212,10 @@ class KimiProvider:
             current=bool(match and match.current),
             provider=self.key,
             proc_start=match.proc_start if match else "",
-            file=os.path.join(session_dir, "state.json")
+            # state.json is metadata only (title/lastPrompt/workDir); the
+            # actual conversation body — what headless resume's transcript
+            # fallback search needs — lives in the main agent's wire log.
+            file=os.path.join(session_dir, "agents", "main", "wire.jsonl")
             if isinstance(session_dir, str)
             else "",
             source="cli",

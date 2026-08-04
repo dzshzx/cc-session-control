@@ -26,9 +26,10 @@ _Avoid_: profile, plugin, treating every CLI as equally deep
 **Argv-exact Liveness**:
 The only takeover-grade pid↔session binding for non-Claude providers: a
 process argv that CARRIES the session id (`codex resume <sid>`,
-`kimi --session <sid>`). Workbench-dispatched sessions are exactly matchable
-by construction; bare-launched TUIs and CLI daemons (codex app-server etc.)
-stay unbound and are never stop/takeover targets.
+`kimi --session <sid>`). Only id-carrying RESUME dispatch is exactly
+matchable by construction; launcher-created NEW sessions dispatch bare argv
+(no session id yet) and, like any bare-launched TUI or CLI daemon (codex
+app-server etc.), stay unbound and are never stop/takeover targets.
 _Avoid_: cwd-guessing as liveness, pane-text busy regexes
 
 **Session** (formerly "Claude Code Session"):

@@ -405,6 +405,9 @@ def remove_session(
         # Cleanup models Claude state only (ADR-0005): a non-Claude row's
         # `file` anchor points INTO the owning CLI's own store (codex rollout,
         # kimi state.json) — csctl never deletes state it does not fully model.
+        # The codex `d` path (`providers.execute_cli_delete` → official
+        # `codex delete`) is a typed bypass BESIDE this boundary, not a
+        # relaxation of it — this seam still refuses every non-Claude row.
         result.refuse(
             [s.sid],
             f"provider {s.provider!r} sessions are not csctl-deletable",

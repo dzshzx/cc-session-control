@@ -30,6 +30,10 @@ _SOURCE_BADGES = {
     "vscode": "IDE",
     "sdk": "SDK",
     "bg": "BG",
+    # ChatGPT mobile/remote-launched codex sessions (ADR-0005 provider
+    # layer): typically app-server-hosted, often show dead in /proc, so the
+    # "CLI" badge would wrongly imply a direct terminal接回 is available.
+    "remote": "远程",
 }
 
 # One spec drives both the header and every row (see _colspec.py). Text columns
@@ -70,6 +74,14 @@ def _hidden_marker(session: Session) -> str:
     return " ".join(known + unknown)
 
 
+def _archived_marker(session: Session) -> str:
+    """`归档` label marker for rows discovered from a provider's archived
+    store: the resume family refuses these until un-archived, so the list
+    says so up front (the filter haystack includes it too — one marker
+    source for both, like `_hidden_marker`)."""
+    return "归档" if session.archived else ""
+
+
 def _source_badge(session: Session) -> str:
     """Short source badge (CLI / IDE / SDK / BG), or "" when unknown."""
     return _SOURCE_BADGES.get(session.source, "")
@@ -90,9 +102,11 @@ def _status_parts(session: Session) -> tuple[str, str]:
     """(状态 cell text, row attr) — shape + word + color, three channels.
 
     Frontend spec: state may not ride on color alone; the word carries the
-    meaning (忙 = generating/tool-running, 闲 = waiting for input, 停 = no
-    process), the ●/○ shape survives colorless terminals, and only the
-    established ●=on / ○=off convention is used (no ◐ — ambiguous, and an
+    meaning (忙 = generating/tool-running, 闲 = waiting for input, 活 =
+    argv-bound non-Claude live whose busy/idle is unknowable, 停 = no
+    process, 未知 = an unbound live cx/km process may hold this session),
+    the ●/○/? shape survives colorless terminals, and only the established
+    ●=on / ○=off convention is used (no ◐ — ambiguous, and an
     East-Asian-Ambiguous width risk, the P5 glyph lesson).
 
     A live tmux-resident session (ADR-0001) additionally shows the ⧉ badge —
@@ -101,16 +115,25 @@ def _status_parts(session: Session) -> tuple[str, str]:
     P5 lesson banned. A live session whose inventory is incomplete shows the
     width-stable ASCII `?`, visibly distinct from confirmed bare residency.
     Data comes from the snapshot's tmux fields; the resume actions read the
-    SAME evidence."""
+    SAME evidence. The fourth state reads `Session.unbound_live_hint` (the
+    same field the confirm layer reads) and reuses the semantic `status_err`
+    warning attr — honest uncertainty, NOT liveness."""
     cur = "▸" if session.current else " "
     if session.alive:
-        word = "忙" if session.status == "busy" else "闲"
+        if session.provider != "claude":
+            # Non-Claude registries carry no busy/idle status — "闲" would
+            # claim "waiting for input" about a session that may be mid-task.
+            word = "活"
+        else:
+            word = "忙" if session.status == "busy" else "闲"
         badge = ""
         if session.tmux_target:
             badge = " ⧉"
         elif not session.tmux_inventory_complete:
             badge = " ?"
         return f"{cur}● {word}{badge}", ("status_busy" if word == "忙" else "alive")
+    if session.unbound_live_hint:
+        return f"{cur}? 未知", "status_err"
     return f"{cur}○ 停", "dead"
 
 
@@ -140,6 +163,9 @@ class SessionRow(SelectableRow):
         when = _rel_time(session.mtime)
         hidden = _hidden_marker(session)
         label = f"[{hidden}] {session.label}" if hidden else session.label
+        archived = _archived_marker(session)
+        if archived:
+            label = f"[{archived}] {label}"
         label = truncate_cells(label, 80)
         cwd = session.cwd.rstrip("/").rsplit("/", 1)[-1] if session.cwd else ""
 
@@ -162,6 +188,7 @@ class SessionRow(SelectableRow):
             focus_map={
                 "status_busy": "selected",
                 "alive": "selected",
+                "status_err": "selected",
                 "dead": "selected",
                 None: "selected",
             },
