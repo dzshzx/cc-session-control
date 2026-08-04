@@ -1,15 +1,35 @@
 # cc-session-control
 
-tmux-first TUI and headless CLI for [Claude Code](https://claude.ai/code)
-sessions, background agents, and Remote Control.
+tmux-first workbench (TUI + headless CLI) for the agent CLIs on one machine
+— [Claude Code](https://claude.ai/code), [Codex CLI](https://github.com/openai/codex),
+and [Kimi Code](https://github.com/MoonshotAI/kimi-code): sessions across
+all three, plus Claude Code background agents and Remote Control.
 
 **CLI command: `csctl`**
 
 ## Features
 
-- **Sessions Tab** — View, resume (tmux-first: `Enter` resumes into the per-project tmux window; `t` bare-terminal fallback; `R` backgrounds into tmux; ⧉ marks tmux-resident sessions), terminate, and delete Claude Code sessions across all projects; a cleanup submenu (`c`) prunes empty/short sessions and sweeps orphan artifact directories, zombie session files, and aged global entries
-- **Projects Tab** — The startup tab: start a new tmux claude session in a project dir (`Enter`), start/stop RC servers per project (`o`/`s`), toggle per-project auto Remote Control (`c`), show running/stopped/dead states
-- **Background agents Tab** — List background agent jobs; take over, respawn, watch their timeline, stop, or remove them
+- **Sessions Tab** — One machine-wide list of Claude Code, Codex, and Kimi
+  Code sessions (CLI column: `cc`/`cx`/`km`), discovered from each CLI's own
+  on-disk state — not just sessions csctl started. Resume tmux-first
+  (`Enter` resumes into the per-project tmux window via each CLI's native
+  resume command; `t` bare-terminal fallback; `R` backgrounds into tmux;
+  `f` forks where the CLI supports it; ⧉ marks tmux-resident sessions),
+  terminate, and delete; a cleanup submenu (`c`) prunes empty/short Claude
+  sessions and sweeps orphan artifact directories, zombie session files, and
+  aged global entries (cleanup models Claude state only)
+- **Projects Tab** — The startup tab / launcher: start a new tmux session in
+  a project dir with claude (`Enter`), codex (`x`), or kimi (`k`); start/stop
+  Claude RC servers per project (`o`/`s`), toggle per-project auto Remote
+  Control (`c`), show running/stopped/dead states
+- **Background agents Tab** — List Claude Code background agent jobs; take
+  over, respawn, watch their timeline, stop, or remove them
+
+Non-Claude liveness is deliberately conservative (ADR-0005): a codex/kimi
+process is bound to its session only when its argv carries the session id
+(`codex resume <sid>` / `kimi --session <sid>` — which is how csctl itself
+dispatches them into tmux). Bare-launched TUIs are never stop/takeover
+targets.
 
 Built with [urwid](https://urwid.org/).
 
@@ -18,7 +38,12 @@ Built with [urwid](https://urwid.org/).
 ## Requirements
 
 - Python 3.12+
-- [Claude Code](https://claude.ai/code) CLI installed and authenticated
+- At least one supported agent CLI installed and authenticated:
+  [Claude Code](https://claude.ai/code), [Codex CLI](https://github.com/openai/codex),
+  and/or [Kimi Code](https://github.com/MoonshotAI/kimi-code) — each is
+  discovered automatically when its state home exists (`~/.claude`,
+  `~/.codex`, `~/.kimi-code`; official relocation variables `CODEX_HOME` /
+  `KIMI_CODE_HOME` are honored)
 - tmux (the primary session-lifecycle carrier: launch, resume, background, and
   survive terminal/SSH disconnects; managed Remote Control servers also use it)
 - Linux / WSL (macOS support is partial — `/proc`-based liveness detection is Linux-only)
@@ -60,9 +85,10 @@ headless CLI keeps only the agent-facing commands: `resume` and `agents`.
 # Open TUI
 csctl
 
-# Resume rescue (headless): list sessions across directories with
-# ready-to-copy resume commands (native /resume only searches the cwd
-# and hides sdk-ts/bridge sessions)
+# Resume rescue (headless): list sessions of ALL providers across
+# directories with ready-to-copy resume commands (native /resume only
+# searches the cwd and hides sdk-ts/bridge sessions); non-Claude rows
+# are tagged [codex]/[kimi]
 csctl resume                 # Page 1, 20 per page
 csctl resume mybug           # Keyword: sid/cwd/title, then transcript body
 csctl resume --page 2        # Next page
@@ -85,6 +111,7 @@ longer bundled with this package).
 
 | Environment Variable | Default | Description |
 |---|---|---|
+| `CSCTL_PROVIDERS` | `claude,codex,kimi` | Comma list of allowed agent-CLI providers; a listed provider is active only when its state home also exists |
 | `CSCTL_RC_SESSION` | `rc` | tmux session name for RC servers |
 | `CSCTL_CLEANUP_AGE_DAYS` | `14` | Minimum age in days for the age sweep in the Sessions cleanup submenu (must be an integer ≥ 0) |
 | `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via `$COLORFGBG`, else `dark`) / `dark` / `light`. Most terminals (including tmux) don't set `$COLORFGBG`, so `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |

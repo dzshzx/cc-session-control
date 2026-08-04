@@ -154,3 +154,25 @@ Claude Code version documented, fail closed where authority is uncertain, and
 adapt the owning boundary with new fixtures before release. Update this
 document and `CONTEXT.md` only with evidence actually captured; record any
 unverified item explicitly.
+
+## Non-Claude provider contracts (ADR-0005)
+
+The provider layer parses Codex CLI and Kimi Code on-disk state and resume
+argv shapes. Treat these as the same class of upstream contract and re-verify
+per release (read-only probes; never write into a CLI's real home):
+
+| Scope | Version | Date | Evidence |
+|---|---:|---:|---|
+| Codex rollout layout + `session_meta` first line (`payload.id` == `payload.session_id` for `thread_source: "user"`; subagent rollouts carry the parent thread id) | 0.146.0 | 2026-08-04 | Sampled `~/.codex/sessions/**/rollout-*.jsonl` first lines |
+| Codex `session_index.jsonl` (`id` / `thread_name` / `updated_at`) | 0.146.0 | 2026-08-04 | Index head/tail sample |
+| `codex resume <SESSION_ID>` / `codex fork <SESSION_ID>` accept a UUID | 0.146.0 | 2026-08-04 | `codex resume --help`, `codex fork --help` |
+| Codex TUI holds NO fd on its rollout; app-server holds MANY rollouts | 0.146.0 | 2026-08-04 | Live `/proc/<pid>/fd` probes (post-prompt) |
+| Kimi `session_index.jsonl` (`sessionId` / `sessionDir` / `workDir`) + per-session `state.json` (`title` / `lastPrompt` / `workDir` / `updatedAt`) | 0.31.1 | 2026-08-04 | Index + state.json samples |
+| `kimi --session <id>` / `-S` resume; no CLI fork (in-session `/fork` only) | 0.31.1 | 2026-08-04 | `kimi --help` |
+| Kimi REPL exposes NO fd/env session binding | 0.31.1 | 2026-08-04 | Live `/proc/<pid>/{fd,environ}` probes |
+
+Re-verify with the same read-only probes (`--help` outputs, first-line
+samples, `/proc` fd checks against a live TUI). A provider whose contract
+breaks degrades to typed provider issues in the Sessions status line — it
+must never blank the Claude view; adapt the owning provider module with new
+fixtures before release.
