@@ -8,7 +8,12 @@ from cc_session_control.actions import session_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import providers
 from cc_session_control.data.providers.base import LivenessGrade
+from cc_session_control.data.providers.claude import ClaudeProvider
 from cc_session_control.models import Session
+
+# Captured at import time — BEFORE the conftest autouse fixture stubs it —
+# so the home-dir activation test can exercise the real predicate.
+_REAL_CLAUDE_AVAILABLE = ClaudeProvider.available
 
 
 def _session(**overrides):
@@ -42,6 +47,7 @@ class TestRegistry:
         assert all(p.key != "claude" for p in providers.active_providers())
 
     def test_active_requires_home_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ClaudeProvider, "available", _REAL_CLAUDE_AVAILABLE)
         monkeypatch.setattr(cfg, "providers", ("claude",))
         monkeypatch.setattr(cfg, "claude_home", tmp_path / "absent")
         assert providers.active_providers() == ()
