@@ -74,6 +74,14 @@ def _hidden_marker(session: Session) -> str:
     return " ".join(known + unknown)
 
 
+def _archived_marker(session: Session) -> str:
+    """`归档` label marker for rows discovered from a provider's archived
+    store: the resume family refuses these until un-archived, so the list
+    says so up front (the filter haystack includes it too — one marker
+    source for both, like `_hidden_marker`)."""
+    return "归档" if session.archived else ""
+
+
 def _source_badge(session: Session) -> str:
     """Short source badge (CLI / IDE / SDK / BG), or "" when unknown."""
     return _SOURCE_BADGES.get(session.source, "")
@@ -155,6 +163,9 @@ class SessionRow(SelectableRow):
         when = _rel_time(session.mtime)
         hidden = _hidden_marker(session)
         label = f"[{hidden}] {session.label}" if hidden else session.label
+        archived = _archived_marker(session)
+        if archived:
+            label = f"[{archived}] {label}"
         label = truncate_cells(label, 80)
         cwd = session.cwd.rstrip("/").rsplit("/", 1)[-1] if session.cwd else ""
 

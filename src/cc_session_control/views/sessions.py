@@ -28,6 +28,7 @@ from ._rows import TextRow
 from ._session_row import (
     _SESSION_HEADER,
     SessionRow,
+    _archived_marker,
     _hidden_marker,
 )
 from ._sessions_cleanup import CleanupMixin, _CleanupPreview
@@ -323,6 +324,8 @@ class SessionsView(CleanupMixin, ListTabView):
                     + s.provider
                     + " "
                     + providers.get(s.provider).label
+                    + " "
+                    + _archived_marker(s)
                     + " "
                     + _hidden_marker(s)
                     + " "

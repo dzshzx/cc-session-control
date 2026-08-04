@@ -152,18 +152,18 @@ def would_take_over(s: Session, fork: bool = False) -> bool:
 def resume_cmd(s: Session, fork: bool = False) -> str:
     """Return a ready-to-copy command without serializing destructive state.
 
-    A live session can change pid, process generation, cwd, or current-session
-    status while a copied command waits in a clipboard. Carry only its durable
-    sid and make ``csctl resume --take-over`` reacquire that evidence at
-    execution time. Dead resumes and forks are non-destructive, so their
-    direct commands remain useful. The take-over deferral is Claude-only
-    (ADR-0005: the headless resolver reads registry + transcripts); a
-    non-Claude command is always the direct provider resume — it never
-    serializes a kill, so the destructive-state argument does not apply.
+    A live session can change pid, generation, cwd, or current status while
+    a copied command sits in a clipboard, so a live Claude resume carries
+    only the durable sid: ``csctl resume --take-over`` reacquires evidence
+    at execution time. Dead resumes, forks, and non-Claude rows copy direct
+    provider commands (ADR-0005) — none serialize a kill. An archived row
+    copies its provider's official un-archive command instead: a direct
+    resume from an archived store is unverified upstream semantics.
     """
+    if s.archived:
+        return shlex.join(providers.unarchive_argv(s.provider, s.sid))
     if s.provider == "claude" and s.alive and not fork:
         return shlex.join(["csctl", "resume", "--take-over", s.sid])
-
     cwd, args, _ = _resume_plan(s, fork)
     parts: list[str] = []
     if cwd:

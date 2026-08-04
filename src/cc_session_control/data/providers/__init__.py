@@ -17,6 +17,7 @@ from ...models import InventoryIssue, Session
 from .. import proc, tmux
 from .base import (
     AgentProvider,
+    ArchiveVerbs,
     DiskDiscovery,
     LivenessGrade,
     ProviderCaps,
@@ -28,6 +29,7 @@ from .kimi import KimiProvider
 
 __all__ = [
     "AgentProvider",
+    "ArchiveVerbs",
     "DiskDiscovery",
     "LivenessGrade",
     "ProviderCaps",
@@ -41,6 +43,7 @@ __all__ = [
     "scan_non_claude",
     "resolve_argv_execution",
     "find_owning_provider",
+    "unarchive_argv",
 ]
 
 _ALL: tuple[AgentProvider, ...] = (ClaudeProvider(), CodexProvider(), KimiProvider())
@@ -106,6 +109,17 @@ def scan_non_claude(
         rows.extend(scan.sessions)
         issues.extend(scan.issues)
     return tuple(rows), tuple(issues)
+
+
+def unarchive_argv(key: str, sid: str) -> list[str]:
+    """THE un-archive argv dispatch (`session_ops.resume_cmd`'s archived
+    branch consumes it): loud on a provider without archive verbs — only
+    `ArchiveVerbs` providers ever mark rows `Session.archived`, so a
+    mismatch is a programming error, not renderable uncertainty."""
+    provider = get(key)
+    if not isinstance(provider, ArchiveVerbs):
+        raise TypeError(f"provider {key!r} has no archive verbs")
+    return provider.unarchive_argv(sid)
 
 
 def find_owning_provider(sid: str) -> AgentProvider | None:

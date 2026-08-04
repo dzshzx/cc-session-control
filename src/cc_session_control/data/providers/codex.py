@@ -9,8 +9,12 @@ rollouts, skipped here). `session_index.jsonl` maps `id` → `thread_name`.
 Resume/fork: `codex resume <sid|name>` (the positional target is "Session id
 (UUID) or session name. UUIDs take precedence if it parses" — `codex resume
 --help`) / `codex fork <sid>`. Discovery reads
-rollout first lines only — never whole files; zstd-compressed old rollouts
-(`.jsonl.zst`) and `archived_sessions/` are out of scope.
+rollout first lines only — never whole files — and covers BOTH the active
+date tree and `$CODEX_HOME/archived_sessions/`, a FLAT directory (no date
+subtree) that `codex archive <SESSION>` moves rollouts into: those rows carry
+`Session.archived` and the resume family hands back `codex unarchive <sid>`
+instead of gambling an unverified direct resume. zstd-compressed old rollouts
+(`.jsonl.zst`) stay out of scope.
 
 Label fallback: `session_index.jsonl` barely overlaps active rollouts in
 practice, so when it has no `thread_name` for a sid, discovery does a
@@ -26,12 +30,14 @@ import os
 import re
 from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
+from pathlib import Path
 
 from ...config import cfg
 from ...models import InventoryIssue, Session
 from ..proc import ProcCliInventory
 from .argv_live import (
     ArgvExtractor,
+    ArgvMatch,
     apply_unbound_hints,
     build_argv_index,
     unbound_live_cwds,
@@ -345,6 +351,12 @@ class CodexProvider:
     def new_session_argv(self) -> list[str]:
         return ["codex"]
 
+    def unarchive_argv(self, sid: str) -> list[str]:
+        """Official recovery for an archived rollout (`codex unarchive
+        <SESSION>`, verified against `codex --help`) — the honest hand-back
+        when the resume family refuses an archived row."""
+        return ["codex", "unarchive", sid]
+
     def window_name(self, sid: str, fork: bool = False) -> str:
         base = f"cx-{sid[:8]}"
         return f"{base}-fork" if fork else base
@@ -359,10 +371,44 @@ class CodexProvider:
         extract = sid_extractor(_name_index(names))
         live = build_argv_index(cli_inventory.records, extract, cur)
 
-        root = cfg.codex_home / "sessions"
-        if not root.is_dir():
+        active_root = cfg.codex_home / "sessions"
+        archived_root = cfg.codex_home / "archived_sessions"
+        if not active_root.is_dir() and not archived_root.is_dir():
             return ProviderScan()  # fresh install — nothing recorded yet
+        active = self._scan_root(active_root, names, live, issues, archived=False)
+        archived = self._scan_root(archived_root, names, live, issues, archived=True)
+        # A sid on both sides is defensive-only (upstream archive is a MOVE):
+        # the archived copy is stale evidence and the active row wins
+        # regardless of mtime — the dict union's right operand does that.
+        best = archived | active
+        rows = apply_unbound_hints(
+            best.values(),
+            unbound_live_cwds(cli_inventory.records, extract, is_tui_shape),
+        )
+        return ProviderScan(rows, tuple(issues))
+
+    def _scan_root(
+        self,
+        root: Path,
+        names: dict[str, str],
+        live: dict[str, ArgvMatch],
+        issues: list[InventoryIssue],
+        *,
+        archived: bool,
+    ) -> dict[str, Session]:
+        """One rollout tree → newest-rollout-per-sid rows.
+
+        Shared by the active date tree and the flat `archived_sessions/`
+        store — the first-line parse, read caps, label fallback, and source
+        classification are exactly the ones the active tree uses, never a
+        second copy. A missing root is normal and contributes no issue
+        (`sessions/` appears on first run, `archived_sessions/` on first
+        archive); an EXISTING but unreadable root degrades loudly via the
+        walk-error issue without touching the other root's rows.
+        """
         best: dict[str, Session] = {}
+        if not root.is_dir():
+            return best
         unparseable = 0
         over_cap = 0
 
@@ -393,7 +439,14 @@ class CodexProvider:
                     elif not empty:
                         unparseable += 1
                     continue
-                row = self._project(payload, path, mtime, names, live)
+                row = self._project(
+                    payload,
+                    path,
+                    mtime,
+                    names,
+                    live,
+                    archived=archived,
+                )
                 if row is None:
                     continue
                 kept = best.get(row.sid)
@@ -415,11 +468,7 @@ class CodexProvider:
                     "session_meta first line (upstream format change?)",
                 )
             )
-        rows = apply_unbound_hints(
-            best.values(),
-            unbound_live_cwds(cli_inventory.records, extract, is_tui_shape),
-        )
-        return ProviderScan(rows, tuple(issues))
+        return best
 
     def _row_payload(self, path: str) -> tuple[dict | None, bool, bool]:
         return _read_meta(path)
@@ -430,7 +479,9 @@ class CodexProvider:
         path: str,
         mtime: float,
         names: dict[str, str],
-        live: dict,
+        live: dict[str, ArgvMatch],
+        *,
+        archived: bool,
     ) -> Session | None:
         if payload.get("thread_source") == "subagent":
             return None  # internal subagent rollout, not an operator work unit
@@ -454,4 +505,5 @@ class CodexProvider:
             proc_start=match.proc_start if match else "",
             file=path,
             source=source,
+            archived=archived,
         )

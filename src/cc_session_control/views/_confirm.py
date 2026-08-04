@@ -17,6 +17,7 @@ from ..actions.session_ops import (
     AttachIntent,
     TmuxResumeIntent,
     attach_target,
+    resume_cmd,
     would_take_over,
 )
 from ..data import proc
@@ -35,6 +36,14 @@ DEGRADED = "liveness 降级：破坏性操作已禁用"
 def stop_message(verb: str, name: str) -> str:
     """Confirm 文案 for a plain stop (kills the named thing's own process)."""
     return f"{verb}「{truncate_cells(name, CONFIRM_NAME_CELLS)}」？将终止其进程。"
+
+
+def archived_notice(s: Session) -> str:
+    """归档 refusal 文案: the provider-official un-archive command with a
+    display-shortened sid — `y` copies the full command (`resume_cmd`'s
+    archived branch, the same synthesis this reads, so they cannot drift)."""
+    short_cmd = resume_cmd(s).replace(s.sid, f"{s.sid[:8]}…")
+    return f"该会话已归档：先 {short_cmd} 恢复后再接回。"
 
 
 def accept_ancestor_probe(app: App, evidence: proc.AncestorProbe) -> bool:
@@ -107,7 +116,17 @@ def confirm_takeover(
     is reserved for callers carrying a complete typed liveness preparation, so
     confirmation does not mix generations. Otherwise the caller supplies the
     current-ancestor probe prepared off-loop.
+
+    An archived row refuses FIRST — before the hint confirm, the R10 gate and
+    the modal: every path from here would synthesize a resume/fork argv
+    against the provider's archived store, which is unverified upstream
+    semantics, so the notice hands back the official un-archive step instead.
+    Only the in-place tmux attach in `confirm_tmux_takeover` (no resume argv
+    at all) stays available for a live resident row.
     """
+    if s.archived:
+        app.notify(archived_notice(s))
+        return
     shown = truncate_cells(s.label if name is None else name, CONFIRM_NAME_CELLS)
     if not would_take_over(s, fork):
         if s.unbound_live_hint and not fork:

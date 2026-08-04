@@ -106,6 +106,23 @@ class AgentProvider(Protocol):
 
 
 @runtime_checkable
+class ArchiveVerbs(Protocol):
+    """Providers whose CLI owns an official archived-session store
+    (`codex archive/unarchive <SESSION>`).
+
+    Discovery marks rows from that store with `Session.archived`; the resume
+    family refuses them honestly and hands back `unarchive_argv` instead —
+    resuming straight from an archived store is unverified upstream
+    semantics, so csctl offers the official recovery step rather than
+    gambling (the ADR-0005 capability discipline).
+    """
+
+    def unarchive_argv(self, sid: str) -> list[str]:
+        """The official argv restoring `sid` from the archived store."""
+        ...
+
+
+@runtime_checkable
 class DiskDiscovery(Protocol):
     """Disk session discovery for providers without a claude-grade engine.
 

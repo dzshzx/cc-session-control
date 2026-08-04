@@ -102,6 +102,13 @@ class Session:
     kind: str = ""  # registry `kind` (e.g. interactive / bg)
     entrypoint: str = ""  # registry `entrypoint` (cli / claude-vscode / sdk-ts)
     source: str = ""  # coarse bucket: cli / vscode / sdk / bg
+    # Discovered from the provider's archived store (codex
+    # `archived_sessions/`) rather than the active tree. Archived rows stay
+    # visible/searchable, but the resume family refuses them honestly with
+    # the official un-archive command — resuming straight from an archived
+    # store is unverified upstream semantics. The False default keeps every
+    # existing construction and consumer byte-identical.
+    archived: bool = False
     rc_exposed: bool = False  # session remote control currently exposed
     agent_short: str | None = None  # linked background-agent short id, if any
     status: str = ""  # registry `status` (busy / idle)

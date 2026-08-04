@@ -74,7 +74,9 @@ def format_session(s: Session) -> list[str]:
 
     `live?` marks the unbound-live hint (an unbindable bare TUI of the same
     provider runs in the session's directory): honest uncertainty, not
-    liveness — the resume command stays the plain non-destructive one."""
+    liveness — the resume command stays the plain non-destructive one.
+    `(archived)` rows carry the un-archive command (resume_cmd's archived
+    branch) plus a note, matching the TUI `y` copy payload."""
     if s.alive:
         state = "live"
     elif s.unbound_live_hint:
@@ -82,9 +84,10 @@ def format_session(s: Session) -> list[str]:
     else:
         state = "dead"
     provider = f"[{s.provider}] " if s.provider != "claude" else ""
+    archived = "(archived) " if s.archived else ""
     flags = f"  [hidden:{','.join(sorted(s.hidden))}]" if s.hidden else ""
     when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
-    lines = [f"[{state}] {when}  {provider}{s.sid}{flags}", f"    {s.label}"]
+    lines = [f"[{state}] {when}  {provider}{archived}{s.sid}{flags}", f"    {s.label}"]
     if s.current:
         lines.append(
             "    <- you are IN this session (no resume needed; "
@@ -92,7 +95,9 @@ def format_session(s: Session) -> list[str]:
         )
     else:
         lines.append(f"    {resume_cmd(s)}")
-        if s.alive:
+        if s.archived:
+            lines.append("    ^ archived — unarchive first, then resume")
+        elif s.alive:
             if s.provider == "claude":
                 lines.append(
                     "    ^ live session: this command re-checks the live "

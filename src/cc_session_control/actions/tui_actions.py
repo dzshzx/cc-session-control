@@ -58,6 +58,10 @@ def copy_resume_command(session: Session) -> ActionResult:
     command = session_ops.resume_cmd(session)
     if not session_ops.to_clipboard(command):
         return ActionResult(f"复制失败: {command}")
+    if session.archived:
+        # The copied payload IS the provider's official un-archive command
+        # (resume_cmd's archived branch) — say so, never imply a resume.
+        return ActionResult("已复制 unarchive 命令（会话已归档）")
     if session.provider != "claude" and session.alive:
         # Non-Claude live rows copy a direct provider resume command
         # (ADR-0005) — it never stops the running process, unlike the
