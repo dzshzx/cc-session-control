@@ -50,7 +50,7 @@ __all__ = [
     "merge_sessions",
     "scan_non_claude",
     "resolve_argv_execution",
-    "find_owning_provider",
+    "find_non_claude_session",
     "unarchive_argv",
     "execute_cli_delete",
 ]
@@ -122,9 +122,10 @@ def scan_non_claude(
 
 def unarchive_argv(key: str, sid: str) -> list[str]:
     """THE un-archive argv dispatch (`session_ops.resume_cmd`'s archived
-    branch consumes it): loud on a provider without archive verbs — only
-    `ArchiveVerbs` providers ever mark rows `Session.archived`, so a
-    mismatch is a programming error, not renderable uncertainty."""
+    branch and the archived `--take-over` hint consume it): loud on a
+    provider without archive verbs — only `ArchiveVerbs` providers ever
+    mark rows `Session.archived`, so a mismatch is a programming error,
+    not renderable uncertainty."""
     provider = get(key)
     if not isinstance(provider, ArchiveVerbs):
         raise TypeError(f"provider {key!r} has no archive verbs")
@@ -200,22 +201,24 @@ def execute_cli_delete(provider_key: str, sid: str) -> CliDeleteResult:
     return provider.delete_session_result(sid)
 
 
-def find_owning_provider(sid: str) -> AgentProvider | None:
-    """Best-effort: which active non-Claude provider's disk records contain
-    `sid`? Liveness is irrelevant here (an empty `/proc` argv inventory and
-    an empty ancestor set are fine) — this only answers "does this sid
-    belong to codex/kimi" to enrich an already-failed Claude-only lookup
-    (e.g. the `--take-over` rejection message), never to gate a new
-    decision. Per-provider discovery issues are intentionally dropped: this
-    is an error-path hint on top of a lookup that already failed, not a new
-    fact source that must itself stay complete."""
+def find_non_claude_session(sid: str) -> Session | None:
+    """Best-effort: the disk row (with its `provider`/`archived` identity)
+    of the active non-Claude provider owning `sid`. Liveness is irrelevant
+    here (an empty `/proc` argv inventory and an empty ancestor set are
+    fine) — this only answers "does this sid belong to codex/kimi" to
+    enrich an already-failed Claude-only lookup (e.g. the `--take-over`
+    rejection message), never to gate a new decision. Per-provider discovery
+    issues are intentionally dropped: this is an error-path hint on top of a
+    lookup that already failed, not a new fact source that must itself stay
+    complete."""
     empty_inventory = proc.ProcCliInventory()
     for provider in active_providers():
         if provider.key == "claude" or not isinstance(provider, DiskDiscovery):
             continue
         scan = provider.discover(empty_inventory, frozenset())
-        if any(row.sid == sid for row in scan.sessions):
-            return provider
+        match = next((row for row in scan.sessions if row.sid == sid), None)
+        if match is not None:
+            return match
     return None
 
 

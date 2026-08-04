@@ -219,6 +219,41 @@ def test_resume_take_over_refuses_non_claude_sid_with_provider_hint(
     assert f"codex resume {sid}" in captured.err
 
 
+def test_resume_take_over_refuses_archived_codex_sid_with_unarchive_hint(
+    tmp_path, monkeypatch, capsys
+):
+    # An ARCHIVED codex sid must never be advised into a direct resume —
+    # resuming straight from the archived store is unverified upstream
+    # semantics (B7); every surface hands back the official un-archive step.
+    sid = "019fc784-c365-70e0-af94-a6a0b15f05b9"
+    codex_home = tmp_path / "codex"
+    archived_dir = codex_home / "archived_sessions"
+    archived_dir.mkdir(parents=True)
+    record = {
+        "timestamp": "t",
+        "type": "session_meta",
+        "payload": {
+            "id": sid,
+            "session_id": sid,
+            "cwd": str(tmp_path),
+            "thread_source": "user",
+        },
+    }
+    (archived_dir / f"rollout-{sid}.jsonl").write_text(json.dumps(record) + "\n")
+    monkeypatch.setattr(cfg, "codex_home", codex_home)
+    monkeypatch.setattr(cfg, "providers", ("claude", "codex"))
+    _install_takeover_rows(monkeypatch, ())  # no Claude session owns this sid
+
+    status = cli.main(["resume", "--take-over", sid])
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert captured.out == ""
+    assert "belongs to codex (archived)" in captured.err
+    assert f"unarchive it first: codex unarchive {sid}" in captured.err
+    assert "resume it directly" not in captured.err
+
+
 def test_resume_take_over_missing_sid_with_no_provider_match_stays_plain(
     tmp_path, monkeypatch, capsys
 ):

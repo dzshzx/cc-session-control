@@ -50,6 +50,12 @@ The provider designs below are grounded in probes of the actual CLIs
   (`app-server`, `proxy`, `codex-threadripper`, Windows-side `/mnt/c/...`
   binaries) share the `codex` basename and must be excluded from session
   matching by argv shape.
+- **Amendment (2026-08-04):** `archived_sessions/` is no longer skipped:
+  discovery now walks that flat store too through the same first-line
+  parse, marking its rows archived; resume-family verbs refuse archived
+  rows and hand back the official `codex unarchive <sid>` instead.
+  Plain-`.jsonl`-only reading is unchanged (`.jsonl.zst` stays unread).
+  The bullet above is left as originally written.
 - **Kimi Code 0.31.1**: `~/.kimi-code/session_index.jsonl` maps `sessionId`
   → `sessionDir`/`workDir`; each `sessions/wd_<name>_<hash>/session_<uuid>/`
   holds `state.json` (`title`, `lastPrompt`, `workDir`, `createdAt`,
@@ -133,6 +139,11 @@ The provider designs below are grounded in probes of the actual CLIs
   Provider source failures surface as non-fatal typed issues (unreadable
   subtrees, malformed `state.json`, unparseable rollout heads) — degraded
   sources narrow the list visibly, never silently.
+- **Amendment (2026-08-04):** "reads only rollout first lines" has narrowed
+  to "bounded reads, never full-file parses": when neither the index nor
+  the first line yields a label, codex discovery continues reading the
+  rollout body for the first user message under hard caps (64 lines /
+  128 KB). The bullet above is left as originally decided.
 - **The launcher goes multi-CLI; membership does not (yet).** The Projects
   tab keeps Claude-trust membership (ADR-0003) but its launcher offers a new
   session per active provider; each CLI shows its own trust/onboarding

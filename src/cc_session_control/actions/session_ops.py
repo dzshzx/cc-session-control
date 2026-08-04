@@ -71,19 +71,15 @@ class ExecutionSessionResolution:
 def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
     """THE kill primitive behind every takeover/stop: R10 gate → kill-time
     liveness recheck → SIGTERM → settle → invalidate the liveness cache.
-
     One implementation so the gate order and the kill semantics cannot fork
-    across the resume/terminate/stop variants (they had already started to:
-    only terminate/stop skipped the settle sleep for an already-gone pid).
-    The recheck (`proc.probe_pid` against `proc_start`; mere existence when the
-    start is unknown) closes the pid-reuse window — a confirm modal can sit
-    open for minutes, and a recycled pid must never be SIGTERMed.
-
-    Results: "killed" (signalled + settled), "gone" (already dead / recycled —
-    nothing to kill), "refused" (R10: current undeterminable), "failed"
-    (signal error, e.g. permissions). A required takeover may continue only
-    after "killed" or "gone"; "refused" and "failed" both fail closed.
-    """
+    across the resume/terminate/stop variants. The recheck (`proc.probe_pid`
+    against `proc_start`; mere existence when the start is unknown) closes
+    the pid-reuse window — a confirm modal can sit open for minutes, and a
+    recycled pid must never be SIGTERMed. Results: "killed" (signalled +
+    settled), "gone" (already dead / recycled — nothing to kill), "refused"
+    (R10: current undeterminable), "failed" (signal error). A required
+    takeover may continue only after "killed" or "gone"; "refused" and
+    "failed" both fail closed."""
     ancestors = proc.probe_current_ancestors()
     if not ancestors.complete:
         return TakeOverOutcome(
@@ -314,17 +310,21 @@ def _missing_sid_provider_hint(sid: str) -> str:
     """Best-effort suffix for a Claude "missing session id" rejection: is
     `sid` actually a non-Claude session? `--take-over` only ever scans
     Claude state (ADR-0005), so a real codex/kimi sid would otherwise be
-    misreported as simply missing. This never changes the refusal — only
-    the message — and the underlying provider probe drops its own typed
-    issues (see `providers.find_owning_provider`)."""
-    owner = providers.find_owning_provider(sid)
-    if owner is None:
+    misreported as simply missing. An archived match gets the official
+    un-archive command, never a direct resume (unverified upstream
+    semantics — the same refusal chain as `resume_cmd`). This never changes
+    the refusal — only the message — and the provider probe drops its own
+    typed issues (see `providers.find_non_claude_session`)."""
+    owned = providers.find_non_claude_session(sid)
+    if owned is None:
         return ""
-    direct_command = shlex.join(owner.resume_argv(sid))
-    return (
-        f"; session {sid!r} belongs to {owner.key}; --take-over is "
-        f"Claude-only — resume it directly: {direct_command}"
-    )
+    if owned.archived:
+        command = shlex.join(providers.unarchive_argv(owned.provider, sid))
+        advice = " (archived); --take-over is Claude-only — unarchive it first"
+    else:
+        command = shlex.join(providers.get(owned.provider).resume_argv(sid))
+        advice = "; --take-over is Claude-only — resume it directly"
+    return f"; session {sid!r} belongs to {owned.provider}{advice}: {command}"
 
 
 def do_resume_sid_result(sid: str) -> ResumeOutcome:
