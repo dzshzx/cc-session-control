@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.8.3 (2026-08-04)
+
+Operator feedback fixes: kimi liveness restored via tmux window metadata, and
+a CLI chooser on the Projects launcher.
+
+### Fixed
+
+- **Kimi sessions dispatched by csctl no longer read as dead.** Kimi 0.31.1
+  rewrites its own process title at runtime (observed live: `/proc/cmdline`
+  becomes `kimi-code` plus padding — the `--session <sid>` argv csctl itself
+  dispatched is destroyed), which blinded argv-exact liveness entirely. csctl
+  now stamps `@csctl_sid` / `@csctl_provider` window options on every
+  tmux window it spawns (addressed by server-unique `#{window_id}`) and binds
+  the pane process back to its session through that metadata — with exe/comm
+  identity verification, dead-pane filtering, bidirectional pid↔sid
+  uniqueness, fresh `proc_start` capture, and the same execution-time
+  re-resolution before any signal is sent. Bound kimi sessions regain
+  live status, `⧉` residency, in-place attach, and `s` stop. The unbound-live
+  `[live?]` hint now recognizes kimi processes by comm/exe identity too, so
+  bare title-rewritten TUIs surface again. Upstream contract recorded in
+  `docs/claude-code-compatibility.md`; ADR-0005 amended (kimi liveness grade
+  is now tmux-metadata for dispatched windows; bare TUIs stay blind).
+
+### Changed
+
+- **Projects `Enter` now opens a CLI chooser** (user-requested): pick
+  claude / codex / kimi with arrows + Enter (Esc cancels); the first row is
+  claude, so Enter-Enter reproduces the old behavior. `x` / `k` remain as
+  direct shortcuts. Friendlier on mobile SSH clients where letter shortcuts
+  are awkward.
+
 ## 0.8.2 (2026-08-04)
 
 Closes out the codex/kimi coverage-gap audit (batches A+B): discovery depth,
