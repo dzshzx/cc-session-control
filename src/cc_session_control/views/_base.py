@@ -139,7 +139,15 @@ class ListTabView:
         if self.app.is_active(self):
             self.app.set_hints(self.keyhints())
 
-    def _show_overlay(self, title: str, rows: list, height: int | None = None) -> None:
+    def _show_overlay(
+        self,
+        title: str,
+        rows: list,
+        height: int | None = None,
+    ) -> urwid.SimpleFocusListWalker:
+        """Show rows in the centered overlay; return the overlay's walker so a
+        selecting mode (e.g. the Projects CLI chooser) can read the focused
+        row back — display-only overlays just drop it."""
         walker = urwid.SimpleFocusListWalker(rows)
         listbox = urwid.ListBox(walker)
         header = urwid.AttrMap(urwid.Text(f" {title}", align="center"), "col_header")
@@ -153,6 +161,7 @@ class ListTabView:
             valign="middle",
             height=h,
         )
+        return walker
 
     # --- overlay-mode dispatch ---
 

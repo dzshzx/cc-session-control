@@ -176,6 +176,17 @@ The provider designs below are grounded in probes of the actual CLIs
   argument for `do_tmux_new_result`. Merging codex `config.toml`
   `projects.*` and kimi `workspaces.json` into membership is deferred to the
   RC-membership redesign (0.9+).
+- **Amendment (2026-08-04, user-requested):** the Projects-tab `Enter` no
+  longer hard-binds claude: it opens a small chooser overlay listing the
+  ACTIVE providers (registry order — claude first with default focus, so
+  Enter-Enter still equals the old direct claude launch; Esc cancels), and
+  the picked provider launches through the same `new_session_argv()` path.
+  `x`/`k` stay as direct per-provider shortcuts. Rationale: on phone/SSH
+  keyboards arrows + Enter beat letter mnemonics. This supersedes the
+  Consequences note below that the launcher binds one explicit key per
+  provider — the chooser now scales with the registry while the shortcut
+  keys remain a convenience. The bullet above is left as originally
+  decided.
 
 ## Consequences
 

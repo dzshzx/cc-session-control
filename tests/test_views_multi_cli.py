@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from view_helpers import FakeApp, _make_project
+import urwid
+from view_helpers import FakeApp, _apply_projects, _make_project
 
 from cc_session_control.actions import session_ops
 from cc_session_control.actions.resume_list import format_session
@@ -35,14 +36,6 @@ def _activate(monkeypatch, *keys: str) -> None:
 
 
 class TestLauncherKeys:
-    def test_enter_still_launches_claude(self, monkeypatch):
-        _activate(monkeypatch, "claude")
-        app = FakeApp()
-        view = RCView(app)
-        view._key_tmux_new(_make_project())
-        assert app.result == TmuxNewIntent("/tmp/myproj")
-        assert app.result.provider == "claude"
-
     def test_x_launches_codex_when_active(self, monkeypatch):
         _activate(monkeypatch, "claude", "codex")
         app = FakeApp()
@@ -57,6 +50,101 @@ class TestLauncherKeys:
         view._key_tmux_new_kimi(_make_project())
         assert app.result is None
         assert any("kimi" in n and "未启用" in n for n in app._notifications)
+
+
+class TestLauncherChooser:
+    """Projects-tab Enter = CLI 选择器 (user-requested ADR-0005 amendment,
+    2026-08-04): arrows + Enter pick one ACTIVE provider; x/k stay direct."""
+
+    def _open(self, monkeypatch, *keys: str):
+        _activate(monkeypatch, *keys)
+        app = FakeApp()
+        view = RCView(app)
+        app.views = [view]
+        _apply_projects(view, [_make_project(name="p1", directory="/tmp/p1")])
+        view.handle_key("enter")
+        return app, view
+
+    def test_enter_opens_chooser_with_claude_focused(self, monkeypatch):
+        app, view = self._open(monkeypatch, "claude", "codex", "kimi")
+        assert app.result is None  # nothing launched yet
+        assert isinstance(view._body.original_widget, urwid.Overlay)
+        assert [row.provider_key for row in view._chooser_walker] == [
+            "claude",
+            "codex",
+            "kimi",
+        ]
+        focused = view._chooser_walker.get_focus()[0]
+        assert focused.provider_key == "claude"  # Enter-Enter ≡ old Enter
+
+    def test_enter_enter_launches_claude_like_old_enter(self, monkeypatch):
+        app, view = self._open(monkeypatch, "claude", "codex", "kimi")
+        view.handle_key("enter")  # confirm the default claude row
+        assert app.result == TmuxNewIntent("/tmp/p1")
+        assert app.result.provider == "claude"
+        assert view._body.original_widget is view._list_body  # chooser closed
+        assert view._chooser is None
+
+    def _pick(self, view, provider_key: str) -> None:
+        rows = [row.provider_key for row in view._chooser_walker]
+        view._chooser_walker.set_focus(rows.index(provider_key))
+        view.handle_key("enter")
+
+    def test_choosing_codex_row_launches_codex(self, monkeypatch):
+        app, view = self._open(monkeypatch, "claude", "codex", "kimi")
+        self._pick(view, "codex")
+        assert app.result == TmuxNewIntent("/tmp/p1", provider="codex")
+
+    def test_choosing_kimi_row_launches_kimi(self, monkeypatch):
+        app, view = self._open(monkeypatch, "claude", "codex", "kimi")
+        self._pick(view, "kimi")
+        assert app.result == TmuxNewIntent("/tmp/p1", provider="kimi")
+
+    def test_esc_cancels_chooser_without_intent(self, monkeypatch):
+        app, view = self._open(monkeypatch, "claude", "codex")
+        view.handle_key("esc")
+        assert app.result is None
+        assert view._body.original_widget is view._list_body
+        assert view._chooser is None
+        view.handle_key("x")  # the list is actionable again — direct shortcut
+        assert app.result == TmuxNewIntent("/tmp/p1", provider="codex")
+
+    def test_inactive_providers_absent_from_chooser(self, monkeypatch):
+        _, view = self._open(monkeypatch, "claude", "kimi")
+        assert [row.provider_key for row in view._chooser_walker] == [
+            "claude",
+            "kimi",  # codex inactive -> not offered
+        ]
+
+    def test_no_active_provider_refuses_chooser(self, monkeypatch):
+        app, view = self._open(monkeypatch)
+        assert app.result is None
+        assert not isinstance(view._body.original_widget, urwid.Overlay)
+        assert any("无法新建会话" in n for n in app._notifications)
+
+    def test_x_k_direct_shortcuts_skip_chooser(self, monkeypatch):
+        _activate(monkeypatch, "claude", "codex", "kimi")
+        for key, provider in (("x", "codex"), ("k", "kimi")):
+            app = FakeApp()
+            view = RCView(app)
+            app.views = [view]
+            _apply_projects(view, [_make_project(name="p1", directory="/tmp/p1")])
+            view.handle_key(key)
+            assert not isinstance(view._body.original_widget, urwid.Overlay)
+            assert app.result == TmuxNewIntent("/tmp/p1", provider=provider)
+
+    def test_footer_and_help_carry_chooser_semantics(self, monkeypatch):
+        from cc_session_control.views._keytable import help_lines
+
+        _, view = self._open(monkeypatch, "claude")
+        hints = view.keyhints()  # chooser mode has its own footer
+        assert "选择 CLI" in hints
+        assert "Esc 取消" in hints
+        view.handle_key("esc")
+        assert "Enter 新建会话" in view.keyhints()  # list-mode label unchanged
+        blob = "\n".join(help_lines(view.KEY_TABLE, view.HELP_LAYOUT))
+        assert "选择器" in blob  # help screen describes the chooser
+        assert "直达" in blob  # …and x/k as direct shortcuts
 
 
 class TestTmuxNewDispatch:

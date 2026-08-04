@@ -2,8 +2,10 @@
 
 Shows two things:
   1. managed projects (RCProject) with typed `remoteControlAtStartup` evidence
-     and `remoteControlSpawnMode`, plus Enter (start a NEW claude session in the
-     project dir inside tmux, then enter it — the tmux-first launcher, ADR-0001),
+     and `remoteControlSpawnMode`, plus Enter (open the CLI chooser over the
+     ACTIVE providers, then start a NEW session of the picked CLI in the
+     project dir inside tmux and enter it — the tmux-first launcher,
+     ADR-0001/0005; `x`/`k` jump straight to codex/kimi),
      `o` (start the project RC server, the demoted secondary), and the
      stop / auto-RC keys;
   2. project RC servers (RCServer) discovered via tmux ∪ /proc, badged
@@ -70,6 +72,19 @@ _PROJECT_COLS: list[ColSpec] = [
     (("weight", 2), "left", "项目"),
     (("weight", 3), "left", "目录"),
 ]
+
+
+class _ProviderRow(SelectableRow):
+    """One CLI-chooser row = one ACTIVE provider (Enter launches it)."""
+
+    def __init__(self, provider_key: str) -> None:
+        self.provider_key = provider_key
+        mapped = urwid.AttrMap(
+            urwid.Text(f" {provider_key}"),
+            "dead",
+            focus_map={"dead": "selected", None: "selected"},
+        )
+        super().__init__(mapped)
 
 
 class RCRow(SelectableRow):
@@ -170,8 +185,10 @@ class RCView(ListTabView):
             "_key_tmux_new",
             section="项目操作（仅对「项目」行生效）:",
             help_lines=(
-                "  Enter  在项目目录新建 tmux claude 会话并直接进入（离开 csctl；",
-                "         tmux-first 主入口，会话默认获得断线保护）",
+                "  Enter  新建会话：先弹 CLI 选择器（仅列已启用的 CLI，↑↓ 选择，",
+                "         默认选中首行 claude，Esc 取消），再次 Enter 确认后在项目",
+                "         目录新建对应 tmux 会话并直接进入（离开 csctl；tmux-first",
+                "         主入口，会话默认获得断线保护）",
             ),
         ),
         Key(
@@ -180,8 +197,8 @@ class RCView(ListTabView):
             "_key_tmux_new_codex",
             section="项目操作（仅对「项目」行生效）:",
             help_lines=(
-                "  x      在项目目录新建 tmux codex 会话并进入（多 CLI 启动器，",
-                "         ADR-0005；codex 未启用时拒绝）",
+                "  x      直达新建 tmux codex 会话并进入（跳过选择器；多 CLI",
+                "         启动器，ADR-0005；codex 未启用时拒绝）",
             ),
         ),
         Key(
@@ -189,7 +206,7 @@ class RCView(ListTabView):
             "k 新kimi",
             "_key_tmux_new_kimi",
             section="项目操作（仅对「项目」行生效）:",
-            help_lines=("  k      在项目目录新建 tmux kimi 会话并进入（同上）",),
+            help_lines=("  k      直达新建 tmux kimi 会话并进入（同上）",),
         ),
         Key(
             ("o",),
@@ -258,8 +275,14 @@ class RCView(ListTabView):
         self._settings = ProjectSettingsResult(ProjectSettingsState.MISSING, {})
         self._inventory_issues: tuple[InventoryIssue, ...] = ()
         self._help = False
+        # CLI chooser (Enter): the project pinned when the chooser opened,
+        # plus the overlay walker whose focused row is the picked provider.
+        self._chooser: RCProject | None = None
+        self._chooser_walker = urwid.SimpleFocusListWalker([])
 
     def keyhints(self) -> str:
+        if self._chooser is not None:
+            return "选择 CLI · Enter 新建会话 · Esc 取消"
         if self._overlay_active():
             # "其余" is honest: the prefix's Tab/q stay global (Tab switches
             # tabs, q QUITS — neither returns to the list).
@@ -278,7 +301,7 @@ class RCView(ListTabView):
         self._servers = list(batch.snapshot.rc_servers)
         self._inventory_issues = batch.snapshot.rc_inventory_issues
         self._loaded = True
-        if not self._help:
+        if not self._help and self._chooser is None:
             self._rebuild()
 
     def _build_rows(self) -> None:
@@ -322,6 +345,31 @@ class RCView(ListTabView):
 
     def _close_overlay_mode(self) -> None:
         self._help = False
+        self._chooser = None
+
+    def handle_key(self, key: str) -> None:
+        """Chooser mode first (Projects-only — Enter confirms the focused
+        provider, Esc cancels, ↑↓ stay with the overlay listbox); the help
+        overlay + list dispatch fall through to the base handle_key."""
+        if self._chooser is not None:
+            if key == "enter":
+                self._confirm_chooser()
+            elif key == "esc":
+                self._exit_overlay()
+            elif key == "r":
+                # Footer prefix promises `r 刷新` on every tab/mode — honor it.
+                self.app.refresh_with_notice()
+            return
+        super().handle_key(key)
+
+    def _confirm_chooser(self) -> None:
+        """Launch the focused provider for the project pinned at chooser open."""
+        project = self._chooser
+        widget = self._chooser_walker.get_focus()[0] if self._chooser_walker else None
+        self._exit_overlay()
+        if project is None or not isinstance(widget, _ProviderRow):
+            return
+        self._launch_new(project, widget.provider_key)
 
     def _selected(self) -> RCProject | None:
         widget = self._focused_widget()
@@ -332,10 +380,22 @@ class RCView(ListTabView):
     # --- key handlers (bound by name in KEY_TABLE; dispatch lives in the base) ---
 
     def _key_tmux_new(self, p: RCProject) -> None:
-        # New claude session in the project dir, inside tmux, entered
-        # immediately — nothing is killed, so no confirm / R10 / trust gate
-        # (each CLI's own trust dialog shows interactively in the window).
-        self._launch_new(p, "claude")
+        """Enter — CLI 选择器 (ADR-0005 amendment, 2026-08-04): arrows + Enter
+        pick one ACTIVE provider, then launch through the same `_launch_new`
+        path as the x/k direct shortcuts. Registry order puts claude first,
+        so default first-row focus keeps Enter-Enter ≡ the old direct
+        claude launch; Esc cancels back to the list."""
+        if not p.dir_exists:
+            self.app.notify("目录缺失 — 无法新建会话")
+            return
+        active = providers.active_providers()
+        if not active:
+            self.app.notify("没有已启用的 CLI — 无法新建会话")
+            return
+        self._chooser = p
+        rows: list[urwid.Widget] = [_ProviderRow(prov.key) for prov in active]
+        self._chooser_walker = self._show_overlay("选择 CLI 新建会话", rows)
+        self._update_footer()
 
     def _key_tmux_new_codex(self, p: RCProject) -> None:
         self._launch_new(p, "codex")
