@@ -13,9 +13,9 @@ from ..actions.session_ops import (
     attach_target,
     would_take_over,
 )
-from ..data import proc
+from ..data import proc, providers
 from ..data.cleanup import CleanupPlan
-from ..models import Session
+from ..models import InventoryIssue, Session, issue_detail
 from ._base import ListTabView
 from ._confirm import (
     accept_ancestor_probe,
@@ -149,6 +149,9 @@ class SessionsView(CleanupMixin, ListTabView):
             "        ▸ = 当前会话（启动 csctl 的会话，受保护） · 📱 = 已开远控",
             "        ⧉ = tmux 驻留（会话进程在 tmux 窗口里，断线不死）",
             "        ? = tmux 驻留未知（盘点不完整，不能确认驻留或裸终端）",
+            "CLI 列: cc = Claude Code · cx = Codex · km = Kimi Code",
+            "        （codex/kimi 仅精确绑定 csctl 派发的会话进程；裸启动的",
+            "        进程不绑定、不会被停止/接管，见 ADR-0005）",
             "",
         ),
         sections=("会话操作:", "清理与过滤:"),
@@ -168,6 +171,7 @@ class SessionsView(CleanupMixin, ListTabView):
         self._cleanup_stats: dict[str, int] = {}
         self._classified: dict[str, int] = {}
         self._preview: _CleanupPreview | None = None
+        self._provider_issues: tuple[InventoryIssue, ...] = ()
         self._show_hidden = True
         # The frozen cleanup plan (R11/D8 — built from the shared snapshot,
         # never re-scanned per view): counts and each new preview read it;
@@ -193,6 +197,7 @@ class SessionsView(CleanupMixin, ListTabView):
     def apply_refresh(self, batch: RefreshBatch) -> None:
         """Apply one complete generation on the urwid main loop."""
         self._all_sessions = list(batch.snapshot.sessions)
+        self._provider_issues = tuple(batch.snapshot.provider_issues)
         self._plan = batch.cleanup_plan
         self._classified = dict(batch.cleanup_counts)
         self._cleanup_stats = dict(batch.session_stats)
@@ -218,6 +223,21 @@ class SessionsView(CleanupMixin, ListTabView):
 
     def _status_text(self) -> str:
         alive_n = sum(1 for s in self._all_sessions if s.alive)
+        provider_text = ""
+        by_provider: dict[str, int] = {}
+        for s in self._all_sessions:
+            by_provider[s.provider] = by_provider.get(s.provider, 0) + 1
+        if len(by_provider) > 1:
+            provider_text = " · " + " ".join(
+                f"{providers.get(key).label} {count}"
+                for key, count in sorted(by_provider.items())
+            )
+        degraded_text = ""
+        if self._provider_issues:
+            degraded_text = (
+                f" · 外部源降级 {len(self._provider_issues)}"
+                f"（{issue_detail(self._provider_issues[:1])}）"
+            )
         flt = f" · 过滤「{self._filter_text}」" if self._filter_text else ""
         empty = self._cleanup_stats.get("empty", 0)
         short = self._cleanup_stats.get("short", 0)
@@ -258,7 +278,11 @@ class SessionsView(CleanupMixin, ListTabView):
             if orphans:
                 parts.append(f"孤儿 {orphans}")
             cleanup_text = f" · {' · '.join(parts)}"
-        return f" 共 {len(self._all_sessions)} 条会话 · 运行 {alive_n} · 显示 {len(self._sessions)}{flt}{hidden_text}{tmux_text}{cleanup_text}"
+        return (
+            f" 共 {len(self._all_sessions)} 条会话{provider_text} · 运行 {alive_n}"
+            f" · 显示 {len(self._sessions)}"
+            f"{flt}{hidden_text}{tmux_text}{degraded_text}{cleanup_text}"
+        )
 
     def _close_overlay_mode(self) -> None:
         self._mode = "list"
@@ -290,6 +314,10 @@ class SessionsView(CleanupMixin, ListTabView):
                     + s.cwd
                     + " "
                     + s.sid
+                    + " "
+                    + s.provider
+                    + " "
+                    + providers.get(s.provider).label
                     + " "
                     + _hidden_marker(s)
                     + " "
@@ -439,7 +467,13 @@ class SessionsView(CleanupMixin, ListTabView):
         )
 
     def _key_fork(self, s: Session) -> None:
-        """f — 分叉进 tmux: a fork is a copy (never kills, no confirm)."""
+        """f — 分叉进 tmux: a fork is a copy (never kills, no confirm).
+
+        Capability-gated (ADR-0005): kimi has no CLI fork argv, so the verb
+        is refused with a reason instead of synthesizing a broken command."""
+        if not providers.get(s.provider).caps.fork:
+            self.app.notify(f"{s.provider} 不支持从命令行分叉会话")
+            return
         if s.current:
             self.app.notify("不能分叉当前会话")
             return

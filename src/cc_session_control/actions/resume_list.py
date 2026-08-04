@@ -64,9 +64,10 @@ def paginate(
 def format_session(s: Session) -> list[str]:
     """Render one session as display lines: status header, label, command."""
     state = "live" if s.alive else "dead"
+    provider = f"[{s.provider}] " if s.provider != "claude" else ""
     flags = f"  [hidden:{','.join(sorted(s.hidden))}]" if s.hidden else ""
     when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
-    lines = [f"[{state}] {when}  {s.sid}{flags}", f"    {s.label}"]
+    lines = [f"[{state}] {when}  {provider}{s.sid}{flags}", f"    {s.label}"]
     if s.current:
         lines.append(
             "    <- you are IN this session (no resume needed; "

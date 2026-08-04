@@ -152,9 +152,12 @@ def resume_cmd(s: Session, fork: bool = False) -> str:
     status while a copied command waits in a clipboard. Carry only its durable
     sid and make ``csctl resume --take-over`` reacquire that evidence at
     execution time. Dead resumes and forks are non-destructive, so their
-    direct commands remain useful.
+    direct commands remain useful. The take-over deferral is Claude-only
+    (ADR-0005: the headless resolver reads registry + transcripts); a
+    non-Claude command is always the direct provider resume — it never
+    serializes a kill, so the destructive-state argument does not apply.
     """
-    if s.alive and not fork:
+    if s.provider == "claude" and s.alive and not fork:
         return shlex.join(["csctl", "resume", "--take-over", s.sid])
 
     cwd, args, _ = _resume_plan(s, fork)
@@ -387,18 +390,29 @@ def do_tmux_resume_result(s: Session, fork: bool = False) -> TmuxResumeOutcome:
     return _spawn_in_tmux_result(s, fork=fork)
 
 
-def do_tmux_new_result(directory: str) -> tmux.TmuxWriteResult:
-    """Start a NEW claude session in `directory`, inside that project's own
-    tmux session, retaining the exact create stage and failure detail.
+def do_tmux_new_result(
+    directory: str,
+    provider_key: str = "claude",
+) -> tmux.TmuxWriteResult:
+    """Start a NEW session of `provider_key`'s CLI in `directory`, inside
+    that project's own tmux session, retaining the exact create stage and
+    failure detail.
 
-    The 项目-tab Enter key: same skeleton as `do_tmux_resume_result` but nothing exists
-    yet — no kill, no confirm, no R10 gate (no process is terminated). Plain
-    `claude` with NO --remote-control (same tradeoff as `tmux_foreground_cmd`:
-    every RC process mints a new cloud environment entry). No trust gate
-    either: the user lands inside the window, so claude's own trust dialog
-    shows interactively."""
-    cmd = f"cd {shlex.quote(directory)} && claude"
-    return tmux.run_in_tmux_result(tmux.session_name_for(directory), "claude", cmd)
+    The 项目-tab launcher keys: same skeleton as `do_tmux_resume_result` but
+    nothing exists yet — no kill, no confirm, no R10 gate (no process is
+    terminated). The argv comes from the provider (ADR-0005); for claude it
+    stays plain `claude` with NO --remote-control (same tradeoff as
+    `tmux_foreground_cmd`: every RC process mints a new cloud environment
+    entry). No trust gate either: the user lands inside the window, so each
+    CLI's own trust/onboarding dialog shows interactively."""
+    provider = providers.get(provider_key)
+    line = shlex.join(provider.new_session_argv())
+    cmd = f"cd {shlex.quote(directory)} && {line}"
+    return tmux.run_in_tmux_result(
+        tmux.session_name_for(directory),
+        provider.key,
+        cmd,
+    )
 
 
 # --- exit intents (the payload crossing the exit-then-exec seam) ------------
@@ -507,12 +521,14 @@ class TmuxResumeIntent(ExitIntent):
 
 @dataclass(frozen=True)
 class TmuxNewIntent(ExitIntent):
-    """项目-tab Enter: start a NEW claude in tmux, then enter (pure spawn)."""
+    """项目-tab launcher: start a NEW session of one provider's CLI in tmux,
+    then enter (pure spawn)."""
 
     directory: str
+    provider: str = "claude"
 
     def run(self) -> int:
-        result = do_tmux_new_result(self.directory)
+        result = do_tmux_new_result(self.directory, self.provider)
         if not result.success:
             detail = f": {result.diagnostic}" if result.diagnostic else ""
             print(
