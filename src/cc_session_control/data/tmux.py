@@ -159,7 +159,10 @@ def set_window_option_result(
 
 # -P -F makes tmux print the exact target of the window it just created, so
 # callers enter THAT window even when names collide (no select-by-name guess).
-_TARGET_FMT = "#{session_name}:#{window_index}"
+# The trailing #{window_id} is the server-unique address follow-up window
+# writes use: a racing kill/create can hand a name:index to a different
+# window, a window id it cannot.
+_TARGET_FMT = "#{session_name}:#{window_index}\t#{window_id}"
 
 
 def _spawn_result(
@@ -252,17 +255,31 @@ def _declare_dispatch_metadata(
 ) -> TmuxWriteResult:
     """Write the dispatch-identity options on a freshly created window.
 
-    A write failure never fails the spawn: the created target is returned
-    with the failure retained in `detail` — the binding simply stays absent
-    (fail safe). A partial write (one option only) also fails safe: the read
-    side requires BOTH options to bind."""
+    Writes address the server-unique `window_id`, never the name:index
+    `target`: a racing kill/create can reassign that index, landing the
+    options on a stranger window — a wrong kill target. A write failure
+    never fails the spawn: the created target is returned with the failure
+    retained in `detail` — the binding simply stays absent (fail safe). A
+    partial write (one option only) also fails safe: the read side requires
+    BOTH options to bind. A spawn printout without a window id skips the
+    writes the same way — no binding beats a misaddressed one."""
     if not result.success or result.target is None:
         return result
+    options = [
+        (option, value)
+        for option, value in ((_PROVIDER_OPTION, provider), (_SID_OPTION, sid))
+        if value
+    ]
+    if not options:
+        return result
+    if result.window_id is None:
+        return replace(
+            result,
+            detail="window metadata: spawn printed no window id; binding skipped",
+        )
     failures: list[str] = []
-    for option, value in ((_PROVIDER_OPTION, provider), (_SID_OPTION, sid)):
-        if not value:
-            continue
-        write = set_window_option_result(result.target, option, value)
+    for option, value in options:
+        write = set_window_option_result(result.window_id, option, value)
         if not write.success:
             failures.append(f"{option}: {write.detail or 'write failed'}")
     if not failures:
@@ -304,7 +321,7 @@ def run_in_tmux_result(
 
 
 _PANES_FMT = (
-    "#{session_name}:#{window_index}\t#{pane_pid}"
+    "#{session_name}:#{window_index}\t#{pane_dead}\t#{pane_pid}"
     f"\t#{{{_SID_OPTION}}}\t#{{{_PROVIDER_OPTION}}}"
 )
 
@@ -314,7 +331,10 @@ def list_panes_inventory() -> PaneInventory:
 
     THE one pane walk (C1): each pane also carries the window's declared
     dispatch identity (`@csctl_sid`/`@csctl_provider`, "" when unset), so
-    residency joins and metadata liveness binding share one tmux call."""
+    residency joins and metadata liveness binding share one tmux call.
+    Dead panes (remain-on-exit residue) are excluded, not an issue: their
+    recorded pid is vacated and may be reused by an unrelated process, so
+    they must never feed a residency or metadata join."""
 
     invocation = _tmux_run_result(["list-panes", "-a", "-F", _PANES_FMT])
     cp = invocation.completed
@@ -333,11 +353,12 @@ def list_panes_inventory() -> PaneInventory:
     for line_number, line in enumerate(cp.stdout.splitlines(), start=1):
         parts = line.split("\t")
         target = parts[0].strip() if parts else ""
+        dead = parts[1].strip() if len(parts) == 5 else ""
         try:
-            pid = int(parts[1].strip()) if len(parts) == 4 else 0
+            pid = int(parts[2].strip()) if len(parts) == 5 else 0
         except ValueError:
             pid = 0
-        if len(parts) != 4 or not target or pid <= 0:
+        if len(parts) != 5 or not target or pid <= 0 or dead not in {"0", "1"}:
             issues.append(
                 ResidencyIssue(
                     "tmux list-panes",
@@ -346,7 +367,9 @@ def list_panes_inventory() -> PaneInventory:
                 )
             )
             continue
-        out.append(TmuxPane(target, pid, parts[2].strip(), parts[3].strip()))
+        if dead == "1":
+            continue
+        out.append(TmuxPane(target, pid, parts[3].strip(), parts[4].strip()))
     return PaneInventory(tuple(out), tuple(issues))
 
 

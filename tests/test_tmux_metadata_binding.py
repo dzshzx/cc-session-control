@@ -41,14 +41,16 @@ KIMI_SID2 = f"session_{UUID2}"
 
 
 def _spawn_run(calls):
-    """Fake subprocess.run: existing session, new-window prints its target."""
+    """Fake subprocess.run: existing session, new-window prints target + id."""
 
     def run(argv, **_kwargs):
         calls.append(argv)
         if argv[1] == "has-session":
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         if argv[1] == "new-window":
-            return subprocess.CompletedProcess(argv, 0, stdout="proj:3\n", stderr="")
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="proj:3\t@7\n", stderr=""
+            )
         if argv[1] == "set-option":
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         raise AssertionError(argv)
@@ -68,9 +70,68 @@ class TestSpawnDeclaresDispatchMetadata:
         assert result.success and result.target == "proj:3"
         option_calls = [argv for argv in calls if argv[1] == "set-option"]
         assert option_calls == [
-            ["tmux", "set-option", "-w", "-t", "proj:3", "@csctl_provider", "kimi"],
-            ["tmux", "set-option", "-w", "-t", "proj:3", "@csctl_sid", KIMI_SID],
+            ["tmux", "set-option", "-w", "-t", "@7", "@csctl_provider", "kimi"],
+            ["tmux", "set-option", "-w", "-t", "@7", "@csctl_sid", KIMI_SID],
         ]
+
+    def test_option_writes_address_the_server_unique_window_id(self, monkeypatch):
+        """Race shape: name:index can be reassigned between spawn and write
+        (a killed window frees its index for the next create) — the option
+        write must address the server-unique window id, never name:index,
+        or the binding lands on a stranger window and mints a wrong kill
+        target."""
+        calls: list[list[str]] = []
+
+        def run(argv, **_kwargs):
+            calls.append(argv)
+            if argv[1] == "has-session":
+                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            if argv[1] == "new-window":
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="proj:3\t@7\n", stderr=""
+                )
+            if argv[1] == "set-option":
+                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            raise AssertionError(argv)
+
+        monkeypatch.setattr(tmux.subprocess, "run", run)
+
+        result = tmux.run_in_tmux_result(
+            "proj", "km-019fc784", "cmd", sid=KIMI_SID, provider="kimi"
+        )
+
+        # Enter/notify consumers keep the enterable session:index target.
+        assert result.success and result.target == "proj:3"
+        assert result.window_id == "@7"
+        option_targets = [argv[4] for argv in calls if argv[1] == "set-option"]
+        assert option_targets == ["@7", "@7"]
+
+    def test_spawn_without_window_id_skips_metadata_writes(self, monkeypatch):
+        """No window id printed → no collision-safe address → fail safe:
+        the spawn stands, the binding stays absent, and the writes are
+        never re-addressed by name:index."""
+        calls: list[list[str]] = []
+
+        def run(argv, **_kwargs):
+            calls.append(argv)
+            if argv[1] == "has-session":
+                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            if argv[1] == "new-window":
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="proj:3\n", stderr=""
+                )
+            raise AssertionError(argv)
+
+        monkeypatch.setattr(tmux.subprocess, "run", run)
+
+        result = tmux.run_in_tmux_result(
+            "proj", "km-019fc784", "cmd", sid=KIMI_SID, provider="kimi"
+        )
+
+        assert result.success and result.target == "proj:3"
+        assert result.window_id is None
+        assert all(argv[1] != "set-option" for argv in calls)
+        assert "window metadata" in result.detail
 
     def test_metadata_write_failure_never_fails_the_spawn(self, monkeypatch):
         def run(argv, **_kwargs):
@@ -78,7 +139,7 @@ class TestSpawnDeclaresDispatchMetadata:
                 return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
             if argv[1] == "new-window":
                 return subprocess.CompletedProcess(
-                    argv, 0, stdout="proj:3\n", stderr=""
+                    argv, 0, stdout="proj:3\t@7\n", stderr=""
                 )
             if argv[1] == "set-option":
                 return subprocess.CompletedProcess(
@@ -191,8 +252,8 @@ class TestPaneInventoryCarriesMetadata:
                 argv,
                 0,
                 stdout=(
-                    f"proj:1\t800\t{KIMI_SID}\tkimi\n"
-                    "other:2\t900\t\t\n"  # plain window — no options set
+                    f"proj:1\t0\t800\t{KIMI_SID}\tkimi\n"
+                    "other:2\t0\t900\t\t\n"  # plain window — no options set
                 ),
                 stderr="",
             ),
@@ -206,6 +267,30 @@ class TestPaneInventoryCarriesMetadata:
             TmuxPane("other:2", 900, "", ""),
         )
 
+    def test_dead_pane_rows_are_excluded(self, monkeypatch):
+        """remain-on-exit residue: a dead pane's process is gone and its
+        recorded pid may be reused by an unrelated same-identity process —
+        binding-time proc_start capture cannot catch that, so a dead pane
+        must never feed the residency or metadata join at all."""
+        monkeypatch.setattr(
+            tmux.subprocess,
+            "run",
+            lambda argv, **_kwargs: subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout=(
+                    f"proj:1\t0\t800\t{KIMI_SID}\tkimi\n"
+                    f"proj:2\t1\t900\t{KIMI_SID2}\tkimi\n"  # dead pane
+                ),
+                stderr="",
+            ),
+        )
+
+        inventory = tmux.list_panes_inventory()
+
+        assert inventory.complete  # a dead pane is normal state, not an issue
+        assert inventory.records == (TmuxPane("proj:1", 800, KIMI_SID, "kimi"),)
+
     def test_malformed_row_stays_an_issue(self, monkeypatch):
         monkeypatch.setattr(
             tmux.subprocess,
@@ -213,7 +298,10 @@ class TestPaneInventoryCarriesMetadata:
             lambda argv, **_kwargs: subprocess.CompletedProcess(
                 argv,
                 0,
-                stdout="proj:1\tnot-a-pid\t\t\n",
+                stdout=(
+                    "proj:1\t0\tnot-a-pid\t\t\n"
+                    "proj:2\tmaybe\t800\t\t\n"  # unparseable pane_dead flag
+                ),
                 stderr="",
             ),
         )
@@ -322,6 +410,26 @@ class TestKimiMetadataBinding:
         (row,) = scan.sessions
         assert row.alive and row.pid == 800
 
+    def test_pane_with_two_tui_descendants_binds_nothing(self, kimi_home, monkeypatch):
+        """`_pane_tui_process` fail-closed: a wrapper pane hosting TWO
+        same-identity TUI descendants proves neither — binding either would
+        be a guess at a kill target."""
+        _write_kimi_session(kimi_home, KIMI_SID, "/tmp/proj", 1000)
+        inventory = ProcCliInventory(
+            records=(_rewritten(800, "/tmp/proj"), _rewritten(900, "/tmp/proj")),
+        )
+        panes = _panes(TmuxPane("proj:1", 700, KIMI_SID, "kimi"))
+        monkeypatch.setattr(
+            kimi_mod.proc,
+            "probe_ancestors",
+            lambda pid: AncestorProbe(frozenset({pid, 700, 1})),
+        )
+
+        scan = KimiProvider().discover(inventory, cur=frozenset(), panes=panes)
+
+        (row,) = scan.sessions
+        assert not row.alive and row.pid is None
+
     def test_identity_mismatch_never_binds(self, kimi_home):
         _write_kimi_session(kimi_home, KIMI_SID, "/tmp/proj", 1000)
         impostor = ProcCli(
@@ -393,6 +501,24 @@ class TestKimiMetadataBinding:
 
         (row,) = scan.sessions
         assert not row.alive
+
+    def test_two_sids_claiming_one_pid_bind_nothing(self, kimi_home):
+        """The reverse ambiguity: one process claimed by panes for TWO sids.
+        One process runs one session — at most one claim is right and the
+        evidence cannot say which, so BOTH are dropped (fail closed, never
+        pick one: a coin-flip binding mints a wrong kill target)."""
+        _write_kimi_session(kimi_home, KIMI_SID, "/tmp/proj", 1000)
+        _write_kimi_session(kimi_home, KIMI_SID2, "/tmp/proj", 2000)
+        inventory = ProcCliInventory(records=(_rewritten(800, "/tmp/proj"),))
+        panes = _panes(
+            TmuxPane("proj:1", 800, KIMI_SID, "kimi"),
+            TmuxPane("proj:2", 800, KIMI_SID2, "kimi"),
+        )
+
+        scan = KimiProvider().discover(inventory, cur=frozenset(), panes=panes)
+
+        assert len(scan.sessions) == 2
+        assert all(not row.alive and row.pid is None for row in scan.sessions)
 
     def test_argv_binding_keeps_priority_over_metadata(self, kimi_home):
         _write_kimi_session(kimi_home, KIMI_SID, "/tmp/proj", 1000)

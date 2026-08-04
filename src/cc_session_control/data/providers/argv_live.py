@@ -112,10 +112,12 @@ def build_metadata_index(
     `proc_start` is the walk's scan-time capture, so the kill-time
     `probe_pid` recheck defeats pid reuse exactly like argv matches. Every
     doubt binds nothing: no panes / an incomplete pane inventory, a missing
-    option, an identity or shape mismatch, a vanished pane process, and a
-    sid claimed by panes over distinct pids all fail closed; argv-bound pids
-    are excluded so metadata can never re-bind proven processes; window
-    names never participate.
+    option, an identity or shape mismatch, and a vanished pane process all
+    fail closed; so does ambiguity in EITHER direction — a sid claimed by
+    panes over distinct pids, and a pid claimed by panes for distinct sids
+    (one process runs one session; a disputed pid binds nobody, never a
+    coin-flip pick). Argv-bound pids are excluded so metadata can never
+    re-bind proven processes; window names never participate.
     """
     if panes is None or not panes.complete:
         return {}
@@ -126,12 +128,14 @@ def build_metadata_index(
         return {}
     bound: dict[str, ProcCli] = {}
     ambiguous: set[str] = set()
+    sids_claiming_pid: dict[int, set[str]] = {}
     for pane in panes.records:
         if pane.provider != provider_key or not pane.sid:
             continue
         record = _pane_tui_process(pane.pid, candidates, ancestors_of)
         if record is None:
             continue
+        sids_claiming_pid.setdefault(record.pid, set()).add(pane.sid)
         if bound.setdefault(pane.sid, record).pid != record.pid:
             ambiguous.add(pane.sid)
     return {
@@ -142,7 +146,7 @@ def build_metadata_index(
             current=record.pid in cur,
         )
         for sid, record in bound.items()
-        if sid not in ambiguous
+        if sid not in ambiguous and len(sids_claiming_pid[record.pid]) == 1
     }
 
 
