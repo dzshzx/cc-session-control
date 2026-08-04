@@ -122,6 +122,31 @@ The provider designs below are grounded in probes of the actual CLIs
   unknown or ambiguous names, flag-shaped targets (`codex resume --last`)
   and the bare picker stay unbound (fail closed). The bullet above is left
   as originally decided.
+- **Amendment (2026-08-04, C1):** kimi 0.31.1 destroys its own argv evidence
+  at runtime: an active REPL rewrites its process title, collapsing
+  `/proc/<pid>/cmdline` to `kimi-code` plus whitespace padding — the
+  `--session <sid>` tokens vanish (probed live against a csctl-dispatched
+  session; comm follows the rewrite to `kimi-code`, exe still resolves to
+  `~/.kimi-code/bin/kimi`; rewrite timing varies — a bare `kimi` cmdline was
+  still intact a day earlier). "Every session the workbench manages is
+  exactly matchable by construction" therefore no longer holds for kimi
+  through argv alone. Dispatched sessions bind through csctl's OWN spawn
+  metadata instead: every tmux dispatch declares `@csctl_sid` /
+  `@csctl_provider` window user options at spawn (fork and launcher windows
+  declare only the provider — their sid does not exist yet), and discovery
+  joins a declaring pane to the pane root process — or its unique TUI-shaped
+  descendant — whose identity matches the provider's process-identity set
+  (kimi: argv0 `kimi`, comm `kimi-code`, or exe basename `kimi`), capturing
+  `proc_start` at scan time so the kill-time recheck still defeats pid
+  reuse. Argv bindings keep priority; the metadata is a supplement, so codex
+  behavior with intact argv is unchanged. The binding fails closed: a
+  missing option, an incomplete pane inventory, an identity or TUI-shape
+  mismatch, a vanished pane process, and a sid claimed over distinct pids
+  all bind nothing, and window NAMES never bind. The unbound-live hint uses
+  the same identity set (a title-rewritten bare kimi hints again) and skips
+  bound pids. The execution-time resolver re-gathers both sources fresh.
+  Kimi's liveness grade is now `TMUX` (ARGV + dispatch metadata; bare TUIs
+  stay blind). The bullet above is left as originally decided.
 - **Takeover semantics generalize, with the same single decision point.**
   `should_kill = alive ∧ ¬current ∧ ¬fork` is provider-neutral;
   `take_over_result`'s kill-time recheck applies to any exact-matched pid.

@@ -63,7 +63,7 @@ class TestTmuxNewDispatch:
     def test_provider_argv_and_window(self, monkeypatch):
         calls = []
 
-        def fake_run(session_name, window, cmd):
+        def fake_run(session_name, window, cmd, **_kwargs):
             calls.append((session_name, window, cmd))
             return tmux.TmuxWriteResult(
                 stage=tmux.TmuxWriteStage.NEW_WINDOW,

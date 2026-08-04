@@ -71,6 +71,10 @@ def _created_target(target: str) -> tmux.TmuxWriteResult:
     )
 
 
+def _must_not_spawn(*_args: object, **_kwargs: object) -> tmux.TmuxWriteResult:
+    raise AssertionError("must not spawn")
+
+
 def _create_failure(
     stage: tmux.TmuxWriteStage,
     detail: str = "tmux unavailable",
@@ -123,7 +127,7 @@ def test_tui_tmux_spawn_failure_exits_nonzero_on_stderr(
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
-        lambda *_args: _create_failure(stage),
+        lambda *_args, **_kwargs: _create_failure(stage),
     )
 
     assert cli.main([]) == 1
@@ -210,7 +214,7 @@ def test_tui_attach_exec_failure_exits_nonzero_with_context_on_stderr(
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
-        lambda *_args: _created_target("project:1"),
+        lambda *_args, **_kwargs: _created_target("project:1"),
     )
     monkeypatch.setattr(tmux, "select_window", lambda _target: True)
     monkeypatch.delenv("TMUX", raising=False)
@@ -443,7 +447,7 @@ def test_live_tmux_resume_uses_execution_time_session_generation(
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
-        lambda tmux_session, window, cmd: (
+        lambda tmux_session, window, cmd, **_kwargs: (
             spawns.append((tmux_session, window, cmd))
             or _created_target("fresh-project:3")
         ),
@@ -483,7 +487,7 @@ def test_live_tmux_resume_enters_fresh_resident_target_without_replacement(
     entered: list[str] = []
     monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: True)
 
-    def fail_replacement(*_args: object) -> None:
+    def fail_replacement(*_args: object, **_kwargs: object) -> None:
         pytest.fail("must not replace fresh resident target")
 
     monkeypatch.setattr(session_ops, "take_over_result", fail_replacement)
@@ -627,7 +631,7 @@ def test_live_resume_refusal_matrix_stops_all_execution_boundaries(
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
+        _must_not_spawn,
     )
 
     assert session_ops.ResumeIntent(stale).run() == 1
@@ -709,7 +713,7 @@ def test_tui_live_tmux_resume_refuses_incomplete_liveness_without_spawn(
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
+        _must_not_spawn,
     )
 
     assert cli.main([]) == 1
@@ -778,7 +782,7 @@ def test_tui_dead_tmux_resume_skips_liveness_and_spawns(
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
-        lambda session, window, cmd: (
+        lambda session, window, cmd, **_kwargs: (
             spawn_calls.append((session, window, cmd)) or _created_target("project:7")
         ),
     )
@@ -828,7 +832,7 @@ def test_tui_live_fork_skips_incomplete_liveness_and_residency(
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
-        lambda tmux_session, window, cmd: (
+        lambda tmux_session, window, cmd, **_kwargs: (
             spawn_calls.append((tmux_session, window, cmd))
             or _created_target("project:8")
         ),
@@ -877,7 +881,7 @@ def test_tui_tmux_resume_refuses_incomplete_residency_without_spawn(
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("must not spawn")),
+        _must_not_spawn,
     )
     monkeypatch.setattr(
         session_ops,
@@ -961,7 +965,7 @@ def test_installed_console_entry_exits_with_tui_failure_status(
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
-        lambda *_args: _create_failure(tmux.TmuxWriteStage.NEW_SESSION),
+        lambda *_args, **_kwargs: _create_failure(tmux.TmuxWriteStage.NEW_SESSION),
     )
     monkeypatch.setattr(sys, "argv", [str(entrypoint)])
 
@@ -982,7 +986,7 @@ def test_module_entry_exits_with_tui_failure_status(
     monkeypatch.setattr(
         tmux,
         "run_in_tmux_result",
-        lambda *_args: _create_failure(tmux.TmuxWriteStage.NEW_SESSION),
+        lambda *_args, **_kwargs: _create_failure(tmux.TmuxWriteStage.NEW_SESSION),
     )
     monkeypatch.setattr(sys, "argv", ["cc_session_control"])
 

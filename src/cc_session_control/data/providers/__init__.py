@@ -93,14 +93,30 @@ def merge_sessions(*row_groups: Iterable[Session]) -> tuple[Session, ...]:
     return tuple(merged)
 
 
+def _pane_evidence(
+    inventory: proc.ProcCliInventory,
+) -> tmux.PaneInventory | None:
+    """The shared dispatch-metadata pane evidence for one discovery pass (C1).
+
+    Fetched only when candidate CLI processes exist at all — the common
+    zero-process case adds no tmux subprocess, and every test injecting an
+    empty inventory stays tmux-free. An unavailable/incomplete pane
+    inventory is NOT an error here: metadata bindings simply stay absent
+    (fail safe, the pre-C1 status quo), while argv bindings stand alone."""
+    if not inventory.records:
+        return None
+    return tmux.list_panes_inventory()
+
+
 def scan_non_claude(
     cur: AbstractSet[int],
 ) -> tuple[tuple[Session, ...], tuple[InventoryIssue, ...]]:
     """Discover every active non-Claude provider's sessions in one pass.
 
-    ONE `/proc` argv walk serves all providers (their extractors are pure);
-    per-provider disk issues merge into one non-fatal issue stream — a
-    degraded codex index must never blank the Claude view (ADR-0005).
+    ONE `/proc` argv walk + ONE pane walk serve all providers (their
+    extractors/predicates are pure); per-provider disk issues merge into one
+    non-fatal issue stream — a degraded codex index must never blank the
+    Claude view (ADR-0005).
     """
     discoverers = [
         p
@@ -109,12 +125,13 @@ def scan_non_claude(
     ]
     if not discoverers:
         return (), ()
-    basenames = frozenset(p.basename for p in discoverers)
+    basenames = frozenset().union(*(p.capture_basenames for p in discoverers))
     inventory = proc.scan_cli_argv_inventory(basenames)
+    panes = _pane_evidence(inventory)
     rows: list[Session] = []
     issues: list[InventoryIssue] = list(inventory.issues)
     for p in discoverers:
-        scan = p.discover(inventory, cur)
+        scan = p.discover(inventory, cur, panes)
         rows.extend(scan.sessions)
         issues.extend(scan.issues)
     return tuple(rows), tuple(issues)
@@ -161,13 +178,13 @@ def execute_cli_delete(provider_key: str, sid: str) -> CliDeleteResult:
         return _delete_refusal(
             CliDeleteStage.EVIDENCE, f"ancestor evidence incomplete: {detail}"
         )
-    inventory = proc.scan_cli_argv_inventory(frozenset({provider.basename}))
+    inventory = proc.scan_cli_argv_inventory(provider.capture_basenames)
     if not inventory.complete:
         detail = "; ".join(i.detail for i in inventory.issues)
         return _delete_refusal(
             CliDeleteStage.EVIDENCE, f"process evidence incomplete: {detail}"
         )
-    scan = provider.discover(inventory, ancestors.pids)
+    scan = provider.discover(inventory, ancestors.pids, _pane_evidence(inventory))
     if not scan.complete:
         detail = "; ".join(i.detail for i in scan.issues)
         return _delete_refusal(
@@ -235,7 +252,8 @@ class ArgvResolution:
 
 
 def resolve_argv_execution(provider_key: str, sid: str) -> ArgvResolution:
-    """Re-resolve one non-Claude sid against fresh disk + `/proc` evidence.
+    """Re-resolve one non-Claude sid against fresh disk + `/proc` + tmux
+    dispatch-metadata evidence (both liveness sources, argv first — C1).
 
     Mirror of the Claude execution-time resolver's guarantees (CLAUDE.md):
     a live takeover may only proceed on a freshly re-scanned whole Session —
@@ -255,11 +273,11 @@ def resolve_argv_execution(provider_key: str, sid: str) -> ArgvResolution:
     if not ancestors.complete:
         detail = "; ".join(i.detail for i in ancestors.issues)
         return ArgvResolution(detail=f"ancestor evidence incomplete: {detail}")
-    inventory = proc.scan_cli_argv_inventory(frozenset({provider.basename}))
+    inventory = proc.scan_cli_argv_inventory(provider.capture_basenames)
     if not inventory.complete:
         detail = "; ".join(i.detail for i in inventory.issues)
         return ArgvResolution(detail=f"process evidence incomplete: {detail}")
-    scan = provider.discover(inventory, ancestors.pids)
+    scan = provider.discover(inventory, ancestors.pids, _pane_evidence(inventory))
     if not scan.complete:
         detail = "; ".join(i.detail for i in scan.issues)
         return ArgvResolution(detail=f"session discovery incomplete: {detail}")

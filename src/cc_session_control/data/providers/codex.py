@@ -35,12 +35,15 @@ from pathlib import Path
 
 from ...config import cfg
 from ...models import InventoryIssue, Session
-from ..proc import ProcCliInventory
+from .. import proc
+from ..proc import ProcCli, ProcCliInventory
+from ..tmux_outcomes import PaneInventory
 from .argv_live import (
     ArgvExtractor,
     ArgvMatch,
     apply_unbound_hints,
-    build_argv_index,
+    bound_pids,
+    build_live_index,
     unbound_live_cwds,
 )
 from .base import (
@@ -163,16 +166,17 @@ def extract_resume_target(argv: tuple[str, ...]) -> str | None:
     return after[0]
 
 
-def is_tui_shape(argv: tuple[str, ...]) -> bool:
-    """PURE: does this codex argv look like a session-holding interactive
-    TUI (bare `codex [PROMPT]`, `codex resume …`, `codex fork …`)?
-
-    Feeds ONLY the unbound-live hint (`unbound_live_cwds`) — never liveness.
-    Token-presence matching mirrors clap's own subcommand resolution and
-    keeps `extract_resume_target`'s conservative discipline: a flag value or
-    quoted prompt that happens to spell a denylisted subcommand only costs a
-    missed hint (safe direction), never a daemon entering the hint source.
+def is_tui_process(record: ProcCli) -> bool:
+    """PURE: does this codex process look like a session-holding interactive
+    TUI (bare `codex [PROMPT]`, `codex resume …`, `codex fork …`)? Identity
+    stays argv0-basename only (codex does not rewrite its title — C1
+    hardened only kimi's identity set). Feeds the unbound-live hint and
+    metadata-binding candidacy — never liveness by itself. Token-presence
+    matching mirrors clap's own subcommand resolution: a flag value or
+    quoted prompt spelling a denylisted subcommand only costs a missed hint
+    (safe direction), never a daemon entering either source.
     """
+    argv = record.argv
     if not argv or os.path.basename(argv[0]) != BASENAME:
         return False
     return not any(tok in _NON_TUI_SUBCOMMANDS for tok in argv[1:])
@@ -357,6 +361,7 @@ class CodexProvider:
     key = "codex"
     label = "cx"
     basename = BASENAME
+    capture_basenames = frozenset({BASENAME})  # no title rewrite observed
     caps = ProviderCaps(
         fork=True,  # native `codex fork <sid>`
         takeover=True,  # argv-exact matches only
@@ -437,11 +442,20 @@ class CodexProvider:
         self,
         cli_inventory: ProcCliInventory,
         cur: AbstractSet[int],
+        panes: PaneInventory | None = None,
     ) -> ProviderScan:
         issues: list[InventoryIssue] = []
         names = _read_index(issues)
         extract = sid_extractor(_name_index(names))
-        live = build_argv_index(cli_inventory.records, extract, cur)
+        live = build_live_index(
+            cli_inventory.records,
+            extract,
+            cur,
+            panes=panes,
+            provider_key=self.key,
+            is_tui_process=is_tui_process,
+            ancestors_of=proc.probe_ancestors,
+        )
 
         active_root = cfg.codex_home / "sessions"
         archived_root = cfg.codex_home / "archived_sessions"
@@ -455,7 +469,12 @@ class CodexProvider:
         best = archived | active
         rows = apply_unbound_hints(
             best.values(),
-            unbound_live_cwds(cli_inventory.records, extract, is_tui_shape),
+            unbound_live_cwds(
+                cli_inventory.records,
+                extract,
+                is_tui_process,
+                bound_pids(live),
+            ),
         )
         return ProviderScan(rows, tuple(issues))
 

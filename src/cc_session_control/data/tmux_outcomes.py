@@ -149,10 +149,18 @@ def window_option_result(
 
 
 class TmuxPane(NamedTuple):
-    """One pane root pid and its enterable session/window target."""
+    """One pane root pid and its enterable session/window target.
+
+    `sid`/`provider` are the window's `@csctl_sid`/`@csctl_provider` user
+    options (C1): the dispatch identity csctl itself declared at spawn, "" on
+    windows without it. They feed the tmux-metadata liveness binding for CLIs
+    whose processes rewrite their own argv (kimi title rewrite); window NAMES
+    stay cosmetic and never bind."""
 
     target: str
     pid: int
+    sid: str = ""
+    provider: str = ""
 
 
 #: Same (source, path, detail) record everywhere — one canonical issue type.

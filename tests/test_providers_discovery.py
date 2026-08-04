@@ -310,7 +310,8 @@ class TestScanNonClaude:
             fake_walk,
         )
         rows, issues = providers.scan_non_claude(frozenset())
-        assert walks == [frozenset({"codex", "kimi"})]
+        # kimi's capture set includes its title-rewritten argv0 (C1).
+        assert walks == [frozenset({"codex", "kimi", "kimi-code"})]
         assert {row.provider for row in rows} == {"codex", "kimi"}
         assert issues == ()
 
@@ -562,7 +563,7 @@ class TestResolveArgvExecutionBranches:
         monkeypatch.setattr(
             CodexProvider,
             "discover",
-            lambda self, inv, cur: ProviderScan(
+            lambda self, inv, cur, panes=None: ProviderScan(
                 issues=(InventoryIssue("codex sessions", None, "broken"),),
             ),
         )

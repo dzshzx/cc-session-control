@@ -290,9 +290,9 @@ def test_attach_target_reads_snapshot_field():
 
 
 def test_window_containing_matches_ancestor():
-    from cc_session_control.data.tmux import window_containing
+    from cc_session_control.data.tmux import TmuxPane, window_containing
 
-    panes = [("cc:1", 100), ("rc:0", 200)]
+    panes = [TmuxPane("cc:1", 100), TmuxPane("rc:0", 200)]
     assert window_containing(panes, {4242, 200}) == "rc:0"
     assert window_containing(panes, {4242}) is None
     assert window_containing([], {100}) is None
@@ -397,7 +397,7 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
     monkeypatch.setattr(
         so.tmux,
         "run_in_tmux_result",
-        lambda session, window, cmd: (
+        lambda session, window, cmd, **_kwargs: (
             calls["spawn"].append((session, window, cmd))
             or _created_target(so.tmux, f"{session}:1")
         ),
@@ -441,7 +441,9 @@ def test_do_tmux_resume_dead_session_no_kill(monkeypatch):
     monkeypatch.setattr(
         so.tmux,
         "run_in_tmux_result",
-        lambda session, window, cmd: _created_target(so.tmux, f"{session}:0"),
+        lambda session, window, cmd, **_kwargs: _created_target(
+            so.tmux, f"{session}:0"
+        ),
     )
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
     assert so.do_tmux_resume_result(s).target == "proj:0"
@@ -473,7 +475,7 @@ def test_do_tmux_new_spawns_and_returns_target(monkeypatch):
     monkeypatch.setattr(
         so.tmux,
         "run_in_tmux_result",
-        lambda session, window, cmd: (
+        lambda session, window, cmd, **_kwargs: (
             spawns.append((session, window, cmd))
             or _created_target(so.tmux, f"{session}:0")
         ),
@@ -494,7 +496,7 @@ def test_do_tmux_new_spawn_failure_returns_none(monkeypatch):
     monkeypatch.setattr(
         so.tmux,
         "run_in_tmux_result",
-        lambda *a: _create_failure(so.tmux),
+        lambda *a, **_kwargs: _create_failure(so.tmux),
     )
     result = so.do_tmux_new_result("/tmp/proj")
     assert result.success is False
@@ -515,7 +517,7 @@ def test_do_tmux_resume_fork_spawns_fork_window_no_kill(monkeypatch):
     monkeypatch.setattr(
         so.tmux,
         "run_in_tmux_result",
-        lambda session, window, cmd: (
+        lambda session, window, cmd, **_kwargs: (
             calls.__setitem__("tmux", (session, window, cmd))
             or _created_target(so.tmux, f"{session}:2")
         ),

@@ -31,6 +31,7 @@ from cc_session_control.data.providers.base import (
     CliDeleteState,
 )
 from cc_session_control.data.providers.codex import CodexProvider
+from cc_session_control.data.tmux_outcomes import PaneInventory
 from cc_session_control.models import InventoryIssue
 from cc_session_control.views.sessions import SessionsView
 
@@ -93,6 +94,13 @@ def _stub_evidence(
         lambda basenames: (
             inventory if inventory is not None else proc.ProcCliInventory()
         ),
+    )
+    # Keep the shared pane-evidence fetch off the real tmux (C1): an empty
+    # inventory simply yields no metadata bindings.
+    monkeypatch.setattr(
+        providers.tmux,
+        "list_panes_inventory",
+        lambda: PaneInventory(),
     )
 
 
@@ -220,7 +228,7 @@ class TestExecutionProtection:
         monkeypatch.setattr(
             CodexProvider,
             "discover",
-            lambda self, inventory, cur: providers.ProviderScan(
+            lambda self, inventory, cur, panes=None: providers.ProviderScan(
                 issues=(InventoryIssue("codex sessions", "/x", "unreadable"),),
             ),
         )
