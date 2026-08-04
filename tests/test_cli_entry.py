@@ -176,11 +176,15 @@ def test_resume_incomplete_transcript_scan_emits_no_inventory_or_command(
     assert "claude --resume" not in captured.err
 
 
-def test_resume_keyword_body_read_race_emits_no_inventory_or_command(
+def test_resume_keyword_body_read_race_is_a_no_match_not_a_refusal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """A transcript deleted between inventory and body search (e.g. a race,
+    or a provider like kimi whose index outlives manually removed session
+    dirs) degrades that one row to "no match" — it must not refuse the
+    whole search."""
     transcript = tmp_path / "disappeared.jsonl"
     transcript.write_text('{"text": "needle"}\n')
     session = replace(_session("raced", "metadata miss"), file=str(transcript))
@@ -196,14 +200,11 @@ def test_resume_keyword_body_read_race_emits_no_inventory_or_command(
         lambda _inputs: sessions.SessionScanResult((session,)),
     )
 
-    assert cli.main(["resume", "needle"]) == 1
+    assert cli.main(["resume", "needle"]) == 0
     captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "transcript body search is incomplete" in captured.err
-    assert "session transcript body" in captured.err
-    assert str(transcript) in captured.err
-    assert "No such file or directory" in captured.err
-    assert "claude --resume" not in captured.err
+    assert "No matching sessions" in captured.out
+    assert captured.err == ""
+    assert "claude --resume" not in captured.out
 
 
 @pytest.mark.parametrize(

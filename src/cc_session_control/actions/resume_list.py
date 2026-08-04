@@ -45,8 +45,16 @@ def keyword_matches(s: Session, keyword: str) -> bool:
         return True
     if not s.file:
         return False
-    with open(s.file, errors="ignore") as fh:
-        return any(kw in line.lower() for line in fh)
+    try:
+        with open(s.file, errors="ignore") as fh:
+            return any(kw in line.lower() for line in fh)
+    except (FileNotFoundError, NotADirectoryError):
+        # The transcript file (or a directory component of its path) is gone.
+        # Some providers' session indexes routinely outlive the underlying
+        # session directory (e.g. kimi has no official delete command, so a
+        # manual `rm` is the only cleanup path) — treat that row as simply
+        # not matching rather than failing the whole search.
+        return False
 
 
 def paginate(

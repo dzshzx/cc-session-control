@@ -49,14 +49,47 @@ def test_keyword_matches_metadata_then_body(tmp_path):
     assert not resume_list.keyword_matches(s, "no-such-word")
 
 
-def test_keyword_body_fallback_survives_missing_file(tmp_path):
-    s = _session(tmp_path)
+def test_keyword_body_missing_file_is_no_match_not_refusal(tmp_path):
+    # kimi's append-only session index routinely outlives a manually removed
+    # session directory (no official delete command) — a deleted transcript
+    # must degrade that one row to "no match", not fail the whole search.
+    s = _session(tmp_path, label="fix the login bug")
     s = types.SimpleNamespace(**{**s.__dict__, "file": str(tmp_path / "gone.jsonl")})
+    result = resume_list.render([s], keyword="no-such-word")
+    assert result.complete
+    assert result.issues == ()
+    assert "No matching sessions" in result.text
+
+
+def test_keyword_metadata_hit_skips_missing_body_file(tmp_path):
+    # A metadata hit (label/cwd/sid) must short-circuit before ever opening
+    # the transcript file, so a missing file can't block a metadata match.
+    s = _session(tmp_path, label="fix the login bug")
+    s = types.SimpleNamespace(**{**s.__dict__, "file": str(tmp_path / "gone.jsonl")})
+    result = resume_list.render([s], keyword="login")
+    assert result.complete
+    assert result.issues == ()
+    assert "fix the login bug" in result.text
+
+
+def test_keyword_body_permission_error_is_still_a_refusal(tmp_path, monkeypatch):
+    # Missing files degrade to no-match, but other OSErrors (e.g. a transcript
+    # file that exists but can't be read) must still refuse the search rather
+    # than silently mask a real access problem.
+    s = _session(tmp_path, body='{"text": "whatever"}\n')
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if str(path) == s.file:
+            raise PermissionError(13, "Permission denied", s.file)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fake_open)
     result = resume_list.render([s], keyword="anything")
     assert not result.complete
     assert result.text == ""
     assert result.issues[0].source == "session transcript body"
-    assert result.issues[0].path == str(tmp_path / "gone.jsonl")
+    assert result.issues[0].path == s.file
 
 
 def test_paginate_clamps_and_slices(tmp_path):
