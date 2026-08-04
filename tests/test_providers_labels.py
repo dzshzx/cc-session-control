@@ -122,6 +122,42 @@ class TestCodexBodyLabelFallback:
         )
         assert _discover_label(codex_home) == "(untitled)"
 
+    def test_first_line_over_old_cap_under_new_cap_is_discovered(self, codex_home):
+        # 100KB session_meta line: exceeds the old 64KB read cap but fits
+        # under the 256KB one — real machines have observed lines near 35KB,
+        # so this exercises the headroom the cap raise buys.
+        meta = _meta_payload(UUID1)
+        meta["pad"] = "x" * 100_000
+        directory = codex_home / "sessions" / "2026" / "08" / "01"
+        directory.mkdir(parents=True, exist_ok=True)
+        meta_line = json.dumps({"timestamp": "t", "type": "session_meta", "payload": meta})
+        assert 64 * 1024 < len(meta_line) < codex_mod._FIRST_LINE_CAP
+        (directory / f"rollout-h-{UUID1}.jsonl").write_text(meta_line + "\n")
+
+        scan = CodexProvider().discover(ProcCliInventory(), cur=frozenset())
+
+        assert scan.complete
+        (row,) = scan.sessions
+        assert row.sid == UUID1
+
+    def test_first_line_over_new_cap_reports_a_cap_issue(self, codex_home):
+        meta = _meta_payload(UUID1)
+        meta["pad"] = "x" * 300_000
+        directory = codex_home / "sessions" / "2026" / "08" / "01"
+        directory.mkdir(parents=True, exist_ok=True)
+        meta_line = json.dumps({"timestamp": "t", "type": "session_meta", "payload": meta})
+        assert len(meta_line) > codex_mod._FIRST_LINE_CAP
+        (directory / f"rollout-i-{UUID1}.jsonl").write_text(meta_line + "\n")
+
+        scan = CodexProvider().discover(ProcCliInventory(), cur=frozenset())
+
+        assert scan.sessions == ()
+        assert not scan.complete
+        (issue,) = scan.issues
+        assert str(codex_mod._FIRST_LINE_CAP) in issue.detail
+        assert "cap" in issue.detail
+        assert "upstream format change" not in issue.detail
+
     def test_malformed_body_line_is_skipped_silently(self, codex_home):
         directory = codex_home / "sessions" / "2026" / "08" / "01"
         directory.mkdir(parents=True, exist_ok=True)

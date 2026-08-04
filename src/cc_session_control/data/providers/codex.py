@@ -39,7 +39,10 @@ _UUID_RE = re.compile(
 
 # First-line pre-check (same cheap-substring-guard pattern as transcripts.py).
 _META_MARK = b'"session_meta"'
-_FIRST_LINE_CAP = 64 * 1024
+# 256KB — real-machine session_meta lines have been observed at ~35KB, so the
+# old 64KB cap left under 2x headroom; a line that reaches this cap without a
+# trailing newline is truncated, not malformed (see `_read_meta`).
+_FIRST_LINE_CAP = 256 * 1024
 
 # Label-fallback continuation read past the session_meta line: bounded by
 # BOTH line count and byte count so a huge rollout is never read in full —
@@ -98,20 +101,29 @@ def _read_index(issues: list[InventoryIssue]) -> dict[str, str]:
     return names
 
 
-def _read_meta(path: str) -> tuple[dict | None, bool]:
-    """(parsed `session_meta` payload or None, first-line-was-empty)."""
+def _read_meta(path: str) -> tuple[dict | None, bool, bool]:
+    """(parsed `session_meta` payload or None, first-line-was-empty,
+    first-line-was-truncated-by-the-cap).
+
+    A line that reads out to exactly `_FIRST_LINE_CAP` bytes without a
+    trailing newline was cut off by the bounded read, not malformed by
+    upstream — that's a distinct, honest cause from a genuine parse failure
+    and must not be blamed on "upstream format change?" (see `discover`).
+    """
     with open(path, "rb") as fh:
         raw = fh.readline(_FIRST_LINE_CAP)
     if not raw.strip():
-        return None, True
+        return None, True, False
+    if len(raw) == _FIRST_LINE_CAP and not raw.endswith(b"\n"):
+        return None, False, True
     if _META_MARK not in raw:
-        return None, False
+        return None, False, False
     try:
         record = json.loads(raw)
     except ValueError:
-        return None, False
+        return None, False, False
     payload = record.get("payload")
-    return (payload, False) if isinstance(payload, dict) else (None, False)
+    return (payload, False, False) if isinstance(payload, dict) else (None, False, False)
 
 
 def _clean_label(text: str) -> str:
@@ -205,6 +217,7 @@ class CodexProvider:
             return ProviderScan()  # fresh install — nothing recorded yet
         best: dict[str, Session] = {}
         unparseable = 0
+        over_cap = 0
 
         def _walk_error(exc: OSError) -> None:
             # os.walk swallows errors by default; an unreadable subtree must
@@ -218,15 +231,19 @@ class CodexProvider:
                 path = os.path.join(dirpath, filename)
                 try:
                     mtime = os.stat(path).st_mtime
-                    payload, empty = self._row_payload(path)
+                    payload, empty, truncated = self._row_payload(path)
                 except OSError as exc:
                     issues.append(_issue(path, str(exc)))
                     continue
                 if payload is None:
-                    # An empty first line is a benign lazily-created rollout;
-                    # a NON-empty unparseable one may be upstream format
-                    # drift — counted and surfaced once below.
-                    if not empty:
+                    # An empty first line is a benign lazily-created rollout.
+                    # A truncated one hit OUR read cap — an honest, distinct
+                    # cause from a genuine parse failure. Anything else NON-
+                    # empty may be upstream format drift. Both counted and
+                    # surfaced once below, never conflated.
+                    if truncated:
+                        over_cap += 1
+                    elif not empty:
                         unparseable += 1
                     continue
                 row = self._project(payload, path, mtime, names, live)
@@ -235,6 +252,14 @@ class CodexProvider:
                 kept = best.get(row.sid)
                 if kept is None or row.mtime > kept.mtime:
                     best[row.sid] = row
+        if over_cap:
+            issues.append(
+                _issue(
+                    os.fspath(root),
+                    f"{over_cap} rollout file(s) whose first line exceeds "
+                    f"the {_FIRST_LINE_CAP}-byte read cap",
+                )
+            )
         if unparseable:
             issues.append(
                 _issue(
@@ -245,7 +270,7 @@ class CodexProvider:
             )
         return ProviderScan(tuple(best.values()), tuple(issues))
 
-    def _row_payload(self, path: str) -> tuple[dict | None, bool]:
+    def _row_payload(self, path: str) -> tuple[dict | None, bool, bool]:
         return _read_meta(path)
 
     def _project(
