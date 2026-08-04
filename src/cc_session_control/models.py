@@ -89,6 +89,10 @@ class Session:
     pid: int | None
     alive: bool
     current: bool
+    # Owning agent CLI (ADR-0005). Part of session identity: sids are unique
+    # only WITHIN a provider, and every action dispatch (resume argv, window
+    # naming, capability gates) routes through `providers.get(provider)`.
+    provider: str = "claude"
     # registry `procStart` of the chosen pid — lets kill-time `proc.probe_pid`
     # rechecks defeat pid reuse ("" = unknown, recheck degrades to existence).
     proc_start: str = ""

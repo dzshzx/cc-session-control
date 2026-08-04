@@ -38,6 +38,17 @@ class Config:
         )
         # TUI palette: "auto" ($COLORFGBG if set, else dark) | "dark" | "light".
         self.theme: str = os.environ.get("CSCTL_THEME", "auto")
+        # Allowed agent-CLI providers (ADR-0005). A listed provider is only
+        # ACTIVE when its home directory also exists; unknown names are
+        # ignored here so the registry stays the single provider authority.
+        self.providers: tuple[str, ...] = tuple(
+            name.strip()
+            for name in os.environ.get(
+                "CSCTL_PROVIDERS",
+                "claude,codex,kimi",
+            ).split(",")
+            if name.strip()
+        )
 
     @property
     def projects_root(self) -> Path:
@@ -98,6 +109,20 @@ class Config:
     @property
     def tasks_dir(self) -> Path:
         return self.claude_home / "tasks"
+
+    # --- Non-Claude CLI state homes (ADR-0005; same single-path-authority
+    # rule: providers read these, never inline `Path.home() / ".codex"`).
+    # Each honors its CLI's OFFICIAL relocation variable (codex-rs reads
+    # CODEX_HOME; Kimi Code reads KIMI_CODE_HOME) so csctl scans wherever the
+    # CLI itself actually writes. ---
+
+    @property
+    def codex_home(self) -> Path:
+        return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+    @property
+    def kimi_home(self) -> Path:
+        return Path(os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code")
 
 
 cfg = Config()

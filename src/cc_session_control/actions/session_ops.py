@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .. import clipboard
+from .. import clipboard, providers
 from ..data import liveness, proc, sessions, tmux
 from ..data.liveness import invalidate_cache
 from ..models import Session, issue_detail
@@ -116,19 +116,19 @@ def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
 
 
 def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
-    """Shared resume recipe: the cwd to enter, the claude argv, and whether
+    """Shared resume recipe: the cwd to enter, the resume argv, and whether
     to kill the old session first.
 
-    Returns (cwd, args, should_kill). Unified kill semantics: a fork is a copy
-    and leaves the original running, while a plain resume takes the session
-    over — so we kill only when it is alive, not the current session, and we
-    are NOT forking. Runtime resume operations and `would_take_over` obey this
-    single decision; copied live commands defer the whole decision to the
+    Returns (cwd, args, should_kill). The argv comes from the session's
+    provider (ADR-0005) — never inline a CLI command here. Unified kill
+    semantics stay provider-neutral: a fork is a copy and leaves the original
+    running, while a plain resume takes the session over — so we kill only
+    when it is alive, not the current session, and we are NOT forking.
+    Runtime resume operations and `would_take_over` obey this single
+    decision; copied live commands defer the whole decision to the
     execution-time `csctl resume --take-over` scan.
     """
-    args = ["claude", "--resume", s.sid]
-    if fork:
-        args.append("--fork-session")
+    args = providers.get(s.provider).resume_argv(s.sid, fork)
     should_kill = s.alive and not s.current and not fork
     return s.cwd, args, should_kill
 
@@ -248,6 +248,18 @@ def _session_for_execution(
             ExecutionSessionState.RESOLVED,
             session=session,
         )
+    if session.provider != "claude":
+        # The destructive execution-time resolver below is Claude's
+        # (registry + transcripts). A live non-Claude takeover needs its
+        # provider's own re-resolution (argv re-scan) — until that exists,
+        # fail closed rather than kill on snapshot identity.
+        return ExecutionSessionResolution(
+            ExecutionSessionState.REFUSED,
+            detail=(
+                f"live takeover for provider {session.provider!r} "
+                "is not supported yet"
+            ),
+        )
     return resolve_execution_session(session.sid)
 
 
@@ -325,7 +337,10 @@ def _spawn_in_tmux_result(
         takeover_failure = _required_takeover_failure(target_session)
         if takeover_failure:
             return TmuxResumeOutcome(None, takeover_failure)
-    window = f"{target_session.sid[:8]}-fork" if fork else target_session.sid[:8]
+    window = providers.get(target_session.provider).window_name(
+        target_session.sid,
+        fork,
+    )
     cmd = tmux_foreground_cmd(target_session, fork)
     result = tmux.run_in_tmux_result(
         tmux.session_name_for(target_session.cwd),
