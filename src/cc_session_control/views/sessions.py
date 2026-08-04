@@ -145,13 +145,15 @@ class SessionsView(CleanupMixin, ListTabView):
 
     HELP_LAYOUT = HelpLayout(
         prefix=(
-            "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 · ○ 停 = 无进程",
+            "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 ·",
+            "        ○ 停 = 无进程（cx/km 行为「未发现可绑定进程」）",
             "        ▸ = 当前会话（启动 csctl 的会话，受保护） · 📱 = 已开远控",
             "        ⧉ = tmux 驻留（会话进程在 tmux 窗口里，断线不死）",
             "        ? = tmux 驻留未知（盘点不完整，不能确认驻留或裸终端）",
             "CLI 列: cc = Claude Code · cx = Codex · km = Kimi Code",
-            "        （codex/kimi 仅精确绑定 csctl 派发的会话进程；裸启动的",
-            "        进程不绑定、不会被停止/接管，见 ADR-0005）",
+            "        （codex/kimi 仅精确绑定按 id resume 派发的会话进程；",
+            "        launcher 新建与裸启动的进程均不绑定、不会被停止/",
+            "        接管，见 ADR-0005）",
             "",
         ),
         sections=("会话操作:", "清理与过滤:"),

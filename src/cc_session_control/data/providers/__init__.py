@@ -40,6 +40,7 @@ __all__ = [
     "merge_sessions",
     "scan_non_claude",
     "resolve_argv_execution",
+    "find_owning_provider",
 ]
 
 _ALL: tuple[AgentProvider, ...] = (ClaudeProvider(), CodexProvider(), KimiProvider())
@@ -105,6 +106,25 @@ def scan_non_claude(
         rows.extend(scan.sessions)
         issues.extend(scan.issues)
     return tuple(rows), tuple(issues)
+
+
+def find_owning_provider(sid: str) -> AgentProvider | None:
+    """Best-effort: which active non-Claude provider's disk records contain
+    `sid`? Liveness is irrelevant here (an empty `/proc` argv inventory and
+    an empty ancestor set are fine) — this only answers "does this sid
+    belong to codex/kimi" to enrich an already-failed Claude-only lookup
+    (e.g. the `--take-over` rejection message), never to gate a new
+    decision. Per-provider discovery issues are intentionally dropped: this
+    is an error-path hint on top of a lookup that already failed, not a new
+    fact source that must itself stay complete."""
+    empty_inventory = proc.ProcCliInventory()
+    for provider in active_providers():
+        if provider.key == "claude" or not isinstance(provider, DiskDiscovery):
+            continue
+        scan = provider.discover(empty_inventory, frozenset())
+        if any(row.sid == sid for row in scan.sessions):
+            return provider
+    return None
 
 
 @dataclass(frozen=True)

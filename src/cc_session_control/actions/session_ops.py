@@ -40,16 +40,20 @@ class ExecutionSessionState(StrEnum):
 
     RESOLVED is discriminated by `.success`; LIVENESS_INCOMPLETE and
     TRANSCRIPT_INCOMPLETE are discriminated by `do_resume_sid_result` to
-    prefix the detail. Every other rejection reason (missing sid, ambiguous
-    match, current-session guard, unusable cwd, incomplete live identity) is
-    never discriminated by any caller — only the detail string is — so they
-    collapse into REFUSED, which still carries the specific reason in
-    `detail`.
+    prefix the detail, and MISSING is discriminated there too so it can
+    append a best-effort non-Claude provider hint (a real codex/kimi sid
+    must not be reported as a plain "missing session id", since
+    `--take-over` only ever scans Claude state). Every other rejection
+    reason (ambiguous match, current-session guard, unusable cwd, incomplete
+    live identity) is never discriminated by any caller — only the detail
+    string is — so they collapse into REFUSED, which still carries the
+    specific reason in `detail`.
     """
 
     RESOLVED = "resolved"
     LIVENESS_INCOMPLETE = "liveness_incomplete"
     TRANSCRIPT_INCOMPLETE = "transcript_incomplete"
+    MISSING = "missing"
     REFUSED = "refused"
 
 
@@ -203,7 +207,7 @@ def resolve_execution_session(sid: str) -> ExecutionSessionResolution:
     )
     if not matches:
         return ExecutionSessionResolution(
-            ExecutionSessionState.REFUSED,
+            ExecutionSessionState.MISSING,
             detail=f"missing session id {sid!r}",
         )
     if len(matches) != 1:
@@ -306,6 +310,23 @@ def do_resume_result(s: Session, fork: bool = False) -> ResumeOutcome:
     return _do_resume_resolved_result(resolution.session, fork)
 
 
+def _missing_sid_provider_hint(sid: str) -> str:
+    """Best-effort suffix for a Claude "missing session id" rejection: is
+    `sid` actually a non-Claude session? `--take-over` only ever scans
+    Claude state (ADR-0005), so a real codex/kimi sid would otherwise be
+    misreported as simply missing. This never changes the refusal — only
+    the message — and the underlying provider probe drops its own typed
+    issues (see `providers.find_owning_provider`)."""
+    owner = providers.find_owning_provider(sid)
+    if owner is None:
+        return ""
+    direct_command = shlex.join(owner.resume_argv(sid))
+    return (
+        f"; session {sid!r} belongs to {owner.key}; --take-over is "
+        f"Claude-only — resume it directly: {direct_command}"
+    )
+
+
 def do_resume_sid_result(sid: str) -> ResumeOutcome:
     """Resolve an exact SID once, then perform a terminal takeover."""
     resolution = resolve_execution_session(sid)
@@ -315,6 +336,8 @@ def do_resume_sid_result(sid: str) -> ResumeOutcome:
             detail = f"liveness evidence is incomplete: {detail}"
         elif resolution.state is ExecutionSessionState.TRANSCRIPT_INCOMPLETE:
             detail = f"transcript inventory is incomplete: {detail}"
+        elif resolution.state is ExecutionSessionState.MISSING:
+            detail += _missing_sid_provider_hint(sid)
         return ResumeOutcome(False, detail)
     if resolution.session is None:
         raise AssertionError("successful session resolution must carry a Session")

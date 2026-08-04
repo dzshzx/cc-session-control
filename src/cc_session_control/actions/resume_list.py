@@ -84,11 +84,19 @@ def format_session(s: Session) -> list[str]:
     else:
         lines.append(f"    {resume_cmd(s)}")
         if s.alive:
-            lines.append(
-                "    ^ live session: this command re-checks the live process "
-                "and safety evidence at execution time, then uses the guarded "
-                "takeover path (single timeline, no fork)"
-            )
+            if s.provider == "claude":
+                lines.append(
+                    "    ^ live session: this command re-checks the live "
+                    "process and safety evidence at execution time, then "
+                    "uses the guarded takeover path (single timeline, no "
+                    "fork)"
+                )
+            else:
+                lines.append(
+                    "    ^ live session: direct resume command — it does "
+                    "NOT stop the running process; a second attach to the "
+                    "same session surfaces in the CLI's own UI"
+                )
     return lines
 
 

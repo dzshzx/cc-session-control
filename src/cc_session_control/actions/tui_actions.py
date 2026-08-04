@@ -56,9 +56,14 @@ def delete_session(session: Session) -> ActionResult:
 
 def copy_resume_command(session: Session) -> ActionResult:
     command = session_ops.resume_cmd(session)
-    if session_ops.to_clipboard(command):
-        return ActionResult("已复制")
-    return ActionResult(f"复制失败: {command}")
+    if not session_ops.to_clipboard(command):
+        return ActionResult(f"复制失败: {command}")
+    if session.provider != "claude" and session.alive:
+        # Non-Claude live rows copy a direct provider resume command
+        # (ADR-0005) — it never stops the running process, unlike the
+        # Claude-only guarded takeover the plain notice implies elsewhere.
+        return ActionResult("已复制（直接 resume 命令，不会终止原进程）")
+    return ActionResult("已复制")
 
 
 def respawn_agent(job: AgentJob) -> ActionResult:

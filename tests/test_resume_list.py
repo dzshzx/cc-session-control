@@ -129,6 +129,20 @@ def test_format_live_session_gives_takeover_command(tmp_path):
     assert "re-checks the live process" in text
 
 
+def test_format_non_claude_live_session_is_honest_about_no_takeover(tmp_path):
+    # ADR-0005: non-Claude live rows print a direct provider resume command,
+    # not the Claude-only guarded takeover path — the annotation must not
+    # claim re-check/guard/single-timeline semantics that do not apply.
+    s = _session(tmp_path, alive=True, pid=4242)
+    s = types.SimpleNamespace(**{**s.__dict__, "provider": "codex"})
+    text = "\n".join(resume_list.format_session(s))
+    assert "[live]" in text
+    assert "re-checks the live process" not in text
+    assert "guarded" not in text
+    assert "single-timeline" not in text
+    assert "does NOT stop the running process" in text
+
+
 def test_format_current_session_never_prints_kill(tmp_path):
     s = _session(tmp_path, alive=True, current=True, pid=4242)
     text = "\n".join(resume_list.format_session(s))

@@ -97,6 +97,14 @@ The provider designs below are grounded in probes of the actual CLIs
   of a secretly-running session collides visibly in the CLI's own UI, while
   a wrong SIGTERM would be unrecoverable). The R10 rule extends unchanged:
   no `/proc`, no destructive verbs.
+- **Clarification (2026-08-04):** "matchable by construction" above covers
+  only id-carrying RESUME dispatch — csctl resuming an existing session back
+  into tmux, or a live takeover's execution-time re-scan. The Projects-tab
+  launcher's NEW-session dispatch (`x`/`k`) uses each provider's bare
+  `new_session_argv()` with no session id yet, so launcher-created sessions
+  are unbound (same as any other bare-launched TUI) until later resumed by
+  id. This note corrects only the claim's scope; the bullet above is left as
+  originally decided.
 - **Takeover semantics generalize, with the same single decision point.**
   `should_kill = alive ∧ ¬current ∧ ¬fork` is provider-neutral;
   `take_over_result`'s kill-time recheck applies to any exact-matched pid.
