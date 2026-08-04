@@ -105,6 +105,17 @@ The provider designs below are grounded in probes of the actual CLIs
   are unbound (same as any other bare-launched TUI) until later resumed by
   id. This note corrects only the claim's scope; the bullet above is left as
   originally decided.
+- **Amendment (2026-08-04):** codex argv binding is stricter than "argv
+  carries the session id". Only a real `resume` invocation binds: the target
+  is the single token right after the `resume` token, and an `exec` token
+  before `resume` never binds — a UUID inside a `codex exec` prompt is not
+  evidence, and binding it would make the headless exec process a wrong
+  SIGTERM target. The target may also be a session name (`codex resume
+  <name>` — upstream help: "Session id (UUID) or session name"), resolved
+  through `session_index.jsonl` only when that name maps to exactly one id;
+  unknown or ambiguous names, flag-shaped targets (`codex resume --last`)
+  and the bare picker stay unbound (fail closed). The bullet above is left
+  as originally decided.
 - **Takeover semantics generalize, with the same single decision point.**
   `should_kill = alive ∧ ¬current ∧ ¬fork` is provider-neutral;
   `take_over_result`'s kill-time recheck applies to any exact-matched pid.

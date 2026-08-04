@@ -13,7 +13,7 @@ from cc_session_control.config import cfg
 from cc_session_control.data import providers
 from cc_session_control.data.proc import ProcCli, ProcCliInventory
 from cc_session_control.data.providers import kimi as kimi_mod
-from cc_session_control.data.providers.codex import CodexProvider, extract_sid
+from cc_session_control.data.providers.codex import CodexProvider
 from cc_session_control.data.providers.kimi import KimiProvider
 
 UUID1 = "019fc784-c365-70e0-af94-a6a0b15f05b8"
@@ -24,25 +24,8 @@ def _proc(pid: int, *argv: str, starttime: str = "100") -> ProcCli:
     return ProcCli(pid=pid, argv=tuple(argv), starttime=starttime)
 
 
-class TestCodexExtract:
-    def test_resume_matches(self):
-        assert extract_sid(("codex", "resume", UUID1)) == UUID1
-        assert extract_sid(("/usr/bin/codex", "resume", UUID1)) == UUID1
-
-    def test_fork_never_binds_the_parent_sid(self):
-        # `codex fork <sid>` is minting a NEW session; binding the parent sid
-        # to the fork's pid would make the parent a wrong takeover target.
-        assert extract_sid(("codex", "fork", UUID1)) is None
-
-    def test_bare_and_daemon_argvs_never_match(self):
-        assert extract_sid(("codex",)) is None
-        assert extract_sid(("codex", "resume")) is None
-        assert extract_sid(("codex", "app-server", "proxy")) is None
-        assert extract_sid(("codex", "-c", "features.x=true", "app-server")) is None
-        assert extract_sid(("kimi", "resume", UUID1)) is None
-
-    def test_uuid_is_required_not_any_token(self):
-        assert extract_sid(("codex", "resume", "not-a-uuid")) is None
+# Codex argv-binding extract tests live in test_codex_resume_binding.py
+# (resume-grammar + name-lookup seams, candidate B5).
 
 
 class TestKimiExtract:

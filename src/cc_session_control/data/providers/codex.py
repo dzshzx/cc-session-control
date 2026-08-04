@@ -6,7 +6,9 @@ sessions are NDJSON rollouts at
 is a `session_meta` record (`payload.id` == `payload.session_id` for
 top-level rollouts; `thread_source: "subagent"` marks internal subagent
 rollouts, skipped here). `session_index.jsonl` maps `id` → `thread_name`.
-Resume/fork: `codex resume <sid>` / `codex fork <sid>`. Discovery reads
+Resume/fork: `codex resume <sid|name>` (the positional target is "Session id
+(UUID) or session name. UUIDs take precedence if it parses" — `codex resume
+--help`) / `codex fork <sid>`. Discovery reads
 rollout first lines only — never whole files; zstd-compressed old rollouts
 (`.jsonl.zst`) and `archived_sessions/` are out of scope.
 
@@ -22,12 +24,13 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 
 from ...config import cfg
 from ...models import InventoryIssue, Session
 from ..proc import ProcCliInventory
-from .argv_live import build_argv_index
+from .argv_live import ArgvExtractor, build_argv_index
 from .base import LivenessGrade, ProviderCaps, ProviderScan
 
 BASENAME = "codex"
@@ -52,25 +55,61 @@ _BODY_SCAN_MAX_LINES = 64
 _BODY_SCAN_MAX_BYTES = 128 * 1024
 
 
-def extract_sid(argv: tuple[str, ...]) -> str | None:
-    """PURE: the sid a codex process argv proves it is running.
+def extract_resume_target(argv: tuple[str, ...]) -> str | None:
+    """PURE: the raw resume-target token (UUID or thread name) this codex
+    argv proves, or None when it is not a real `resume` invocation.
 
-    Matches ONLY the resume subcommand shape with an explicit UUID — daemons
-    (`app-server`, `proxy`, `codex-threadripper`) and bare TUIs never match,
-    so they are never kill targets. `codex fork <sid>` deliberately does NOT
-    match either: the fork process is minting a NEW session, so binding the
+    Grammar per `codex resume --help` (0.146.0): `codex resume [OPTIONS]
+    [SESSION_ID] [PROMPT]` — the target is ONLY the token immediately after
+    the first `resume` token. Pre-resume global flags (`codex --cd x resume
+    <target>`) are fine, but an `exec` token before `resume` means "resume"
+    is prompt text, not a subcommand: binding a headless `codex exec` run to
+    a sid its prompt merely mentions would make it a wrong SIGTERM target.
+    A missing or flag-shaped target (`codex resume --last`, the bare picker)
+    binds nothing; flags are never skipped to hunt for a target, since
+    options take values (`-c k=v`, `--remote <addr>`) that would misread as
+    session names. Daemons (`app-server`, `proxy`, `codex-threadripper`) and
+    bare TUIs never match; `codex fork <sid>` deliberately does NOT match
+    either — the fork process is minting a NEW session, so binding the
     PARENT sid to the fork's pid would make the parent read alive with the
     child's pid (a wrong takeover target).
     """
-    if len(argv) < 3 or os.path.basename(argv[0]) != BASENAME:
+    if not argv or os.path.basename(argv[0]) != BASENAME:
         return None
     rest = argv[1:]
     if "resume" not in rest:
         return None
-    for tok in rest:
-        if _UUID_RE.match(tok):
-            return tok.lower()
-    return None
+    at = rest.index("resume")
+    if "exec" in rest[:at]:
+        return None
+    after = rest[at + 1 :]
+    if not after or after[0].startswith("-"):
+        return None
+    return after[0]
+
+
+def sid_extractor(name_to_sid: Mapping[str, str]) -> ArgvExtractor:
+    """THE codex argv→sid binding rule. Both consumers — the generation scan
+    (`scan_non_claude`) and the execution-time takeover resolver
+    (`resolve_argv_execution`) — reach it via `discover`, so argv evidence
+    turns into a sid in exactly one place.
+
+    A UUID target binds directly ("UUIDs take precedence if it parses" —
+    upstream help); any other target is a thread name, bound only through
+    the unique-name view of the index (`_name_index`). Unknown and ambiguous
+    names bind nothing: a wrong guess would aim `s`/takeover SIGTERM at the
+    wrong process, so the blind spot is kept instead (fail closed).
+    """
+
+    def extract(argv: tuple[str, ...]) -> str | None:
+        target = extract_resume_target(argv)
+        if target is None:
+            return None
+        if _UUID_RE.match(target):
+            return target.lower()
+        return name_to_sid.get(target)
+
+    return extract
 
 
 def _issue(path: str, detail: str) -> InventoryIssue:
@@ -99,6 +138,22 @@ def _read_index(issues: list[InventoryIssue]) -> dict[str, str]:
     except OSError as exc:
         issues.append(_issue(os.fspath(path), str(exc)))
     return names
+
+
+def _name_index(names: Mapping[str, str]) -> dict[str, str]:
+    """PURE: reverse the id→thread_name index into thread_name→sid, keeping
+    ONLY names owned by exactly one sid — a name shared by several sids is
+    ambiguous and binds nothing (fail closed). Built from the last-write-wins
+    id→name view, so after a rename the OLD name is stale evidence and stops
+    binding too."""
+    owners: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for sid, name in names.items():
+        if owners.setdefault(name, sid) != sid:
+            ambiguous.add(name)
+    for name in ambiguous:
+        del owners[name]
+    return owners
 
 
 def _read_meta(path: str) -> tuple[dict | None, bool, bool]:
@@ -210,7 +265,9 @@ class CodexProvider:
     ) -> ProviderScan:
         issues: list[InventoryIssue] = []
         names = _read_index(issues)
-        live = build_argv_index(cli_inventory.records, extract_sid, cur)
+        live = build_argv_index(
+            cli_inventory.records, sid_extractor(_name_index(names)), cur
+        )
 
         root = cfg.codex_home / "sessions"
         if not root.is_dir():
