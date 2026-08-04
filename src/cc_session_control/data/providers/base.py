@@ -105,6 +105,37 @@ class AgentProvider(Protocol):
         ...
 
 
+class CliDeleteState(Enum):
+    """Outcome of one delegated official-CLI session deletion."""
+
+    DELETED = "deleted"
+    REFUSED = "refused"  # a protection verdict — the CLI never ran
+    FAILED = "failed"  # the CLI ran and failed, or could not be invoked
+
+
+class CliDeleteStage(Enum):
+    """Where a delegated deletion's outcome was determined."""
+
+    EVIDENCE = "evidence"  # ancestors / argv inventory / discovery incomplete
+    PROTECTION = "protection"  # live / current / archived / missing verdict
+    INVOKE = "invoke"  # the CLI could not be started or did not finish
+    CLI = "cli"  # the CLI ran to completion
+
+
+@dataclass(frozen=True)
+class CliDeleteResult:
+    """Typed outcome of one delegated deletion (stage + exit evidence kept)."""
+
+    state: CliDeleteState
+    stage: CliDeleteStage
+    detail: str = ""
+    returncode: int | None = None
+
+    @property
+    def success(self) -> bool:
+        return self.state is CliDeleteState.DELETED
+
+
 @runtime_checkable
 class ArchiveVerbs(Protocol):
     """Providers whose CLI owns an official archived-session store
@@ -119,6 +150,24 @@ class ArchiveVerbs(Protocol):
 
     def unarchive_argv(self, sid: str) -> list[str]:
         """The official argv restoring `sid` from the archived store."""
+        ...
+
+
+@runtime_checkable
+class DeleteVerbs(Protocol):
+    """Providers whose CLI owns an official by-id session deletion
+    (`codex delete <SESSION>` — verified 0.146.0).
+
+    csctl shells out to that verb for Sessions `d` on a dead non-archived
+    row, so deletion authority stays with the owning CLI; csctl's own
+    removal seam keeps refusing non-Claude state (`cleanup.remove_session`
+    — the delegation runs BESIDE that boundary, never through it). A
+    provider without this protocol (kimi 0.31.1 has no delete subcommand)
+    keeps the honest refusal — the verb is never emulated (ADR-0005).
+    """
+
+    def delete_session_result(self, sid: str) -> CliDeleteResult:
+        """Run the official delete, bounded, keeping typed failure evidence."""
         ...
 
 

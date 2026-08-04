@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from pathlib import Path
@@ -42,7 +43,14 @@ from .argv_live import (
     build_argv_index,
     unbound_live_cwds,
 )
-from .base import LivenessGrade, ProviderCaps, ProviderScan
+from .base import (
+    CliDeleteResult,
+    CliDeleteStage,
+    CliDeleteState,
+    LivenessGrade,
+    ProviderCaps,
+    ProviderScan,
+)
 
 BASENAME = "codex"
 
@@ -104,6 +112,22 @@ _BODY_SCAN_MAX_BYTES = 128 * 1024
 # substring guess: an unrecognized future originator must fall through to the
 # honest "cli" default rather than a wrong badge.
 _ANDROID_REMOTE_ORIGINATOR = "codex_chatgpt_android_remote"
+
+# Bounded `codex delete` invocation (same bounded-run + typed-outcome
+# discipline as tmux's `_tmux_run_result`); 10s matches the liveness seam's
+# `claude agents --json` bound — a store operation that has not returned by
+# then is a hang, not work.
+_DELETE_TIMEOUT_SECONDS = 10
+# Only the TAIL of a failing delete's output enters the typed detail: the
+# last chars carry the actual error line, and notices must stay one line.
+_DELETE_DETAIL_TAIL_CHARS = 200
+
+
+def _output_tail(completed: subprocess.CompletedProcess[str]) -> str:
+    text = (completed.stderr or "").strip() or (completed.stdout or "").strip()
+    if len(text) > _DELETE_DETAIL_TAIL_CHARS:
+        return "…" + text[-_DELETE_DETAIL_TAIL_CHARS:]
+    return text
 
 
 def extract_resume_target(argv: tuple[str, ...]) -> str | None:
@@ -356,6 +380,54 @@ class CodexProvider:
         <SESSION>`, verified against `codex --help`) — the honest hand-back
         when the resume family refuses an archived row."""
         return ["codex", "unarchive", sid]
+
+    def delete_argv(self, sid: str) -> list[str]:
+        """The official by-id deletion ("Permanently delete a saved session
+        by id or session name" — `codex delete --help`, 0.146.0)."""
+        return ["codex", "delete", sid]
+
+    def delete_session_result(self, sid: str) -> CliDeleteResult:
+        """Bounded official delete (`DeleteVerbs`): list argv only, never a
+        shell — the sid rides `subprocess.run`'s argv boundary. Callers gate
+        on fresh evidence first (`providers.execute_cli_delete`); this seam
+        only runs the CLI and keeps typed stage/exit/stderr-tail evidence."""
+        argv = self.delete_argv(sid)
+        try:
+            completed = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=_DELETE_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            return CliDeleteResult(
+                CliDeleteState.FAILED,
+                CliDeleteStage.INVOKE,
+                f"codex delete timed out after {_DELETE_TIMEOUT_SECONDS} seconds",
+            )
+        except FileNotFoundError:
+            return CliDeleteResult(
+                CliDeleteState.FAILED,
+                CliDeleteStage.INVOKE,
+                "codex executable not found on PATH",
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            detail = str(exc).strip() or type(exc).__name__
+            return CliDeleteResult(CliDeleteState.FAILED, CliDeleteStage.INVOKE, detail)
+        if completed.returncode != 0:
+            tail = _output_tail(completed)
+            detail = f"codex delete exited with status {completed.returncode}"
+            return CliDeleteResult(
+                CliDeleteState.FAILED,
+                CliDeleteStage.CLI,
+                f"{detail}: {tail}" if tail else detail,
+                returncode=completed.returncode,
+            )
+        return CliDeleteResult(
+            CliDeleteState.DELETED,
+            CliDeleteStage.CLI,
+            returncode=completed.returncode,
+        )
 
     def window_name(self, sid: str, fork: bool = False) -> str:
         base = f"cx-{sid[:8]}"

@@ -19,6 +19,7 @@ from ..models import InventoryIssue, Session, issue_detail
 from ._base import ListTabView
 from ._confirm import (
     accept_ancestor_probe,
+    archived_notice,
     confirm_stop,
     confirm_takeover,
     confirm_tmux_takeover,
@@ -552,10 +553,21 @@ class SessionsView(CleanupMixin, ListTabView):
         )
 
     def _key_delete(self, s: Session) -> None:
-        if not providers.get(s.provider).caps.cleanup:
+        provider = providers.get(s.provider)
+        if not provider.caps.cleanup and not isinstance(
+            provider, providers.DeleteVerbs
+        ):
             # ADR-0005: csctl never deletes state it does not fully model —
-            # a codex/kimi row's file anchor points into that CLI's own store.
-            self.app.notify(f"{s.provider} 会话由其 CLI 自己管理，csctl 不删除")
+            # and this CLI has no official delete command to delegate to.
+            self.app.notify(
+                f"{s.provider} 会话由其 CLI 自己管理，csctl 不删除"
+                f"（{s.provider} 无官方删除命令）"
+            )
+            return
+        if s.archived:
+            # B7 refusal chain: deleting from the archived store is
+            # unverified upstream semantics — official unarchive first.
+            self.app.notify(archived_notice(s))
             return
         if s.alive:
             self.app.notify("运行中的会话不删，先停止")
