@@ -9,6 +9,12 @@ rollouts, skipped here). `session_index.jsonl` maps `id` → `thread_name`.
 Resume/fork: `codex resume <sid>` / `codex fork <sid>`. Discovery reads
 rollout first lines only — never whole files; zstd-compressed old rollouts
 (`.jsonl.zst`) and `archived_sessions/` are out of scope.
+
+Label fallback: `session_index.jsonl` barely overlaps active rollouts in
+practice, so when it has no `thread_name` for a sid, discovery does a
+bounded continuation read of the rollout body (still never the whole file —
+see `_first_user_message`) looking for the first real `user_message` event
+to use as the label.
 """
 
 from __future__ import annotations
@@ -34,6 +40,13 @@ _UUID_RE = re.compile(
 # First-line pre-check (same cheap-substring-guard pattern as transcripts.py).
 _META_MARK = b'"session_meta"'
 _FIRST_LINE_CAP = 64 * 1024
+
+# Label-fallback continuation read past the session_meta line: bounded by
+# BOTH line count and byte count so a huge rollout is never read in full —
+# same cheap-substring-guard discipline as `_read_meta`/transcripts.py.
+_USER_MSG_MARK = b'"user_message"'
+_BODY_SCAN_MAX_LINES = 64
+_BODY_SCAN_MAX_BYTES = 128 * 1024
 
 
 def extract_sid(argv: tuple[str, ...]) -> str | None:
@@ -99,6 +112,57 @@ def _read_meta(path: str) -> tuple[dict | None, bool]:
         return None, False
     payload = record.get("payload")
     return (payload, False) if isinstance(payload, dict) else (None, False)
+
+
+def _clean_label(text: str) -> str:
+    """Collapse whitespace/newlines the same way transcripts.py cleans prompts."""
+    return " ".join(text.split()).strip()
+
+
+def _is_wrapper_block(text: str) -> bool:
+    """A leading `<...>` block (`<user_instructions>`, `<environment_context>`,
+    …) is injected context, not something the operator typed — skip it."""
+    return text.startswith("<")
+
+
+def _first_user_message(path: str) -> str | None:
+    """Bounded continuation read past the session_meta first line: the first
+    real `user_message` event body, cleaned — or None if nothing usable
+    turns up within the line/byte caps. Malformed lines are skipped
+    silently; this is a best-effort label fallback, not a completeness
+    signal, so it never raises and never contributes an `InventoryIssue`.
+    """
+    try:
+        with open(path, "rb") as fh:
+            fh.readline(_FIRST_LINE_CAP)  # skip the already-parsed session_meta line
+            total_bytes = 0
+            for line_number, raw in enumerate(fh, start=1):
+                total_bytes += len(raw)
+                if line_number > _BODY_SCAN_MAX_LINES or total_bytes > _BODY_SCAN_MAX_BYTES:
+                    return None
+                if _USER_MSG_MARK not in raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except ValueError:
+                    continue  # malformed body line — keep scanning
+                if not isinstance(record, dict) or record.get("type") != "event_msg":
+                    continue
+                event_payload = record.get("payload")
+                if not isinstance(event_payload, dict):
+                    continue
+                if event_payload.get("type") != "user_message":
+                    continue
+                message = event_payload.get("message")
+                if not isinstance(message, str):
+                    continue
+                cleaned = _clean_label(message)
+                if not cleaned or _is_wrapper_block(cleaned):
+                    continue
+                return cleaned
+    except OSError:
+        return None
+    return None
 
 
 class CodexProvider:
@@ -207,7 +271,7 @@ class CodexProvider:
         return Session(
             sid=sid,
             cwd=cwd if isinstance(cwd, str) else "",
-            label=names.get(sid) or "(untitled)",
+            label=names.get(sid) or _first_user_message(path) or "(untitled)",
             mtime=mtime,
             prompts=0,
             pid=match.pid if match else None,
