@@ -12,7 +12,8 @@ walk per generation.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Set as AbstractSet
+from collections.abc import Callable, Iterable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 
 from ..proc import ProcCli

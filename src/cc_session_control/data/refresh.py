@@ -140,9 +140,7 @@ def build_refresh_result(
         # case passes the generation tuple through UNCOPIED.
         claude_rows = snapshot.sessions
         if any(row.provider != "claude" for row in claude_rows):
-            claude_rows = tuple(
-                row for row in claude_rows if row.provider == "claude"
-            )
+            claude_rows = tuple(row for row in claude_rows if row.provider == "claude")
         plan = cleanup_builder(
             claude_rows,
             evidence,

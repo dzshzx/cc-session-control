@@ -17,8 +17,8 @@ import os
 from collections.abc import Set as AbstractSet
 
 from ...config import cfg
-from ..proc import ProcCliInventory
 from ...models import InventoryIssue, Session
+from ..proc import ProcCliInventory
 from .argv_live import build_argv_index, flag_value
 from .base import LivenessGrade, ProviderCaps, ProviderScan
 
@@ -114,8 +114,7 @@ class KimiProvider:
             return ProviderScan(issues=(_issue(os.fspath(index_path), str(exc)),))
 
         rows = tuple(
-            self._project(sid, entry, live, issues)
-            for sid, entry in entries.items()
+            self._project(sid, entry, live, issues) for sid, entry in entries.items()
         )
         return ProviderScan(rows, tuple(issues))
 
@@ -139,7 +138,8 @@ class KimiProvider:
             except OSError:
                 mtime = 0.0
         label = "(untitled)"
-        cwd = entry.get("workDir") if isinstance(entry.get("workDir"), str) else ""
+        index_work_dir = entry.get("workDir")
+        cwd = index_work_dir if isinstance(index_work_dir, str) else ""
         if state is not None:
             title = state.get("title")
             last_prompt = state.get("lastPrompt")

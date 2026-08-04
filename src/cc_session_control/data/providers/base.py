@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, runtime_checkable
 
-from ..proc import ProcCliInventory
 from ...models import InventoryIssue, Session
+from ..proc import ProcCliInventory
 
 
 class LivenessGrade(Enum):

@@ -9,11 +9,12 @@ absent CLI simply contributes no rows.
 from __future__ import annotations
 
 import os.path
-from collections.abc import Iterable, Set as AbstractSet
+from collections.abc import Iterable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 
-from .. import proc, tmux
 from ...models import InventoryIssue, Session
+from .. import proc, tmux
 from .base import (
     AgentProvider,
     DiskDiscovery,
@@ -159,8 +160,7 @@ def resolve_argv_execution(provider_key: str, sid: str) -> ArgvResolution:
         return ArgvResolution(detail=f"session {sid!r} is the current session")
     if not target.cwd or not os.path.isdir(target.cwd):
         return ArgvResolution(
-            detail=f"session {sid!r} has no usable execution-time cwd: "
-            f"{target.cwd!r}",
+            detail=f"session {sid!r} has no usable execution-time cwd: {target.cwd!r}",
         )
     return ArgvResolution(session=_with_residency(target))
 

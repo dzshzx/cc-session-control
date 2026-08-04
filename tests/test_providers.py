@@ -159,6 +159,4 @@ class TestActionDispatch:
         s = _session(provider="codex", file="/tmp/rollout.jsonl")
         execution = cleanup.remove_session(s)
         assert execution.refused
-        assert any(
-            "not csctl-deletable" in r.reason for r in execution.refused
-        )
+        assert any("not csctl-deletable" in r.reason for r in execution.refused)
