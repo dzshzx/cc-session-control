@@ -19,8 +19,8 @@ import re
 from collections.abc import Set as AbstractSet
 
 from ...config import cfg
-from ..proc import ProcCliInventory
 from ...models import InventoryIssue, Session
+from ..proc import ProcCliInventory
 from .argv_live import build_argv_index
 from .base import LivenessGrade, ProviderCaps, ProviderScan
 

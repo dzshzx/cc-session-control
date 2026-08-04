@@ -421,9 +421,7 @@ def scan_cli_argv_inventory(basenames: frozenset[str]) -> ProcCliInventory:
             detail = stat_issue.detail if stat_issue else "missing starttime"
             issues.append(_cli_issue(stat.path, detail))
             continue
-        records.append(
-            ProcCli(pid=pid, argv=tuple(argv), starttime=stat.starttime)
-        )
+        records.append(ProcCli(pid=pid, argv=tuple(argv), starttime=stat.starttime))
     return ProcCliInventory(tuple(records), tuple(issues))
 
 
