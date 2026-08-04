@@ -51,7 +51,11 @@ def _user_message_event(message: str) -> dict:
 def _write_rollout(root, name: str, sid: str, body_lines: list[dict]) -> None:
     directory = root / "sessions" / "2026" / "08" / "01"
     directory.mkdir(parents=True, exist_ok=True)
-    meta_line = {"timestamp": "t", "type": "session_meta", "payload": _meta_payload(sid)}
+    meta_line = {
+        "timestamp": "t",
+        "type": "session_meta",
+        "payload": _meta_payload(sid),
+    }
     lines = [json.dumps(meta_line)] + [json.dumps(line) for line in body_lines]
     (directory / name).write_text("\n".join(lines) + "\n")
 
@@ -118,7 +122,13 @@ class TestCodexBodyLabelFallback:
             codex_home,
             f"rollout-f-{UUID1}.jsonl",
             UUID1,
-            [{"timestamp": "t", "type": "event_msg", "payload": {"type": "agent_message"}}],
+            [
+                {
+                    "timestamp": "t",
+                    "type": "event_msg",
+                    "payload": {"type": "agent_message"},
+                }
+            ],
         )
         assert _discover_label(codex_home) == "(untitled)"
 
@@ -130,7 +140,9 @@ class TestCodexBodyLabelFallback:
         meta["pad"] = "x" * 100_000
         directory = codex_home / "sessions" / "2026" / "08" / "01"
         directory.mkdir(parents=True, exist_ok=True)
-        meta_line = json.dumps({"timestamp": "t", "type": "session_meta", "payload": meta})
+        meta_line = json.dumps(
+            {"timestamp": "t", "type": "session_meta", "payload": meta}
+        )
         assert 64 * 1024 < len(meta_line) < codex_mod._FIRST_LINE_CAP
         (directory / f"rollout-h-{UUID1}.jsonl").write_text(meta_line + "\n")
 
@@ -145,7 +157,9 @@ class TestCodexBodyLabelFallback:
         meta["pad"] = "x" * 300_000
         directory = codex_home / "sessions" / "2026" / "08" / "01"
         directory.mkdir(parents=True, exist_ok=True)
-        meta_line = json.dumps({"timestamp": "t", "type": "session_meta", "payload": meta})
+        meta_line = json.dumps(
+            {"timestamp": "t", "type": "session_meta", "payload": meta}
+        )
         assert len(meta_line) > codex_mod._FIRST_LINE_CAP
         (directory / f"rollout-i-{UUID1}.jsonl").write_text(meta_line + "\n")
 

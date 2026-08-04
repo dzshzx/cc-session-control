@@ -247,9 +247,7 @@ class TestKimiDiscover:
         # actual conversation content csctl needs for body search lives in
         # agents/main/wire.jsonl.
         sid = f"session_{UUID1}"
-        session_dir = Path(
-            _write_kimi_session(kimi_home, sid, {"title": "标题"})
-        )
+        session_dir = Path(_write_kimi_session(kimi_home, sid, {"title": "标题"}))
         wire_dir = session_dir / "agents" / "main"
         wire_dir.mkdir(parents=True)
         (wire_dir / "wire.jsonl").write_text(
