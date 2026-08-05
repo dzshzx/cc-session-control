@@ -1,6 +1,8 @@
 # Upstream settings, effective trust, and typed diagnostics
 
-Status: accepted (2026-07-29)
+Status: accepted (2026-07-29); partially superseded by ADR-0004 (2026-07-30),
+which removed the ledger-specific surfaces while retaining the typed,
+fail-closed boundary rules.
 
 csctl depends on Claude Code state that it does not own, including
 `~/.claude.json`, per-project `.claude/settings.local.json`, session/job

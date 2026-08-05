@@ -24,13 +24,21 @@ a typed reason, never emulated.
 _Avoid_: profile, plugin, treating every CLI as equally deep
 
 **Argv-exact Liveness**:
-The only takeover-grade pid↔session binding for non-Claude providers: a
-process argv that CARRIES the session id (`codex resume <sid>`,
-`kimi --session <sid>`). Only id-carrying RESUME dispatch is exactly
-matchable by construction; launcher-created NEW sessions dispatch bare argv
-(no session id yet) and, like any bare-launched TUI or CLI daemon (codex
-app-server etc.), stay unbound and are never stop/takeover targets.
+The preferred takeover-grade pid↔session binding for non-Claude providers: a real
+resume argv that identifies the session (`codex resume <sid-or-unique-name>`,
+`kimi --session <sid>`). Unknown or ambiguous Codex names, bare pickers,
+launcher-created NEW sessions, bare-launched TUIs, and CLI daemons remain
+unbound and are never stop/takeover targets.
 _Avoid_: cwd-guessing as liveness, pane-text busy regexes
+
+**Dispatch-metadata Liveness**:
+The supplementary non-Claude binding for sessions csctl dispatched into tmux.
+Kimi 0.31.1 makes this source essential by rewriting away its resume argv.
+csctl joins its own
+`@csctl_sid`/`@csctl_provider` window options to one identity-checked pane TUI
+process. Missing, incomplete, mismatched, or ambiguous evidence binds nothing;
+window names never participate, and bare TUIs stay unbound.
+_Avoid_: treating tmux presence or a window name alone as session identity
 
 **Session** (formerly "Claude Code Session"):
 A resumable agent-CLI conversation or execution context whose state may be
@@ -38,7 +46,8 @@ visible through the owning CLI's on-disk records, agent listings, Remote
 Control, or background execution surfaces. The session is the durable record;
 agents and runtimes are ways that record is or was being executed. Rich
 liveness/registry semantics below (busy/idle status, bridge, background
-agents) are Claude-specific; non-Claude sessions carry the argv-exact subset.
+agents) are Claude-specific; non-Claude sessions carry only the conservative
+argv-exact and dispatch-metadata subset above.
 _Avoid_: chat, transcript file
 
 **Agent**:

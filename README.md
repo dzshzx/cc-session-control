@@ -27,13 +27,13 @@ all three, plus Claude Code background agents and Remote Control.
 - **Background agents Tab** — List Claude Code background agent jobs; take
   over, respawn, watch their timeline, stop, or remove them
 
-Non-Claude liveness is deliberately conservative (ADR-0005): a codex/kimi
-process is bound to its session only when its argv carries the session id
-(`codex resume <sid>` / `kimi --session <sid>`) — which is how csctl
-dispatches an EXISTING session back into tmux. A brand-new session started
-from the launcher (the `Enter` chooser or `x`/`k`) is bare argv with no
-session id yet, so it is never bound either, same as any other bare-launched
-TUI; neither is ever a stop/takeover target.
+Non-Claude liveness is deliberately conservative (ADR-0005). A real resume
+target in argv (`codex resume <sid-or-unique-name>` / `kimi --session <sid>`)
+has priority; csctl's own identity-checked tmux dispatch metadata is a
+supplement for dispatched windows, and is essential after Kimi rewrites its
+argv at runtime. A brand-new session started from the launcher (the `Enter`
+chooser or `x`/`k`) has no sid yet, so it stays unbound, as does any other
+bare-launched TUI; unbound processes are never stop/takeover targets.
 
 Built with [urwid](https://urwid.org/).
 
@@ -50,7 +50,9 @@ Built with [urwid](https://urwid.org/).
   `KIMI_CODE_HOME` are honored)
 - tmux (the primary session-lifecycle carrier: launch, resume, background, and
   survive terminal/SSH disconnects; managed Remote Control servers also use it)
-- Linux / WSL (macOS support is partial — `/proc`-based liveness detection is Linux-only)
+- Linux / WSL. Other POSIX systems are not supported; without `/proc`, csctl
+  shows degraded state and refuses destructive actions whose safety it cannot
+  prove.
 
 ## Installation
 
@@ -73,10 +75,10 @@ To try the newest `master` before it is released, install from GitHub:
 uv tool install --reinstall git+https://github.com/dzshzx/cc-session-control.git
 ```
 
-`csctl` manages the Claude Code state on the machine where it is installed: the
-local `~/.claude`, local `tmux`, and the projects recorded in the local
-`~/.claude.json`. Install it separately on each machine whose sessions you want
-to manage. For working *on* the code
+`csctl` manages local state on the machine where it is installed: the active
+providers' `~/.claude`, `~/.codex`, and `~/.kimi-code` homes, local `tmux`, and
+the project launcher entries recorded in `~/.claude.json`. Install it separately
+on each machine whose sessions you want to manage. For working *on* the code
 instead of using it, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Usage

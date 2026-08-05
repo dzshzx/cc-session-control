@@ -1,7 +1,7 @@
 # Releasing `cc-session-control`
 
-This guide is for maintainers publishing `csctl` so other Claude Code users can
-install it for their own local sessions.
+This guide is for maintainers publishing `csctl` so users of the supported
+agent CLIs can install it for their own local sessions.
 
 ## Release Model
 
@@ -17,8 +17,9 @@ uv tool install cc-session-control
 ```
 
 `csctl` is local-machine tooling. Each user installs it on their own Linux/WSL
-machine, signs in to their own Claude Code CLI, and runs it against their own
-`~/.claude`, `tmux`, and workspace state.
+machine, signs in to the agent CLIs they use, and runs it against those CLIs'
+local state homes (`~/.claude`, `~/.codex`, `~/.kimi-code`), `tmux`, and
+workspace state.
 
 ## One-Time PyPI Setup
 
@@ -137,11 +138,6 @@ publish to PyPI through Trusted Publishing. Production publishing has no manual
 workflow trigger; use the manual TestPyPI workflow for dry runs.
 
 ## Post-Release Verification
-
-> **First publish only.** After the package is live on PyPI for the first time,
-> remove the "Coming soon to PyPI" note from `README.md` (under *Installation*)
-> and reword the *Latest `master` build* section so it no longer implies the
-> package is unpublished.
 
 On a clean machine or isolated environment:
 

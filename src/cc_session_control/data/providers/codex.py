@@ -364,8 +364,8 @@ class CodexProvider:
     capture_basenames = frozenset({BASENAME})  # no title rewrite observed
     caps = ProviderCaps(
         fork=True,  # native `codex fork <sid>`
-        takeover=True,  # argv-exact matches only
-        liveness=LivenessGrade.ARGV,
+        takeover=True,  # argv-exact + dispatch-metadata matches only
+        liveness=LivenessGrade.TMUX,
     )
 
     def available(self) -> bool:

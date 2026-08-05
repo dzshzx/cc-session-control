@@ -1,3 +1,3 @@
-"""cc-session-control — TUI manager for Claude Code sessions and Remote Control."""
+"""tmux-first workbench for Claude Code, Codex CLI, and Kimi Code."""
 
 __version__ = "0.8.3"

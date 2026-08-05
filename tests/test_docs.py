@@ -5,14 +5,19 @@ from __future__ import annotations
 
 import re
 import shlex
+import tomllib
 from pathlib import Path
 
 import pytest
 
+import cc_session_control
 from cc_session_control.cli import build_parser
 
 README = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
 CLAUDE = (Path(__file__).parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
+PYPROJECT = tomllib.loads(
+    (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+)
 WORKFLOWS = Path(__file__).parents[1] / ".github" / "workflows"
 QUALITY_GATE_USE = "./.github/workflows/quality-gate.yml"
 PINNED_EXTERNAL_USE = re.compile(
@@ -33,6 +38,20 @@ PINNED_EXTERNAL_USE = re.compile(
 def test_readme_cli_examples_are_accepted_by_the_parser(command: str) -> None:
     assert f"csctl {command}" in README
     build_parser().parse_args(shlex.split(command))
+
+
+@pytest.mark.parametrize(
+    "surface",
+    [
+        README,
+        PYPROJECT["project"]["description"],
+        cc_session_control.__doc__,
+        build_parser().description,
+    ],
+)
+def test_public_descriptions_name_every_supported_provider(surface: str) -> None:
+    for provider in ("Claude Code", "Codex CLI", "Kimi Code"):
+        assert provider in surface
 
 
 @pytest.mark.parametrize(

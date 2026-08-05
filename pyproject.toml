@@ -5,12 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cc-session-control"
 dynamic = ["version"]
-description = "TUI manager for Claude Code sessions and Remote Control"
+description = "tmux-first workbench for Claude Code, Codex CLI, and Kimi Code"
 requires-python = ">=3.12"
 license = "MIT"
 readme = "README.md"
 authors = [{ name = "dzshzx" }]
-keywords = ["claude-code", "session-manager", "tui", "remote-control", "urwid"]
+keywords = [
+    "claude-code",
+    "codex-cli",
+    "kimi-code",
+    "session-manager",
+    "tmux",
+    "tui",
+    "remote-control",
+    "urwid",
+]
 dependencies = ["urwid>=2.0.0"]
 classifiers = [
     "Development Status :: 3 - Alpha",

@@ -37,6 +37,10 @@ class TestRegistry:
         assert p.key == "claude"
         assert p.caps.liveness is LivenessGrade.FULL
 
+    def test_non_claude_liveness_includes_dispatch_metadata(self):
+        assert providers.get("codex").caps.liveness is LivenessGrade.TMUX
+        assert providers.get("kimi").caps.liveness is LivenessGrade.TMUX
+
     def test_get_unknown_raises(self):
         with pytest.raises(KeyError):
             providers.get("aider")

@@ -34,8 +34,8 @@ if grep -rn --include='*.py' '/home/' src/; then
 fi
 ```
 
-The coverage ratchet independently requires at least 85% statement coverage
-and 75% branch coverage. Remove `.coverage` and `coverage.json` after local
+The coverage ratchet independently requires at least 92% statement coverage
+and 82% branch coverage. Remove `.coverage` and `coverage.json` after local
 inspection; both are ignored by Git.
 
 ## Pull Requests

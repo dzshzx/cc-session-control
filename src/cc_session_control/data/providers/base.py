@@ -27,14 +27,13 @@ class LivenessGrade(Enum):
 
     FULL: registry + targeted /proc probes (Claude — `sessions/<pid>.json`
     carries `procStart`). ARGV: /proc cmdline scan binds only processes whose
-    argv carries the session id (`codex resume <sid>` / `kimi -S <sid>`) —
-    exact for workbench-dispatched sessions, blind to bare TUIs. TMUX: ARGV
-    supplemented by csctl's own dispatch metadata — the CLI rewrites its
-    process title at runtime (kimi 0.31.1), destroying cmdline evidence, so
-    dispatched windows bind exactly through the `@csctl_sid`/`@csctl_provider`
-    options csctl declared at spawn (pane process identity-checked via
-    argv0/comm/exe); bare TUIs stay blind. NONE: no binding; sessions are
-    resumable records, never kill targets.
+    argv carries the session id (`codex resume <sid>` / `kimi -S <sid>`), blind
+    to bare TUIs. TMUX: ARGV supplemented by csctl's own dispatch metadata;
+    dispatched windows bind through the `@csctl_sid`/`@csctl_provider` options
+    csctl declared at spawn (pane process identity-checked via argv0/comm/exe).
+    This supplement is essential when a CLI rewrites its process title at
+    runtime (kimi 0.31.1), destroying cmdline evidence; bare TUIs stay blind.
+    NONE: no binding; sessions are resumable records, never kill targets.
     """
 
     FULL = "full"

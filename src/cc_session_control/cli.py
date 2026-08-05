@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="csctl",
-        description="TUI manager for Claude Code sessions and Remote Control",
+        description="tmux-first workbench for Claude Code, Codex CLI, and Kimi Code",
     )
     parser.add_argument(
         "--version",

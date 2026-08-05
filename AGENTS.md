@@ -4,7 +4,7 @@
 
 - `csctl` 是仅限 Linux/WSL 的本地多 agent-CLI sessions（Claude Code / Codex / Kimi Code，ADR-0005）、后台 agents 和 Remote Control 操作员 TUI。它读取 `~/.claude`、`~/.codex`、`~/.kimi-code`（尊重官方 `CODEX_HOME`/`KIMI_CODE_HOME`）、检查 `/proc`，并调用本地 CLI 与 tmux。没有 `/proc` 时，显示降级状态，并拒绝无法证明当前 session 安全的破坏性操作。
 - 保持 tmux-first 模型：每个项目的 tmux window 是主要的 session 生命周期载体；Remote Control 是次要入口。所有 tmux subprocess 调用都属于 `data/tmux.py`。
-- `data/` 以自底向上的 DAG 管理外部状态读写。`data/proc.py` 是唯一的 `/proc` 接缝，`data/liveness.py` 是 Claude liveness 权威，`data/providers/` 是 CLI 适配层（注册表、typed capabilities、argv 合成、非 Claude 磁盘发现与 argv-exact liveness——只有 argv 携带 session id 的进程才绑定，裸启动 TUI 绝不是 kill 目标），`config.py::cfg` 是唯一的路径权威。`views/` 只消费 `data/` 和 `actions/`，不得反向 import；refresh worker 只构建完整 generation，action worker 只返回 typed result，urwid widget 只能在 main loop 上变更。非 Claude provider 的来源故障降级为 issue 展示，绝不清空 Claude 视图；cleanup 只建模 Claude 状态。
+- `data/` 以自底向上的 DAG 管理外部状态读写。`data/proc.py` 是唯一的 `/proc` 接缝，`data/liveness.py` 是 Claude liveness 权威，`data/providers/` 是 CLI 适配层（注册表、typed capabilities、argv 合成、非 Claude 磁盘发现与保守 liveness：真实 resume argv 优先，csctl 自己写入且经进程身份复核的 tmux 派发元数据作为补充；裸启动 TUI 绝不是 kill 目标），`config.py::cfg` 是唯一的路径权威。`views/` 只消费 `data/` 和 `actions/`，不得反向 import；refresh worker 只构建完整 generation，action worker 只返回 typed result，urwid widget 只能在 main loop 上变更。非 Claude provider 的来源故障降级为 issue 展示，绝不清空 Claude 视图；cleanup 只建模 Claude 状态。
 
 ## 外部失败
 

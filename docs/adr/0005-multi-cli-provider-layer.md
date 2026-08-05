@@ -182,22 +182,21 @@ The provider designs below are grounded in probes of the actual CLIs
   Enter-Enter still equals the old direct claude launch; Esc cancels), and
   the picked provider launches through the same `new_session_argv()` path.
   `x`/`k` stay as direct per-provider shortcuts. Rationale: on phone/SSH
-  keyboards arrows + Enter beat letter mnemonics. This supersedes the
-  Consequences note below that the launcher binds one explicit key per
-  provider — the chooser now scales with the registry while the shortcut
-  keys remain a convenience. The bullet above is left as originally
-  decided.
+  keyboards arrows + Enter beat letter mnemonics. The chooser scales with the
+  registry while the shortcut keys remain a convenience. The bullet above is
+  left as originally decided.
 
 ## Consequences
 
 - The Sessions tab becomes the machine-wide session surface for all three
   CLIs (with a provider column and filter); Agents and Projects-RC remain
   Claude surfaces until those CLIs grow equivalent primitives.
-- Non-Claude liveness is deliberately conservative: a codex/kimi session
-  resumed outside csctl by hand (`codex resume <sid>` in a bare terminal) is
-  still exactly matched; only bare fresh TUIs stay unbound. This is the same
-  spawn-vs-discovery tradeoff claude-squad resolves by managing only its own
-  spawns — csctl discovers everything but only *binds* what argv proves.
+- Non-Claude liveness is deliberately conservative: a real resume target in
+  argv has priority, and csctl's own identity-checked tmux dispatch metadata
+  supplements it for dispatched windows. Kimi depends on that supplement when
+  its runtime destroys argv evidence. Bare fresh TUIs stay unbound. csctl
+  discovers everything but only *binds* what these two fail-closed evidence
+  sources prove.
 - Desktop/IDE-hosted codex sessions (app-server-held rollouts) currently
   read as not-alive. Surfacing them as "hosted, read-only" via the
   app-server's fd table is a known follow-up, not in this change.
@@ -205,8 +204,7 @@ The provider designs below are grounded in probes of the actual CLIs
   provider resume (`codex resume <sid>`): the Claude-only
   `csctl resume --take-over` deferral cannot cover it, and a plain resume
   serializes no kill — the CLI itself surfaces any collision. The launcher
-  binds one explicit key per provider (`x`/`k`) — a deliberate UI choice at
-  three CLIs, revisited if the registry grows.
+  uses an active-provider chooser; `x`/`k` remain direct convenience keys.
 - `codex fork <sid>` argv deliberately does NOT bind liveness: the fork
   process is minting a NEW session, so binding the parent sid to the fork's
   pid would make the parent a wrong takeover target.
