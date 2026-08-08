@@ -12,15 +12,17 @@ all three, plus Claude Code background agents and Remote Control.
 - **Sessions Tab** — One machine-wide list of Claude Code, Codex, and Kimi
   Code sessions (CLI column: `cc`/`cx`/`km`), discovered from each CLI's own
   on-disk state — not just sessions csctl started. Resume tmux-first
-  (`Enter` resumes into the per-project tmux window via each CLI's native
-  resume command; `t` bare-terminal fallback; `R` backgrounds into tmux;
+  (`Enter` resumes into a project-labelled window in the shared `csctl` tmux
+  session via each CLI's native resume command; `t` bare-terminal fallback;
+  `R` backgrounds into tmux;
   `f` forks where the CLI supports it; ⧉ marks tmux-resident sessions),
   terminate, and delete; a cleanup submenu (`c`) prunes empty/short Claude
   sessions and sweeps orphan artifact directories, zombie session files, and
   aged global entries (cleanup models Claude state only)
 - **Projects Tab** — The startup tab / launcher: `Enter` opens a CLI chooser
   (active providers only, claude focused first — so Enter-Enter starts
-  claude) to begin a new tmux session in the project dir; `x`/`k` jump
+  claude) to open a new project-labelled window in the shared `csctl` tmux
+  session; `x`/`k` jump
   straight to codex/kimi; start/stop
   Claude RC servers per project (`o`/`s`), toggle per-project auto Remote
   Control (`c`), show running/stopped/dead states
@@ -34,6 +36,12 @@ supplement for dispatched windows, and is essential after Kimi rewrites its
 argv at runtime. A brand-new session started from the launcher (the `Enter`
 chooser or `x`/`k`) has no sid yet, so it stays unbound, as does any other
 bare-launched TUI; unbound processes are never stop/takeover targets.
+
+All agent sessions csctl dispatches — new, resumed, forked, backgrounded, or
+background-agent respawns — share the tmux session named `csctl`; their window
+names retain the project. Existing live sessions in older or user-created tmux
+sessions are entered in place and are never migrated automatically. Managed
+Remote Control servers remain isolated in the configurable `rc` session.
 
 Built with [urwid](https://urwid.org/).
 
@@ -118,7 +126,7 @@ longer bundled with this package).
 | Environment Variable | Default | Description |
 |---|---|---|
 | `CSCTL_PROVIDERS` | `claude,codex,kimi` | Comma list of allowed agent-CLI providers; a listed provider is active only when its state home also exists |
-| `CSCTL_RC_SESSION` | `rc` | tmux session name for RC servers |
+| `CSCTL_RC_SESSION` | `rc` | Literal tmux session name for RC servers (target syntax `= : * ? [ ] $ @ %` is rejected); must differ from the reserved workbench session `csctl` |
 | `CSCTL_CLEANUP_AGE_DAYS` | `14` | Minimum age in days for the age sweep in the Sessions cleanup submenu (must be an integer ≥ 0) |
 | `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via `$COLORFGBG`, else `dark`) / `dark` / `light`. Most terminals (including tmux) don't set `$COLORFGBG`, so `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |
 

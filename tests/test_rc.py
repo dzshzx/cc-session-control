@@ -421,6 +421,31 @@ def test_restart_continues_when_dead_window_vanishes_during_stop(
     assert result.state is rc.StartState.STARTED
 
 
+def test_start_keeps_project_window_name_inside_rc_session(tmp_path, monkeypatch):
+    spawned: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        rc.tmux,
+        "run_in_tmux_result",
+        lambda session, window, cmd: (
+            spawned.append((session, window, cmd)) or _created_target("rc:7")
+        ),
+    )
+    monkeypatch.setattr(
+        rc.tmux,
+        "set_window_option_result",
+        lambda *_args: _metadata_written("rc:7"),
+    )
+
+    result = rc._start_one_with_trust(
+        str(tmp_path),
+        rc.TrustDecision.TRUSTED,
+        window_inventory=WindowInventory(),
+    )
+
+    assert result.state is rc.StartState.STARTED
+    assert spawned[0][:2] == ("rc", tmp_path.name)
+
+
 # --- remoteControlSpawnMode read (AC8 read half) ---------------------------
 
 

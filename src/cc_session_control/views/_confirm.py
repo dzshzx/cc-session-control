@@ -163,11 +163,11 @@ def confirm_tmux_takeover(
     A tmux-resident session is entered IN PLACE (`AttachIntent` — no kill, no
     confirm, no R10 gate: nothing destructive happens). Anything else goes
     through the standard takeover gate (`confirm_takeover`) into
-    `TmuxResumeIntent` — resume (or fork) inside its per-project tmux window,
-    then enter. A fork is a copy: it never enters the original's window in
-    place, it always spawns its own (and never kills, so the confirm path
-    falls straight through). ``gated`` has the same typed-preparation contract
-    as :func:`confirm_takeover`.
+    `TmuxResumeIntent` — resume (or fork) inside a project-labelled window in
+    the shared csctl tmux session, then enter. A fork is a copy: it never
+    enters the original's window in place, it always spawns its own (and never
+    kills, so the confirm path falls straight through). ``gated`` has the same
+    typed-preparation contract as :func:`confirm_takeover`.
     """
     if not fork:
         target = attach_target(s)

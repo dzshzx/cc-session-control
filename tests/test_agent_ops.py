@@ -52,7 +52,7 @@ def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
             or ao.tmux.TmuxWriteResult(
                 ao.tmux.TmuxWriteStage.NEW_WINDOW,
                 ao.tmux.TmuxWriteState.SUCCEEDED,
-                target="proj:1",
+                target="csctl:1",
             )
         ),
     )
@@ -60,8 +60,8 @@ def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
     out = ao.respawn_result(job).command
     assert out == "claude --resume sid-xyz --bg-extra --bg"
     assert captured["cmd"] == out
-    # per-project grouping: the job's cwd basename, not one shared session
-    assert captured["session"] == "proj"
+    assert captured["session"] == "csctl"
+    assert captured["window"] == "proj/worker-abcdef01"
 
 
 def test_respawn_result_retains_tmux_failure(monkeypatch):

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .. import clipboard
+from ..config import cfg
 from ..data import liveness, proc, providers, sessions, tmux
 from ..data.liveness import invalidate_cache
 from ..models import Session, issue_detail
@@ -343,7 +344,7 @@ def _spawn_in_tmux_result(
     s: Session,
     fork: bool = False,
 ) -> TmuxResumeOutcome:
-    """Resolve and kill-if-needed, then spawn in the per-project tmux session."""
+    """Resolve and kill-if-needed, then spawn in the shared csctl tmux session."""
     resolution = _session_for_execution(s, fork)
     if not resolution.success:
         return TmuxResumeOutcome(None, resolution.detail)
@@ -365,13 +366,13 @@ def _spawn_in_tmux_result(
         takeover_failure = _required_takeover_failure(target_session)
         if takeover_failure:
             return TmuxResumeOutcome(None, takeover_failure)
-    window = providers.get(target_session.provider).window_name(
-        target_session.sid,
-        fork,
+    provider = providers.get(target_session.provider)
+    window = tmux.window_name_for(
+        target_session.cwd, provider.window_name(target_session.sid, fork)
     )
     cmd = tmux_foreground_cmd(target_session, fork)
     result = tmux.run_in_tmux_result(
-        tmux.session_name_for(target_session.cwd),
+        cfg.tmux_session,
         window,
         cmd,
         # A fork window hosts a NEW sid unknown at spawn — declaring the
@@ -417,9 +418,8 @@ def do_tmux_new_result(
     directory: str,
     provider_key: str = "claude",
 ) -> tmux.TmuxWriteResult:
-    """Start a NEW session of `provider_key`'s CLI in `directory`, inside
-    that project's own tmux session, retaining the exact create stage and
-    failure detail.
+    """Start `provider_key` in `directory` inside the shared csctl tmux session,
+    retaining exact create-stage diagnostics and a project-visible window name.
 
     The 项目-tab launcher keys: same skeleton as `do_tmux_resume_result` but
     nothing exists yet — no kill, no confirm, no R10 gate (no process is
@@ -432,8 +432,8 @@ def do_tmux_new_result(
     line = shlex.join(provider.new_session_argv())
     cmd = f"cd {shlex.quote(directory)} && {line}"
     return tmux.run_in_tmux_result(
-        tmux.session_name_for(directory),
-        provider.key,
+        cfg.tmux_session,
+        tmux.window_name_for(directory, provider.key),
         cmd,
         provider=provider.key,  # no sid exists yet — provider tag only
     )
@@ -583,16 +583,15 @@ class TmuxNewIntent(ExitIntent):
 def enter_window(target: str) -> bool:
     """Bring `target` ("session:window") to the user's terminal foreground.
 
-    Outside tmux: exec `tmux attach-session` — replaces the csctl process (does
-    not return on success). Inside tmux ($TMUX set): `switch-client`, then
-    return so the caller exits csctl normally — both paths end csctl, keeping
-    "接回 = 离开 csctl" uniform. select-window failure is non-fatal (the user
-    lands in the session and can pick the window by hand)."""
+    Outside tmux, `attach-session` replaces csctl; inside, `switch-client`
+    returns so csctl exits. Both mean "接回 = 离开 csctl". A select-window
+    failure is non-fatal: the user can pick the window by hand."""
     tmux.select_window(target)
     session = target.split(":", 1)[0]
     if os.environ.get("TMUX"):
         return tmux.switch_client(target)
-    os.execvp("tmux", ["tmux", "attach-session", "-t", session])
+    exact_session = tmux.exact_session_target(session)
+    os.execvp("tmux", ["tmux", "attach-session", "-t", exact_session])
     return True  # unreachable after a successful exec; keeps type-checkers calm
 
 

@@ -198,7 +198,7 @@ class TestSessionOpsPassMetadata:
             return tmux.TmuxWriteResult(
                 tmux.TmuxWriteStage.NEW_WINDOW,
                 tmux.TmuxWriteState.SUCCEEDED,
-                target="proj:5",
+                target="csctl:5",
             )
 
         monkeypatch.setattr(session_ops.tmux, "run_in_tmux_result", fake_run)
@@ -210,11 +210,11 @@ class TestSessionOpsPassMetadata:
 
         outcome = session_ops.do_tmux_resume_result(s)
 
-        assert outcome.target == "proj:5"
+        assert outcome.target == "csctl:5"
         assert seen == [
             {
-                "session": "tmp",
-                "window": "km-019fc784",
+                "session": "csctl",
+                "window": "tmp/km-019fc784",
                 "sid": KIMI_SID,
                 "provider": "kimi",
             }
@@ -226,7 +226,7 @@ class TestSessionOpsPassMetadata:
 
         outcome = session_ops.do_tmux_resume_result(s, fork=True)
 
-        assert outcome.target == "proj:5"
+        assert outcome.target == "csctl:5"
         assert seen[0]["sid"] == ""
         assert seen[0]["provider"] == "codex"
 
@@ -236,6 +236,8 @@ class TestSessionOpsPassMetadata:
         result = session_ops.do_tmux_new_result(str(tmp_path), "kimi")
 
         assert result.success
+        assert seen[0]["session"] == "csctl"
+        assert seen[0]["window"].endswith("/kimi")
         assert seen[0]["sid"] == ""
         assert seen[0]["provider"] == "kimi"
 

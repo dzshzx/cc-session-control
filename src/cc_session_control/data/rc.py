@@ -276,7 +276,7 @@ def _start_one_with_trust(
 
     cmd = rc_outcomes.remote_control_command(path, _basename(path))
     create_result = tmux.run_in_tmux_result(
-        cfg.rc_session, tmux.session_name_for(path), cmd
+        cfg.rc_session, tmux.project_name_for(path), cmd
     )
     if not create_result.success:
         return rc_outcomes.start_from_tmux(StartState.TMUX_FAILED, path, create_result)

@@ -177,16 +177,16 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
         "run_in_tmux_result",
         lambda tmux_session, window, cmd, **_kwargs: (
             spawn_calls.append((tmux_session, window, cmd))
-            or _created_target("project:4")
+            or _created_target("csctl:4")
         ),
     )
 
     result = tui_actions.background_session(session)
 
-    assert result.message == "已转入后台（tmux project:4）"
+    assert result.message == "已转入后台（tmux csctl:4）"
     assert result.needs_refresh is True
     assert spawn_calls == [
-        ("project", "sid-1", "cd /tmp/project && claude --resume sid-1")
+        ("csctl", "project/sid-1", "cd /tmp/project && claude --resume sid-1")
     ]
 
 
@@ -213,15 +213,15 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
             tui_actions.session_ops.TakeOverOutcome(
                 tui_actions.session_ops.TakeOverState.KILLED,
             ),
-            "已转入后台（tmux project:4）",
-            [("project", "sid-1", "cd /tmp/project && claude --resume sid-1")],
+            "已转入后台（tmux csctl:4）",
+            [("csctl", "project/sid-1", "cd /tmp/project && claude --resume sid-1")],
         ),
         (
             tui_actions.session_ops.TakeOverOutcome(
                 tui_actions.session_ops.TakeOverState.GONE,
             ),
-            "已转入后台（tmux project:4）",
-            [("project", "sid-1", "cd /tmp/project && claude --resume sid-1")],
+            "已转入后台（tmux csctl:4）",
+            [("csctl", "project/sid-1", "cd /tmp/project && claude --resume sid-1")],
         ),
     ],
 )
@@ -254,7 +254,7 @@ def test_live_background_session_requires_successful_takeover_before_spawn(
         "run_in_tmux_result",
         lambda tmux_session, window, cmd, **_kwargs: (
             spawn_calls.append((tmux_session, window, cmd))
-            or _created_target("project:4")
+            or _created_target("csctl:4")
         ),
     )
 
@@ -334,19 +334,18 @@ def test_live_background_session_uses_execution_time_session_generation(
         tui_actions.session_ops.tmux,
         "run_in_tmux_result",
         lambda tmux_session, window, cmd, **_kwargs: (
-            spawns.append((tmux_session, window, cmd))
-            or _created_target("fresh-project:4")
+            spawns.append((tmux_session, window, cmd)) or _created_target("csctl:4")
         ),
     )
 
     result = tui_actions.background_session(stale)
 
-    assert result.message == "已转入后台（tmux fresh-project:4）"
+    assert result.message == "已转入后台（tmux csctl:4）"
     assert takeovers == [(9002, "fresh-start")]
     assert spawns == [
         (
-            "fresh-project",
-            "sid-1",
+            "csctl",
+            "fresh-project/sid-1",
             "cd /fresh-project && claude --resume sid-1",
         )
     ]

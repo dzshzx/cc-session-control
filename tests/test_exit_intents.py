@@ -448,8 +448,7 @@ def test_live_tmux_resume_uses_execution_time_session_generation(
         tmux,
         "run_in_tmux_result",
         lambda tmux_session, window, cmd, **_kwargs: (
-            spawns.append((tmux_session, window, cmd))
-            or _created_target("fresh-project:3")
+            spawns.append((tmux_session, window, cmd)) or _created_target("csctl:3")
         ),
     )
     monkeypatch.setattr(tmux, "select_window", entered.append)
@@ -464,12 +463,12 @@ def test_live_tmux_resume_uses_execution_time_session_generation(
     assert takeovers == [(9002, "fresh-start")]
     assert spawns == [
         (
-            "fresh-project",
-            "resume",
+            "csctl",
+            "fresh-project/resume",
             "cd /fresh-project && claude --resume resume",
         )
     ]
-    assert entered == ["fresh-project:3", "fresh-project:3"]
+    assert entered == ["csctl:3", "csctl:3"]
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
@@ -783,7 +782,7 @@ def test_tui_dead_tmux_resume_skips_liveness_and_spawns(
         tmux,
         "run_in_tmux_result",
         lambda session, window, cmd, **_kwargs: (
-            spawn_calls.append((session, window, cmd)) or _created_target("project:7")
+            spawn_calls.append((session, window, cmd)) or _created_target("csctl:7")
         ),
     )
     monkeypatch.setattr(
@@ -798,9 +797,9 @@ def test_tui_dead_tmux_resume_skips_liveness_and_spawns(
 
     assert cli.main([]) == 0
     assert spawn_calls == [
-        ("project", "resume", "cd /project && claude --resume resume")
+        ("csctl", "project/resume", "cd /project && claude --resume resume")
     ]
-    assert enter_calls == ["project:7", "project:7"]
+    assert enter_calls == ["csctl:7", "csctl:7"]
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
@@ -834,7 +833,7 @@ def test_tui_live_fork_skips_incomplete_liveness_and_residency(
         "run_in_tmux_result",
         lambda tmux_session, window, cmd, **_kwargs: (
             spawn_calls.append((tmux_session, window, cmd))
-            or _created_target("project:8")
+            or _created_target("csctl:8")
         ),
     )
     monkeypatch.setattr(
@@ -850,12 +849,12 @@ def test_tui_live_fork_skips_incomplete_liveness_and_residency(
     assert cli.main([]) == 0
     assert spawn_calls == [
         (
-            "project",
-            "resume-fork",
+            "csctl",
+            "project/resume-fork",
             "cd /project && claude --resume resume --fork-session",
         )
     ]
-    assert enter_calls == ["project:8", "project:8"]
+    assert enter_calls == ["csctl:8", "csctl:8"]
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""

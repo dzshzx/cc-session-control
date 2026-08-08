@@ -162,8 +162,9 @@ class TestTmuxNewDispatch:
         monkeypatch.setattr(session_ops.tmux, "run_in_tmux_result", fake_run)
         result = session_ops.do_tmux_new_result("/tmp/proj", "codex")
         assert result.success
-        ((_, window, cmd),) = calls
-        assert window == "codex"
+        ((tmux_session, window, cmd),) = calls
+        assert tmux_session == "csctl"
+        assert window == "proj/codex"
         assert cmd.endswith("&& codex")
 
 

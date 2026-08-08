@@ -1,6 +1,6 @@
 # tmux-first session dispatch
 
-Status: accepted (2026-07-06)
+Status: accepted (2026-07-06); placement rule superseded by ADR-0006
 
 csctl's core operator need is that Claude Code sessions survive terminal /
 network disconnects (flaky SSH, phone connections). Two mechanisms could carry
@@ -8,6 +8,10 @@ that: per-session Remote Control (cloud bridge) or tmux residency. We chose
 **tmux as the primary mechanism** and repositioned csctl as a tmux-first
 dispatch center: every primary verb puts the operator into — or the session
 into — a per-project tmux window.
+
+ADR-0006 retains this tmux-first lifecycle decision but replaces the original
+per-project tmux-session placement with one shared interactive `csctl` session.
+The per-project wording below records the decision as originally accepted.
 
 ## Decision
 

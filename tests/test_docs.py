@@ -15,6 +15,14 @@ from cc_session_control.cli import build_parser
 
 README = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
 CLAUDE = (Path(__file__).parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
+CONTEXT = (Path(__file__).parents[1] / "CONTEXT.md").read_text(encoding="utf-8")
+AGENTS = (Path(__file__).parents[1] / "AGENTS.md").read_text(encoding="utf-8")
+ADR6 = (
+    Path(__file__).parents[1]
+    / "docs"
+    / "adr"
+    / "0006-unified-interactive-tmux-session.md"
+).read_text(encoding="utf-8")
 PYPROJECT = tomllib.loads(
     (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
 )
@@ -72,6 +80,22 @@ def test_readme_drops_retired_cli_surfaces(retired_command: str) -> None:
 )
 def test_readme_lists_every_public_environment_setting(variable: str) -> None:
     assert f"`{variable}`" in README
+
+
+def test_current_knowledge_surfaces_describe_the_unified_tmux_session() -> None:
+    assert "share the tmux session named `csctl`" in README
+    assert "single tmux session named `csctl`" in CONTEXT
+    assert "`csctl` tmux session" in AGENTS
+    assert '`cfg.tmux_session == "csctl"`' in CLAUDE
+    assert (
+        "Every agent session csctl dispatches uses one tmux session named `csctl`"
+        in ADR6
+    )
+
+
+def test_unified_tmux_adr_preserves_legacy_residency_and_rc_isolation() -> None:
+    assert "already resident in any tmux session is entered in place" in ADR6
+    assert "Managed Remote Control servers remain" in ADR6
 
 
 @pytest.mark.parametrize(

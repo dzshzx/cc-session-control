@@ -186,8 +186,9 @@ class RCView(ListTabView):
             section="项目操作（仅对「项目」行生效）:",
             help_lines=(
                 "  Enter  新建会话：先弹 CLI 选择器（仅列已启用的 CLI，↑↓ 选择，",
-                "         默认选中首行 claude，Esc 取消），再次 Enter 确认后在项目",
-                "         目录新建对应 tmux 会话并直接进入（离开 csctl；tmux-first",
+                "         默认选中首行 claude，Esc 取消），再次 Enter 确认后在统一",
+                "         csctl tmux session 新建项目窗口并直接进入（离开 csctl；",
+                "         tmux-first",
                 "         主入口，会话默认获得断线保护）",
             ),
         ),

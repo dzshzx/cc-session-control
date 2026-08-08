@@ -89,12 +89,31 @@ _WINDOWS_FMT = (
 )
 
 
+def exact_session_target(session: str) -> str:
+    """Encode a literal session name as an exact tmux target.
+
+    tmux otherwise falls back from exact names to prefix and glob matching. The
+    extra ``=`` is intentional when ``session`` itself starts with ``=``.
+    """
+
+    return f"={session}"
+
+
+def _exact_window_target(target: str) -> str:
+    """Encode a name/index target exactly; stable window IDs need no wrapper."""
+
+    is_window_id = target.startswith("@") and target[1:].isdigit()
+    return target if is_window_id else f"={target}"
+
+
 def list_windows_inventory(session: str) -> WindowInventory:
     """Typed window inventory retaining external and malformed evidence.
 
     ONE tmux round-trip feeds both project↔window joins (`rc.scan_result`) and
     managed-server classification (`rc.scan_servers_result`)."""
-    invocation = _tmux_run_result(["list-windows", "-t", session, "-F", _WINDOWS_FMT])
+    invocation = _tmux_run_result(
+        ["list-windows", "-t", exact_session_target(session), "-F", _WINDOWS_FMT]
+    )
     cp = invocation.completed
     if cp is None:
         return WindowInventory(
@@ -148,7 +167,9 @@ def set_window_option_result(
     value: str,
 ) -> TmuxWriteResult:
     """Set one per-window option while retaining exact failure evidence."""
-    invocation = _tmux_run_result(["set-option", "-w", "-t", target, option, value])
+    invocation = _tmux_run_result(
+        ["set-option", "-w", "-t", _exact_window_target(target), option, value]
+    )
     cp = invocation.completed
     return window_option_result(
         target,
@@ -180,7 +201,17 @@ def _spawn_result(
 
 def _tmux_new_window_result(session: str, name: str, cmd: str) -> TmuxWriteResult:
     invocation = _tmux_run_result(
-        ["new-window", "-P", "-F", _TARGET_FMT, "-t", session, "-n", name, cmd]
+        [
+            "new-window",
+            "-P",
+            "-F",
+            _TARGET_FMT,
+            "-t",
+            exact_session_target(session),
+            "-n",
+            name,
+            cmd,
+        ]
     )
     return _spawn_result(invocation, TmuxWriteStage.NEW_WINDOW)
 
@@ -222,23 +253,34 @@ def _kill_result(args: list[str], target: str) -> KillResult:
 
 def kill_window_result(target: str) -> KillResult:
     """Kill one window while distinguishing a vanished target from failure."""
-    return _kill_result(["kill-window", "-t", target], target)
+    return _kill_result(["kill-window", "-t", _exact_window_target(target)], target)
 
 
 def kill_session_result(session: str) -> KillResult:
     """Kill one session while distinguishing absence from external failure."""
-    return _kill_result(["kill-session", "-t", session], session)
+    return _kill_result(
+        ["kill-session", "-t", exact_session_target(session)],
+        session,
+    )
 
 
-def session_name_for(cwd: str) -> str:
-    """tmux session name for a project directory: its basename, with the tmux
-    target separators `.`/`:` (illegal in session names) replaced by `-`.
+def project_name_for(cwd: str) -> str:
+    """Stable display name for a project directory.
 
-    One session per project — the grouping rule shared by every claude spawn
-    (t 新建 / t 接回 / R 转入后台 / agents respawn). Empty cwd → "claude"."""
+    Uses the basename and replaces tmux target separators ``.``/``:`` with
+    ``-``. The result names RC project windows and prefixes agent windows; it
+    is display metadata, never the project's identity. Empty cwd → "claude".
+    """
     base = cwd.rstrip("/").rsplit("/", 1)[-1] if cwd else ""
     name = base.replace(".", "-").replace(":", "-").strip()
     return name or "claude"
+
+
+def window_name_for(cwd: str, leaf: str) -> str:
+    """Project-visible window name inside the unified workbench session."""
+
+    project = project_name_for(cwd)
+    return f"{project}/{leaf}" if leaf else project
 
 
 # C1: the dispatch-identity window options every csctl spawn declares and
@@ -299,7 +341,7 @@ def run_in_tmux_result(
     Non-empty `sid`/`provider` are declared on the created window as
     `@csctl_sid`/`@csctl_provider` (see `_declare_dispatch_metadata`)."""
 
-    invocation = _tmux_run_result(["has-session", "-t", session])
+    invocation = _tmux_run_result(["has-session", "-t", exact_session_target(session)])
     cp = invocation.completed
     if cp is None:
         return TmuxWriteResult(
@@ -425,11 +467,11 @@ def find_session_window_result(pids: list[int]) -> SessionWindowResult:
 
 def select_window(target: str) -> bool:
     """tmux select-window -t <target>; False on failure (non-fatal for attach)."""
-    cp = _tmux_run(["select-window", "-t", target])
+    cp = _tmux_run(["select-window", "-t", _exact_window_target(target)])
     return cp is not None and cp.returncode == 0
 
 
 def switch_client(target: str) -> bool:
     """tmux switch-client -t <target> — the inside-tmux attach equivalent."""
-    cp = _tmux_run(["switch-client", "-t", target])
+    cp = _tmux_run(["switch-client", "-t", _exact_window_target(target)])
     return cp is not None and cp.returncode == 0

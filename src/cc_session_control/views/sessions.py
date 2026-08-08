@@ -55,8 +55,9 @@ class SessionsView(CleanupMixin, ListTabView):
             "_key_resume",
             section="会话操作:",
             help_lines=(
-                "  Enter  tmux 接回（主操作：会话恢复进所属项目的 tmux 窗口并接入前台，",
-                "         终端断线会话不死；已驻留 tmux 的会话就地进入不重启；",
+                "  Enter  tmux 接回（主操作：会话恢复进统一 csctl tmux session 的",
+                "         项目标记窗口并接入前台；终端断线会话不死；",
+                "         已驻留 tmux 的会话就地进入不重启；",
                 "         接运行中的裸终端会话会先确认接管）",
             ),
         ),
@@ -367,7 +368,7 @@ class SessionsView(CleanupMixin, ListTabView):
 
     def _do_relaunch(self, s: Session) -> None:
         """转后台 body (after confirm when it takes over a live one): spawn the
-        resume window in the per-project tmux session, do NOT enter it — the
+        resume window in the shared csctl tmux session, do NOT enter it — the
         operator stays in csctl. No --remote-control (ADR-0001)."""
         self.app.submit_action(
             "session.background",
@@ -432,7 +433,8 @@ class SessionsView(CleanupMixin, ListTabView):
 
     def _key_resume(self, s: Session) -> None:
         """Enter — tmux 接回: enter a resident session in place, else resume
-        it inside its per-project tmux window and enter (ADR-0001 primary)."""
+        it inside its project-labelled window in the shared csctl tmux session
+        and enter (ADR-0001/0006 primary)."""
         if s.current:
             self.app.notify("不能接回当前会话")
             return

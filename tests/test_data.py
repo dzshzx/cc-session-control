@@ -425,10 +425,10 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
     )
     target = so.do_tmux_resume_result(s).target
     assert calls["kill"] == [4242]
-    assert target == "proj:1"  # per-project session, exact spawned target
+    assert target == "csctl:1"  # unified workbench session, exact spawned target
     session, window, cmd = calls["spawn"][0]
-    assert session == "proj"
-    assert window == "abcdef01"
+    assert session == "csctl"
+    assert window == "proj/abcdef01"
     assert "--remote-control" not in cmd
 
 
@@ -446,7 +446,7 @@ def test_do_tmux_resume_dead_session_no_kill(monkeypatch):
         ),
     )
     s = _make_session(sid="abcdef0123456789", cwd="/tmp/proj", alive=False)
-    assert so.do_tmux_resume_result(s).target == "proj:0"
+    assert so.do_tmux_resume_result(s).target == "csctl:0"
 
 
 def test_do_tmux_resume_refuses_takeover_when_degraded(monkeypatch):
@@ -482,10 +482,10 @@ def test_do_tmux_new_spawns_and_returns_target(monkeypatch):
     )
     result = so.do_tmux_new_result("/tmp/proj with space")
     assert result.success is True
-    assert result.target == "proj with space:0"
+    assert result.target == "csctl:0"
     session, window, cmd = spawns[0]
-    assert session == "proj with space"  # per-project session = dir basename
-    assert window == "claude"
+    assert session == "csctl"
+    assert window == "proj with space/claude"
     assert cmd == "cd '/tmp/proj with space' && claude"
     assert "--remote-control" not in cmd and "--resume" not in cmd
 
@@ -526,11 +526,11 @@ def test_do_tmux_resume_fork_spawns_fork_window_no_kill(monkeypatch):
     s = _make_session(
         sid="abcdef0123456789", cwd="/tmp/proj", alive=True, current=False, pid=4242
     )
-    assert so.do_tmux_resume_result(s, fork=True).target == "proj:2"
+    assert so.do_tmux_resume_result(s, fork=True).target == "csctl:2"
     assert calls["kill"] == 0  # fork leaves the original running
     session, window, cmd = calls["tmux"]
-    assert session == "proj"
-    assert window == "abcdef01-fork"
+    assert session == "csctl"
+    assert window == "proj/abcdef01-fork"
     assert "--fork-session" in cmd
     assert "--remote-control" not in cmd
 
@@ -606,14 +606,20 @@ def test_run_in_tmux_returns_printed_target(monkeypatch):
     assert tmux.run_in_tmux_result("proj", "claude", "cmd").target == "proj:3"
 
 
-def test_session_name_for_sanitizes_tmux_separators():
-    from cc_session_control.data.tmux import session_name_for
+def test_project_name_for_sanitizes_tmux_target_separators():
+    from cc_session_control.data.tmux import project_name_for
 
-    assert session_name_for("/tmp/myproj") == "myproj"
-    assert session_name_for("/tmp/myproj/") == "myproj"
-    assert session_name_for("/tmp/my.proj") == "my-proj"
-    assert session_name_for("/tmp/a:b.c") == "a-b-c"
-    assert session_name_for("") == "claude"
+    assert project_name_for("/tmp/myproj") == "myproj"
+    assert project_name_for("/tmp/myproj/") == "myproj"
+    assert project_name_for("/tmp/my.proj") == "my-proj"
+    assert project_name_for("/tmp/a:b.c") == "a-b-c"
+    assert project_name_for("") == "claude"
+
+
+def test_window_name_for_keeps_project_visible_in_unified_session():
+    from cc_session_control.data.tmux import window_name_for
+
+    assert window_name_for("/tmp/my.proj", "cx-abcdef01") == "my-proj/cx-abcdef01"
 
 
 def test_list_windows_meta_parses_and_prefers_declared_path(monkeypatch):

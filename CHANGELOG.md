@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **All csctl-dispatched agent sessions now share one `csctl` tmux session.**
+  New, resumed, forked, backgrounded, and background-agent respawn windows use
+  project-prefixed names, making cross-project switching available from one
+  tmux window list. Existing resident windows are entered in place and are not
+  migrated; managed Remote Control servers remain in the separate `rc` session.
+  Session/window names are exact-matched, and RC configuration rejects tmux
+  target-expression syntax so prefix or glob fallback cannot cross that boundary.
+
 ## 0.8.3 (2026-08-04)
 
 Operator feedback fixes: kimi liveness restored via tmux window metadata, and

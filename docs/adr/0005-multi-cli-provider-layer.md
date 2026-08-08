@@ -7,11 +7,12 @@ reads `~/.claude`, every resume synthesizes a `claude --resume` argv, and the
 domain language (CONTEXT.md) says "Claude Code session" where it means
 "session". The machine it operates, however, runs three agent CLIs side by
 side — Claude Code, Codex CLI, and Kimi Code — and the operator problem csctl
-solves (which sessions exist, which are live, dispatch them into per-project
-tmux windows so they survive disconnects) is identical for all three. This
+solves (which sessions exist, which are live, dispatch them into the shared
+workbench tmux session so they survive disconnects) is identical for all three. This
 ADR turns csctl into a multi-CLI workbench by introducing a **provider
 layer** while keeping the tmux-first dispatch model of ADR-0001 as the shared
-engine.
+engine. ADR-0006 later unified the placement without changing this provider
+interface.
 
 Comparable workbenches (claude-squad, vibe-kanban, crystal, agent-deck)
 converge on the same split this ADR adopts: a per-CLI adapter that owns

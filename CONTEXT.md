@@ -10,7 +10,7 @@ from one local machine.
 A machine-wide management surface for seeing and acting on agent-CLI sessions
 across providers and projects, plus Claude Code agents and Remote Control
 environments. Works tmux-first: its primary verbs dispatch sessions into
-per-project tmux windows (ADR-0001).
+project-labelled windows in one shared `csctl` tmux session (ADR-0001/0006).
 _Avoid_: current project view, current session view, Claude-only panel
 
 **Provider**:
@@ -63,10 +63,20 @@ resident session survives terminal and network disconnects. The primary
 protection csctl works toward.
 _Avoid_: detached, daemonized, "in tmux" without saying resident
 
+**Workbench tmux Session**:
+The single tmux session named `csctl` into which the workbench dispatches new,
+resumed, forked, backgrounded, and respawned agent sessions. Project identity
+remains the absolute cwd; the project basename is display-only metadata in the
+window name. Existing resident windows in any tmux session are entered in
+place rather than migrated. Managed Remote Control servers remain in their
+separate configurable session.
+_Avoid_: one tmux session per project, treating a window name as identity
+
 **tmux Resume (tmux 接回)**:
-Resuming a session inside its per-project tmux window and bringing the
-operator's terminal into that window — the primary resume verb; makes the
-session tmux-resident. A session already resident is entered in place.
+Resuming a session inside its project-labelled window in the workbench tmux
+session and bringing the operator's terminal into that window — the primary
+resume verb; makes the session tmux-resident. A session already resident in
+any tmux session is entered in place.
 _Avoid_: attach
 
 **Terminal Resume (终端接回)**:
@@ -76,8 +86,9 @@ unwanted.
 _Avoid_: unqualified "resume/接回"
 
 **Backgrounding (转后台)**:
-Moving a session into its per-project tmux window without entering it and
-without enabling Remote Control; the operator stays in csctl.
+Moving a session into its project-labelled window in the workbench tmux
+session without entering it and without enabling Remote Control; the operator
+stays in csctl.
 _Avoid_: relaunch, RC relaunch (the pre-0.7 behavior that also minted a cloud
 environment)
 

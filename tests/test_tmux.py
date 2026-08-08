@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 from cc_session_control.data import tmux
 
 
@@ -203,6 +205,108 @@ def test_kill_session_result_retains_timeout(monkeypatch) -> None:
 
     assert result.state is tmux.KillState.FAILED
     assert result.detail == "tmux timed out after 5 seconds"
+
+
+def test_session_inventory_and_kill_use_exact_literal_targets(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(argv, **_kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            stdout="",
+            stderr="can't find session: =csc\n",
+        )
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    assert tmux.list_windows_inventory("csc").records == ()
+    assert tmux.kill_session_result("csc").state is tmux.KillState.TARGET_NOT_FOUND
+    assert calls == [
+        ["tmux", "list-windows", "-t", "=csc", "-F", tmux._WINDOWS_FMT],
+        ["tmux", "kill-session", "-t", "=csc"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("literal", "exact_target"),
+    [
+        ("csc", "=csc"),  # must not prefix-match the reserved csctl session
+        ("cs*", "=cs*"),  # must not be interpreted as a glob
+        ("=csctl", "==csctl"),  # a leading '=' is part of the literal name
+    ],
+)
+def test_run_in_tmux_treats_session_name_as_literal(
+    literal: str,
+    exact_target: str,
+    monkeypatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def run(argv, **_kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=f"{literal}:3\t@3\n" if argv[1] == "new-window" else "",
+            stderr="",
+        )
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    result = tmux.run_in_tmux_result(literal, "project/leaf", "cmd")
+
+    assert result.target == f"{literal}:3"
+    assert calls[0] == ["tmux", "has-session", "-t", exact_target]
+    assert calls[1][calls[1].index("-t") + 1] == exact_target
+
+
+@pytest.mark.parametrize(
+    ("target", "exact_target"),
+    [
+        ("csctl:3", "=csctl:3"),
+        ("@legacy:3", "=@legacy:3"),
+        ("@7", "@7"),
+    ],
+)
+def test_window_navigation_uses_exact_literal_target(
+    target: str,
+    exact_target: str,
+    monkeypatch,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        tmux.subprocess,
+        "run",
+        lambda argv, **_kwargs: (
+            calls.append(argv)
+            or subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        ),
+    )
+
+    assert tmux.select_window(target) is True
+    assert tmux.switch_client(target) is True
+
+    assert calls == [
+        ["tmux", "select-window", "-t", exact_target],
+        ["tmux", "switch-client", "-t", exact_target],
+    ]
+
+
+def test_window_option_exactifies_non_id_target(monkeypatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        tmux.subprocess,
+        "run",
+        lambda argv, **_kwargs: (
+            calls.append(argv)
+            or subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        ),
+    )
+
+    assert tmux.set_window_option_result("@legacy:3", "@key", "value").success
+    assert calls == [["tmux", "set-option", "-w", "-t", "=@legacy:3", "@key", "value"]]
 
 
 def test_run_in_tmux_result_retains_new_window_failure_detail(monkeypatch) -> None:
