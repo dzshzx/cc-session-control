@@ -15,7 +15,10 @@
 ### Fixed
 
 - Background-agent respawns now enter the job's recorded project directory
-  before launching inside the shared `csctl` session.
+  before launching inside the shared `csctl` session and fail closed when that
+  directory is missing or unusable.
+- Concurrent first dispatches recover when another csctl process wins creation
+  of the shared tmux session, then create their window exactly once.
 
 ## 0.8.3 (2026-08-04)
 

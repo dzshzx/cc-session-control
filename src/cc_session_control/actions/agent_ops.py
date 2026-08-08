@@ -26,6 +26,7 @@ import shlex
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 from ..config import cfg
 from ..data import cleanup, liveness, registry, tmux
@@ -70,9 +71,13 @@ def _job_window(job: AgentJob) -> str:
 def respawn_result(job: AgentJob) -> RespawnResult:
     """Relaunch a background agent from its project cwd, retaining outcome."""
     agent_command = respawn_cmd(job)
-    tmux_command = (
-        f"cd {shlex.quote(job.cwd)} && {agent_command}" if job.cwd else agent_command
-    )
+    if not job.cwd or not Path(job.cwd).is_dir():
+        return RespawnResult(
+            agent_command=agent_command,
+            target=None,
+            detail=f"unusable project directory: {job.cwd or '<missing>'}",
+        )
+    tmux_command = f"cd {shlex.quote(job.cwd)} && {agent_command}"
     result = tmux.run_in_tmux_result(
         cfg.tmux_session,
         tmux.window_name_for(job.cwd, _job_window(job)),

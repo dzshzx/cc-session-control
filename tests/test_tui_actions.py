@@ -520,7 +520,7 @@ def test_agent_respawn_does_not_claim_success_when_tmux_fails(monkeypatch) -> No
     assert result.message == "重启失败：无法创建 tmux 窗口"
 
 
-def test_agent_respawn_reports_typed_tmux_failure_detail(monkeypatch) -> None:
+def test_agent_respawn_reports_typed_tmux_failure_detail(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         tui_actions.agent_ops.tmux.subprocess,
         "run",
@@ -529,7 +529,7 @@ def test_agent_respawn_reports_typed_tmux_failure_detail(monkeypatch) -> None:
         ),
     )
 
-    result = tui_actions.respawn_agent(_job())
+    result = tui_actions.respawn_agent(replace(_job(), cwd=str(tmp_path)))
 
     assert result.message == ("重启失败：session-probe: tmux timed out after 5 seconds")
 

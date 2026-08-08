@@ -216,11 +216,27 @@ def _tmux_new_window_result(session: str, name: str, cmd: str) -> TmuxWriteResul
     return _spawn_result(invocation, TmuxWriteStage.NEW_WINDOW)
 
 
-def _tmux_new_session_result(session: str, name: str, cmd: str) -> TmuxWriteResult:
+def _tmux_new_session_attempt(
+    session: str,
+    name: str,
+    cmd: str,
+) -> tuple[TmuxWriteResult, _TmuxInvocation]:
     args = ["new-session", "-d", "-P", "-F", _TARGET_FMT]
     args.extend(["-s", session, "-n", name, cmd])
     invocation = _tmux_run_result(args)
-    return _spawn_result(invocation, TmuxWriteStage.NEW_SESSION)
+    return _spawn_result(invocation, TmuxWriteStage.NEW_SESSION), invocation
+
+
+def _is_duplicate_session_failure(
+    invocation: _TmuxInvocation,
+    session: str,
+) -> bool:
+    cp = invocation.completed
+    return (
+        cp is not None
+        and cp.returncode != 0
+        and invocation.detail == f"duplicate session: {session}"
+    )
 
 
 _MISSING_TARGET_PREFIXES = (
@@ -358,7 +374,16 @@ def run_in_tmux_result(
             detail=invocation.detail,
         )
     else:
-        created = _tmux_new_session_result(session, window, cmd)
+        created, new_session_invocation = _tmux_new_session_attempt(
+            session, window, cmd
+        )
+        if _is_duplicate_session_failure(new_session_invocation, session):
+            retry_probe = _tmux_run_result(
+                ["has-session", "-t", exact_session_target(session)]
+            )
+            retry_cp = retry_probe.completed
+            if retry_cp is not None and retry_cp.returncode == 0:
+                created = _tmux_new_window_result(session, window, cmd)
     return _declare_dispatch_metadata(created, sid, provider)
 
 

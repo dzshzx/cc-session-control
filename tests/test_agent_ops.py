@@ -42,7 +42,7 @@ def test_respawn_cmd_no_flags():
     assert ao.respawn_cmd(job) == "claude --resume sid-xyz --bg"
 
 
-def test_respawn_launches_from_job_project_in_shared_tmux(monkeypatch):
+def test_respawn_launches_from_job_project_in_shared_tmux(tmp_path, monkeypatch):
     captured = {}
     monkeypatch.setattr(
         ao.tmux,
@@ -56,21 +56,23 @@ def test_respawn_launches_from_job_project_in_shared_tmux(monkeypatch):
             )
         ),
     )
+    project = tmp_path / "proj with space"
+    project.mkdir()
     job = _make_job(
-        cwd="/tmp/proj with space",
+        cwd=str(project),
         resume_sid="sid-xyz",
         respawn_flags=["--bg-extra"],
     )
     out = ao.respawn_result(job).agent_command
     assert out == "claude --resume sid-xyz --bg-extra --bg"
     assert captured["cmd"] == (
-        "cd '/tmp/proj with space' && claude --resume sid-xyz --bg-extra --bg"
+        f"cd {str(project)!r} && claude --resume sid-xyz --bg-extra --bg"
     )
     assert captured["session"] == "csctl"
     assert captured["window"] == "proj with space/worker-abcdef01"
 
 
-def test_respawn_result_retains_tmux_failure(monkeypatch):
+def test_respawn_result_retains_tmux_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ao.tmux,
         "run_in_tmux_result",
@@ -81,12 +83,34 @@ def test_respawn_result_retains_tmux_failure(monkeypatch):
         ),
     )
 
-    result = ao.respawn_result(_make_job(resume_sid="sid-xyz"))
+    result = ao.respawn_result(_make_job(cwd=str(tmp_path), resume_sid="sid-xyz"))
 
     assert result.agent_command == "claude --resume sid-xyz --bg"
     assert result.target is None
     assert result.detail == "new-window: tmux unavailable"
     assert result.success is False
+
+
+@pytest.mark.parametrize("kind", ["blank", "missing", "file"])
+def test_respawn_result_refuses_missing_or_unusable_project_directory(
+    tmp_path, monkeypatch, kind
+):
+    cwd = "" if kind == "blank" else str(tmp_path / "project")
+    if kind == "file":
+        (tmp_path / "project").write_text("not a directory")
+
+    monkeypatch.setattr(
+        ao.tmux,
+        "run_in_tmux_result",
+        lambda *_: pytest.fail("invalid cwd must not dispatch tmux"),
+    )
+
+    result = ao.respawn_result(_make_job(cwd=cwd, resume_sid="sid-xyz"))
+
+    assert result.agent_command == "claude --resume sid-xyz --bg"
+    assert result.target is None
+    assert result.success is False
+    assert result.detail == f"unusable project directory: {cwd or '<missing>'}"
 
 
 # --- remove_job: settled only, current-determinable only ---

@@ -333,24 +333,187 @@ def test_run_in_tmux_result_retains_new_window_failure_detail(monkeypatch) -> No
     assert result.detail == "lost server connection"
 
 
-def test_run_in_tmux_result_retains_new_session_timeout(monkeypatch) -> None:
+def test_run_in_tmux_result_recovers_when_another_process_creates_session(
+    monkeypatch,
+) -> None:
+    calls: list[list[str]] = []
+    probe_count = 0
+
     def run(argv, **_kwargs):
+        nonlocal probe_count
+        calls.append(argv)
         if argv[1] == "has-session":
+            probe_count += 1
+            return subprocess.CompletedProcess(
+                argv,
+                0 if probe_count == 2 else 1,
+                stdout="",
+                stderr="" if probe_count == 2 else "can't find session: csctl\n",
+            )
+        if argv[1] == "new-session":
             return subprocess.CompletedProcess(
                 argv,
                 1,
                 stdout="",
-                stderr="can't find session: project\n",
+                stderr="duplicate session: csctl\n",
             )
-        raise subprocess.TimeoutExpired(argv, 5)
+        if argv[1] == "new-window":
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="csctl:1\t@42\n",
+                stderr="",
+            )
+        if argv[1] == "set-option":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        raise AssertionError(argv)
 
     monkeypatch.setattr(tmux.subprocess, "run", run)
 
-    result = tmux.run_in_tmux_result("project", "claude", "cmd")
+    result = tmux.run_in_tmux_result(
+        "csctl",
+        "project/leaf",
+        "cmd",
+        sid="session-id",
+        provider="claude",
+    )
+
+    assert result.success
+    assert result.target == "csctl:1"
+    assert result.window_id == "@42"
+    assert calls == [
+        ["tmux", "has-session", "-t", "=csctl"],
+        [
+            "tmux",
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            tmux._TARGET_FMT,
+            "-s",
+            "csctl",
+            "-n",
+            "project/leaf",
+            "cmd",
+        ],
+        ["tmux", "has-session", "-t", "=csctl"],
+        [
+            "tmux",
+            "new-window",
+            "-P",
+            "-F",
+            tmux._TARGET_FMT,
+            "-t",
+            "=csctl",
+            "-n",
+            "project/leaf",
+            "cmd",
+        ],
+        ["tmux", "set-option", "-w", "-t", "@42", "@csctl_provider", "claude"],
+        [
+            "tmux",
+            "set-option",
+            "-w",
+            "-t",
+            "@42",
+            "@csctl_sid",
+            "session-id",
+        ],
+    ]
+
+
+def test_run_in_tmux_result_does_not_recover_new_session_without_target(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+    probe_count = 0
+
+    def run(argv, **_kwargs):
+        nonlocal probe_count
+        operation = argv[1]
+        calls.append(operation)
+        if operation == "has-session":
+            probe_count += 1
+            return subprocess.CompletedProcess(
+                argv,
+                0 if probe_count == 2 else 1,
+                stdout="",
+                stderr="" if probe_count == 2 else "can't find session: csctl\n",
+            )
+        if operation == "new-session":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if operation == "new-window":
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="csctl:1\t@42\n",
+                stderr="",
+            )
+        if operation == "set-option":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    result = tmux.run_in_tmux_result(
+        "csctl",
+        "project/leaf",
+        "cmd",
+        sid="session-id",
+        provider="claude",
+    )
 
     assert result.stage is tmux.TmuxWriteStage.NEW_SESSION
     assert result.state is tmux.TmuxWriteState.FAILED
+    assert result.target is None
+    assert result.detail == "tmux succeeded without printing the created target"
+    assert calls == ["has-session", "new-session"]
+
+
+def test_run_in_tmux_result_retains_new_session_timeout(monkeypatch) -> None:
+    calls: list[str] = []
+    probe_count = 0
+
+    def run(argv, **_kwargs):
+        nonlocal probe_count
+        operation = argv[1]
+        calls.append(operation)
+        if operation == "has-session":
+            probe_count += 1
+            return subprocess.CompletedProcess(
+                argv,
+                0 if probe_count == 2 else 1,
+                stdout="",
+                stderr="" if probe_count == 2 else "can't find session: csctl\n",
+            )
+        if operation == "new-session":
+            raise subprocess.TimeoutExpired(argv, 5)
+        if operation == "new-window":
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="csctl:1\t@42\n",
+                stderr="",
+            )
+        if operation == "set-option":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    result = tmux.run_in_tmux_result(
+        "csctl",
+        "project/leaf",
+        "cmd",
+        sid="session-id",
+        provider="claude",
+    )
+
+    assert result.stage is tmux.TmuxWriteStage.NEW_SESSION
+    assert result.state is tmux.TmuxWriteState.FAILED
+    assert result.target is None
     assert result.detail == "tmux timed out after 5 seconds"
+    assert calls == ["has-session", "new-session"]
 
 
 def test_run_in_tmux_result_retains_spawn_failure(monkeypatch) -> None:
