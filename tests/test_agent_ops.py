@@ -42,7 +42,7 @@ def test_respawn_cmd_no_flags():
     assert ao.respawn_cmd(job) == "claude --resume sid-xyz --bg"
 
 
-def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
+def test_respawn_launches_from_job_project_in_shared_tmux(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         ao.tmux,
@@ -56,12 +56,18 @@ def test_respawn_launches_in_tmux_and_returns_cmd(monkeypatch):
             )
         ),
     )
-    job = _make_job(resume_sid="sid-xyz", respawn_flags=["--bg-extra"])
+    job = _make_job(
+        cwd="/tmp/proj with space",
+        resume_sid="sid-xyz",
+        respawn_flags=["--bg-extra"],
+    )
     out = ao.respawn_result(job).command
     assert out == "claude --resume sid-xyz --bg-extra --bg"
-    assert captured["cmd"] == out
+    assert captured["cmd"] == (
+        "cd '/tmp/proj with space' && claude --resume sid-xyz --bg-extra --bg"
+    )
     assert captured["session"] == "csctl"
-    assert captured["window"] == "proj/worker-abcdef01"
+    assert captured["window"] == "proj with space/worker-abcdef01"
 
 
 def test_respawn_result_retains_tmux_failure(monkeypatch):

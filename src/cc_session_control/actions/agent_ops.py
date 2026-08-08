@@ -68,12 +68,13 @@ def _job_window(job: AgentJob) -> str:
 
 
 def respawn_result(job: AgentJob) -> RespawnResult:
-    """Relaunch a background agent while retaining the tmux outcome."""
+    """Relaunch a background agent from its project cwd, retaining outcome."""
     cmd = respawn_cmd(job)
+    tmux_cmd = f"cd {shlex.quote(job.cwd)} && {cmd}" if job.cwd else cmd
     result = tmux.run_in_tmux_result(
         cfg.tmux_session,
         tmux.window_name_for(job.cwd, _job_window(job)),
-        cmd,
+        tmux_cmd,
     )
     target = result.target if result.success else None
     return RespawnResult(cmd, target, result.diagnostic)

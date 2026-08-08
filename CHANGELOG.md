@@ -12,6 +12,11 @@
   Session/window names are exact-matched, and RC configuration rejects tmux
   target-expression syntax so prefix or glob fallback cannot cross that boundary.
 
+### Fixed
+
+- Background-agent respawns now enter the job's recorded project directory
+  before launching inside the shared `csctl` session.
+
 ## 0.8.3 (2026-08-04)
 
 Operator feedback fixes: kimi liveness restored via tmux window metadata, and
