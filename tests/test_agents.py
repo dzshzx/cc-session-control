@@ -184,7 +184,10 @@ def test_R_key_respawns(monkeypatch):
         "respawn_result",
         lambda job: (
             called.setdefault("job", job)
-            and av_mod.agent_ops.RespawnResult("claude --resume x --bg", "p:1")
+            and av_mod.agent_ops.RespawnResult(
+                agent_command="claude --resume x --bg",
+                target="p:1",
+            )
         ),
     )
     app, view = _make_view([_make_job()])
@@ -202,7 +205,7 @@ def test_r_key_refreshes_not_respawn(monkeypatch):
         "respawn_result",
         lambda job: (
             respawned.__setitem__("n", respawned["n"] + 1)
-            or av_mod.agent_ops.RespawnResult("x", "p:1")
+            or av_mod.agent_ops.RespawnResult(agent_command="x", target="p:1")
         ),
     )
     app, view = _make_view([_make_job()])

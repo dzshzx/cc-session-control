@@ -39,9 +39,9 @@ from . import session_ops
 
 @dataclass(frozen=True)
 class RespawnResult:
-    """Exact command plus the tmux target that proves it was launched."""
+    """Copyable agent CLI command plus the tmux target proving launch."""
 
-    command: str
+    agent_command: str
     target: str | None
     detail: str = ""
 
@@ -69,15 +69,21 @@ def _job_window(job: AgentJob) -> str:
 
 def respawn_result(job: AgentJob) -> RespawnResult:
     """Relaunch a background agent from its project cwd, retaining outcome."""
-    cmd = respawn_cmd(job)
-    tmux_cmd = f"cd {shlex.quote(job.cwd)} && {cmd}" if job.cwd else cmd
+    agent_command = respawn_cmd(job)
+    tmux_command = (
+        f"cd {shlex.quote(job.cwd)} && {agent_command}" if job.cwd else agent_command
+    )
     result = tmux.run_in_tmux_result(
         cfg.tmux_session,
         tmux.window_name_for(job.cwd, _job_window(job)),
-        tmux_cmd,
+        tmux_command,
     )
     target = result.target if result.success else None
-    return RespawnResult(cmd, target, result.diagnostic)
+    return RespawnResult(
+        agent_command=agent_command,
+        target=target,
+        detail=result.diagnostic,
+    )
 
 
 # --- remove (settled agents only) ---------------------------------------------

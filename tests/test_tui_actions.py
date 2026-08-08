@@ -510,8 +510,8 @@ def test_agent_respawn_does_not_claim_success_when_tmux_fails(monkeypatch) -> No
         tui_actions.agent_ops,
         "respawn_result",
         lambda _job: tui_actions.agent_ops.RespawnResult(
-            "claude --resume resume-1 --bg",
-            None,
+            agent_command="claude --resume resume-1 --bg",
+            target=None,
         ),
     )
 

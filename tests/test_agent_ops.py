@@ -61,7 +61,7 @@ def test_respawn_launches_from_job_project_in_shared_tmux(monkeypatch):
         resume_sid="sid-xyz",
         respawn_flags=["--bg-extra"],
     )
-    out = ao.respawn_result(job).command
+    out = ao.respawn_result(job).agent_command
     assert out == "claude --resume sid-xyz --bg-extra --bg"
     assert captured["cmd"] == (
         "cd '/tmp/proj with space' && claude --resume sid-xyz --bg-extra --bg"
@@ -83,7 +83,7 @@ def test_respawn_result_retains_tmux_failure(monkeypatch):
 
     result = ao.respawn_result(_make_job(resume_sid="sid-xyz"))
 
-    assert result.command == "claude --resume sid-xyz --bg"
+    assert result.agent_command == "claude --resume sid-xyz --bg"
     assert result.target is None
     assert result.detail == "new-window: tmux unavailable"
     assert result.success is False

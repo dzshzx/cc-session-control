@@ -90,7 +90,7 @@ def respawn_agent(job: AgentJob) -> ActionResult:
             needs_refresh=True,
         )
     return ActionResult(
-        f"已重启：{result.command}",
+        f"已重启：{result.agent_command}",
         needs_refresh=True,
     )
 
