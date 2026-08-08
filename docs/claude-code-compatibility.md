@@ -10,13 +10,12 @@ new Claude Code version still emits them.
 | Scope | Claude Code | Date | Evidence |
 |---|---:|---:|---|
 | Trust inheritance and `~/.claude.json` footprint | 2.1.218 | 2026-07-23 | Parent `true` suppresses the child dialog; the child may be recorded with explicit `false`; declining writes no project entry |
-| Isolated read-only command probe | 2.1.221 | 2026-08-04 | For the v0.8.1 release: `claude --version` → 2.1.221; `claude agents --help` exited 0 with `--json`; `claude agents --json` exited 0 with valid-JSON `[]` under an empty temporary home |
-| Authenticated `remote-control --help` | not reverified | 2026-08-04 | Under an unauthenticated temporary home, it exited 1 with a login-required diagnostic before rendering help (same auth boundary as 2.1.220) |
+| Isolated read-only command probe | 2.1.226 | 2026-08-08 | For the v0.8.4 release: `claude --version` exited 0; `claude agents --help` exited 0 with `--json`; `claude agents --json` exited 0 with valid-JSON `[]` under an empty temporary home; unauthenticated `remote-control --help` stopped at the login boundary without starting a server |
+| Authenticated `remote-control --help` | 2.1.226 | 2026-08-08 | Reused the maintainer's existing Linux Claude.ai login for this read-only probe: exit 0, with `--name`, `--spawn`, and `same-dir`; the credential file hash was unchanged and no server was started |
 
-The 2.1.220 probe did **not** revalidate trust inheritance, non-empty registry
-fields, or the authenticated Remote Control help contract. Do not advance the
-semantic “last verified” version from 2.1.218 until the disposable-fixture
-steps below pass.
+The 2.1.226 release probes did **not** revalidate trust inheritance or non-empty
+registry fields. Do not advance the semantic “last verified” version from
+2.1.218 until the remaining disposable-fixture steps below pass.
 
 ## Tier 1: isolated read-only probe
 
@@ -164,11 +163,11 @@ per release (read-only probes; never write into a CLI's real home):
 | Scope | Version | Date | Evidence |
 |---|---:|---:|---|
 | Codex rollout layout + `session_meta` first line (`payload.id` == `payload.session_id` for `thread_source: "user"`; subagent rollouts carry the parent thread id) | 0.146.0 | 2026-08-04 | Sampled `~/.codex/sessions/**/rollout-*.jsonl` first lines |
-| Codex `session_index.jsonl` (`id` / `thread_name` / `updated_at`) | 0.146.0 | 2026-08-04 | Index head/tail sample |
-| `codex resume <SESSION_ID>` / `codex fork <SESSION_ID>` accept a UUID | 0.146.0 | 2026-08-04 | `codex resume --help`, `codex fork --help` |
+| Codex `session_index.jsonl` (`id` / `thread_name` / `updated_at`) | 0.147.0 | 2026-08-08 | Latest index row retained all three nonempty string fields |
+| `codex resume <SESSION_ID>` / `codex fork <SESSION_ID>` accept a UUID | 0.147.0 | 2026-08-08 | `codex resume --help`, `codex fork --help` |
 | Codex TUI holds NO fd on its rollout; app-server holds MANY rollouts | 0.146.0 | 2026-08-04 | Live `/proc/<pid>/fd` probes (post-prompt) |
-| Kimi `session_index.jsonl` (`sessionId` / `sessionDir` / `workDir`) + per-session `state.json` (`title` / `lastPrompt` / `workDir` / `updatedAt`) | 0.31.1 | 2026-08-04 | Index + state.json samples |
-| `kimi --session <id>` / `-S` resume; no CLI fork (in-session `/fork` only) | 0.31.1 | 2026-08-04 | `kimi --help` |
+| Kimi `session_index.jsonl` (`sessionId` / `sessionDir` / `workDir`) + per-session `state.json` (`title` / `lastPrompt` / `workDir` / `updatedAt`) | 0.34.0 | 2026-08-08 | Latest index and state rows retained the required nonempty string fields |
+| `kimi --session <id>` / `-S` resume; no CLI fork (in-session `/fork` only) | 0.34.0 | 2026-08-08 | `kimi --help` |
 | Kimi REPL exposes NO fd/env session binding | 0.31.1 | 2026-08-04 | Live `/proc/<pid>/{fd,environ}` probes |
 | Kimi runtime REWRITES its own process title: an active dispatched session's cmdline collapses to `kimi-code` + whitespace padding — the `--session <sid>` argv is destroyed; comm = `kimi-code`, exe → `~/.kimi-code/bin/kimi` | 0.31.1 | 2026-08-04 | Live `/proc/<pid>/{cmdline,comm,exe}` of a csctl-dispatched session (pid 3587394, window `km-2661a1d4`); a bare `kimi` process observed 2026-08-03 still showed cmdline `kimi` (rewrite timing varies) |
 
