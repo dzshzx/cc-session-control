@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.5 (2026-08-12)
+
+### Fixed
+
+- **Kimi sessions dispatched as NEW sessions no longer read as `? 未知` after
+  their first prompt.** Kimi registers a session (index entry + sid) only at
+  the first prompt and refuses `--session <unknown-id>`, so the dispatch
+  window could not declare `@csctl_sid` at spawn and the metadata binding
+  (0.8.3) never engaged — csctl's own dispatches looked like unbound bare
+  TUIs. Late-sid providers (`caps.late_sid`, kimi) now embed a background
+  `csctl _bind-window` watch in the spawn command, which backfills
+  `@csctl_sid` from a spawn-time index snapshot diff once exactly one new
+  session registers for the dispatch directory, re-verifying the pane process
+  identity first; ambiguity or evidence loss fails closed (unbound), never a
+  wrong binding. Kimi upstream contracts re-verified on 0.34.0 (title rewrite
+  now collapses to bare `kimi`; wire-log fd is transient; no env evidence).
+
 ## 0.8.4 (2026-08-08)
 
 ### Changed
