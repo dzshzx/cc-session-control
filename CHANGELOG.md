@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.8.6 (2026-08-12)
+
+### Added
+
+- **Opt-in kimi runtime registry closes the unbound-session gap for good.**
+  Two `[[hooks]]` rules in `~/.kimi-code/config.toml` (README) point kimi's
+  official SessionStart/SessionEnd hooks at `csctl _kimi-hook`, which
+  maintains `~/.kimi-code/run/<pid>.json` (`sessionId` + `procStart`) — the
+  CLI's own self-report, the same evidence shape as Claude's
+  `sessions/<pid>.json`. Every kimi session binds once it materializes (a
+  TUI's first prompt): bare-launched TUIs included, not just csctl-dispatched
+  windows. Entries are re-verified against the /proc walk (identity +
+  starttime), so stale, forged, or double-attach-disputed records never bind.
+  Hook payload/timing contract verified on Kimi Code 0.34.0.
+- Codex Desktop sessions now get their own `桌面` source badge: Desktop main
+  threads reuse the IDE pipeline (`source: "vscode"`), so only the exact
+  `originator: "Codex Desktop"` distinguishes them from real VS Code sessions
+  (real rollouts sampled, cli_version 0.130.0–0.147.0).
+
+### Removed
+
+- The 0.8.5 `_bind-window` late-sid backfill watch — subsumed by the runtime
+  registry, which covers its entire case (dispatched new sessions) with
+  stronger evidence and no per-window polling process. Without the hook
+  configured, new-session dispatches return to the pre-0.8.5 unbound-hint
+  behavior until a later resume declares the sid.
+
 ## 0.8.5 (2026-08-12)
 
 ### Fixed
