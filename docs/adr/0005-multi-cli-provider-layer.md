@@ -148,6 +148,24 @@ The provider designs below are grounded in probes of the actual CLIs
   bound pids. The execution-time resolver re-gathers both sources fresh.
   Kimi's liveness grade is now `TMUX` (ARGV + dispatch metadata; bare TUIs
   stay blind). The bullet above is left as originally decided.
+- **Amendment (2026-08-12, runtime registry):** kimi's official hook seam
+  closes the bare-TUI blind spot C1 left. Verified on 0.34.0: `SessionStart`
+  fires when a session materializes (a TUI's first prompt; immediately for
+  `--prompt`) with `session_id`/`cwd`/`source` (startup|resume);
+  `SessionEnd` fires on a clean exit; the hook process is kimi's grandchild
+  (kimi → `sh -c` → hook). With two opt-in `[[hooks]]` rules in
+  `~/.kimi-code/config.toml`, `csctl _kimi-hook` maintains
+  `~/.kimi-code/run/<pid>.json` (`sessionId` + `procStart`) — the CLI's OWN
+  self-report, the same evidence shape as Claude's `sessions/<pid>.json`.
+  Discovery joins registry entries after argv-exact and before dispatch
+  metadata, re-verifying pid identity (argv0/comm/exe) and scan-time
+  starttime per entry: stale (SIGKILL residue), forged, or
+  double-attach-disputed records never bind; a missing registry (hook not
+  configured) degrades to the pre-registry sources, never an error. This
+  subsumes the short-lived 0.8.5 `_bind-window` backfill watch (a
+  spawn-snapshot index diff covering only csctl-dispatched NEW sessions),
+  which is removed in the same release. C1's closing claim now reads: bare
+  TUIs stay blind *unless the hook registry proves them*.
 - **Takeover semantics generalize, with the same single decision point.**
   `should_kill = alive ∧ ¬current ∧ ¬fork` is provider-neutral;
   `take_over_result`'s kill-time recheck applies to any exact-matched pid.
@@ -193,11 +211,13 @@ The provider designs below are grounded in probes of the actual CLIs
   CLIs (with a provider column and filter); Agents and Projects-RC remain
   Claude surfaces until those CLIs grow equivalent primitives.
 - Non-Claude liveness is deliberately conservative: a real resume target in
-  argv has priority, and csctl's own identity-checked tmux dispatch metadata
-  supplements it for dispatched windows. Kimi depends on that supplement when
-  its runtime destroys argv evidence. Bare fresh TUIs stay unbound. csctl
-  discovers everything but only *binds* what these two fail-closed evidence
-  sources prove.
+  argv has priority, kimi's opt-in hook runtime registry (`run/<pid>.json`,
+  2026-08-12 amendment) self-reports any session including bare TUIs, and
+  csctl's own identity-checked tmux dispatch metadata supplements both for
+  dispatched windows. Kimi depends on the supplements when its runtime
+  destroys argv evidence. Bare fresh TUIs without registry evidence stay
+  unbound. csctl discovers everything but only *binds* what these fail-closed
+  evidence sources prove.
 - Desktop/IDE-hosted codex sessions (app-server-held rollouts) currently
   read as not-alive. Surfacing them as "hosted, read-only" via the
   app-server's fd table is a known follow-up, not in this change.
