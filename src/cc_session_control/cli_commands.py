@@ -107,6 +107,26 @@ def _cmd_agents(args: Namespace) -> int:
     return int(not inputs.complete)
 
 
+def cmd_bind_window(argv: list[str]) -> int:
+    """Internal late-sid backfill entry — backgrounded by the new-session
+    spawn command of providers whose `caps.late_sid` is set (kimi). Exit
+    codes are the contract of `actions/dispatch_binding.run_binding_watch`
+    (2 here = malformed invocation)."""
+    from .actions import dispatch_binding
+
+    if len(argv) != 2:
+        print("usage: csctl _bind-window <provider> <directory>", file=sys.stderr)
+        return 2
+    code = dispatch_binding.run_binding_watch(argv[0], argv[1])
+    if code:
+        print(
+            f"csctl _bind-window: window left unbound (exit {code}; "
+            "see actions/dispatch_binding.py)",
+            file=sys.stderr,
+        )
+    return code
+
+
 def _cmd_tui(args: Namespace) -> int:
     from .actions.session_ops import ExitIntent
     from .app import App

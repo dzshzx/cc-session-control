@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from typing import Protocol, TextIO
 
 from . import cli_commands
 from .cli_streams import run_with_streams
+
+#: Internal plumbing command (`csctl _bind-window <provider> <directory>` —
+#: the late-sid backfill watch backgrounded by new-session spawns). Routed
+#: around the public parser: argparse cannot hide a subcommand choice.
+BIND_WINDOW_COMMAND = "_bind-window"
 
 
 class CommandHandler(Protocol):
@@ -123,6 +129,9 @@ def dispatch(
 
 def main(argv: list[str] | None = None) -> int:
     """Run ``csctl`` for ``argv`` and return its process exit status."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == [BIND_WINDOW_COMMAND]:
+        return cli_commands.cmd_bind_window(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

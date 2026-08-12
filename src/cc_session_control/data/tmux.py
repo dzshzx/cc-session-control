@@ -387,6 +387,41 @@ def run_in_tmux_result(
     return _declare_dispatch_metadata(created, sid, provider)
 
 
+def declare_dispatch_sid(window_id: str, sid: str) -> TmuxWriteResult:
+    """Write `@csctl_sid` on a dispatch window whose sid arrived AFTER spawn.
+
+    The late-sid backfill (kimi — `actions/dispatch_binding`); spawn-time
+    sids go through `_declare_dispatch_metadata`. Addressed by the
+    server-unique window id, same as the spawn-time writes."""
+    return set_window_option_result(window_id, _SID_OPTION, sid)
+
+
+def pane_window_identity(pane: str) -> tuple[str, int] | None:
+    """(window_id, pane_pid) for a `$TMUX_PANE`-style pane id, else None.
+
+    The late-sid binding watch runs inside the dispatched pane and addresses
+    its own window by the server-unique id (a name:index could have been
+    reassigned — the misaddressing `_declare_dispatch_metadata` rules out).
+    None covers every failure shape (pane gone, tmux unavailable, malformed
+    row): the watcher treats them all as "no window to bind" and exits."""
+    invocation = _tmux_run_result(
+        ["display-message", "-p", "-t", pane, "#{window_id}\t#{pane_pid}"]
+    )
+    cp = invocation.completed
+    if cp is None or cp.returncode != 0:
+        return None
+    parts = cp.stdout.strip().split("\t")
+    if len(parts) != 2 or not parts[0].startswith("@"):
+        return None
+    try:
+        pid = int(parts[1])
+    except ValueError:
+        return None
+    if pid <= 0:
+        return None
+    return parts[0], pid
+
+
 _PANES_FMT = (
     "#{session_name}:#{window_index}\t#{pane_dead}\t#{pane_pid}"
     f"\t#{{{_SID_OPTION}}}\t#{{{_PROVIDER_OPTION}}}"

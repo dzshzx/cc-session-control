@@ -15,6 +15,7 @@ from ..config import cfg
 from ..data import liveness, proc, providers, sessions, tmux
 from ..data.liveness import invalidate_cache
 from ..models import Session, issue_detail
+from . import dispatch_binding
 
 
 class TakeOverState(StrEnum):
@@ -423,14 +424,14 @@ def do_tmux_new_result(
 
     The 项目-tab launcher keys: same skeleton as `do_tmux_resume_result` but
     nothing exists yet — no kill, no confirm, no R10 gate (no process is
-    terminated). The argv comes from the provider (ADR-0005); for claude it
+    terminated). The spawn command comes from dispatch_binding (late-sid
+    providers embed the `@csctl_sid` backfill watch); for claude it
     stays plain `claude` with NO --remote-control (same tradeoff as
     `tmux_foreground_cmd`: every RC process mints a new cloud environment
     entry). No trust gate either: the user lands inside the window, so each
     CLI's own trust/onboarding dialog shows interactively."""
     provider = providers.get(provider_key)
-    line = shlex.join(provider.new_session_argv())
-    cmd = f"cd {shlex.quote(directory)} && {line}"
+    cmd = dispatch_binding.new_session_spawn_cmd(directory, provider)
     return tmux.run_in_tmux_result(
         cfg.tmux_session,
         tmux.window_name_for(directory, provider.key),

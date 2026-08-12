@@ -1,22 +1,34 @@
 """Kimi Code provider — disk discovery + argv-exact liveness (ADR-0005).
 
-Upstream contracts (verified on Kimi Code 0.31.1, re-verify per release):
-`$KIMI_CODE_HOME/session_index.jsonl` maps `sessionId` → `sessionDir` /
-`workDir`; each session dir holds `state.json` (`title`, `lastPrompt`,
-`workDir`, `updatedAt` — metadata only) and `agents/main/wire.jsonl`, the
-main agent's actual conversation log (subagents get their own
-`agents/agent-N/wire.jsonl`, not covered here). `Session.file` points at the
-wire log so headless resume's transcript-body search fallback has real
-content to search; `Session.mtime` still comes from `state.json`'s stat, not
-the wire log's. Resume: `kimi --session <sid>` (short `-S`); fork exists
-only as the in-session `/fork`, so `caps.fork` is False and a fork argv
-request is a programming error. A bare `kimi` REPL leaves no pid↔session
-evidence (no fd, no env — probed), and 0.31.1 rewrites its own title at
-runtime, destroying even a dispatched session's `--session` argv (C1,
-observed 2026-08-04) — so bindings (the only kill targets) come from
-`--session` argv matches where the argv survives, plus csctl's own
+Upstream contracts (verified on Kimi Code 0.31.1, re-verified on 0.34.0
+2026-08-12, re-verify per release): `$KIMI_CODE_HOME/session_index.jsonl`
+maps `sessionId` → `sessionDir` / `workDir`; each session dir holds
+`state.json` (`title`, `lastPrompt`, `workDir`, `updatedAt` — metadata only)
+and `agents/main/wire.jsonl`, the main agent's actual conversation log
+(subagents get their own `agents/agent-N/wire.jsonl`, not covered here).
+`Session.file` points at the wire log so headless resume's transcript-body
+search fallback has real content to search; `Session.mtime` still comes from
+`state.json`'s stat, not the wire log's. Resume: `kimi --session <sid>`
+(short `-S`); fork exists only as the in-session `/fork`, so `caps.fork` is
+False and a fork argv request is a programming error.
+
+A bare `kimi` REPL leaves no STABLE pid↔session evidence: no env var
+(0.31.1 + 0.34.0 probed), and the wire-log fd 0.34.0 holds is transient
+(open around writes only — scan-time evidence would flap). The title
+rewrite destroys even a dispatched session's `--session` argv within moments
+of start (C1; 0.31.1 collapsed cmdline to `kimi-code`, 0.34.0 to bare
+`kimi`) — so bindings (the only kill targets) come from `--session` argv
+matches where the argv survives, plus csctl's own
 `@csctl_sid`/`@csctl_provider` window metadata for dispatched windows,
 identity-checked via argv0/comm/exe (`is_provider_process`).
+
+New-session dispatches have a late-sid gap (0.34.0 probes): the index entry
+is written at the FIRST PROMPT, not at startup, and `--session
+<unknown-id>` refuses to start, so csctl can neither mint the sid nor know
+it at spawn. `caps.late_sid` therefore marks the provider: the new-session
+spawn command embeds the `csctl _bind-window` watch
+(actions/dispatch_binding), which backfills `@csctl_sid` from the index
+snapshot diff once the session registers (`index_sids` / `new_sids_since`).
 """
 
 from __future__ import annotations
@@ -42,6 +54,8 @@ from .base import LivenessGrade, ProviderCaps, ProviderScan
 BASENAME = "kimi"
 # The comm/argv0 an active kimi 0.31.1 process rewrites itself to (observed
 # 2026-08-04: cmdline collapses to `kimi-code` + padding, comm follows).
+# 0.34.0 collapses to bare `kimi` instead (observed 2026-08-12) — keep both
+# capture shapes; per-record identity is re-verified either way (C1).
 TITLE_COMM = "kimi-code"
 
 # Non-interactive shapes from `kimi --help` (verified 0.31.x-line, this
@@ -129,6 +143,63 @@ def _read_state(
     return state, None
 
 
+def _read_index(path: str) -> tuple[dict[str, dict], InventoryIssue | None]:
+    """The append-only session index as sid → entry, plus read-failure evidence.
+
+    A MISSING index is not an issue (a fresh install has no state — callers
+    get an empty mapping); torn tail lines of the append-only file are
+    skipped; an unreadable index surfaces as an issue (AGENTS.md 外部失败)."""
+    entries: dict[str, dict] = {}
+    try:
+        with open(path, "rb") as fh:
+            for raw in fh:
+                if b'"sessionId"' not in raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue  # torn tail line of an append-only index
+                sid = entry.get("sessionId")
+                if isinstance(sid, str) and sid:
+                    entries[sid] = entry  # last write wins
+    except FileNotFoundError:
+        return {}, None
+    except OSError as exc:
+        return {}, _issue(path, str(exc))
+    return entries, None
+
+
+def index_sids() -> frozenset[str] | None:
+    """Snapshot of the session index's ids — the binding watch's diff base.
+
+    None = the index is unreadable this poll (transient; the caller retries).
+    A missing index is a legitimately EMPTY snapshot (no sessions yet)."""
+    entries, issue = _read_index(os.fspath(cfg.kimi_home / "session_index.jsonl"))
+    if issue is not None:
+        return None
+    return frozenset(entries)
+
+
+def new_sids_since(prior: AbstractSet[str], directory: str) -> tuple[str, ...] | None:
+    """Index ids absent from `prior` whose workDir is `directory`.
+
+    The binding watch's candidate source: sessions kimi registered after the
+    watcher's spawn-time snapshot. None = unreadable this poll (retry);
+    several candidates = ambiguity the caller must fail closed on (the watch
+    may bind only the ONE session its own dispatched window created)."""
+    entries, issue = _read_index(os.fspath(cfg.kimi_home / "session_index.jsonl"))
+    if issue is not None:
+        return None
+    wanted = os.path.normpath(directory)
+    return tuple(
+        sid
+        for sid, entry in entries.items()
+        if sid not in prior
+        and isinstance(entry.get("workDir"), str)
+        and os.path.normpath(entry["workDir"]) == wanted
+    )
+
+
 class KimiProvider:
     key = "kimi"
     label = "km"
@@ -139,6 +210,7 @@ class KimiProvider:
     caps = ProviderCaps(
         takeover=True,  # argv-exact + dispatch-metadata matches only
         liveness=LivenessGrade.TMUX,  # the title rewrite destroys argv evidence
+        late_sid=True,  # the sid exists only once the first prompt registers
     )
 
     def available(self) -> bool:
@@ -176,23 +248,9 @@ class KimiProvider:
             ancestors_of=proc.probe_ancestors,
         )
         index_path = cfg.kimi_home / "session_index.jsonl"
-        entries: dict[str, dict] = {}
-        try:
-            with open(index_path, "rb") as fh:
-                for raw in fh:
-                    if b'"sessionId"' not in raw:
-                        continue
-                    try:
-                        entry = json.loads(raw)
-                    except ValueError:
-                        continue  # torn tail line of an append-only index
-                    sid = entry.get("sessionId")
-                    if isinstance(sid, str) and sid:
-                        entries[sid] = entry  # last write wins
-        except FileNotFoundError:
-            return ProviderScan()  # no kimi state — nothing to list
-        except OSError as exc:
-            return ProviderScan(issues=(_issue(os.fspath(index_path), str(exc)),))
+        entries, index_issue = _read_index(os.fspath(index_path))
+        if index_issue is not None:
+            return ProviderScan(issues=(index_issue,))
 
         rows = apply_unbound_hints(
             (self._project(sid, entry, live, issues) for sid, entry in entries.items()),

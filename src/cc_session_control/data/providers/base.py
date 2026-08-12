@@ -53,7 +53,10 @@ class ProviderCaps:
     `background_agents` / `remote_control` are declarative: the Agents and
     Projects-RC tabs read Claude-specific data sources directly, so these
     document the contract a future non-Claude surface must consult rather
-    than gating an existing verb."""
+    than gating an existing verb. `late_sid` is consumed by
+    `do_tmux_new_result`: the CLI assigns a session id only AFTER startup
+    (kimi registers at the first prompt), so the new-session spawn command
+    embeds the `_bind-window` backfill watch (actions/dispatch_binding)."""
 
     fork: bool = False
     takeover: bool = False
@@ -61,6 +64,7 @@ class ProviderCaps:
     remote_control: bool = False
     cleanup: bool = False
     liveness: LivenessGrade = LivenessGrade.NONE
+    late_sid: bool = False
 
 
 @dataclass(frozen=True)

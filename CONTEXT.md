@@ -33,11 +33,14 @@ _Avoid_: cwd-guessing as liveness, pane-text busy regexes
 
 **Dispatch-metadata Liveness**:
 The supplementary non-Claude binding for sessions csctl dispatched into tmux.
-Kimi 0.31.1 makes this source essential by rewriting away its resume argv.
-csctl joins its own
+Kimi makes this source essential by rewriting away its resume argv (0.31.1
+collapses cmdline to `kimi-code`, 0.34.0 to bare `kimi`). csctl joins its own
 `@csctl_sid`/`@csctl_provider` window options to one identity-checked pane TUI
 process. Missing, incomplete, mismatched, or ambiguous evidence binds nothing;
-window names never participate, and bare TUIs stay unbound.
+window names never participate, and bare TUIs stay unbound. A NEW kimi session
+has no sid at spawn (kimi registers it at the first prompt), so its dispatch
+embeds a backfill watch that writes `@csctl_sid` onto its own window once the
+session registers (`caps.late_sid`, `actions/dispatch_binding`).
 _Avoid_: treating tmux presence or a window name alone as session identity
 
 **Session** (formerly "Claude Code Session"):
