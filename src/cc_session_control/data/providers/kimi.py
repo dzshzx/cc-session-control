@@ -25,16 +25,17 @@ identity-checked via argv0/comm/exe (`is_provider_process`).
 New-session dispatches have a late-sid gap (0.34.0 probes): the index entry
 is written at the FIRST PROMPT, not at startup, and `--session
 <unknown-id>` refuses to start, so csctl can neither mint the sid nor know
-it at spawn. `caps.late_sid` therefore marks the provider: the new-session
-spawn command embeds the `csctl _bind-window` watch
-(actions/dispatch_binding), which backfills `@csctl_sid` from the index
-snapshot diff once the session registers (`index_sids` / `new_sids_since`).
+it at spawn. The covered fix is the opt-in runtime registry below (the
+CLI's official hooks self-report pid↔sid for ANY session — bare or
+dispatched); without it, dispatched new sessions fall back to the
+unbound-live hint until a later resume declares the sid.
 """
 
 from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from collections.abc import Set as AbstractSet
 
 from ...config import cfg
@@ -43,6 +44,7 @@ from .. import proc
 from ..proc import ProcCli, ProcCliInventory
 from ..tmux_outcomes import PaneInventory
 from .argv_live import (
+    ArgvMatch,
     apply_unbound_hints,
     bound_pids,
     build_live_index,
@@ -169,35 +171,90 @@ def _read_index(path: str) -> tuple[dict[str, dict], InventoryIssue | None]:
     return entries, None
 
 
-def index_sids() -> frozenset[str] | None:
-    """Snapshot of the session index's ids — the binding watch's diff base.
+# --- runtime registry (opt-in, hook-maintained pid↔session evidence) --------
+#
+# kimi's official SessionStart/SessionEnd hooks run `csctl _kimi-hook`
+# (actions/kimi_hook), maintaining one `<pid>.json` (`sessionId` +
+# `procStart`) per live session in this directory — the CLI's OWN
+# self-report, the same shape csctl consumes for Claude
+# (`sessions/<pid>.json`). Hook contract verified on 0.34.0 (2026-08-12):
+# SessionStart fires when the session materializes (a TUI's first prompt;
+# immediately for `--prompt`; `source` is startup|resume) carrying
+# `session_id`/`cwd`; SessionEnd fires on a clean exit; the hook process is
+# kimi's grandchild (kimi → sh → hook). SIGKILL leaves a stale file — the
+# reader's starttime recheck fails closed on pid reuse.
 
-    None = the index is unreadable this poll (transient; the caller retries).
-    A missing index is a legitimately EMPTY snapshot (no sessions yet)."""
-    entries, issue = _read_index(os.fspath(cfg.kimi_home / "session_index.jsonl"))
-    if issue is not None:
-        return None
-    return frozenset(entries)
+#: Registry directory name under the kimi home — part of the provider's
+#: contract surface, also written by `actions/kimi_hook`.
+REGISTRY_DIR = "run"
 
 
-def new_sids_since(prior: AbstractSet[str], directory: str) -> tuple[str, ...] | None:
-    """Index ids absent from `prior` whose workDir is `directory`.
+def _read_registry() -> tuple[dict[int, tuple[str, str]], tuple[InventoryIssue, ...]]:
+    """The runtime registry as pid → (sessionId, procStart), plus issues.
 
-    The binding watch's candidate source: sessions kimi registered after the
-    watcher's spawn-time snapshot. None = unreadable this poll (retry);
-    several candidates = ambiguity the caller must fail closed on (the watch
-    may bind only the ONE session its own dispatched window created)."""
-    entries, issue = _read_index(os.fspath(cfg.kimi_home / "session_index.jsonl"))
-    if issue is not None:
-        return None
-    wanted = os.path.normpath(directory)
-    return tuple(
-        sid
-        for sid, entry in entries.items()
-        if sid not in prior
-        and isinstance(entry.get("workDir"), str)
-        and os.path.normpath(entry["workDir"]) == wanted
-    )
+    A missing directory is not an issue (the hook is opt-in — no config, no
+    registry, not a failure); an unreadable or malformed entry surfaces as an
+    issue (AGENTS.md 外部失败)."""
+    registry_dir = cfg.kimi_home / REGISTRY_DIR
+    entries: dict[int, tuple[str, str]] = {}
+    issues: list[InventoryIssue] = []
+    try:
+        files = sorted(registry_dir.glob("*.json"))
+    except OSError as exc:
+        return {}, (_issue(os.fspath(registry_dir), str(exc)),)
+    for path in files:
+        name = path.name[: -len(".json")]
+        try:
+            record = json.loads(path.read_bytes())
+        except (OSError, ValueError) as exc:
+            issues.append(_issue(os.fspath(path), str(exc)))
+            continue
+        sid = record.get("sessionId") if isinstance(record, dict) else None
+        proc_start = record.get("procStart") if isinstance(record, dict) else None
+        if (
+            not name.isdigit()
+            or not isinstance(sid, str)
+            or not sid
+            or not isinstance(proc_start, str)
+            or not proc_start
+        ):
+            issues.append(_issue(os.fspath(path), "malformed registry entry"))
+            continue
+        entries[int(name)] = (sid, proc_start)
+    return entries, tuple(issues)
+
+
+def _registry_index(
+    entries: dict[int, tuple[str, str]],
+    records: Iterable[ProcCli],
+    cur: AbstractSet[int],
+) -> dict[str, ArgvMatch]:
+    """PURE: registry entries → bindings, re-verified against the /proc walk.
+
+    An entry binds only when the walk netted the pid, the record passes
+    `is_provider_process` (argv0/comm/exe), and the scan-time starttime
+    matches the recorded procStart — a stale (crashed) or forged file never
+    binds. One sid claimed by two live pids (double-attach) binds nobody: a
+    disputed kill target is never a coin-flip pick (the metadata join's
+    ambiguity rule)."""
+    by_pid = {record.pid: record for record in records}
+    valid: dict[str, tuple[int, str]] = {}
+    claiming: dict[str, set[int]] = {}
+    for pid, (sid, proc_start) in entries.items():
+        record = by_pid.get(pid)
+        if (
+            record is None
+            or not is_provider_process(record)
+            or record.starttime != proc_start
+        ):
+            continue
+        valid.setdefault(sid, (pid, proc_start))
+        claiming.setdefault(sid, set()).add(pid)
+    return {
+        sid: ArgvMatch(sid=sid, pid=pid, proc_start=proc_start, current=pid in cur)
+        for sid, (pid, proc_start) in valid.items()
+        if len(claiming[sid]) == 1
+    }
 
 
 class KimiProvider:
@@ -208,9 +265,9 @@ class KimiProvider:
     # `kimi-code`) — identity is then re-verified per record (C1).
     capture_basenames = frozenset({BASENAME, TITLE_COMM})
     caps = ProviderCaps(
-        takeover=True,  # argv-exact + dispatch-metadata matches only
+        # argv-exact + runtime-registry + dispatch-metadata matches only
+        takeover=True,
         liveness=LivenessGrade.TMUX,  # the title rewrite destroys argv evidence
-        late_sid=True,  # the sid exists only once the first prompt registers
     )
 
     def available(self) -> bool:
@@ -238,6 +295,8 @@ class KimiProvider:
         panes: PaneInventory | None = None,
     ) -> ProviderScan:
         issues: list[InventoryIssue] = []
+        registry, registry_issues = _read_registry()
+        issues.extend(registry_issues)
         live = build_live_index(
             cli_inventory.records,
             extract_sid,
@@ -246,6 +305,7 @@ class KimiProvider:
             provider_key=self.key,
             is_tui_process=is_tui_process,
             ancestors_of=proc.probe_ancestors,
+            registry=_registry_index(registry, cli_inventory.records, cur),
         )
         index_path = cfg.kimi_home / "session_index.jsonl"
         entries, index_issue = _read_index(os.fspath(index_path))

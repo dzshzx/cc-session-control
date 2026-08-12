@@ -101,7 +101,7 @@ class Session:
     # Unified-workbench fields (all default so existing construction stays valid).
     kind: str = ""  # registry `kind` (e.g. interactive / bg)
     entrypoint: str = ""  # registry `entrypoint` (cli / claude-vscode / sdk-ts)
-    source: str = ""  # coarse bucket: cli / vscode / sdk / bg
+    source: str = ""  # coarse bucket: cli / vscode / desktop / sdk / bg / remote
     # Discovered from the provider's archived store (codex
     # `archived_sessions/`) rather than the active tree. Archived rows stay
     # visible/searchable, but the resume family refuses them honestly with

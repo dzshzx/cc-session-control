@@ -28,6 +28,9 @@ _HIDDEN_MARKERS = {
 _SOURCE_BADGES = {
     "cli": "CLI",
     "vscode": "IDE",
+    # Codex Desktop launches (originator tells them apart from real VS Code
+    # sessions, whose pipeline Desktop reuses — codex._classify_source).
+    "desktop": "桌面",
     "sdk": "SDK",
     "bg": "BG",
     # ChatGPT mobile/remote-launched codex sessions (ADR-0005 provider

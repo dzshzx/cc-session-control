@@ -37,6 +37,27 @@ argv at runtime. A brand-new session started from the launcher (the `Enter`
 chooser or `x`/`k`) has no sid yet, so it stays unbound, as does any other
 bare-launched TUI; unbound processes are never stop/takeover targets.
 
+Kimi can close that gap opt-in via its official hooks: add this to
+`~/.kimi-code/config.toml` and every kimi session — bare-launched ones
+included — self-reports its pid↔session binding (verified on Kimi Code
+0.34.0; csctl re-verifies pid identity and process start time per entry, so
+stale or forged entries never bind):
+
+```toml
+[[hooks]]
+event = "SessionStart"
+command = "csctl _kimi-hook"
+timeout = 5
+
+[[hooks]]
+event = "SessionEnd"
+command = "csctl _kimi-hook"
+timeout = 5
+```
+
+The hook fires when a session materializes (a TUI's first prompt), and the
+binding appears on csctl's next refresh.
+
 All agent sessions csctl dispatches — new, resumed, forked, backgrounded, or
 background-agent respawns — share the tmux session named `csctl`; their window
 names retain the project. Existing live sessions in older or user-created tmux

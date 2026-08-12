@@ -54,6 +54,7 @@ from .base import (
     ProviderCaps,
     ProviderScan,
 )
+from .codex_source import classify_source
 
 BASENAME = "codex"
 
@@ -109,12 +110,6 @@ _FIRST_LINE_CAP = 256 * 1024
 _USER_MSG_MARK = b'"user_message"'
 _BODY_SCAN_MAX_LINES = 64
 _BODY_SCAN_MAX_BYTES = 128 * 1024
-
-# The only ChatGPT-mobile-remote originator observed on this machine (real
-# rollout `session_meta`, 2026-08-04). Matched exactly, never as a prefix or
-# substring guess: an unrecognized future originator must fall through to the
-# honest "cli" default rather than a wrong badge.
-_ANDROID_REMOTE_ORIGINATOR = "codex_chatgpt_android_remote"
 
 # Bounded `codex delete` invocation (same bounded-run + typed-outcome
 # discipline as tmux's `_tmux_run_result`); 10s matches the liveness seam's
@@ -275,32 +270,6 @@ def _read_meta(path: str) -> tuple[dict | None, bool, bool]:
     return (
         (payload, False, False) if isinstance(payload, dict) else (None, False, False)
     )
-
-
-def _classify_source(payload: dict) -> str:
-    """PURE: coarse `Session.source` bucket from a codex session_meta payload.
-
-    Priority (highest first, first match wins):
-      1. `originator == "codex_exec"` — the pre-existing bridge/SDK signal
-         (`Session.bridge_or_sdk` keys off `source == "sdk"`); a headless
-         exec run must stay hidden-by-default no matter what else is set.
-      2. session_meta `source == "vscode"` — reuses the IDE badge Claude
-         rows already use for `entrypoint == "claude-vscode"`, so Desktop/
-         IDE-launched codex sessions get an honest badge instead of "CLI".
-      3. `originator == _ANDROID_REMOTE_ORIGINATOR` (exact) — ChatGPT mobile/
-         remote launches, which are typically app-server-hosted and often
-         show dead in `/proc`; the "CLI" badge would wrongly imply a direct
-         terminal takeover is available.
-      4. Otherwise "cli" — the honest default for a real interactive CLI
-         session and for any originator/source this machine hasn't observed.
-    """
-    if payload.get("originator") == "codex_exec":
-        return "sdk"
-    if payload.get("source") == "vscode":
-        return "vscode"
-    if payload.get("originator") == _ANDROID_REMOTE_ORIGINATOR:
-        return "remote"
-    return "cli"
 
 
 def _clean_label(text: str) -> str:
@@ -581,7 +550,7 @@ class CodexProvider:
             return None
         sid = sid.lower()
         cwd = payload.get("cwd")
-        source = _classify_source(payload)
+        source = classify_source(payload)
         match = live.get(sid)
         return Session(
             sid=sid,

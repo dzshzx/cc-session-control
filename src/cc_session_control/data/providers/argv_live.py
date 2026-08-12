@@ -1,21 +1,26 @@
 """Non-Claude pid↔session liveness evidence (ADR-0005 + C1 amendment).
 
-Codex/kimi have no registry equivalent. Two takeover-grade sources join a
-pid to a session id, argv first:
+Codex/kimi have no built-in registry equivalent. Takeover-grade sources join
+a pid to a session id, argv first:
 
 - **argv-exact**: a process argv that CARRIES the session id
   (`codex resume <sid>` / `kimi --session <sid>`).
+- **runtime registry** (kimi, opt-in): kimi's official SessionStart/SessionEnd
+  hooks run `csctl _kimi-hook`, which maintains `run/<pid>.json`
+  (`sessionId` + `procStart`) under the kimi home — the CLI's own
+  self-report, the same shape as Claude's `sessions/<pid>.json`, validated
+  against the /proc walk's starttime so a stale or forged entry never binds.
 - **tmux dispatch metadata** (supplement): kimi rewrites its own process
   title at runtime, destroying that argv evidence for the very sessions
   csctl dispatched — so csctl's spawns declare `@csctl_sid`/`@csctl_provider`
   window options and `build_metadata_index` joins a declaring pane back to
   the pane process that matches the provider's process-identity set.
 
-Bare TUIs (no argv sid, no declaring pane) stay unbound and are never kill
-targets. Each provider supplies PURE predicates; `build_argv_index` stays
-IO-free, and the metadata join's only IO is the injected ancestor prober
-(`data.proc.scan_cli_argv_inventory` provides the one walk per generation,
-`data.tmux.list_panes_inventory` the one pane walk).
+Bare TUIs without registry or metadata evidence stay unbound and are never
+kill targets. Each provider supplies PURE predicates; `build_argv_index`
+stays IO-free, and the metadata join's only IO is the injected ancestor
+prober (`data.proc.scan_cli_argv_inventory` provides the one walk per
+generation, `data.tmux.list_panes_inventory` the one pane walk).
 """
 
 from __future__ import annotations
@@ -159,13 +164,19 @@ def build_live_index(
     provider_key: str,
     is_tui_process: TuiProcessPredicate,
     ancestors_of: AncestorProber,
+    registry: dict[str, ArgvMatch] | None = None,
 ) -> dict[str, ArgvMatch]:
     """THE combined sid → binding view both providers' `discover` consumes:
-    argv-exact bindings first, dispatch-metadata bindings as a supplement
-    (a sid argv already proved is never overridden — codex with intact argv
-    is byte-identical to the pre-C1 behavior)."""
+    argv-exact bindings first, then a provider runtime registry when one
+    exists (kimi's hook-maintained `run/<pid>.json` — the CLI's own
+    self-report, stronger than dispatch metadata), then dispatch-metadata
+    bindings as the last supplement (a sid already proved is never
+    overridden — codex with intact argv is byte-identical to the pre-C1
+    behavior)."""
     records = tuple(records)
     live = build_argv_index(records, extract, cur)
+    for sid, match in (registry or {}).items():
+        live.setdefault(sid, match)
     metadata = build_metadata_index(
         panes,
         provider_key,

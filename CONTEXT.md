@@ -28,8 +28,20 @@ The preferred takeover-grade pid↔session binding for non-Claude providers: a r
 resume argv that identifies the session (`codex resume <sid-or-unique-name>`,
 `kimi --session <sid>`). Unknown or ambiguous Codex names, bare pickers,
 launcher-created NEW sessions, bare-launched TUIs, and CLI daemons remain
-unbound and are never stop/takeover targets.
+unbound and are never stop/takeover targets — unless the kimi runtime
+registry (below) proves them.
 _Avoid_: cwd-guessing as liveness, pane-text busy regexes
+
+**Runtime-registry Liveness** (kimi, opt-in):
+The strongest non-Claude binding when configured: kimi's official
+SessionStart/SessionEnd hooks run `csctl _kimi-hook`, which maintains
+`~/.kimi-code/run/<pid>.json` (`sessionId` + `procStart`) — the CLI's own
+self-report, the same shape as Claude's `sessions/<pid>.json`. csctl
+re-verifies pid identity and start time per entry, so stale, forged, or
+disputed entries never bind. Covers every kimi session regardless of launch
+surface, bare-launched TUIs included; the hook fires when a session
+materializes (a TUI's first prompt).
+_Avoid_: treating the registry file alone as proof without the /proc recheck
 
 **Dispatch-metadata Liveness**:
 The supplementary non-Claude binding for sessions csctl dispatched into tmux.
@@ -37,10 +49,7 @@ Kimi makes this source essential by rewriting away its resume argv (0.31.1
 collapses cmdline to `kimi-code`, 0.34.0 to bare `kimi`). csctl joins its own
 `@csctl_sid`/`@csctl_provider` window options to one identity-checked pane TUI
 process. Missing, incomplete, mismatched, or ambiguous evidence binds nothing;
-window names never participate, and bare TUIs stay unbound. A NEW kimi session
-has no sid at spawn (kimi registers it at the first prompt), so its dispatch
-embeds a backfill watch that writes `@csctl_sid` onto its own window once the
-session registers (`caps.late_sid`, `actions/dispatch_binding`).
+window names never participate, and bare TUIs stay unbound.
 _Avoid_: treating tmux presence or a window name alone as session identity
 
 **Session** (formerly "Claude Code Session"):

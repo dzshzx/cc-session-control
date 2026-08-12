@@ -759,6 +759,13 @@ def test_session_row_source_badge_maps_vscode_to_ide():
     assert "IDE" in text
 
 
+def test_session_row_source_badge_maps_desktop_to_chinese_label():
+    # Codex Desktop launches (originator distinguishes them from real VS Code
+    # sessions — codex_source.classify_source) get their own honest badge.
+    text = _row_text(SessionRow(_make_session(source="desktop")))
+    assert "桌面" in text
+
+
 def test_session_row_source_badge_maps_remote_to_chinese_label():
     # B9a: codex ChatGPT mobile/remote-launched sessions get an honest badge
     # instead of the misleading "CLI" one (app-server-hosted, often dead in
