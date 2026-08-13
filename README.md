@@ -132,10 +132,10 @@ csctl --theme light            # Force the TUI palette (auto/dark/light)
 csctl --version
 ```
 
-The companion Claude Code skill (`claude-session-doctor`) is distributed via
-the [skills CLI](https://github.com/dzshzx/agent-skills) — install it with
-`skills add dzshzx/agent-skills --skill=claude-session-doctor` (it is no
-longer bundled with this package).
+The companion Claude Code skill (`claude-session-doctor`) is deprecated:
+its background-agent and Remote Control instructions depended on surfaces
+removed in 0.9. Session rescue lives in csctl itself (`csctl resume` and
+the TUI).
 
 ## Configuration
 

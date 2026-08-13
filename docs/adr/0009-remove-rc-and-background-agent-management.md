@@ -47,8 +47,8 @@ phone/web control, and `claude`/`claude agents` covers background agents.
 ## Consequences
 
 - The TUI has two tabs (项目 / 会话); the headless CLI is `resume` only.
-- External consumers of `csctl agents` (e.g. the claude-session-doctor
-  skill) must drop that dependency; `csctl resume` is the remaining
-  headless surface.
+- The claude-session-doctor skill, the documented consumer of
+  `csctl agents`, is deprecated rather than updated; session rescue stays
+  in csctl itself (`csctl resume` and the TUI).
 - The knowledge docs (CLAUDE.md, CONTEXT.md, AGENTS.md, README) are synced
   to the removal in the same change.

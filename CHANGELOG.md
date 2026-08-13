@@ -32,6 +32,13 @@
   status count, the same channel as codex/kimi trust-store and curation
   degradation.
 
+### Deprecated
+
+- **The claude-session-doctor skill is deprecated.** Its background-agent
+  instructions and RC-management verbs depended on surfaces removed in this
+  release; session rescue stays in csctl itself (`csctl resume` and the
+  TUI).
+
 ## 0.8.7 (2026-08-13)
 
 ### Added

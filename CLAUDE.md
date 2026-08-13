@@ -42,7 +42,7 @@ csctl resume [keyword] [--page N] [--limit N] [--all]  # cross-directory resume 
 csctl resume --take-over <sid>                 # execution-time re-resolution + guarded live takeover (Claude sids only)
 ```
 
-`claude-session-doctor` skill 已不再随包捆绑，由 skills CLI 分发：`skills add dzshzx/agent-skills --skill=claude-session-doctor`。
+`claude-session-doctor` skill 已废弃（其依赖的后台 agent 与 RC 管理随 0.9 移除）；会话接回直接走 `csctl resume` / TUI。
 
 `CONTRIBUTING.md` 的约束：每个源文件保持 **600 行以内**，使用 type hints，不硬编码路径。
 
