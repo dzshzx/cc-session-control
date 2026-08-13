@@ -17,8 +17,10 @@ A bare `kimi` REPL leaves no STABLE pid↔session evidence: no env var
 (0.31.1 + 0.34.0 probed), and the wire-log fd 0.34.0 holds is transient
 (open around writes only — scan-time evidence would flap). The title
 rewrite destroys even a dispatched session's `--session` argv within moments
-of start (C1; 0.31.1 collapsed cmdline to `kimi-code`, 0.34.0 to bare
-`kimi`) — so bindings (the only kill targets) come from `--session` argv
+of start (C1; it collapses to `kimi-code` or to bare `kimi` — both shapes
+are live within a single version, picked by launch path: on 0.35.0 a new
+session read `kimi` and a resume read `kimi-code`) — so bindings (the only
+kill targets) come from `--session` argv
 matches where the argv survives, plus csctl's own
 `@csctl_sid`/`@csctl_provider` window metadata for dispatched windows,
 identity-checked via argv0/comm/exe (`is_provider_process`).
@@ -183,14 +185,23 @@ def _read_index(path: str) -> tuple[dict[str, dict], InventoryIssue | None]:
 # self-report, the same shape csctl consumes for Claude
 # (`sessions/<pid>.json`). Hook contract verified on 0.34.0 (2026-08-12),
 # re-verified on 0.35.0 (2026-08-13): SessionStart fires when the session
-# materializes (a TUI's first prompt; immediately for `--prompt` — both
-# paths re-probed) carrying `session_id`/`cwd`; the hook process is kimi's
+# materializes, carrying `session_id`/`cwd`; the hook process is kimi's
 # grandchild (kimi → sh → hook).
 #
+# "Materializes" is per launch path, and only ONE path waits (0.35.0,
+# 2026-08-13): `--prompt` and a `--session` RESUME both register at once —
+# a resumed TUI held its entry before any input — while a NEW session waits
+# for its first prompt, since that is when its sid is created at all. So
+# the window in which a running kimi cannot be bound is not "every TUI
+# until used": it is new sessions, pre-first-prompt. That is also exactly
+# the window csctl's own dispatch metadata cannot cover (the late-sid gap
+# above), which is why the two sources do not rescue each other there.
+#
 # SessionEnd is NOT dependable: 0.35.0 left the entry behind after a clean
-# `kimi -p` exit and after a killed TUI, so this directory accumulates
-# entries for dead pids. Two things contain that: `kimi_hook._prune_gone`
-# drops provably-gone entries on each successful registration, and the
+# `kimi -p` exit, after a killed TUI, and after SIGTERM to a resumed one,
+# so this directory accumulates entries for dead pids. Two things contain
+# that: `kimi_hook` calls `prune_gone_entries` on each successful
+# registration (verified live 2026-08-13: six entries → one), and the
 # reader below re-verifies identity + starttime, so a leftover (or a pid
 # reused by an unrelated process) never binds.
 #

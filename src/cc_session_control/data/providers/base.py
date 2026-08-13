@@ -207,8 +207,9 @@ class DiskDiscovery(Protocol):
 
     basename: str  # argv0 basename this CLI's processes carry
     # Every argv0 basename the /proc walk must net for this CLI — a superset
-    # of `basename` when the runtime rewrites its own title (kimi 0.31.1
-    # collapses cmdline to `kimi-code`); identity is re-verified per record.
+    # of `basename` when the runtime rewrites its own title (kimi collapses
+    # cmdline to `kimi-code` or bare `kimi`, both live within one version by
+    # launch path); identity is re-verified per record.
     capture_basenames: frozenset[str]
     # Environment variables the walk must capture for this CLI's processes
     # (ADR-0008): codex needs `CODEX_HOME` to tell two identities running the

@@ -53,8 +53,8 @@ command = "csctl _kimi-hook"
 timeout = 5
 ```
 
-The hook fires when a session materializes (a TUI's first prompt), and the
-binding appears on csctl's next refresh.
+The hook fires when a session materializes, and the binding appears on
+csctl's next refresh.
 
 A resumed session registers immediately; only a **new** one waits for its
 first prompt, because that is when kimi creates its id — which is also why

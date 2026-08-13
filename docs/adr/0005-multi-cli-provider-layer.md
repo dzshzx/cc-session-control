@@ -171,13 +171,26 @@ The provider designs below are grounded in probes of the actual CLIs
   holds — 0.35.0 assembles hook input camelCase and runs it through
   `toHookInputData`/`camelToSnake` before spawning the command, so
   `hook_event_name`/`session_id` remain what the endpoint reads.
-  `SessionStart` still fires on both probed paths (`--prompt`, and a TUI's
-  first prompt). Two claims above are corrected by measurement:
+  `SessionStart` still fires on every probed path. Claims above corrected by
+  measurement:
   - `SessionEnd` does **not** dependably fire — 0.35.0 left `run/<pid>.json`
-    in place after a clean `kimi -p` exit and after a killed TUI. Entries
-    therefore accumulate; `kimi_hook._prune_gone` drops provably-`GONE`
-    pids on each successful registration (never on `UNAVAILABLE` — R10),
-    and the reader's identity/starttime recheck keeps leftovers inert.
+    in place after a clean `kimi -p` exit, after a killed TUI, and after
+    SIGTERM to a resumed one. Entries therefore accumulate;
+    `kimi.prune_gone_entries` drops provably-`GONE` pids on each successful
+    registration (never on `UNAVAILABLE` — R10), and the reader's
+    identity/starttime recheck keeps leftovers inert. Verified live on
+    2026-08-13: reopening a real session took the registry six entries → one.
+  - **Registration is immediate on every path but one.** The earlier
+    "fires at a TUI's first prompt" reading was too broad: `--prompt` and a
+    `--session` RESUME both register at once (a resumed TUI held its entry
+    before any input), and only a NEW session waits — that is when its sid
+    is created. The unbindable window is therefore new-sessions-pre-first-
+    prompt, which is precisely the window the late-sid gap keeps dispatch
+    metadata out of too, so neither source rescues the other there.
+  - **The title rewrite has two live shapes within one version**, chosen by
+    launch path rather than by version as C1 recorded: on 0.35.0 a new
+    session's comm read `kimi`, a resume of the same version `kimi-code`.
+    csctl already captures both, so identity matching was unaffected.
   - A registration that never happens leaves **no evidence at all**. A live
     0.35.0 session sat unbound for four hours on 2026-08-13 and the cause
     was unrecoverable after the fact: kimi swallows hook failures
