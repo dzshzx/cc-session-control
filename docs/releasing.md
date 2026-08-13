@@ -154,5 +154,20 @@ uv tool upgrade cc-session-control
 csctl --version
 ```
 
+Right after a publish, that upgrade can report `Nothing to upgrade` even though
+the release succeeded. Two caches sit in front of it: PyPI's simple index lags
+the upload by a minute or two, and `uv` keeps its own index cache. Wait for the
+version to appear in the index, then bust `uv`'s cache:
+
+```bash
+curl -s https://pypi.org/simple/cc-session-control/ | grep -c 'X\.Y\.Z-py3'
+uv tool upgrade cc-session-control --reinstall --no-cache
+```
+
+`uv tool upgrade` has no `--refresh` flag, and `--reinstall` alone (documented
+as implying `--refresh`) was not enough in the v0.8.8 release — `--no-cache` was
+required. Do not pin `cc-session-control==X.Y.Z` to force the upgrade: that
+writes a version constraint into the tool receipt and blocks later upgrades.
+
 If a bad version reaches PyPI, do not try to overwrite it. Fix the issue, bump
 to the next patch version, and publish a new tag.
