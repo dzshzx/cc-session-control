@@ -76,33 +76,6 @@ class AncestorProbe:
         return not self.issues
 
 
-@dataclass
-class ProcRC:
-    """A /proc-discovered Claude project RC server (`claude remote-control`).
-
-    Internal to this module — the public, view-facing model is `RCServer`
-    (assembled in `data/rc.py` after classifying managed vs external). `pid` is
-    0 when produced by the pure matcher (the scanner fills it); `cwd` comes from
-    `readlink(/proc/<pid>/cwd)`.
-    """
-
-    pid: int
-    name: str = ""
-    cwd: str = ""
-
-
-@dataclass(frozen=True)
-class ProcRCInventory:
-    """Known RC server processes plus `/proc` scan completeness."""
-
-    records: tuple[ProcRC, ...] = ()
-    issues: tuple[ProcIssue, ...] = ()
-
-    @property
-    def complete(self) -> bool:
-        return not self.issues
-
-
 @dataclass(frozen=True)
 class ProcCli:
     """One agent-CLI process found by the argv walk (ADR-0005).
@@ -298,13 +271,9 @@ def ancestor_pids() -> set[int]:
     return set(probe_current_ancestors().pids)
 
 
-# --- project RC server discovery (R5 / D5) ---------------------------------
-# A real `claude remote-control --name <name>` server's /proc cmdline shows the
-# FULL argv (verified live: a bare interactive `claude` instead collapses its
-# cmdline to just `claude`), so we match on the argv SHAPE, not on `comm` (a
-# node-launched claude can have comm `node`). Other tools are excluded — codex
-# runs `--remote-control` as a FLAG with argv0 `codex` and no `remote-control`
-# subcommand token, so it never matches.
+# --- agent-CLI argv discovery (ADR-0005) ------------------------------------
+# The one /proc walk for non-Claude provider liveness. Matching is on the argv
+# SHAPE, not on `comm` (a node-launched CLI can have comm `node`).
 
 
 def _split_cmdline(cmdline: str) -> list[str]:
@@ -323,42 +292,6 @@ def _split_cmdline(cmdline: str) -> list[str]:
     return parts
 
 
-def _flag_value(argv: list[str], flag: str) -> str | None:
-    """Value of `--flag value` or `--flag=value` in argv; None if absent/empty."""
-    prefix = flag + "="
-    for i, tok in enumerate(argv):
-        if tok == flag:
-            return argv[i + 1] if i + 1 < len(argv) else None
-        if tok.startswith(prefix):
-            return tok[len(prefix) :] or None
-    return None
-
-
-def _match_rc_cmdline(comm: str, cmdline: str) -> ProcRC | None:
-    """PURE matcher (no IO): is this argv a Claude project RC server? (AC5)
-
-    Matches iff the program basename is `claude` AND a bare `remote-control`
-    subcommand token is present AND a `--name <name>` flag is parseable. `comm`
-    is accepted for signature completeness but deliberately NOT trusted on its
-    own. Returns a `ProcRC` (pid=0, filled by the scanner) or None.
-    """
-    argv = _split_cmdline(cmdline)
-    if not argv:
-        return None
-    if os.path.basename(argv[0]) != "claude":
-        return None
-    if "remote-control" not in argv[1:]:
-        return None
-    name = _flag_value(argv, "--name")
-    if not name:
-        return None
-    return ProcRC(pid=0, name=name)
-
-
-def _rc_issue(path: str, detail: str) -> ProcIssue:
-    return ProcIssue("RC process inventory", path, detail)
-
-
 def _read_inventory_text(
     path: str,
 ) -> tuple[str | None, ProcIssue | None, bool]:
@@ -372,9 +305,9 @@ def _read_inventory_text(
     except OSError as exc:
         if exc.errno == errno.ENOENT:
             return None, None, True
-        return None, _rc_issue(path, str(exc)), False
+        return None, _cli_issue(path, str(exc)), False
     except UnicodeError as exc:
-        return None, _rc_issue(path, f"malformed text: {exc}"), False
+        return None, _cli_issue(path, f"malformed text: {exc}"), False
 
 
 def _read_inventory_link(
@@ -387,7 +320,7 @@ def _read_inventory_link(
     except OSError as exc:
         if exc.errno == errno.ENOENT:
             return None, None, True
-        return None, _rc_issue(path, str(exc)), False
+        return None, _cli_issue(path, str(exc)), False
 
 
 def _read_inventory_env(
@@ -447,7 +380,7 @@ def scan_cli_argv_inventory(
     variables those providers need to tell their state homes apart
     (ADR-0008); only matched processes are read, and only those keys are
     kept. Degrades to an issue off Linux; per-pid disappearance races are
-    ignored like the RC walk does.
+    ignored (a vanished pid is not evidence loss).
     """
     if not has_proc():
         return ProcCliInventory(
@@ -468,9 +401,7 @@ def scan_cli_argv_inventory(
         if disappeared:
             continue
         if issue is not None:
-            issues.append(
-                _cli_issue(cmdline_path, issue.detail),
-            )
+            issues.append(issue)
             continue
         if cmdline is None:
             raise AssertionError("available process cmdline must carry text")
@@ -505,68 +436,3 @@ def scan_cli_argv_inventory(
             )
         )
     return ProcCliInventory(tuple(records), tuple(issues))
-
-
-def scan_rc_server_inventory() -> ProcRCInventory:
-    """Walk `/proc` without collapsing incomplete process evidence.
-
-    Reads each pid's `comm` + `cmdline`, runs the pure `_match_rc_cmdline`, and
-    fills `pid` + `cwd` (`readlink /proc/<pid>/cwd`) for matches. Degrades to
-    an issue off Linux and ignores only confirmed per-pid disappearance races.
-    """
-    if not has_proc():
-        return ProcRCInventory(
-            issues=(_rc_issue(_PROC, f"{_PROC} is unavailable"),),
-        )
-    servers: list[ProcRC] = []
-    issues: list[ProcIssue] = []
-    try:
-        entries = os.listdir(_PROC)
-    except OSError as exc:
-        return ProcRCInventory(issues=(_rc_issue(_PROC, str(exc)),))
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        pid = int(entry)
-        comm_path = f"{_PROC}/{pid}/comm"
-        comm, issue, disappeared = _read_inventory_text(comm_path)
-        if disappeared:
-            continue
-        if issue is not None:
-            issues.append(issue)
-            continue
-        if comm is None:
-            raise AssertionError("available process comm must carry text")
-
-        cmdline_path = f"{_PROC}/{pid}/cmdline"
-        cmdline, issue, disappeared = _read_inventory_text(cmdline_path)
-        if disappeared:
-            continue
-        if issue is not None:
-            issues.append(issue)
-            continue
-        if cmdline is None:
-            raise AssertionError("available process cmdline must carry text")
-
-        argv = _split_cmdline(cmdline)
-        if (
-            argv
-            and os.path.basename(argv[0]) == "claude"
-            and "remote-control" in argv[1:]
-            and _flag_value(argv, "--name") is None
-        ):
-            issues.append(
-                _rc_issue(cmdline_path, "malformed RC argv: missing --name value")
-            )
-            continue
-        match = _match_rc_cmdline(comm, cmdline)
-        if match is None:
-            continue
-        cwd_path = f"{_PROC}/{pid}/cwd"
-        cwd, issue, disappeared = _read_inventory_link(cwd_path)
-        if disappeared:
-            continue
-        if issue is not None:
-            issues.append(issue)
-        servers.append(ProcRC(pid=pid, name=match.name, cwd=cwd or match.cwd))
-    return ProcRCInventory(tuple(servers), tuple(issues))

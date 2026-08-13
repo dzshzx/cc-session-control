@@ -6,7 +6,6 @@ import inspect
 
 import pytest
 
-from cc_session_control.actions import agent_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import (
     cleanup,
@@ -15,7 +14,7 @@ from cc_session_control.data import (
     transcripts,
 )
 from cc_session_control.data.removal import CleanupExecution, CleanupPlan
-from cc_session_control.models import AgentJob, Session, SessionProc
+from cc_session_control.models import Session, SessionProc
 from cc_session_control.views import _sessions_cleanup as cleanup_view
 
 
@@ -301,24 +300,6 @@ def test_session_executor_ignores_stale_rows_and_keeps_fresh_current_sid(
     assert [notice.target for notice in result.skipped] == [target.sid]
 
 
-def test_public_agent_artifact_removal_revalidates_live_sid(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setattr(cfg, "claude_home", tmp_path)
-    _bomb_removal(monkeypatch)
-    sid = "live-agent-sid"
-    monkeypatch.setattr(
-        cleanup.liveness,
-        "liveness_inputs",
-        lambda: liveness.LivenessSnapshot(agents_map={sid: 99}),
-    )
-
-    result = cleanup.remove_agent_artifacts("live-agt", sid)
-
-    assert [notice.target for notice in result.skipped] == ["live-agt"]
-
-
 @pytest.mark.parametrize("kind", ["orphan", "zombie", "session"])
 def test_public_executors_refuse_incomplete_typed_liveness(
     kind,
@@ -393,34 +374,4 @@ def test_tui_orphan_adapter_does_not_inject_transcript_evidence(monkeypatch):
 
     assert result.completed == ["session-env/ghost"]
     assert called["entries"] == ["session-env/ghost"]
-    assert set(called["kwargs"]) == {"anchors"}
-
-
-def test_remove_job_routes_final_revalidation_to_public_cleanup(
-    monkeypatch,
-):
-    job = AgentJob(
-        short="agent-id",
-        sid="session-sid",
-        resume_sid="session-sid",
-    )
-    expected = CleanupExecution(completed=[job.short])
-    called: dict[str, object] = {}
-
-    def remove(short, sid, **kwargs):
-        called.update(short=short, sid=sid, kwargs=kwargs)
-        return expected
-
-    monkeypatch.setattr(cleanup, "remove_agent_artifacts", remove)
-    monkeypatch.setattr(
-        agent_ops.liveness,
-        "liveness_inputs",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("caller must not own final liveness evidence")
-        ),
-    )
-
-    assert agent_ops.remove_job(job) is expected
-    assert called["short"] == job.short
-    assert called["sid"] == job.sid
     assert set(called["kwargs"]) == {"anchors"}

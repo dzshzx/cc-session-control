@@ -55,20 +55,6 @@ def _sid_targets(sid: str, sid_roots: Sequence[str]) -> list[tuple[str, str]]:
     return [(root, os.path.join(root, sid)) for root in sid_roots]
 
 
-def agent_removal_anchors(
-    short: str,
-    sid: str,
-    sid_roots: Sequence[str],
-    jobs_root: str,
-) -> tuple[RemovalAnchor, ...]:
-    targets = [
-        (jobs_root, os.path.join(jobs_root, short)),
-        *_sid_targets(sid, sid_roots),
-        (jobs_root, os.path.join(jobs_root, sid[:8])),
-    ]
-    return _anchors(list(dict.fromkeys(targets)))
-
-
 def _session_anchors(
     session: Session,
     sid_roots: Sequence[str],

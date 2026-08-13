@@ -47,7 +47,6 @@ def _compute(tmp_path, **overrides):
         sessions=(),
         pinned=frozenset(),
         hidden=frozenset(),
-        window_paths=(),
         now=NOW,
     )
     defaults.update(overrides)
@@ -209,7 +208,7 @@ def test_empty_cwd_sessions_are_ignored(tmp_path):
 # --- hygiene (temp / missing dirs) and the escapes ---------------------------
 
 
-def test_temp_trusted_dropped_but_window_or_pin_saves_it(tmp_path, monkeypatch):
+def test_temp_trusted_dropped_but_pin_saves_it(tmp_path, monkeypatch):
     troot = tmp_path / "t"
     temp_proj = troot / "scratch"
     temp_proj.mkdir(parents=True)
@@ -217,13 +216,6 @@ def test_temp_trusted_dropped_but_window_or_pin_saves_it(tmp_path, monkeypatch):
     projects = {str(temp_proj): {"hasTrustDialogAccepted": True}}
 
     assert _compute(tmp_path, claude_projects=projects) == []
-
-    rows = _compute(
-        tmp_path,
-        claude_projects=projects,
-        window_paths=(str(temp_proj),),
-    )
-    assert [row.directory for row in rows] == [str(temp_proj)]
 
     rows = _compute(
         tmp_path,
@@ -245,7 +237,7 @@ def test_temp_segment_boundary(tmp_path, monkeypatch):
     assert [row.directory for row in rows] == [str(sibling)]
 
 
-def test_missing_dir_dropped_unless_pinned_or_windowed(tmp_path):
+def test_missing_dir_dropped_unless_pinned(tmp_path):
     gone = tmp_path / "gone"
     gone_trusted = str(gone)
     projects = {gone_trusted: {"hasTrustDialogAccepted": True}}
@@ -255,12 +247,6 @@ def test_missing_dir_dropped_unless_pinned_or_windowed(tmp_path):
     rows = _by_dir(_compute(tmp_path, claude_projects=projects, pinned={gone_trusted}))
     assert rows[gone_trusted].dir_exists is False
     assert rows[gone_trusted].pinned is True
-
-    rows = _by_dir(
-        _compute(tmp_path, claude_projects=projects, window_paths=(gone_trusted,))
-    )
-    assert rows[gone_trusted].dir_exists is False
-    assert rows[gone_trusted].has_window is True
 
 
 # --- curation: pin / hide ----------------------------------------------------
@@ -327,27 +313,21 @@ def test_entries_are_sorted_by_directory(tmp_path):
     )
 
 
-# --- scan integration (rc.scan_result consumes membership) -------------------
+# --- scan integration (scan_projects consumes membership) --------------------
 
 
-def _wire_rc_scan(tmp_path, monkeypatch, projects=None, providers=("claude",)):
-    import json
-
-    from cc_session_control.data import rc
+def _wire_scan(tmp_path, monkeypatch, projects=None, providers=("claude",)):
+    from cc_session_control.config import cfg
+    from cc_session_control.data import providers as providers_mod
 
     cj = tmp_path / ".claude.json"
     cj.write_text(json.dumps({"projects": projects or {}}))
-    monkeypatch.setattr(rc.cfg, "claude_json", cj)
-    monkeypatch.setattr(rc.cfg, "providers", providers)
+    monkeypatch.setattr(cfg, "claude_json", cj)
+    monkeypatch.setattr(cfg, "providers", providers)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.setattr(rc.cfg, "codex_home", tmp_path / "codex-home")
-    monkeypatch.setattr(rc.cfg, "kimi_home", tmp_path / "kimi-home")
-    monkeypatch.setattr(
-        rc,
-        "_tmux_window_inventory",
-        lambda: rc.tmux.WindowInventory(),
-    )
-    return rc
+    monkeypatch.setattr(cfg, "codex_home", tmp_path / "codex-home")
+    monkeypatch.setattr(cfg, "kimi_home", tmp_path / "kimi-home")
+    providers_mod.reset()
 
 
 def test_scan_lists_codex_only_directory(tmp_path, monkeypatch):
@@ -358,25 +338,25 @@ def test_scan_lists_codex_only_directory(tmp_path, monkeypatch):
     (codex_home / "config.toml").write_text(
         f'[projects."{proj}"]\ntrust_level = "trusted"\n'
     )
-    rc = _wire_rc_scan(tmp_path, monkeypatch, providers=("claude", "codex"))
+    _wire_scan(tmp_path, monkeypatch, providers=("claude", "codex"))
 
-    rows = {p.directory: p for p in rc.scan_result().projects}
+    rows = {p.directory: p for p in membership.scan_projects(()).projects}
 
     assert set(rows) == {str(proj)}
     assert rows[str(proj)].trusted_by == frozenset({"codex"})
-    # Claude never trusted it — the RC start gate stays honestly refused.
-    assert rows[str(proj)].trust_decision.value == "untrusted"
+    # Claude never trusted it — no claude evidence badge.
+    assert "claude" not in rows[str(proj)].trusted_by
 
 
 def test_scan_lists_kimi_observed_directory(tmp_path, monkeypatch):
     proj = tmp_path / "km-only"
     proj.mkdir()
-    rc = _wire_rc_scan(tmp_path, monkeypatch)
+    _wire_scan(tmp_path, monkeypatch)
 
     rows = {
         p.directory: p
-        for p in rc.scan_result(
-            sessions=(_session(str(proj), RECENT, "kimi"),)
+        for p in membership.scan_projects(
+            (_session(str(proj), RECENT, "kimi"),)
         ).projects
     }
 
@@ -387,14 +367,14 @@ def test_scan_lists_kimi_observed_directory(tmp_path, monkeypatch):
 def test_scan_pinned_directory_without_any_cli_evidence(tmp_path, monkeypatch):
     proj = tmp_path / "mine"
     proj.mkdir()
-    rc = _wire_rc_scan(tmp_path, monkeypatch)
+    _wire_scan(tmp_path, monkeypatch)
     xdg = tmp_path / "xdg" / "csctl"
     xdg.mkdir(parents=True)
     (xdg / "projects.json").write_text(
         json.dumps({"pinned": [str(proj)], "hidden": []})
     )
 
-    rows = {p.directory: p for p in rc.scan_result().projects}
+    rows = {p.directory: p for p in membership.scan_projects(()).projects}
 
     assert set(rows) == {str(proj)}
     assert rows[str(proj)].pinned is True
@@ -404,9 +384,9 @@ def test_scan_surfaces_membership_source_issues(tmp_path, monkeypatch):
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     (codex_home / "config.toml").write_text("[projects\n")  # broken TOML
-    rc = _wire_rc_scan(tmp_path, monkeypatch, providers=("claude", "codex"))
+    _wire_scan(tmp_path, monkeypatch, providers=("claude", "codex"))
 
-    result = rc.scan_result()
+    result = membership.scan_projects(())
 
-    assert result.projects == []
-    assert [issue.source for issue in result.membership_issues] == ["codex trust"]
+    assert result.projects == ()
+    assert [issue.source for issue in result.issues] == ["codex trust"]

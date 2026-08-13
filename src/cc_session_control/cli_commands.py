@@ -9,8 +9,9 @@ from argparse import Namespace
 def _cmd_resume(args: Namespace) -> int:
     from .actions import session_ops
     from .actions.resume_list import render
-    from .data import liveness, providers, rc_outcomes
+    from .data import liveness, providers
     from .data.sessions import scan_result
+    from .models import format_inventory_issues
 
     take_over_sid: str | None = getattr(args, "take_over", None)
     if take_over_sid is not None:
@@ -37,7 +38,7 @@ def _cmd_resume(args: Namespace) -> int:
         for liveness_issue in inputs.issues:
             print(
                 "Refused: liveness evidence is incomplete: "
-                + rc_outcomes.format_inventory_issues((liveness_issue,)),
+                + format_inventory_issues((liveness_issue,)),
                 file=sys.stderr,
             )
         return 1
@@ -47,7 +48,7 @@ def _cmd_resume(args: Namespace) -> int:
         for transcript_issue in transcript_scan.issues:
             print(
                 "Refused: transcript inventory is incomplete: "
-                + rc_outcomes.format_inventory_issues((transcript_issue,)),
+                + format_inventory_issues((transcript_issue,)),
                 file=sys.stderr,
             )
         return 1
@@ -58,7 +59,7 @@ def _cmd_resume(args: Namespace) -> int:
     for provider_issue in provider_issues:
         print(
             "Warning: provider inventory is partial: "
-            + rc_outcomes.format_inventory_issues((provider_issue,)),
+            + format_inventory_issues((provider_issue,)),
             file=sys.stderr,
         )
     rows = providers.merge_sessions(transcript_scan.sessions, provider_rows)
@@ -82,29 +83,6 @@ def _cmd_resume(args: Namespace) -> int:
 
     print(render_result.text)
     return 0
-
-
-def _cmd_agents(args: Namespace) -> int:
-    from .data import rc_outcomes
-    from .data.liveness import liveness_inputs
-
-    inputs = liveness_inputs()
-    jobs = inputs.agent_jobs
-    if not jobs:
-        print("No background agents found.")
-    else:
-        for job in jobs:
-            state = "live" if job.host_alive else (job.state or "settled")
-            tempo = job.tempo or "-"
-            name = job.name or job.short
-            print(f"  {job.short}  [{state}]  tempo={tempo}  {name}  {job.cwd}")
-    for issue in inputs.issues:
-        print(
-            "Warning: agent inventory is partial: "
-            + rc_outcomes.format_inventory_issues((issue,)),
-            file=sys.stderr,
-        )
-    return int(not inputs.complete)
 
 
 def cmd_kimi_hook(argv: list[str]) -> int:

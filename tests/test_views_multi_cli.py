@@ -11,7 +11,7 @@ from cc_session_control.actions.session_ops import TmuxNewIntent
 from cc_session_control.data import providers, tmux
 from cc_session_control.models import Session
 from cc_session_control.views._session_row import SessionRow
-from cc_session_control.views.rc import RCView
+from cc_session_control.views.projects import ProjectsView
 from cc_session_control.views.sessions import SessionsView
 
 
@@ -39,14 +39,14 @@ class TestLauncherKeys:
     def test_x_launches_codex_when_active(self, monkeypatch):
         _activate(monkeypatch, "claude", "codex")
         app = FakeApp()
-        view = RCView(app)
+        view = ProjectsView(app)
         view._key_tmux_new_codex(_make_project())
         assert app.result == TmuxNewIntent("/tmp/myproj", provider="codex")
 
     def test_k_refused_when_kimi_inactive(self, monkeypatch):
         _activate(monkeypatch, "claude")
         app = FakeApp()
-        view = RCView(app)
+        view = ProjectsView(app)
         view._key_tmux_new_kimi(_make_project())
         assert app.result is None
         assert any("kimi" in n and "未启用" in n for n in app._notifications)
@@ -59,7 +59,7 @@ class TestLauncherChooser:
     def _open(self, monkeypatch, *keys: str):
         _activate(monkeypatch, *keys)
         app = FakeApp()
-        view = RCView(app)
+        view = ProjectsView(app)
         app.views = [view]
         _apply_projects(view, [_make_project(name="p1", directory="/tmp/p1")])
         view.handle_key("enter")
@@ -126,7 +126,7 @@ class TestLauncherChooser:
         _activate(monkeypatch, "claude", "codex", "kimi")
         for key, provider in (("x", "codex"), ("k", "kimi")):
             app = FakeApp()
-            view = RCView(app)
+            view = ProjectsView(app)
             app.views = [view]
             _apply_projects(view, [_make_project(name="p1", directory="/tmp/p1")])
             view.handle_key(key)

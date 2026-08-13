@@ -1,9 +1,9 @@
 """Tests for data/sessions.py — the unified, multi-source scan() (AC1).
 
-scan() merges three liveness/identity sources (registry sessions/<pid>.json,
-`claude agents --json`, jobs/*/state.json) and projects each transcript through
+scan() merges the liveness/identity sources (registry sessions/<pid>.json,
+`claude agents --json`) and projects each transcript through
 `live_index()`. These tests feed monkeypatched cfg paths + a fake `probe_pid`
-(no real /proc) and assert source/liveness/current/rc-exposure/agent-link.
+(no real /proc) and assert source/liveness/current/rc-exposure.
 """
 
 import builtins
@@ -13,7 +13,7 @@ from types import MappingProxyType
 from cc_session_control.config import cfg
 from cc_session_control.data import liveness, proc, registry
 from cc_session_control.data import sessions as sessions_mod
-from cc_session_control.models import AgentJob, SessionProc
+from cc_session_control.models import SessionProc
 
 CLI_SID = "cli11111-1111-1111-1111-111111111111"
 VSC_SID = "vsc22222-2222-2222-2222-222222222222"
@@ -103,16 +103,6 @@ def _setup_world(tmp_path, monkeypatch):
         },
     )
 
-    _write_json(
-        tmp_path / "jobs" / BG_SID[:8] / "state.json",
-        {
-            "state": "running",
-            "sessionId": BG_SID,
-            "resumeSessionId": BG_SID,
-            "backend": "daemon",
-        },
-    )
-
     # pid 1003 (sdk) is a zombie file: registry entry exists but proc is dead.
     alive_pids = {1001, 1002, 1004}
     monkeypatch.setattr(
@@ -149,7 +139,6 @@ def test_scan_unifies_sources(tmp_path, monkeypatch):
     assert cli.alive is True
     assert cli.current is True  # pid 1001 in ancestor set
     assert cli.rc_exposed is True  # bridge string AND alive
-    assert cli.agent_short is None
     assert cli.status == "busy"
     assert cli.pid == 1001
 
@@ -170,7 +159,6 @@ def test_scan_unifies_sources(tmp_path, monkeypatch):
     assert bg.source == "bg"  # registry kind == bg
     assert bg.alive is True
     assert bg.current is False
-    assert bg.agent_short == BG_SID[:8]  # linked job short
     assert bg.status == "busy"
 
 
@@ -283,7 +271,6 @@ def test_scan_transcript_only_session_is_dead(tmp_path, monkeypatch):
     assert s.current is False
     assert s.source == ""
     assert s.rc_exposed is False
-    assert s.agent_short is None
 
 
 def test_scan_excludes_transcript_without_cwd(tmp_path, monkeypatch):
@@ -335,15 +322,6 @@ def test_scan_uses_injected_generation_liveness_without_reading_sources(
             ),
         ),
         cur=frozenset({5150}),
-        agent_jobs=(
-            AgentJob(
-                short=sid[:8],
-                sid=sid,
-                resume_sid=sid,
-                host_pid=5150,
-                host_alive=True,
-            ),
-        ),
         agents_map=MappingProxyType({sid: 5150}),
     )
 
@@ -352,7 +330,6 @@ def test_scan_uses_injected_generation_liveness_without_reading_sources(
 
     monkeypatch.setattr(sessions_mod, "live_session_procs", unexpected)
     monkeypatch.setattr(sessions_mod, "alive_map", unexpected)
-    monkeypatch.setattr(sessions_mod.registry, "read_agent_jobs", unexpected)
     monkeypatch.setattr(sessions_mod, "_ancestor_pids", unexpected)
     monkeypatch.setattr(
         sessions_mod.tmux,
@@ -366,7 +343,6 @@ def test_scan_uses_injected_generation_liveness_without_reading_sources(
     assert rows[0].sid == sid
     assert rows[0].alive
     assert rows[0].current
-    assert rows[0].agent_short == sid[:8]
 
 
 def test_scan_result_retains_stat_failure_as_incomplete_evidence(

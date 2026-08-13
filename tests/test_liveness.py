@@ -8,7 +8,7 @@ import pytest
 
 from cc_session_control.config import cfg
 from cc_session_control.data import liveness, registry
-from cc_session_control.models import AgentJob, SessionProc
+from cc_session_control.models import SessionProc
 
 
 def _sp(sid, pid, proc_start, proc_alive=False, **kw):
@@ -351,16 +351,10 @@ def test_live_session_procs_propagates_programming_errors(monkeypatch):
 
 def test_liveness_inputs_is_an_immutable_typed_generation_snapshot(monkeypatch):
     procs = [_sp("sid", 101, "1", proc_alive=True)]
-    jobs = [AgentJob(short="sid", sid="sid", resume_sid="sid")]
     monkeypatch.setattr(
         liveness.registry,
         "scan_session_procs",
         lambda max_age=5.0: registry.RegistryScan(records=tuple(procs)),
-    )
-    monkeypatch.setattr(
-        liveness.registry,
-        "scan_agent_jobs",
-        lambda max_age=5.0: registry.RegistryScan(records=tuple(jobs)),
     )
     monkeypatch.setattr(
         liveness,
@@ -384,7 +378,6 @@ def test_liveness_inputs_is_an_immutable_typed_generation_snapshot(monkeypatch):
     assert inputs.complete is True
     assert inputs.issues == ()
     assert inputs.session_procs == tuple(procs)
-    assert inputs.agent_jobs[0].host_pid == 101
     assert inputs.cur == frozenset({101})
     assert inputs.agents_map == {"sid": 101}
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -404,11 +397,6 @@ def test_liveness_inputs_preserves_unknown_proc_verdict_and_issue(monkeypatch):
         liveness.registry,
         "scan_session_procs",
         lambda max_age=5.0: registry.RegistryScan(records=(row,)),
-    )
-    monkeypatch.setattr(
-        liveness.registry,
-        "scan_agent_jobs",
-        lambda max_age=5.0: registry.RegistryScan(),
     )
     monkeypatch.setattr(
         liveness,
@@ -441,7 +429,7 @@ def test_liveness_inputs_preserves_unknown_proc_verdict_and_issue(monkeypatch):
 
 
 def test_liveness_inputs_forces_fresh_sources_for_each_generation(monkeypatch):
-    ages = {"sessions": [], "jobs": [], "agents": []}
+    ages = {"sessions": [], "agents": []}
     next_pid = iter((101, 202))
 
     def session_procs(max_age=5.0):
@@ -452,11 +440,6 @@ def test_liveness_inputs_forces_fresh_sources_for_each_generation(monkeypatch):
         )
 
     monkeypatch.setattr(liveness.registry, "scan_session_procs", session_procs)
-    monkeypatch.setattr(
-        liveness.registry,
-        "scan_agent_jobs",
-        lambda max_age=5.0: ages["jobs"].append(max_age) or registry.RegistryScan(),
-    )
     monkeypatch.setattr(
         liveness,
         "scan_agents",
@@ -478,7 +461,6 @@ def test_liveness_inputs_forces_fresh_sources_for_each_generation(monkeypatch):
 
     assert ages == {
         "sessions": [0.0, 0.0],
-        "jobs": [0.0, 0.0],
         "agents": [0.0, 0.0],
     }
     assert [sp.pid for sp in first.session_procs] == [101]
@@ -495,9 +477,6 @@ def test_liveness_inputs_collects_multiple_low_level_source_issues(
     sessions.mkdir()
     (sessions / "1.json").write_text('{"pid":1,"sessionId":"safe"}')
     (sessions / "broken.json").write_text("{bad json")
-    state = tmp_path / "jobs" / "agent" / "state.json"
-    state.parent.mkdir(parents=True)
-    state.write_text('{"state":"running"}')
     completed = subprocess.CompletedProcess(
         [],
         3,
@@ -522,7 +501,6 @@ def test_liveness_inputs_collects_multiple_low_level_source_issues(
     assert inputs.complete is False
     assert {issue.source for issue in inputs.issues} == {
         "session registry",
-        "job registry",
         "claude agents --json",
     }
     assert all(issue.detail for issue in inputs.issues)
@@ -547,5 +525,4 @@ def test_liveness_inputs_normal_empty_sources_are_complete(tmp_path, monkeypatch
     assert inputs.complete is True
     assert inputs.issues == ()
     assert inputs.session_procs == ()
-    assert inputs.agent_jobs == ()
     assert inputs.agents_map == {}

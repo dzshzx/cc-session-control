@@ -70,8 +70,7 @@ def confirm_stop(
     (停止{noun} / {noun}未在运行 / 不能停止当前{noun}).
 
     `gated=False` is reserved for a submitted mutation whose worker owns fresh
-    typed process validation, or for a stop that does not signal a pid. Agent
-    stop uses the former; the RC tab's tmux-window stop uses the latter.
+    typed process validation, or for a stop that does not signal a pid.
     Otherwise the caller must supply the probe prepared off-loop.
     """
     if gated:
@@ -80,7 +79,7 @@ def confirm_stop(
         if not accept_ancestor_probe(app, evidence):
             return
     if not alive:
-        # 中西文混排: a latin-ending noun ("后台 agent") gets a space before 未.
+        # 中西文混排: a latin-ending noun gets a space before 未.
         sep = " " if noun and noun[-1].isascii() else ""
         app.notify(f"{noun}{sep}未在运行")
         return
@@ -158,7 +157,7 @@ def confirm_tmux_takeover(
     gated: bool = True,
     evidence: proc.AncestorProbe | None = None,
 ) -> None:
-    """The tmux-first Enter/f body, shared by the 会话/后台 tabs (ADR-0001).
+    """The tmux-first Enter/f body (ADR-0001).
 
     A tmux-resident session is entered IN PLACE (`AttachIntent` — no kill, no
     confirm, no R10 gate: nothing destructive happens). Anything else goes

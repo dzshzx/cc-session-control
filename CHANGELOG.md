@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- **Remote Control management is gone.** The Projects tab loses its
+  状态/自动远控/启动模式 columns, the `o`/`s`/`c`/`S` server verbs, and the
+  RC-server listing, together with the whole RC data/action layer
+  (`data/rc.py`, the RC outcomes, `claude remote-control` process
+  discovery, and the `rc` tmux session it spawned into — `CSCTL_RC_SESSION`
+  is retired with it). The tab is now a pure launcher plus membership
+  curation: 项目/目录 columns, Enter CLI chooser, `x`/`k` direct launches,
+  and the `p`/`h`/`H` curation verbs. The 证据 provenance-badge column
+  (钉/隐/信cc/信cx/信km/活…) is removed with it — provenance stays on the
+  row model for ordering and status-bar counts. Session-level remote-control
+  exposure (the 📱 badge on the Sessions tab) is unaffected.
+- **Background agents management is gone.** The 后台 tab, the `csctl agents`
+  command, and the `jobs/<short>/state.json` registry scan are removed;
+  csctl no longer lists, takes over, respawns, watches, stops, or removes
+  Claude Code background agents. Session cleanup still removes a dead
+  session's `jobs/<sid-prefix>` artifacts exactly as before.
+
+### Changed
+
+- **The TUI title now reads "Agent CLI 会话管理器"** (was "Claude Code
+  会话管理器") — the tool has managed Codex and Kimi Code sessions since
+  ADR-0005, and the title finally says so. The package, command, and config
+  directory names are unchanged.
+- Projects-tab rows no longer gate on a missing `~/.claude.json` silently:
+  an unreadable or malformed project map surfaces as a typed ⚠ 项目来源异常
+  status count, the same channel as codex/kimi trust-store and curation
+  degradation.
+
 ## 0.8.7 (2026-08-13)
 
 ### Added

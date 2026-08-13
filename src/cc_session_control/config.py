@@ -23,21 +23,6 @@ def _integer_environment(name: str, default: int, minimum: int) -> int:
     return value
 
 
-_TMUX_TARGET_SYNTAX = frozenset("=:*?[]$@%")
-
-
-def _literal_tmux_session_environment(name: str, default: str) -> str:
-    """Read a tmux session *name*, rejecting target-expression syntax."""
-
-    value = os.environ.get(name, default)
-    if not value or any(char in value for char in _TMUX_TARGET_SYNTAX):
-        raise ValueError(
-            f"{name}={value!r}: expected a literal tmux session name without "
-            "= : * ? [ ] $ @ %"
-        )
-    return value
-
-
 def codex_default_home() -> Path:
     """The home codex itself uses when `CODEX_HOME` is unset (upstream
     contract). THE single spelling of that default: the single-instance
@@ -67,18 +52,8 @@ class Config:
             os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code"
         )
         # One operator-facing tmux workspace for every session csctl dispatches.
-        # Project identity stays in each window name and cwd; RC servers retain
-        # their separate configurable session below.
+        # Project identity stays in each window name and cwd.
         self.tmux_session: str = "csctl"
-        self.rc_session: str = _literal_tmux_session_environment(
-            "CSCTL_RC_SESSION",
-            "rc",
-        )
-        if self.rc_session == self.tmux_session:
-            raise ValueError(
-                "CSCTL_RC_SESSION must differ from the reserved "
-                f"workbench tmux session {self.tmux_session!r}"
-            )
         # Age threshold (days) for the time/global-keyed cleanup strategy.
         # 0 is a valid operator value (sweep every aged entry) — pre-0.8
         # releases accepted it, so validation only rejects negatives/garbage.

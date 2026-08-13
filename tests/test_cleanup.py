@@ -21,7 +21,7 @@ from cc_session_control.data import (
     transcripts,
 )
 from cc_session_control.data import proc as proc_mod
-from cc_session_control.models import AgentJob, SessionProc
+from cc_session_control.models import SessionProc
 
 
 @pytest.fixture(autouse=True)
@@ -69,13 +69,11 @@ def _fresh_execution(
     *,
     sessions=(),
     session_procs=(),
-    agent_jobs=(),
     agents_map=None,
     cur=(),
 ):
     evidence = liveness.LivenessSnapshot(
         session_procs=session_procs,
-        agent_jobs=agent_jobs,
         agents_map={} if agents_map is None else agents_map,
         cur=frozenset(cur),
     )
@@ -151,7 +149,7 @@ def test_execute_orphan_removals_deletes_at_most_the_preview(tmp_path, monkeypat
     # deleted (it was never shown to the user).
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     _mkdir(tmp_path, "session-env", "ghost-sid")
-    inject = dict(session_procs=[], agent_jobs=[], agents_map={}, cur=set())
+    inject = dict(session_procs=[], agents_map={}, cur=set())
     entries = _orphan_entries([], **inject)
     assert entries == ["session-env/ghost-sid"]
 
@@ -179,28 +177,6 @@ def test_execute_orphan_removals_fresh_transcript_protects(tmp_path, monkeypatch
 # --- H1: orphan sweep protects registry-known / live / current sids ---------
 
 
-def _job(sid, **kw):
-    base = dict(short=sid[:8], sid=sid, resume_sid=sid)
-    base.update(kw)
-    return AgentJob(**base)
-
-
-def test_orphan_sweep_keeps_live_bg_agent_artifacts(tmp_path, monkeypatch):
-    # (a) A LIVE background agent has no transcript Session, but its
-    # file-history/<sid> must NOT be swept (host_alive protects it).
-    monkeypatch.setattr(cfg, "claude_home", tmp_path)
-    live_sid = "live-bg-sid"
-    _mkdir(tmp_path, "file-history", live_sid)
-    job = _job(live_sid, host_alive=True)
-
-    inject = dict(session_procs=[], agent_jobs=[job], agents_map={}, cur=set())
-    assert _orphan_entries([], **inject) == []
-    _fresh_execution(monkeypatch, agent_jobs=[job])
-    result = cleanup.execute_orphan_removals([f"file-history/{live_sid}"])
-    assert len(result.skipped) == 1
-    assert os.path.isdir(os.path.join(tmp_path, "file-history", live_sid))
-
-
 def test_orphan_sweep_keeps_registry_known_sid_without_transcript(
     tmp_path, monkeypatch
 ):
@@ -211,7 +187,7 @@ def test_orphan_sweep_keeps_registry_known_sid_without_transcript(
     _mkdir(tmp_path, "uploads", reg_sid)
     sp = SessionProc(pid=4242, sid=reg_sid, proc_start="1", proc_alive=False)
 
-    inject = dict(session_procs=[sp], agent_jobs=[], agents_map={}, cur=set())
+    inject = dict(session_procs=[sp], agents_map={}, cur=set())
     assert _orphan_entries([], **inject) == []
     _fresh_execution(monkeypatch, session_procs=[sp])
     result = cleanup.execute_orphan_removals([f"uploads/{reg_sid}"])
@@ -224,7 +200,7 @@ def test_orphan_sweep_removes_genuinely_unknown_dead_sid(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     _mkdir(tmp_path, "session-env", "ghost-sid")
 
-    inject = dict(session_procs=[], agent_jobs=[], agents_map={}, cur=set())
+    inject = dict(session_procs=[], agents_map={}, cur=set())
     assert _orphan_entries([], **inject) == ["session-env/ghost-sid"]
     _fresh_execution(monkeypatch)
     result = cleanup.execute_orphan_removals(["session-env/ghost-sid"])
@@ -238,9 +214,7 @@ def test_orphan_sweep_keeps_alive_map_sid(tmp_path, monkeypatch):
     live_sid = "agents-json-sid"
     _mkdir(tmp_path, "tasks", live_sid)
 
-    inject = dict(
-        session_procs=[], agent_jobs=[], agents_map={live_sid: 999}, cur=set()
-    )
+    inject = dict(session_procs=[], agents_map={live_sid: 999}, cur=set())
     assert _orphan_entries([], **inject) == []
     assert os.path.isdir(os.path.join(tmp_path, "tasks", live_sid))
 

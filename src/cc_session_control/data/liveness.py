@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
-from ..models import AgentJob, InventoryIssue, LiveInfo, SessionProc
+from ..models import InventoryIssue, LiveInfo, SessionProc
 from . import proc, registry
 
 #: Same (source, path, detail) record everywhere — one canonical issue type.
@@ -53,7 +53,6 @@ class LivenessSnapshot:
 
     session_procs: tuple[SessionProc, ...] = ()
     cur: frozenset[int] = frozenset()
-    agent_jobs: tuple[AgentJob, ...] = ()
     agents_map: Mapping[str, int | None] = field(
         default_factory=lambda: MappingProxyType({}),
     )
@@ -62,7 +61,6 @@ class LivenessSnapshot:
     def __post_init__(self) -> None:
         object.__setattr__(self, "session_procs", tuple(self.session_procs))
         object.__setattr__(self, "cur", frozenset(self.cur))
-        object.__setattr__(self, "agent_jobs", tuple(self.agent_jobs))
         object.__setattr__(self, "issues", tuple(self.issues))
         object.__setattr__(
             self,
@@ -129,16 +127,10 @@ def liveness_inputs() -> LivenessSnapshot:
     """
     session_scan = registry.scan_session_procs(max_age=0.0)
     session_procs, proc_issues = _probe_proc_liveness(session_scan.records)
-    jobs_scan = registry.scan_agent_jobs(max_age=0.0)
-    agent_jobs = enrich_jobs(
-        jobs_scan.records,
-        session_procs,
-    )
     agents_scan = scan_agents(max_age=0.0)
     ancestors = proc.probe_current_ancestors()
     issues = [
         *_registry_issues(session_scan.issues),
-        *_registry_issues(jobs_scan.issues),
         *proc_issues,
         *(
             LivenessIssue(issue.source, issue.path, issue.detail)
@@ -152,7 +144,6 @@ def liveness_inputs() -> LivenessSnapshot:
     return LivenessSnapshot(
         session_procs=tuple(session_procs),
         cur=ancestors.pids,
-        agent_jobs=tuple(agent_jobs),
         agents_map=agents_scan.records,
         issues=tuple(issues),
     )
@@ -290,30 +281,6 @@ def live_session_procs(max_age: float = 5.0) -> list[SessionProc]:
     propagate.
     """
     return _inject_proc_liveness(registry.read_session_procs(max_age=max_age))
-
-
-def enrich_jobs(
-    jobs: Sequence[AgentJob],
-    session_procs: Sequence[SessionProc] | None = None,
-) -> list[AgentJob]:
-    """Fill each job's `host_pid`/`host_alive` — THE one enrich loop.
-
-    `state.json` carries no pid, so a worker's host pid is JOINed from
-    `sessions/<pid>.json` via the single pure join `registry.host_pid_for_sid`.
-    The snapshot, the agents view's self-fetch path, and `csctl agents` all
-    consume this loop: pass the shared snapshot's `session_procs` for zero
-    extra IO, or `None` to self-fetch ONCE (the old per-job `job_host` loops
-    re-injected `/proc` liveness onto the whole registry once per job).
-    Returns fresh copies so the ~5s-TTL cached registry objects are never
-    mutated.
-    """
-    if session_procs is None:
-        session_procs = live_session_procs()
-    out: list[AgentJob] = []
-    for job in jobs:
-        pid, alive = registry.host_pid_for_sid(job.sid, session_procs)
-        out.append(replace(job, host_pid=pid, host_alive=alive))
-    return out
 
 
 def _source_of(entrypoint: str, kind: str) -> str:

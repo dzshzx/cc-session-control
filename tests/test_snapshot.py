@@ -7,14 +7,8 @@ These tests monkeypatch the data sources.
 import os
 
 from cc_session_control.config import cfg
-from cc_session_control.data import liveness, registry, snapshot
-from cc_session_control.data.proc import ProcRCInventory
-from cc_session_control.data.project_settings import (
-    ProjectSettingsResult,
-    ProjectSettingsState,
-)
+from cc_session_control.data import liveness, membership, registry, snapshot
 from cc_session_control.data.refresh import RefreshFailure, build_refresh_result
-from cc_session_control.data.tmux import TmuxWindow, WindowInventory
 from cc_session_control.models import SessionProc
 
 
@@ -29,11 +23,6 @@ def _stub_sources(monkeypatch, procs):
         lambda *a, **k: registry.RegistryScan(records=tuple(procs)),
     )
     monkeypatch.setattr(
-        snapshot.liveness.registry,
-        "scan_agent_jobs",
-        lambda *a, **k: registry.RegistryScan(),
-    )
-    monkeypatch.setattr(
         snapshot.liveness,
         "scan_agents",
         lambda *a, **k: liveness.AgentsScan(),
@@ -44,22 +33,9 @@ def _stub_sources(monkeypatch, procs):
         lambda inputs=None: snapshot.sessions.SessionScanResult(),
     )
     monkeypatch.setattr(
-        snapshot.rc,
-        "scan_result",
-        lambda *, window_inventory, sessions=(): snapshot.rc.RCScanResult(
-            [],
-            ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
-        ),
-    )
-    monkeypatch.setattr(
-        snapshot.rc,
-        "_tmux_window_inventory",
-        lambda: WindowInventory(),
-    )
-    monkeypatch.setattr(
-        snapshot.rc,
-        "scan_servers_result",
-        lambda *, window_inventory: snapshot.rc.RCServerScanResult(),
+        snapshot.membership,
+        "scan_projects",
+        lambda sessions=(): membership.ProjectsScan(),
     )
 
 
@@ -80,8 +56,8 @@ def test_incomplete_liveness_snapshot_fails_generation(
         ),
         issues=(
             liveness.LivenessIssue(
-                "job registry",
-                "/runtime/jobs/broken/state.json",
+                "session registry",
+                "/runtime/sessions/broken.json",
                 "invalid JSON",
             ),
         ),
@@ -94,7 +70,7 @@ def test_incomplete_liveness_snapshot_fails_generation(
     )
 
     assert isinstance(result, RefreshFailure)
-    assert "job registry" in result.source
+    assert "session registry" in result.source
 
 
 def test_incomplete_transcript_snapshot_fails_before_cleanup_plan(
@@ -148,16 +124,14 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
 ):
     """Sessions consumes the generation's injected liveness, not fresh proc reads.
 
-    The liveness side performs targeted pid checks; the RC side performs the one
-    full `/proc` traversal.  Keep those costs distinct in the regression test.
+    The liveness side performs targeted pid checks — one registry read, one
+    agents probe, one ancestor walk per generation, never a second pass.
     """
     calls = {
         "registry_sessions": 0,
         "pid_alive": 0,
-        "jobs": 0,
         "agents": 0,
         "ancestors": 0,
-        "rc_proc_scan": 0,
     }
     generations = iter((101, 202))
     active_pid = {"value": next(generations)}
@@ -171,10 +145,6 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
     def probe_pid(pid, proc_start):
         calls["pid_alive"] += 1
         return snapshot.liveness.proc.PidProbe(pid, True)
-
-    def read_jobs(*args, **kwargs):
-        calls["jobs"] += 1
-        return registry.RegistryScan()
 
     def read_agents(*args, **kwargs):
         calls["agents"] += 1
@@ -194,7 +164,6 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
         snapshot.liveness.registry, "scan_session_procs", read_session_procs
     )
     monkeypatch.setattr(snapshot.liveness.proc, "probe_pid", probe_pid)
-    monkeypatch.setattr(snapshot.liveness.registry, "scan_agent_jobs", read_jobs)
     monkeypatch.setattr(snapshot.liveness, "scan_agents", read_agents)
     monkeypatch.setattr(
         snapshot.liveness.proc,
@@ -203,27 +172,9 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
     )
     monkeypatch.setattr(snapshot.sessions, "scan_result", scan_sessions)
     monkeypatch.setattr(
-        snapshot.rc,
-        "scan_result",
-        lambda *, window_inventory, sessions=(): snapshot.rc.RCScanResult(
-            [],
-            ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
-        ),
-    )
-    monkeypatch.setattr(
-        snapshot.rc,
-        "_tmux_window_inventory",
-        lambda: WindowInventory(),
-    )
-
-    def scan_rc_procs():
-        calls["rc_proc_scan"] += 1
-        return ProcRCInventory()
-
-    monkeypatch.setattr(
-        snapshot.rc.proc,
-        "scan_rc_server_inventory",
-        scan_rc_procs,
+        snapshot.membership,
+        "scan_projects",
+        lambda sessions=(): membership.ProjectsScan(),
     )
 
     first = snapshot.build_world_snapshot()
@@ -233,57 +184,10 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
     assert calls == {
         "registry_sessions": 2,
         "pid_alive": 2,
-        "jobs": 2,
         "agents": 2,
         "ancestors": 2,
-        "rc_proc_scan": 2,
     }
     assert injected == [first.liveness_snapshot, second.liveness_snapshot]
     assert first.liveness_snapshot is not second.liveness_snapshot
-    assert first.agent_jobs is first.liveness_snapshot.agent_jobs
     assert [sp.pid for sp in first.liveness_snapshot.session_procs] == [101]
     assert [sp.pid for sp in second.liveness_snapshot.session_procs] == [202]
-
-
-def test_snapshot_reuses_one_window_inventory_for_project_and_server_joins(
-    monkeypatch,
-):
-    inventory = WindowInventory((TmuxWindow("@1", "project", False, 101, "/project"),))
-    reads = 0
-    injected: list[WindowInventory] = []
-
-    def read_windows() -> WindowInventory:
-        nonlocal reads
-        reads += 1
-        return inventory
-
-    def scan_projects(*, window_inventory, sessions=()):
-        injected.append(window_inventory)
-        return snapshot.rc.RCScanResult(
-            [],
-            ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
-        )
-
-    def scan_servers(*, window_inventory):
-        injected.append(window_inventory)
-        return snapshot.rc.RCServerScanResult()
-
-    monkeypatch.setattr(
-        snapshot.liveness,
-        "liveness_inputs",
-        lambda: liveness.LivenessSnapshot(),
-    )
-    monkeypatch.setattr(
-        snapshot.sessions,
-        "scan_result",
-        lambda _inputs: snapshot.sessions.SessionScanResult(),
-    )
-    monkeypatch.setattr(snapshot.rc, "_tmux_window_inventory", read_windows)
-    monkeypatch.setattr(snapshot.rc, "scan_result", scan_projects)
-    monkeypatch.setattr(snapshot.rc, "scan_servers_result", scan_servers)
-
-    snapshot.build_world_snapshot()
-
-    assert reads == 1
-    assert injected == [inventory, inventory]
-    assert injected[0] is injected[1]

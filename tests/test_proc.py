@@ -1,82 +1,10 @@
 """Tests for data/proc.py — the /proc seam and its non-Linux degradation."""
 
 import errno
-import os
 
 import pytest
 
 from cc_session_control.data import proc
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        FileNotFoundError(errno.ENOENT, "missing proc"),
-        PermissionError(errno.EACCES, "permission denied"),
-        OSError(errno.EIO, "input/output error"),
-    ],
-)
-def test_rc_inventory_preserves_proc_root_failure(monkeypatch, error):
-    def fail_listdir(_path):
-        raise error
-
-    monkeypatch.setattr(proc.os, "listdir", fail_listdir)
-
-    result = proc.scan_rc_server_inventory()
-
-    assert result.records == ()
-    assert result.complete is False
-    assert result.issues[0].source == "RC process inventory"
-    assert result.issues[0].path == proc._PROC
-    assert str(error) in result.issues[0].detail
-
-
-def test_rc_inventory_preserves_per_pid_permission_failure(monkeypatch):
-    monkeypatch.setattr(proc.os, "listdir", lambda _path: ["4242"])
-
-    def fail_open(path, *_args, **_kwargs):
-        raise PermissionError(errno.EACCES, "permission denied", path)
-
-    monkeypatch.setattr("builtins.open", fail_open)
-
-    result = proc.scan_rc_server_inventory()
-
-    assert result.records == ()
-    assert result.complete is False
-    assert result.issues[0].source == "RC process inventory"
-    assert result.issues[0].path == f"{proc._PROC}/4242/comm"
-    assert "permission denied" in result.issues[0].detail
-
-
-def test_rc_inventory_skips_per_pid_enoent_race(monkeypatch):
-    monkeypatch.setattr(proc.os, "listdir", lambda _path: ["4242"])
-
-    def gone(path, *_args, **_kwargs):
-        raise FileNotFoundError(errno.ENOENT, "process exited", path)
-
-    monkeypatch.setattr("builtins.open", gone)
-
-    result = proc.scan_rc_server_inventory()
-
-    assert result.records == ()
-    assert result.complete is True
-    assert result.issues == ()
-
-
-def test_rc_inventory_flags_malformed_rc_cmdline(tmp_path, monkeypatch):
-    pid_dir = tmp_path / "4242"
-    pid_dir.mkdir()
-    (pid_dir / "comm").write_text("claude\n")
-    (pid_dir / "cmdline").write_bytes(b"claude\0remote-control\0--name\0")
-    os.symlink(tmp_path, pid_dir / "cwd")
-    monkeypatch.setattr(proc, "_PROC", str(tmp_path))
-
-    result = proc.scan_rc_server_inventory()
-
-    assert result.records == ()
-    assert result.complete is False
-    assert result.issues[0].path == str(pid_dir / "cmdline")
-    assert "missing --name value" in result.issues[0].detail
 
 
 @pytest.mark.parametrize(

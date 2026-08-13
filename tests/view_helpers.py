@@ -1,28 +1,14 @@
 """Shared plain helpers (FakeApp stub + builders) for the split `test_views*` modules."""
 
-from pathlib import Path
-
 import urwid
 from factories import make_session
 
 from cc_session_control.actions.runner import Accepted
 from cc_session_control.data.cleanup import CleanupPlan
-from cc_session_control.data.project_settings import (
-    ProjectSettingsResult,
-    ProjectSettingsState,
-    SettingWriteResult,
-    SettingWriteState,
-)
 from cc_session_control.data.refresh import RefreshBatch
 from cc_session_control.data.snapshot import WorldSnapshot
-from cc_session_control.models import (
-    RCProject,
-    RCServer,
-    RCStartupSettingRead,
-    RCStartupSettingState,
-    TrustDecision,
-)
-from cc_session_control.views.rc import RCView
+from cc_session_control.models import Project
+from cc_session_control.views.projects import ProjectsView
 
 
 class FakeApp:
@@ -108,19 +94,9 @@ def _make_project(**overrides):
     defaults = dict(
         name="myproj",
         directory="/tmp/myproj",
-        trust_decision=TrustDecision.TRUSTED,
-        status="stopped",
     )
-    if "rc_at_startup" in overrides:
-        value = overrides.pop("rc_at_startup")
-        state = {
-            None: RCStartupSettingState.UNSET,
-            True: RCStartupSettingState.TRUE,
-            False: RCStartupSettingState.FALSE,
-        }[value]
-        overrides["rc_at_startup_setting"] = RCStartupSettingRead(state)
     defaults.update(overrides)
-    return RCProject(**defaults)
+    return Project(**defaults)
 
 
 def _row_text(row):
@@ -128,18 +104,11 @@ def _row_text(row):
     return b"\n".join(canvas.text).decode()
 
 
-def _updated_setting(directory):
-    return SettingWriteResult(
-        SettingWriteState.UPDATED,
-        Path(directory) / ".claude" / "settings.local.json",
-    )
-
-
 def _refresh_batch(
     snapshot: WorldSnapshot | None = None,
     *,
     plan: CleanupPlan | None = None,
-    ordered_projects: tuple[RCProject, ...] | None = None,
+    ordered_projects: tuple[Project, ...] | None = None,
 ) -> RefreshBatch:
     snapshot = snapshot or WorldSnapshot()
     plan = plan or CleanupPlan()
@@ -158,25 +127,19 @@ def _refresh_batch(
         ordered_projects=(
             ordered_projects
             if ordered_projects is not None
-            else tuple(snapshot.rc_projects)
+            else tuple(snapshot.projects)
         ),
     )
 
 
 def _apply_projects(
-    view: RCView,
-    projects: list[RCProject],
+    view: ProjectsView,
+    projects: list[Project],
     *,
-    settings: ProjectSettingsResult | None = None,
-    servers: list[RCServer] | None = None,
+    membership_issues=(),
 ) -> None:
     snapshot = WorldSnapshot(
-        rc_projects=projects,
-        rc_project_settings=(
-            settings
-            if settings is not None
-            else ProjectSettingsResult(ProjectSettingsState.MISSING, {})
-        ),
-        rc_servers=servers or [],
+        projects=projects,
+        membership_issues=membership_issues,
     )
     view.apply_refresh(_refresh_batch(snapshot, ordered_projects=tuple(projects)))

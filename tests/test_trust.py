@@ -124,20 +124,11 @@ def _wire_scan(tmp_path, monkeypatch, projects, temp_roots=()):
     import json
     import os
 
-    from cc_session_control.data import membership, rc
+    from cc_session_control.data import membership
 
     cj = tmp_path / ".claude.json"
     cj.write_text(json.dumps({"projects": projects}))
-    monkeypatch.setattr(rc.cfg, "claude_json", cj)
-    # Isolate the other ADR-0007 membership sources from the real machine:
-    # codex/kimi trust stores and the curation file.
-    monkeypatch.setattr(rc.cfg, "providers", ("claude",))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.setattr(
-        rc,
-        "_tmux_window_inventory",
-        lambda: rc.tmux.WindowInventory(),
-    )
+    monkeypatch.setattr(membership.cfg, "claude_json", cj)
     # pytest tmp_path lives under the REAL platform temp root, so the temp-dir
     # membership filter is neutralized unless a test injects roots explicitly.
     monkeypatch.setattr(
@@ -145,7 +136,7 @@ def _wire_scan(tmp_path, monkeypatch, projects, temp_roots=()):
         "_TEMP_ROOTS",
         frozenset(os.path.normpath(p) for p in temp_roots),
     )
-    return rc
+    return membership
 
 
 def test_scan_includes_inherited_subdir(tmp_path, monkeypatch):
@@ -154,7 +145,7 @@ def test_scan_includes_inherited_subdir(tmp_path, monkeypatch):
     parent = tmp_path / "parent"
     sub = parent / "new-proj"
     sub.mkdir(parents=True)
-    rc = _wire_scan(
+    membership = _wire_scan(
         tmp_path,
         monkeypatch,
         {
@@ -163,9 +154,9 @@ def test_scan_includes_inherited_subdir(tmp_path, monkeypatch):
         },
     )
 
-    rows = {p.directory: p for p in rc.scan_result().projects}
+    rows = {p.directory: p for p in membership.scan_projects(()).projects}
     assert str(sub) in rows and str(parent) in rows
-    assert rows[str(sub)].trust_decision is TrustDecision.TRUSTED
+    assert "claude" in rows[str(sub)].trusted_by
     assert rows[str(sub)].name == "new-proj"
 
 
@@ -173,7 +164,7 @@ def test_scan_excludes_untrusted_entry(tmp_path, monkeypatch):
     # Explicit False with NO trusted ancestor (the hapi shape) stays out.
     lone = tmp_path / "lone"
     lone.mkdir()
-    rc = _wire_scan(
+    membership = _wire_scan(
         tmp_path,
         monkeypatch,
         {
@@ -181,44 +172,25 @@ def test_scan_excludes_untrusted_entry(tmp_path, monkeypatch):
         },
     )
 
-    assert rc.scan_result().projects == []
+    assert membership.scan_projects(()).projects == ()
 
 
-def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
-    tmp_path,
-    monkeypatch,
-):
-    from cc_session_control.data import membership, rc
+def test_scan_keeps_unavailable_settings_observable(tmp_path, monkeypatch):
+    from cc_session_control.data import membership
 
     project = tmp_path / "app"
     project.mkdir()
     claude_json = tmp_path / ".claude.json"
     claude_json.write_text("{broken")
-    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(rc.cfg, "providers", ("claude",))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.setattr(
-        rc,
-        "_tmux_window_inventory",
-        lambda: rc.tmux.WindowInventory(),
-    )
+    monkeypatch.setattr(membership.cfg, "claude_json", claude_json)
     monkeypatch.setattr(membership, "_TEMP_ROOTS", frozenset())
-    launches = []
-    monkeypatch.setattr(
-        rc.tmux,
-        "run_in_tmux_result",
-        lambda *args, **kwargs: launches.append(args),
-    )
 
-    scan_result = rc.scan_result()
-    start_result = rc.start_one_result(str(project))
+    scan = membership.scan_projects(())
 
-    # Membership fails closed (no trusted set to enumerate), but the typed
-    # settings evidence stays observable and the start gate refuses to spawn.
-    assert scan_result.settings.state.value == "malformed"
-    assert scan_result.projects == []
-    assert start_result.state is rc.StartState.TRUST_UNAVAILABLE
-    assert launches == []
+    # Membership fails closed (no trusted set to enumerate), and the broken
+    # settings evidence stays observable as a typed membership issue.
+    assert scan.projects == ()
+    assert any(issue.source == "claude.json project settings" for issue in scan.issues)
 
 
 # --- temp-dir membership filter (trust untouched, discovery only) -----------
@@ -240,7 +212,7 @@ def test_scan_drops_temp_root_and_subtree(tmp_path, monkeypatch):
     troot = tmp_path / "t"
     sub = troot / "scratch"
     sub.mkdir(parents=True)
-    rc = _wire_scan(
+    membership = _wire_scan(
         tmp_path,
         monkeypatch,
         {
@@ -250,47 +222,18 @@ def test_scan_drops_temp_root_and_subtree(tmp_path, monkeypatch):
         temp_roots={str(troot)},
     )
 
-    assert rc.scan_result().projects == []
-    # Trust itself is NOT touched — the start gate still passes.
-    assert rc.project_trust(str(sub)).decision is TrustDecision.TRUSTED
-
-
-def test_scan_keeps_temp_project_with_rc_window(tmp_path, monkeypatch):
-    from cc_session_control.data import tmux
-
-    troot = tmp_path / "t"
-    sub = troot / "served"
-    sub.mkdir(parents=True)
-    # A server's claude leaves the suppressed-False footprint, so the path
-    # IS enumerated (windows join rows, they don't create membership).
-    rc = _wire_scan(
-        tmp_path,
-        monkeypatch,
-        {
-            str(troot): {"hasTrustDialogAccepted": True},
-            str(sub): {"hasTrustDialogAccepted": False},
-        },
-        temp_roots={str(troot)},
+    assert membership.scan_projects(()).projects == ()
+    # Trust itself is NOT touched — the effective decision still passes.
+    assert (
+        effective_trust_decision(
+            str(sub),
+            {
+                str(troot): {"hasTrustDialogAccepted": True},
+                str(sub): {"hasTrustDialogAccepted": False},
+            },
+        )
+        is TrustDecision.TRUSTED
     )
-    monkeypatch.setattr(
-        rc,
-        "_tmux_window_inventory",
-        lambda: tmux.WindowInventory(
-            (
-                tmux.TmuxWindow(
-                    wid="@1",
-                    name="served",
-                    dead=False,
-                    pid=42,
-                    path=str(sub),
-                ),
-            )
-        ),
-    )
-
-    rows = {p.directory: p for p in rc.scan_result().projects}
-    assert set(rows) == {str(sub)}
-    assert rows[str(sub)].status == "running"
 
 
 def test_scan_temp_root_does_not_cover_sibling(tmp_path, monkeypatch):
@@ -298,7 +241,7 @@ def test_scan_temp_root_does_not_cover_sibling(tmp_path, monkeypatch):
     troot = tmp_path / "t"
     sibling = tmp_path / "t-ext"
     sibling.mkdir(parents=True)
-    rc = _wire_scan(
+    membership = _wire_scan(
         tmp_path,
         monkeypatch,
         {
@@ -307,4 +250,6 @@ def test_scan_temp_root_does_not_cover_sibling(tmp_path, monkeypatch):
         temp_roots={str(troot)},
     )
 
-    assert {p.directory for p in rc.scan_result().projects} == {str(sibling)}
+    assert {p.directory for p in membership.scan_projects(()).projects} == {
+        str(sibling)
+    }

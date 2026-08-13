@@ -5,10 +5,10 @@ registries independently. `build_world_snapshot` computes that world ONCE on
 the worker thread; `data.refresh.build_refresh_result` derives one complete batch
 from it before the App main loop gives that batch to every view.
 
-This is the TOP of the data layer — it composes `sessions` / `rc` / `liveness`.
-Only the data layer's top-level `refresh` module imports it, so there is no
-cycle. Recoverable external failures are typed by their owning data module.
-Expected boundary I/O failures become an explicit `RefreshFailure`;
+This is the TOP of the data layer — it composes `sessions` / `membership` /
+`liveness`. Only the data layer's top-level `refresh` module imports it, so
+there is no cycle. Recoverable external failures are typed by their owning data
+module. Expected boundary I/O failures become an explicit `RefreshFailure`;
 programming and invariant errors are not converted into empty view data.
 """
 
@@ -16,9 +16,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from ..models import AgentJob, InventoryIssue, RCProject, RCServer, Session
-from . import liveness, providers, rc, sessions, tmux
-from .project_settings import ProjectSettingsResult, ProjectSettingsState
+from ..models import InventoryIssue, Project, Session
+from . import liveness, membership, providers, sessions, tmux
 from .sessions import SessionScanResult
 
 
@@ -26,12 +25,11 @@ from .sessions import SessionScanResult
 class WorldSnapshot:
     """One cycle's shared view of the machine (read-only data for the views).
 
-    `sessions` is the full transcript-driven scan (SessionsView), `agent_jobs`
-    the background jobs enriched with host liveness (AgentsView), and
-    `rc_projects`/`rc_servers` the Remote Control world (RCView).
-    `rc_inventory_issues` carries the RC server scan's tmux + `/proc`
-    incompleteness evidence so the Projects status can expose a degraded
-    inventory.
+    `sessions` is the full transcript-driven scan (SessionsView) and
+    `projects` the evidence-tier membership list (ProjectsView).
+    `membership_issues` carries the membership sources' (claude.json,
+    codex/kimi trust, curation) incompleteness evidence so the Projects status
+    can expose a degraded inventory.
 
     `liveness_snapshot` is the one typed liveness evidence `build_world_snapshot`
     already computes for the scan (`.session_procs` with `/proc` liveness already
@@ -46,17 +44,9 @@ class WorldSnapshot:
     # (ADR-0005): a broken codex/kimi source narrows the list, never blanks
     # the generation. Claude transcript issues keep failing the generation.
     provider_issues: tuple[InventoryIssue, ...] = ()
-    agent_jobs: tuple[AgentJob, ...] = ()
-    rc_projects: tuple[RCProject, ...] = ()
-    rc_project_settings: ProjectSettingsResult = field(
-        default_factory=lambda: ProjectSettingsResult(
-            ProjectSettingsState.MISSING,
-            {},
-        ),
-    )
-    rc_servers: tuple[RCServer, ...] = ()
-    rc_inventory_issues: tuple[InventoryIssue, ...] = ()
-    # ADR-0007 membership-source degradation (codex/kimi trust, curation).
+    projects: tuple[Project, ...] = ()
+    # ADR-0007 membership-source degradation (claude.json, codex/kimi trust,
+    # curation).
     membership_issues: tuple[InventoryIssue, ...] = ()
     liveness_snapshot: liveness.LivenessSnapshot | None = None
     transcript_scan: SessionScanResult = field(default_factory=SessionScanResult)
@@ -64,14 +54,7 @@ class WorldSnapshot:
     def __post_init__(self) -> None:
         object.__setattr__(self, "sessions", tuple(self.sessions))
         object.__setattr__(self, "provider_issues", tuple(self.provider_issues))
-        object.__setattr__(self, "agent_jobs", tuple(self.agent_jobs))
-        object.__setattr__(self, "rc_projects", tuple(self.rc_projects))
-        object.__setattr__(self, "rc_servers", tuple(self.rc_servers))
-        object.__setattr__(
-            self,
-            "rc_inventory_issues",
-            tuple(self.rc_inventory_issues),
-        )
+        object.__setattr__(self, "projects", tuple(self.projects))
         object.__setattr__(
             self,
             "membership_issues",
@@ -82,12 +65,11 @@ class WorldSnapshot:
 def build_world_snapshot() -> WorldSnapshot:
     """Compute the shared per-cycle world once (worker thread, R11/D8).
 
-    Heavy scans (typed transcript discovery via `sessions.scan_result`, the
-    full `/proc` walk via
-    `rc.scan_servers_result`) run exactly once here instead of once per tab. Session
-    liveness uses targeted per-pid `/proc` reads, not another full walk; those
-    inputs are captured once and injected into `sessions.scan_result`. Each data
-    owner handles its expected external failures.
+    Heavy scans (typed transcript discovery via `sessions.scan_result`) run
+    exactly once here instead of once per tab. Session liveness uses targeted
+    per-pid `/proc` reads, not another full walk; those inputs are captured
+    once and injected into `sessions.scan_result`. Each data owner handles its
+    expected external failures.
     """
     inputs = liveness.liveness_inputs()
     transcript_scan = sessions.scan_result(inputs)
@@ -99,18 +81,12 @@ def build_world_snapshot() -> WorldSnapshot:
         )
     provider_rows, provider_issues = providers.scan_non_claude(inputs.cur)
     all_sessions = _merged_sessions(transcript_scan.sessions, provider_rows)
-    window_inventory = rc._tmux_window_inventory()
-    rc_scan = rc.scan_result(window_inventory=window_inventory, sessions=all_sessions)
-    server_scan = rc.scan_servers_result(window_inventory=window_inventory)
+    projects_scan = membership.scan_projects(all_sessions)
     return WorldSnapshot(
         sessions=all_sessions,
         provider_issues=provider_issues,
-        agent_jobs=inputs.agent_jobs,
-        rc_projects=tuple(rc_scan.projects),
-        rc_project_settings=rc_scan.settings,
-        rc_servers=tuple(server_scan.servers),
-        rc_inventory_issues=server_scan.issues,
-        membership_issues=rc_scan.membership_issues,
+        projects=projects_scan.projects,
+        membership_issues=projects_scan.issues,
         liveness_snapshot=inputs,
         transcript_scan=transcript_scan,
     )

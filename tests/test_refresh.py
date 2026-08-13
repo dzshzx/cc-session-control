@@ -13,10 +13,6 @@ from cc_session_control.data import age_cleanup, cleanup
 from cc_session_control.data.age_cleanup import AgeCleanupPlan
 from cc_session_control.data.cleanup import CleanupPlan
 from cc_session_control.data.liveness import LivenessIssue, LivenessSnapshot
-from cc_session_control.data.project_settings import (
-    ProjectSettingsResult,
-    ProjectSettingsState,
-)
 from cc_session_control.data.refresh import (
     RefreshBatch,
     RefreshCoordinator,
@@ -26,12 +22,9 @@ from cc_session_control.data.refresh import (
 )
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.models import (
-    AgentJob,
-    RCProject,
-    RCServer,
+    Project,
     Session,
     SessionProc,
-    TrustDecision,
 )
 
 
@@ -102,9 +95,7 @@ def test_refresh_batch_copies_and_freezes_nested_handoff_containers() -> None:
         current=False,
     )
     sessions = [session]
-    agent_jobs = []
     projects = []
-    servers = []
     empty = [session]
     orphan_entries = ["projects/orphan"]
 
@@ -112,9 +103,7 @@ def test_refresh_batch_copies_and_freezes_nested_handoff_containers() -> None:
         generation=1,
         snapshot=WorldSnapshot(
             sessions=sessions,
-            agent_jobs=agent_jobs,
-            rc_projects=projects,
-            rc_servers=servers,
+            projects=projects,
         ),
         cleanup_plan=CleanupPlan(
             empty=empty,
@@ -126,16 +115,12 @@ def test_refresh_batch_copies_and_freezes_nested_handoff_containers() -> None:
     )
 
     sessions.append(session)
-    agent_jobs.append(object())
     projects.append(object())
-    servers.append(object())
     empty.append(session)
     orphan_entries.append("projects/later")
 
     assert batch.snapshot.sessions == (session,)
-    assert batch.snapshot.agent_jobs == ()
-    assert batch.snapshot.rc_projects == ()
-    assert batch.snapshot.rc_servers == ()
+    assert batch.snapshot.projects == ()
     assert batch.cleanup_plan.empty == (session,)
     assert batch.cleanup_plan.orphan_entries == ("projects/orphan",)
     with pytest.raises(AttributeError):
@@ -146,13 +131,6 @@ def test_refresh_batch_copies_and_freezes_nested_handoff_containers() -> None:
 
 def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
     hidden = {"tool"}
-    respawn_flags = ["--verbose"]
-    project_document = {
-        "/tmp/project": {
-            "hasTrustDialogAccepted": True,
-            "metadata": {"tags": ["one"]},
-        }
-    }
     session = Session(
         sid="session-1",
         cwd="/tmp/project",
@@ -165,38 +143,19 @@ def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
         hidden=hidden,
     )
     session_proc = SessionProc(123, "session-1", proc_alive=True)
-    job = AgentJob(
-        "job-1",
-        "session-1",
-        "session-1",
-        respawn_flags=respawn_flags,
-        host_pid=123,
-        host_alive=True,
-    )
-    project = RCProject(
+    project = Project(
         "project",
         "/tmp/project",
-        TrustDecision.TRUSTED,
-        True,
-        "running",
-        True,
-    )
-    server = RCServer("project", "/tmp/project", True, 456, "running")
-    settings = ProjectSettingsResult(
-        ProjectSettingsState.AVAILABLE,
-        project_document,
+        trusted_by={"claude"},
+        observed_by={"claude"},
     )
     batch = RefreshBatch(
         generation=1,
         snapshot=WorldSnapshot(
             sessions=[session],
-            agent_jobs=[job],
-            rc_projects=[project],
-            rc_project_settings=settings,
-            rc_servers=[server],
+            projects=[project],
             liveness_snapshot=LivenessSnapshot(
                 session_procs=[session_proc],
-                agent_jobs=[job],
             ),
         ),
         cleanup_plan=CleanupPlan(empty=[session]),
@@ -206,15 +165,9 @@ def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
     )
 
     hidden.add("later")
-    respawn_flags.append("--later")
-    project_document["/tmp/project"]["hasTrustDialogAccepted"] = False
-    project_document["/tmp/project"]["metadata"]["tags"].append("later")
 
     assert batch.snapshot.sessions[0].hidden == frozenset({"tool"})
-    assert batch.snapshot.agent_jobs[0].respawn_flags == ("--verbose",)
-    published_settings = batch.snapshot.rc_project_settings.projects["/tmp/project"]
-    assert published_settings["hasTrustDialogAccepted"] is True
-    assert published_settings["metadata"]["tags"] == ("one",)
+    assert batch.snapshot.projects[0].trusted_by == frozenset({"claude"})
     with pytest.raises(FrozenInstanceError):
         batch.snapshot.sessions = ()
     with pytest.raises(FrozenInstanceError):
@@ -226,21 +179,11 @@ def test_refresh_batch_deeply_freezes_reachable_models_and_results() -> None:
     with pytest.raises(FrozenInstanceError):
         batch.snapshot.liveness_snapshot.session_procs[0].status = "changed"
     with pytest.raises(FrozenInstanceError):
-        batch.snapshot.agent_jobs[0].host_alive = False
+        batch.snapshot.projects[0].pinned = True
     with pytest.raises(AttributeError):
-        batch.snapshot.agent_jobs[0].respawn_flags.append("--changed")
-    with pytest.raises(FrozenInstanceError):
-        batch.snapshot.rc_projects[0].status = "stopped"
-    with pytest.raises(FrozenInstanceError):
-        batch.snapshot.rc_servers[0].status = "stopped"
+        batch.snapshot.projects[0].trusted_by.add("codex")
     with pytest.raises(TypeError):
         batch.cleanup_plan.orphan_anchors["projects/later"] = None
-    with pytest.raises(TypeError):
-        batch.snapshot.rc_project_settings.projects["/tmp/other"] = {}
-    with pytest.raises(TypeError):
-        published_settings["hasTrustDialogAccepted"] = False
-    with pytest.raises(TypeError):
-        published_settings["metadata"]["tags"][0] = "changed"
 
 
 def test_ready_generation_is_not_overwritten_and_old_signal_cannot_consume_next() -> (
@@ -331,22 +274,18 @@ def test_batch_builder_reads_sources_once_and_derives_one_coherent_world() -> No
         alive=False,
         current=False,
     )
-    older = RCProject(
+    older = Project(
         name="older",
         directory="/tmp/older",
-        trust_decision=TrustDecision.TRUSTED,
-        status="stopped",
     )
-    active = RCProject(
+    active = Project(
         name="active",
         directory="/tmp/project",
-        trust_decision=TrustDecision.TRUSTED,
-        status="stopped",
     )
     evidence = LivenessSnapshot()
     snapshot = WorldSnapshot(
         sessions=[session],
-        rc_projects=[older, active],
+        projects=[older, active],
         liveness_snapshot=evidence,
     )
     plan = CleanupPlan(short=[session], orphan_entries=["gone"])

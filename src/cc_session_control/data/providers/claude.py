@@ -24,8 +24,6 @@ class ClaudeProvider:
     caps = ProviderCaps(
         fork=True,
         takeover=True,
-        background_agents=True,
-        remote_control=True,
         cleanup=True,
         liveness=LivenessGrade.FULL,
     )

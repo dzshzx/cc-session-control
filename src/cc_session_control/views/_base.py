@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 
 class ListTabView:
-    """Walker/listbox/overlay plumbing shared by the 会话/项目/后台 tabs."""
+    """Walker/listbox/overlay plumbing shared by the 会话/项目 tabs."""
 
     # Overlay width in relative % — Sessions narrows to 70 for its previews.
     OVERLAY_WIDTH = 80

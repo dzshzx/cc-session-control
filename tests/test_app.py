@@ -2,6 +2,7 @@
 
 import os
 import threading
+import time
 from queue import Queue
 
 import pytest
@@ -49,6 +50,22 @@ class _RecorderView:
         return False
 
 
+def _wait_published(app: App, timeout: float = 1.0) -> None:
+    """Wait until the refresh worker has published its result.
+
+    The builder queue only proves the builder returned; the worker still has
+    to store `_ready` under the coordinator lock before the main-loop pipe
+    handler would see it. In production the pipe signal follows publication,
+    so this mirrors that ordering — without it, `_on_pipe` can consume `None`
+    and the test races the worker (reliably so under coverage).
+    """
+    deadline = time.monotonic() + timeout
+    while app._refresh._ready is None:
+        if time.monotonic() > deadline:
+            pytest.fail("refresh worker never published its result")
+        time.sleep(0.001)
+
+
 def _app_with_recorders(n=3):
     app = App()
     views = [_RecorderView() for _ in range(n)]
@@ -85,6 +102,7 @@ def test_worker_publishes_then_main_loop_applies_same_batch_to_all_views():
     assert worker_thread != main_thread
     assert all(not view.applied for view in views)
 
+    _wait_published(app)
     assert app._on_pipe(b"1") is True
     assert all(view.applied == [batch] for view in views)
     assert all(view.apply_threads == [main_thread] for view in views)
@@ -110,9 +128,11 @@ def test_failed_generation_keeps_last_good_views_and_notifies():
 
     app.trigger_async_refresh()
     assert completed.get(timeout=1) == 1
+    _wait_published(app)
     app._on_pipe(b"1")
     app.trigger_async_refresh()
     assert completed.get(timeout=1) == 2
+    _wait_published(app)
     app._on_pipe(b"1")
 
     assert all(view.applied == [results[0]] for view in views)
@@ -140,6 +160,7 @@ def test_first_failed_generation_stays_explicit_instead_of_empty_success():
 
     app.trigger_async_refresh()
     assert completed.get(timeout=1) == 1
+    _wait_published(app)
     app._on_pipe(b"1")
 
     assert all(not view.applied for view in views)
@@ -314,7 +335,7 @@ def test_exit_drops_late_completion_without_second_apply():
 
 
 def test_complete_batch_drives_real_views():
-    from cc_session_control.models import RCProject, Session, TrustDecision
+    from cc_session_control.models import Project, Session
 
     sess = [
         Session(
@@ -329,14 +350,12 @@ def test_complete_batch_drives_real_views():
         )
     ]
     proj = [
-        RCProject(
+        Project(
             name="p1",
             directory="/tmp/p1",
-            trust_decision=TrustDecision.TRUSTED,
-            status="stopped",
         )
     ]
-    snap = WorldSnapshot(sessions=sess, rc_projects=proj)
+    snap = WorldSnapshot(sessions=sess, projects=proj)
     batch = RefreshBatch(
         generation=1,
         snapshot=snap,
@@ -361,16 +380,15 @@ def test_complete_batch_drives_real_views():
 
 
 def test_tab_order_launcher_first():
-    # ADR-0001: 项目 → 会话 → 后台, startup on 项目; TAB_NAMES and self.views
+    # ADR-0001: 项目 → 会话, startup on 项目; TAB_NAMES and self.views
     # index in lockstep.
-    from cc_session_control.views.agents import AgentsView
-    from cc_session_control.views.rc import RCView
+    from cc_session_control.views.projects import ProjectsView
     from cc_session_control.views.sessions import SessionsView
 
-    assert app_mod.TAB_NAMES == ["项目", "会话", "后台"]
+    assert app_mod.TAB_NAMES == ["项目", "会话"]
     app = App()
     assert app._active == 0
-    assert [type(v) for v in app.views] == [RCView, SessionsView, AgentsView]
+    assert [type(v) for v in app.views] == [ProjectsView, SessionsView]
     assert len(app.views) == len(app_mod.TAB_NAMES)
 
 
@@ -456,7 +474,7 @@ def test_filter_mode_captures_q_into_edit():
     # _input consumed it before the view ever saw it.
     app = App()
     app.trigger_async_refresh = lambda: None  # keep the test IO-free
-    app._input("tab")  # 项目 → 会话 (项目/会话/后台 order)
+    app._input("tab")  # 项目 → 会话 (项目/会话 order)
     sessions_view = app.views[1]
     app._input("/")  # enter filter mode
     app._input("q")  # must land in the Edit, not exit
@@ -477,8 +495,8 @@ def test_tab_is_captured_during_filter_mode():
 
     app._input("enter")  # commit the filter
     assert sessions_view._filter_text == "x"
-    app._input("tab")  # back in list mode: tab switches again
-    assert app._active == 2
+    app._input("tab")  # back in list mode: tab switches again (wraps to 项目)
+    assert app._active == 0
 
 
 def test_notify_restore_does_not_evict_filter_edit():
@@ -650,7 +668,7 @@ def test_typed_completion_applies_on_main_and_busy_cannot_replace_handler():
 
     assert isinstance(
         app.submit_completion(
-            "agent.prepare",
+            "session.prepare",
             prepare,
             lambda value: (
                 completions.append(value),
@@ -663,7 +681,7 @@ def test_typed_completion_applies_on_main_and_busy_cannot_replace_handler():
     assert worker_threads and worker_threads[0] != main_thread
 
     outcome = app.submit_completion(
-        "agent.watch",
+        "session.watch",
         lambda: "replacement",
         lambda value: completions.append(value),
     )

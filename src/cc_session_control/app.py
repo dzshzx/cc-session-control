@@ -1,4 +1,4 @@
-"""CCM — Claude Code Manager urwid App."""
+"""csctl — agent-CLI session manager urwid App."""
 
 from __future__ import annotations
 
@@ -27,8 +27,7 @@ from .data.refresh import (
     RequestResult,
     build_refresh_result,
 )
-from .views.agents import AgentsView
-from .views.rc import RCView
+from .views.projects import ProjectsView
 from .views.sessions import SessionsView
 
 if TYPE_CHECKING:
@@ -68,10 +67,10 @@ class TabView(Protocol):
 
 
 # Launcher-first order (ADR-0001): startup lands on 项目 (the tmux-first
-# dispatch entry), then 会话 / 后台. In lockstep with `self.views` below.
-TAB_NAMES = ["项目", "会话", "后台"]
+# dispatch entry), then 会话. In lockstep with `self.views` below.
+TAB_NAMES = ["项目", "会话"]
 
-# D1: all three tabs share ONE footer prefix — the universal verbs (Tab/q/r) live
+# D1: both tabs share ONE footer prefix — the universal verbs (Tab/q/r) live
 # here exactly once so `r 刷新` shows identically on every tab. View-specific keys
 # come from each view's `keyhints()` and are appended via `App.set_hints`.
 FOOTER_PREFIX = " Tab 切换 · q 退出 · r 刷新 · "
@@ -119,16 +118,16 @@ class App:
         self._confirm_yes: Callable[[], None] | None = None
         self._confirm_base: urwid.Widget | None = None
 
-        # Order is in lockstep with TAB_NAMES: 项目 / 会话 / 后台 (launcher-first,
+        # Order is in lockstep with TAB_NAMES: 项目 / 会话 (launcher-first,
         # ADR-0001 — startup loads the 项目 tab at _active=0).
-        self.views: list[TabView] = [RCView(self), SessionsView(self), AgentsView(self)]
+        self.views: list[TabView] = [ProjectsView(self), SessionsView(self)]
         self._active = 0
 
         self.body = urwid.WidgetPlaceholder(self.views[0].widget)
         self._tab_texts: list[urwid.Text] = []
         tab_bar = self._build_tab_bar()
         title = urwid.AttrMap(
-            urwid.Text("Claude Code 会话管理器", align="center"), "header"
+            urwid.Text("Agent CLI 会话管理器", align="center"), "header"
         )
         # Title at 0 and tab_bar at 1 are positional (see `_update_tab_bar`); the
         # degraded banner, if any, is appended LAST so those indices are stable.

@@ -3,16 +3,9 @@
 from __future__ import annotations
 
 import os.path
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
-from typing import Literal
-
-# Single source of truth for RC status values. The Chinese display labels
-# (views/rc.py) and the CLI icons (cli.py) are presentation-only maps keyed
-# off this vocabulary.
-Status = Literal["running", "dead", "stopped", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -33,50 +26,22 @@ def issue_detail(issues: Iterable[InventoryIssue]) -> str:
     return "; ".join(parts)
 
 
+def format_inventory_issues(issues: Sequence[InventoryIssue]) -> str:
+    """The one `source (path): detail; …` rendering of inventory evidence."""
+    return "; ".join(
+        f"{issue.source}"
+        + (f" ({issue.path})" if issue.path else "")
+        + f": {issue.detail}"
+        for issue in issues
+    )
+
+
 class TrustDecision(Enum):
     """Effective Claude project trust, including unavailable evidence."""
 
     TRUSTED = "trusted"
     UNTRUSTED = "untrusted"
     UNAVAILABLE = "unavailable"
-
-
-class RCStartupSettingState(Enum):
-    """Effective per-project ``remoteControlAtStartup`` read state."""
-
-    TRUE = "true"
-    FALSE = "false"
-    UNSET = "unset"
-    MISSING = "missing"
-    UNREADABLE = "unreadable"
-    MALFORMED = "malformed"
-    INVALID = "invalid"
-
-
-@dataclass(frozen=True)
-class RCStartupSettingRead:
-    """Typed evidence for one effective per-project startup setting."""
-
-    state: RCStartupSettingState
-    source: Path | None = None
-    detail: str = ""
-
-    @property
-    def value(self) -> bool | None:
-        if self.state is RCStartupSettingState.TRUE:
-            return True
-        if self.state is RCStartupSettingState.FALSE:
-            return False
-        return None
-
-    @property
-    def available(self) -> bool:
-        return self.state in {
-            RCStartupSettingState.TRUE,
-            RCStartupSettingState.FALSE,
-            RCStartupSettingState.UNSET,
-            RCStartupSettingState.MISSING,
-        }
 
 
 @dataclass(frozen=True)
@@ -110,7 +75,6 @@ class Session:
     # existing construction and consumer byte-identical.
     archived: bool = False
     rc_exposed: bool = False  # session remote control currently exposed
-    agent_short: str | None = None  # linked background-agent short id, if any
     status: str = ""  # registry `status` (busy / idle)
     # ADR-0005 unbound-live hint (fourth status state): a live provider
     # process that argv binding could NOT tie to any sid (bare TUI / picker)
@@ -170,30 +134,6 @@ class SessionProc:
 
 
 @dataclass(frozen=True)
-class AgentJob:
-    """One `jobs/<short>/state.json` background-agent record.
-
-    state.json carries NO pid; `host_pid`/`host_alive` are filled later by
-    joining `sid -> sessions/<pid>.json` (see Phase 6).
-    """
-
-    short: str
-    sid: str
-    resume_sid: str
-    state: str = ""
-    tempo: str = ""
-    cwd: str = ""
-    name: str = ""
-    env_suffix: str = ""  # suffix of the cse_* bridge id
-    respawn_flags: tuple[str, ...] = ()
-    host_pid: int | None = None
-    host_alive: bool = False
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "respawn_flags", tuple(self.respawn_flags))
-
-
-@dataclass(frozen=True)
 class LiveInfo:
     """Merged liveness/identity for one sessionId (output of live_index)."""
 
@@ -218,28 +158,24 @@ class LiveInfo:
 
 
 @dataclass(frozen=True)
-class RCProject:
+class Project:
+    """One projects-tab row: an absolute directory plus membership evidence.
+
+    The tab is a pure launcher + membership surface, so the row carries no
+    runtime state — `dir_exists` marks a stale reference (the workspace
+    directory is gone but membership evidence or a pin still references the
+    project) and gates the launch verbs.
+    """
+
     name: str
     directory: str
-    # THE sole trust representation — unavailable evidence stays distinct from
-    # untrusted rather than collapsing into a plain bool.
-    trust_decision: TrustDecision
-    status: Status
-    rc_at_startup_setting: RCStartupSettingRead = field(
-        default_factory=lambda: RCStartupSettingRead(RCStartupSettingState.MISSING)
-    )
-    spawn_mode: str | None = None  # per-project remoteControlSpawnMode (None=unset)
-    # False when the workspace directory is gone but membership evidence (or
-    # a pin / rc window) still references the project — shown as 缺失,
-    # start-ops refused.
     dir_exists: bool = True
-    # ADR-0007 evidence-tier provenance (all default so pre-0.9 constructions
-    # stay byte-identical): `trusted_by` holds the provider keys whose trust
-    # store covers this directory (claude = effective/inherited trust, i.e.
-    # exactly what `trust_decision` gates; codex/kimi = exact-match records);
-    # `observed_by` holds providers with session activity in the directory.
-    # `hidden` rows ship in the scan so the view's show-hidden mode can offer
-    # the unhide verb; the view filters them in normal mode.
+    # ADR-0007 evidence-tier provenance: `trusted_by` holds the provider keys
+    # whose trust store covers this directory (claude = effective/inherited
+    # trust; codex/kimi = exact-match records); `observed_by` holds providers
+    # with session activity in the directory. `hidden` rows ship in the scan
+    # so the view's show-hidden mode can offer the unhide verb; the view
+    # filters them in normal mode.
     pinned: bool = False
     hidden: bool = False
     trusted_by: frozenset[str] = frozenset()
@@ -249,28 +185,6 @@ class RCProject:
         object.__setattr__(self, "trusted_by", frozenset(self.trusted_by))
         object.__setattr__(self, "observed_by", frozenset(self.observed_by))
 
-    @property
-    def rc_at_startup(self) -> bool | None:
-        """Compatibility view of the typed per-project settings evidence."""
-
-        return self.rc_at_startup_setting.value
-
-
-@dataclass(frozen=True)
-class RCServer:
-    """A project RC server process (`claude remote-control --name`) — R5/D5.
-
-    Discovered from tmux (managed) and/or `/proc` (external). `managed` is True
-    when the pid belongs to a csctl-managed tmux pane; otherwise the server was
-    started outside csctl and is READ-ONLY (no takeover/restart — review gate).
-    """
-
-    name: str
-    cwd: str = ""
-    managed: bool = False
-    pid: int | None = None
-    status: Status = "stopped"
-
 
 def effective_trust_decision(
     path: str,
@@ -278,8 +192,8 @@ def effective_trust_decision(
 ) -> TrustDecision:
     """PURE: is `path` trusted per Claude Code's runtime trust-dialog gate?
 
-    THE one trust predicate — membership discovery and the `start_one_result` gate
-    both call it, never re-derive. Mirrors claude's own behavior (verified on
+    THE one trust predicate — membership discovery calls it, never re-derives.
+    Mirrors claude's own behavior (verified on
     2.1.218): the dialog is suppressed when the cwd or ANY ancestor entry in
     `projects` (the `~/.claude.json` map) carries `hasTrustDialogAccepted:
     true`. An inherited subdirectory gets an entry with an EXPLICIT False
@@ -308,18 +222,3 @@ def effective_trust_decision(
         if target == root or target.startswith(root.rstrip("/") + "/"):
             return TrustDecision.TRUSTED
     return TrustDecision.UNTRUSTED
-
-
-def split_env_id(value: str | None) -> tuple[str, str]:
-    """`cse_abc` -> ("cse", "abc"); ("", "") when not a namespaced id.
-
-    THE one parser for namespaced bridge/env ids (`session_*` / `cse_*`) —
-    registry routes through it so the edge rules (None, no underscore, empty
-    prefix or suffix) cannot diverge.
-    """
-    if not value:
-        return "", ""
-    prefix, sep, suffix = value.partition("_")
-    if not sep or not prefix or not suffix:
-        return "", ""
-    return prefix, suffix

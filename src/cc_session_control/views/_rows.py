@@ -1,10 +1,10 @@
 """Shared text-display helpers for the views: the overlay text row + cell-width
 truncation.
 
-`TextRow` is the read-only line used in overlay lists (help / watch / cleanup
+`TextRow` is the read-only line used in overlay lists (help / cleanup
 preview). Selectable so the hosting ListBox can scroll it with the arrow keys,
 but every key is returned unhandled — the owning view's `handle_key` decides
-what closes the overlay. One class serves all three tabs (single source).
+what closes the overlay. One class serves both tabs (single source).
 """
 
 from __future__ import annotations
@@ -54,9 +54,13 @@ class SelectableRow(urwid.WidgetWrap):
         return key
 
 
+def dead_mapped(widget: urwid.Widget) -> urwid.AttrMap:
+    """The one dead/focus-selected AttrMap wrapping for selectable rows."""
+    return urwid.AttrMap(
+        widget, "dead", focus_map={"dead": "selected", None: "selected"}
+    )
+
+
 class TextRow(SelectableRow):
     def __init__(self, text: str) -> None:
-        mapped = urwid.AttrMap(
-            urwid.Text(text), "dead", focus_map={"dead": "selected", None: "selected"}
-        )
-        super().__init__(mapped)
+        super().__init__(dead_mapped(urwid.Text(text)))

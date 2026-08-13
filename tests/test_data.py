@@ -29,14 +29,6 @@ def _create_failure(tmux, detail="tmux unavailable"):
     )
 
 
-def _metadata_written(tmux, target):
-    return tmux.TmuxWriteResult(
-        tmux.TmuxWriteStage.WINDOW_OPTION,
-        tmux.TmuxWriteState.SUCCEEDED,
-        target=target,
-    )
-
-
 _make_session = make_session
 
 
@@ -625,170 +617,6 @@ def test_window_name_for_keeps_project_visible_in_unified_session():
     assert window_name_for("/tmp/my.proj", "cx-abcdef01") == "my-proj/cx-abcdef01"
 
 
-def test_list_windows_meta_parses_and_prefers_declared_path(monkeypatch):
-    from cc_session_control.data import tmux
-
-    out = (
-        "@1\tfoo\t0\t111\t/declared\t/current\n"
-        "@2\tbar\t1\t222\t\t/fallback\n"
-        "@3\tbaz\t0\tnope\t\t\n"
-        "bogus-line\n"
-    )
-    monkeypatch.setattr(
-        tmux.subprocess,
-        "run",
-        lambda argv, **_kwargs: tmux.subprocess.CompletedProcess(
-            argv,
-            0,
-            stdout=out,
-            stderr="",
-        ),
-    )
-
-    inventory = tmux.list_windows_inventory("rc")
-    assert inventory.records[0] == tmux.TmuxWindow("@1", "foo", False, 111, "/declared")
-    assert inventory.records[1] == tmux.TmuxWindow("@2", "bar", True, 222, "/fallback")
-    assert len(inventory.records) == 2
-    assert inventory.complete is False
-    assert len(inventory.issues) == 2
-
-
-def test_start_one_quotes_directory_and_remote_name(tmp_path, monkeypatch):
-    from cc_session_control.data import rc, tmux
-
-    proj = tmp_path / "project with space"
-    proj.mkdir()
-    claude_json = tmp_path / ".claude.json"
-    claude_json.write_text(
-        json.dumps(
-            {
-                "projects": {str(proj): {"hasTrustDialogAccepted": True}},
-            }
-        )
-    )
-    calls = {}
-    opts = {}
-    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(
-        rc,
-        "_tmux_window_inventory",
-        lambda: tmux.WindowInventory(),
-    )
-    monkeypatch.setattr(
-        tmux,
-        "run_in_tmux_result",
-        lambda session, window, cmd: (
-            calls.__setitem__("cmd", cmd) or _created_target(tmux, "rc:1")
-        ),
-    )
-    monkeypatch.setattr(
-        tmux,
-        "set_window_option_result",
-        lambda target, option, value: (
-            opts.__setitem__(option, (target, value)) or _metadata_written(tmux, target)
-        ),
-    )
-
-    assert rc.start_one_result(str(proj)).success is True
-
-    assert f"cd '{proj}'" in calls["cmd"]
-    assert "while true" not in calls["cmd"]
-    assert "exec claude remote-control" in calls["cmd"]
-    assert "--name 'project with space'" in calls["cmd"]
-    # The window declares its project path — the join key scan/stop read back.
-    assert opts["@csctl_path"] == ("rc:1", str(proj))
-
-
-def test_start_one_refuses_running_window(tmp_path, monkeypatch):
-    from cc_session_control.data import rc, tmux
-
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    claude_json = tmp_path / ".claude.json"
-    claude_json.write_text(
-        json.dumps(
-            {
-                "projects": {str(proj): {"hasTrustDialogAccepted": True}},
-            }
-        )
-    )
-    calls = {"kill": 0, "new": 0}
-    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(
-        rc,
-        "_tmux_window_inventory",
-        lambda: tmux.WindowInventory(
-            (tmux.TmuxWindow("@1", "proj", False, 1, str(proj)),)
-        ),
-    )
-    monkeypatch.setattr(
-        rc,
-        "stop_one_result",
-        lambda path, *, window_inventory=None: (
-            calls.__setitem__("kill", calls["kill"] + 1)
-            or rc.StopResult(rc.StopState.STOPPED, path)
-        ),
-    )
-    monkeypatch.setattr(
-        tmux,
-        "run_in_tmux_result",
-        lambda *a: (
-            calls.__setitem__("new", calls["new"] + 1) or _created_target(tmux, "rc:1")
-        ),
-    )
-
-    assert rc.start_one_result(str(proj)).success is False
-    assert calls == {"kill": 0, "new": 0}
-
-
-def test_start_one_replaces_dead_window(tmp_path, monkeypatch):
-    from cc_session_control.data import rc, tmux
-
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    claude_json = tmp_path / ".claude.json"
-    claude_json.write_text(
-        json.dumps(
-            {
-                "projects": {str(proj): {"hasTrustDialogAccepted": True}},
-            }
-        )
-    )
-    calls = {"kill": 0, "cmd": None}
-    monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(
-        rc,
-        "_tmux_window_inventory",
-        lambda: tmux.WindowInventory(
-            (tmux.TmuxWindow("@1", "proj", True, 1, str(proj)),)
-        ),
-    )
-    monkeypatch.setattr(
-        rc,
-        "stop_one_result",
-        lambda path, *, window_inventory=None: (
-            calls.__setitem__("kill", calls["kill"] + 1)
-            or rc.StopResult(rc.StopState.STOPPED, path)
-        ),
-    )
-    monkeypatch.setattr(
-        tmux,
-        "run_in_tmux_result",
-        lambda session, window, cmd: (
-            calls.__setitem__("cmd", cmd) or _created_target(tmux, "rc:2")
-        ),
-    )
-    monkeypatch.setattr(
-        tmux,
-        "set_window_option_result",
-        lambda target, *_a: _metadata_written(tmux, target),
-    )
-
-    assert rc.start_one_result(str(proj)).success is True
-    assert calls["kill"] == 1
-    assert calls["cmd"] is not None
-
-
 # --- D4: _parse_transcript ---
 
 
@@ -802,7 +630,7 @@ def _write_jsonl(tmp_path, sid, lines):
     return str(f)
 
 
-def _parse_transcript(path, idx, cur, job_shorts):
+def _parse_transcript(path, idx, cur):
     """Test-only composition of the two production seams the removed
     `sessions._parse_transcript` compatibility wrapper used to chain: the
     record-level parser (`transcripts._parse_transcript`) projected through
@@ -811,7 +639,7 @@ def _parse_transcript(path, idx, cur, job_shorts):
     transcript = transcripts_mod._parse_transcript(path)
     if transcript is None:
         return None
-    return sessions_mod._project_transcript(transcript, idx, cur, job_shorts)
+    return sessions_mod._project_transcript(transcript, idx, cur)
 
 
 def test_parse_transcript_basic_fields(tmp_path):
@@ -824,7 +652,7 @@ def test_parse_transcript_basic_fields(tmp_path):
             {"type": "user", "message": {"content": "second prompt"}},
         ],
     )
-    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
+    s = _parse_transcript(path, idx={}, cur=set())
     assert s is not None
     assert s.sid == "sid1"
     assert s.cwd == "/tmp/proj"
@@ -843,7 +671,7 @@ def test_parse_transcript_none_when_no_cwd(tmp_path):
             {"type": "user", "message": {"content": "hello"}},
         ],
     )
-    assert _parse_transcript(path, idx={}, cur=set(), job_shorts=set()) is None
+    assert _parse_transcript(path, idx={}, cur=set()) is None
 
 
 def test_parse_transcript_label_priority_aititle(tmp_path):
@@ -857,7 +685,7 @@ def test_parse_transcript_label_priority_aititle(tmp_path):
             {"type": "user", "message": {"content": "first prompt"}},
         ],
     )
-    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
+    s = _parse_transcript(path, idx={}, cur=set())
     assert s.label == "The Title"
 
 
@@ -871,7 +699,7 @@ def test_parse_transcript_label_priority_first_prompt(tmp_path):
             {"type": "user", "message": {"content": "first real prompt"}},
         ],
     )
-    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
+    s = _parse_transcript(path, idx={}, cur=set())
     assert s.label == "first real prompt"
 
 
@@ -889,7 +717,7 @@ def test_parse_transcript_label_priority_last_prompt(tmp_path):
             },
         ],
     )
-    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
+    s = _parse_transcript(path, idx={}, cur=set())
     assert s.label == "the last prompt"
 
 
@@ -901,7 +729,7 @@ def test_parse_transcript_label_untitled(tmp_path):
             {"cwd": "/tmp/proj"},
         ],
     )
-    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
+    s = _parse_transcript(path, idx={}, cur=set())
     assert s.label == "(untitled)"
 
 
@@ -915,7 +743,7 @@ def test_parse_transcript_alive_and_current(tmp_path):
         ],
     )
     idx = {"sid1": LiveInfo(sid="sid1", pid=4242, alive=True)}
-    s = _parse_transcript(path, idx=idx, cur={4242}, job_shorts=set())
+    s = _parse_transcript(path, idx=idx, cur={4242})
     assert s.pid == 4242
     assert s.alive is True
     assert s.current is True
@@ -935,7 +763,7 @@ def test_parse_transcript_current_via_older_alive_pid(tmp_path):
         ],
     )
     idx = {"sid1": LiveInfo(sid="sid1", pid=710575, pids=[700772, 710575], alive=True)}
-    s = _parse_transcript(path, idx=idx, cur={700772}, job_shorts=set())
+    s = _parse_transcript(path, idx=idx, cur={700772})
     assert s.pid == 710575  # newest chosen for display
     assert s.current is True  # older ancestor pid still protects it
 
@@ -958,7 +786,7 @@ def test_parse_transcript_rc_exposed_requires_proc_alive(tmp_path):
             bridge="session_env",
         )
     }
-    s = _parse_transcript(path, idx=idx, cur=set(), job_shorts=set())
+    s = _parse_transcript(path, idx=idx, cur=set())
     assert s.alive is True
     assert s.rc_exposed is False
 
@@ -981,7 +809,7 @@ def test_parse_transcript_sets_rc_exposed_when_proc_alive(tmp_path):
             bridge="session_env",
         )
     }
-    s = _parse_transcript(path, idx=idx, cur=set(), job_shorts=set())
+    s = _parse_transcript(path, idx=idx, cur=set())
     assert s.rc_exposed is True
 
 
@@ -995,5 +823,5 @@ def test_parse_transcript_hidden_tags(tmp_path):
             {"type": "user", "message": {"content": "hi"}},
         ],
     )
-    s = _parse_transcript(path, idx={}, cur=set(), job_shorts=set())
+    s = _parse_transcript(path, idx={}, cur=set())
     assert s.hidden == {"sdk", "bridge"}

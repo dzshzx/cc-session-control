@@ -16,7 +16,7 @@ import urwid
 from ..data import providers
 from ..models import Session
 from ._colspec import ColSpec, header_columns, row_columns
-from ._rows import SelectableRow, truncate_cells
+from ._rows import SelectableRow, dead_mapped, truncate_cells
 
 # Transcript-derived hidden tags -> compact Chinese row marker.
 _HIDDEN_MARKERS = {
@@ -97,7 +97,7 @@ def _flags(session: Session) -> str:
     terminals (the old ⚙ agent glyph was the width-unstable one — text-default,
     needs VS16 — and is the only thing P5 actually needed to drop). Agent-link is
     deliberately NOT shown here: it is orthogonal to remote control and already
-    covered by the 来源 `BG` badge plus the dedicated 后台 tab."""
+    covered by the 来源 `BG` badge."""
     return "📱" if session.rc_exposed else ""
 
 
@@ -209,10 +209,7 @@ class _ActionRow(SelectableRow):
             ],
             dividechars=2,
         )
-        mapped = urwid.AttrMap(
-            cols, "dead", focus_map={"dead": "selected", None: "selected"}
-        )
-        super().__init__(mapped)
+        super().__init__(dead_mapped(cols))
 
 
 _SESSION_HEADER = header_columns(SESSION_COLS)

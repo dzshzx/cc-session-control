@@ -235,9 +235,9 @@ def scan_trusted_dirs() -> TrustedDirsScan:
     """Every ACTIVE TrustDiscovery provider's trusted dirs, in one pass.
 
     Claude is deliberately absent: its trust store is `~/.claude.json`, read
-    through `data.project_settings` — the same single reader the RC start
-    gate uses — never through this registry path. Per-provider failures merge
-    into the issue stream and narrow only their own source.
+    through `data.project_settings` — the single typed reader membership
+    discovery uses — never through this registry path. Per-provider failures
+    merge into the issue stream and narrow only their own source.
     """
     directories: dict[str, tuple[str, ...]] = {}
     issues: list[InventoryIssue] = list(config_issues())

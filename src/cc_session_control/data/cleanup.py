@@ -1,5 +1,5 @@
 """Preview-first cleanup policy bounded by frozen plans, fresh liveness, and
-immutable anchors. `jobs/` is explicit-delete only; age cleanup is not R10-gated.
+immutable anchors. Age cleanup is not R10-gated.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 from ..config import cfg
-from ..models import AgentJob, Session, SessionProc
+from ..models import Session, SessionProc
 from . import liveness, proc, registry, transcripts
 from .age_cleanup import (
     AgeCleanupPlan,
@@ -23,9 +23,6 @@ from .age_cleanup import (
 from .cleanup_anchors import (
     PlanAnchors,
     pin_plan_targets,
-)
-from .cleanup_anchors import (
-    agent_removal_anchors as _agent_removal_anchors,
 )
 from .cleanup_anchors import (
     entry_anchors as _raw_entry_anchors,
@@ -50,7 +47,6 @@ _SID_DIRS = ("session_env", "file_history", "tasks", "uploads")
 def known_sids_from_transcripts(
     transcript_sids: Iterable[str],
     session_procs: Sequence[SessionProc],
-    agent_jobs: Sequence[AgentJob],
     agents_map: Mapping[str, int | None],
     cur: AbstractSet[int],
 ) -> set[str]:
@@ -59,13 +55,6 @@ def known_sids_from_transcripts(
     known |= {sp.sid for sp in session_procs}
     known |= {sp.sid for sp in session_procs if sp.proc_alive}
     known |= {sp.sid for sp in session_procs if sp.pid in cur}
-    for job in agent_jobs:
-        if job.sid:
-            known.add(job.sid)
-        if job.resume_sid:
-            known.add(job.resume_sid)
-        if job.host_alive and job.sid:
-            known.add(job.sid)
     known |= {sid for sid in agents_map if sid}
     return known
 
@@ -143,15 +132,6 @@ def _jobs_path(sid: str) -> str:
     return os.path.join(str(cfg.jobs_dir), sid[:8])
 
 
-def agent_removal_anchors(short: str, sid: str) -> tuple[RemovalAnchor, ...]:
-    return _agent_removal_anchors(
-        short,
-        sid,
-        [base for _, base in _sid_dir_paths()],
-        str(cfg.jobs_dir),
-    )
-
-
 def session_removal_anchors(
     sessions: Sequence[Session],
 ) -> dict[str, tuple[RemovalAnchor, ...]]:
@@ -173,47 +153,6 @@ def _sid_is_protected(
         or bool(agents_map.get(sid))
         or any(sp.sid == sid and sp.pid in cur for sp in session_procs)
     )
-
-
-def _remove_agent_artifact_paths(
-    short: str,
-    anchors: tuple[RemovalAnchor, ...],
-) -> CleanupExecution:
-    result = CleanupExecution()
-    for anchor in anchors:
-        result.add_removal(remove_anchored(anchor))
-    if result.removed and not result.failed:
-        result.complete(short)
-    elif not result.removed and not result.incomplete:
-        result.mark_missing(short)
-    return result
-
-
-def remove_agent_artifacts(
-    short: str,
-    sid: str,
-    *,
-    anchors: tuple[RemovalAnchor, ...] | None = None,
-) -> CleanupExecution:
-    """Delete anchored agent artifacts after fresh liveness revalidation."""
-    result = CleanupExecution()
-    try:
-        pinned = anchors if anchors is not None else agent_removal_anchors(short, sid)
-    except OSError as exc:
-        result.refuse([short], f"cannot establish removal anchor: {exc}")
-        return result
-    evidence = fresh_liveness_inputs()
-    if not evidence.complete:
-        return refuse_incomplete_liveness(result, [short], evidence)
-    if _sid_is_protected(
-        sid,
-        evidence.session_procs,
-        evidence.agents_map,
-        evidence.cur,
-    ):
-        result.skip(short, "background agent is now live or current")
-        return result
-    return _remove_agent_artifact_paths(short, pinned)
 
 
 # --- Strategy A: sid-keyed orphan dirs (H1 protected-sid set) --------------
@@ -254,7 +193,6 @@ def execute_orphan_removals(
     known = known_sids_from_transcripts(
         transcript_inventory.sids,
         evidence.session_procs,
-        evidence.agent_jobs,
         evidence.agents_map,
         evidence.cur,
     )
@@ -517,7 +455,6 @@ def build_plan(
     protected_sids = known_sids_from_transcripts(
         (s.sid for s in sessions),
         evidence.session_procs,
-        evidence.agent_jobs,
         evidence.agents_map,
         evidence.cur,
     ) | set(transcript_sids)

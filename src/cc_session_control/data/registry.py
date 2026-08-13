@@ -1,11 +1,10 @@
-"""Read Claude Code's session/agent registries with typed scan diagnostics.
+"""Read Claude Code's session registry with typed scan diagnostics.
 
-Two on-disk registers Claude Code maintains itself:
+The on-disk register Claude Code maintains itself:
   - `sessions/<pid>.json`  → one per local runtime (a sid can have several)
-  - `jobs/<short>/state.json` → one per background agent (NO pid inside)
 
-The typed scanners retain partial records and every expected source issue.
-Compatibility readers return only the records for non-safety callers. Results
+The typed scanner retains partial records and every expected source issue.
+The compatibility reader returns only the records for non-safety callers. Results
 are cached for ~5s; pass `max_age=0.0` for fresh protection evidence.
 """
 
@@ -18,7 +17,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from ..config import cfg
-from ..models import AgentJob, InventoryIssue, SessionProc, split_env_id
+from ..models import InventoryIssue, SessionProc
 
 #: Same (source, path, detail) record everywhere — one canonical issue type.
 RegistryIssue = InventoryIssue
@@ -38,15 +37,12 @@ class RegistryScan[Record]:
 
 _sessions_cache: RegistryScan[SessionProc] | None = None
 _sessions_time: float = 0.0
-_jobs_cache: RegistryScan[AgentJob] | None = None
-_jobs_time: float = 0.0
 
 
 def invalidate_cache() -> None:
-    """Drop both cached reads (next call re-scans disk)."""
-    global _sessions_cache, _jobs_cache
+    """Drop the cached read (next call re-scans disk)."""
+    global _sessions_cache
     _sessions_cache = None
-    _jobs_cache = None
 
 
 def _read_document(path: str) -> object:
@@ -158,105 +154,18 @@ def read_session_procs(max_age: float = 5.0) -> list[SessionProc]:
     return list(scan_session_procs(max_age=max_age).records)
 
 
-def _parse_agent_job(
-    document: object,
-    *,
-    short: str,
-) -> tuple[AgentJob | None, str | None]:
-    if not short:
-        return None, "invalid schema: job directory name is empty"
-    d = document
-    if not isinstance(d, dict):
-        return None, "invalid schema: expected a JSON object"
-    sid_value = d.get("sessionId")
-    if not isinstance(sid_value, str) or not sid_value:
-        return None, "invalid schema: sessionId is required"
-    sid = sid_value
-    flags = d.get("respawnFlags")
-    if not isinstance(flags, list):
-        flags = []
-    bridge = d.get("bridgeSessionId")
-    if bridge is not None and not isinstance(bridge, str):
-        return None, "invalid schema: bridgeSessionId must be a string or null"
-    return (
-        AgentJob(
-            short=short,
-            sid=sid,
-            resume_sid=str(d.get("resumeSessionId") or sid),
-            state=d.get("state", "") or "",
-            tempo=d.get("tempo", "") or "",
-            cwd=d.get("cwd", "") or "",
-            name=d.get("name", "") or "",
-            env_suffix=split_env_id(bridge)[1],
-            respawn_flags=tuple(str(x) for x in flags),
-        ),
-        None,
-    )
-
-
-def scan_agent_jobs(max_age: float = 5.0) -> RegistryScan[AgentJob]:
-    """Scan `jobs/*/state.json`, retaining partial records and source issues."""
-    global _jobs_cache, _jobs_time
-    now = time.monotonic()
-    if _jobs_cache is not None and (now - _jobs_time) < max_age:
-        return _jobs_cache
-    root = os.fspath(cfg.jobs_dir)
-    job_dirs, root_issue = _root_paths(
-        root,
-        "job registry",
-        lambda entry: entry.is_dir(),
-    )
-    if root_issue is not None:
-        result = RegistryScan[AgentJob](issues=(root_issue,))
-    else:
-        rows: list[AgentJob] = []
-        issues: list[RegistryIssue] = []
-        for job_dir in job_dirs:
-            state_path = os.path.join(job_dir, "state.json")
-            try:
-                document = _read_document(state_path)
-            except FileNotFoundError:
-                continue
-            except (OSError, json.JSONDecodeError, UnicodeError) as exc:
-                issues.append(RegistryIssue("job registry", state_path, str(exc)))
-                continue
-            row, schema_error = _parse_agent_job(
-                document,
-                short=os.path.basename(job_dir),
-            )
-            if schema_error is not None:
-                issues.append(RegistryIssue("job registry", state_path, schema_error))
-            elif row is not None:
-                rows.append(row)
-        result = RegistryScan(
-            records=tuple(rows),
-            issues=tuple(issues),
-        )
-    _jobs_cache = result
-    _jobs_time = now
-    return result
-
-
-def read_agent_jobs(max_age: float = 5.0) -> list[AgentJob]:
-    """Compatibility records-only view of :func:`scan_agent_jobs`."""
-    return list(scan_agent_jobs(max_age=max_age).records)
-
-
 def host_pid_for_sid(
     sid: str, session_procs: Sequence[SessionProc]
 ) -> tuple[int | None, bool]:
     """Join a sid to its host pid via the registry session files — PURE.
 
-    `jobs/<short>/state.json` carries NO pid, so a background/agent worker's host
-    pid is the `sessions/<pid>.json` entry sharing the sid. Prefers a proc-alive
-    match (`proc_alive is True` — so `alive=True` is trustworthy and defeats pid
-    reuse); falls back to the first sid match with `alive=False`. An uninjected
-    row (`proc_alive is None`) can never yield `alive=True` — only
-    `liveness.live_session_procs` injection can. Returns `(None, False)` when
-    no sessions file references the sid (that live worker is unstoppable).
+    Prefers a proc-alive match (`proc_alive is True` — so `alive=True` is
+    trustworthy and defeats pid reuse); falls back to the first sid match
+    with `alive=False`. An uninjected row (`proc_alive is None`) can never
+    yield `alive=True` — only `liveness.live_session_procs` injection can.
+    Returns `(None, False)` when no sessions file references the sid.
 
-    The single host-pid join shared by `liveness.enrich_jobs` and
-    `cleanup.remove_session` (M3 guard).
+    The single host-pid join behind `cleanup.remove_session`'s M3 guard.
     """
     procs = [sp for sp in session_procs if sp.sid == sid]
     if not procs:

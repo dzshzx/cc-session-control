@@ -14,9 +14,9 @@ path carrying a provenance evidence set:
   the Sessions tab remains the exhaustive activity surface.
 
 Membership = tier union − hygiene (temp roots, missing directories), where
-pinned and rc-window-held entries are exempt from hygiene, and hidden
-entries are returned flagged (never filtered away here) so the view's
-show-hidden toggle can still offer the unhide verb.
+pinned entries are exempt from hygiene, and hidden entries are returned
+flagged (never filtered away here) so the view's show-hidden toggle can still
+offer the unhide verb.
 
 The load-bearing invariant: trust inheritance only ever QUALIFIES a recorded
 candidate, it never GENERATES one — candidates come from explicit records
@@ -28,11 +28,22 @@ from __future__ import annotations
 
 import os
 import tempfile
-from collections.abc import Iterable, Mapping
+import time
+from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 
-from ..models import Session, TrustDecision, effective_trust_decision
+from ..config import cfg
+from ..models import (
+    InventoryIssue,
+    Project,
+    Session,
+    TrustDecision,
+    effective_trust_decision,
+)
+from . import providers
+from .curation import read_curation
+from .project_settings import read_project_settings
 
 #: Days without any provider activity after which an observed-only directory
 #: leaves the projects tab (a constant, deliberately not configurable).
@@ -58,9 +69,25 @@ def _is_temp_path(path: str) -> bool:
     return False
 
 
+def _latest_activity(sessions: Iterable[Session]) -> dict[str, float]:
+    """Newest session mtime per normpath'd cwd — shared by the observed
+    tier's decay check and the projects-tab activity ordering."""
+    latest: dict[str, float] = {}
+    for session in sessions:
+        if session.cwd:
+            key = os.path.normpath(session.cwd)
+            latest[key] = max(session.mtime, latest.get(key, 0.0))
+    return latest
+
+
 @dataclass(frozen=True)
 class MembershipEntry:
-    """One candidate directory and its full provenance evidence set."""
+    """One candidate directory and its full provenance evidence set.
+
+    The projection intermediate between raw evidence and the view-facing
+    :class:`Project`: it carries `last_activity` (needed by the decay check
+    and the activity ordering), which `Project` deliberately drops.
+    """
 
     directory: str  # normpath'd absolute path — THE identity key
     pinned: bool = False
@@ -69,7 +96,6 @@ class MembershipEntry:
     observed_by: frozenset[str] = frozenset()  # provider keys
     last_activity: float = 0.0  # newest session mtime across providers
     dir_exists: bool = True
-    has_window: bool = False  # holds a live/dead RC tmux window
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "trusted_by", frozenset(self.trusted_by))
@@ -83,7 +109,6 @@ def compute_membership(
     sessions: Iterable[Session],
     pinned: AbstractSet[str],
     hidden: AbstractSet[str],
-    window_paths: Iterable[str],
     now: float,
 ) -> list[MembershipEntry]:
     """Pure membership computation over the three evidence tiers + curation.
@@ -95,11 +120,10 @@ def compute_membership(
     decay_floor = now - OBSERVED_DECAY_DAYS * _SECONDS_PER_DAY
     pinned_dirs = {os.path.normpath(p) for p in pinned}
     hidden_dirs = {os.path.normpath(p) for p in hidden}
-    windows = {os.path.normpath(p) for p in window_paths}
 
     trusted: dict[str, set[str]] = {}
     observed: dict[str, set[str]] = {}
-    latest: dict[str, float] = {}
+    latest = _latest_activity(sessions)
 
     # Trusted tier — recorded candidates only; inheritance qualifies a key's
     # trust status, it never enumerates the key's descendants.
@@ -123,10 +147,10 @@ def compute_membership(
             continue
         directory = os.path.normpath(session.cwd)
         observed.setdefault(directory, set()).add(session.provider)
-        latest[directory] = max(session.mtime, latest.get(directory, 0.0))
 
     # The claude trust badge qualifies every candidate (effective trust is
-    # what the RC start gate reads) — qualification, not generation.
+    # what a trust-sensitive launch gate would read) — qualification, not
+    # generation.
     if claude_projects is not None:
         for directory in set(trusted) | set(observed):
             if "claude" not in trusted.get(directory, set()) and (
@@ -155,19 +179,13 @@ def compute_membership(
                     observed_by=observed_by,
                     last_activity=activity,
                     dir_exists=dir_exists,
-                    has_window=directory in windows,
                 )
             )
             continue
         is_pinned = directory in pinned_dirs
         if not (is_pinned or trusted_by or activity >= decay_floor):
             continue  # observed-only evidence, decayed
-        has_window = directory in windows
-        if (
-            not is_pinned
-            and not has_window
-            and (not dir_exists or _is_temp_path(directory))
-        ):
+        if not is_pinned and (not dir_exists or _is_temp_path(directory)):
             continue  # hygiene: dead residue / working space
         entries.append(
             MembershipEntry(
@@ -177,7 +195,94 @@ def compute_membership(
                 observed_by=observed_by,
                 last_activity=activity,
                 dir_exists=dir_exists,
-                has_window=has_window,
             )
         )
     return entries
+
+
+def _basename(path: str) -> str:
+    """Display name derived from the path — NEVER an identity key."""
+    return os.path.basename(path.rstrip("/")) or path
+
+
+@dataclass(frozen=True)
+class ProjectsScan:
+    """Project rows plus the non-fatal degradation of their evidence sources."""
+
+    projects: tuple[Project, ...] = ()
+    # Non-fatal degradation of the membership sources (claude.json, codex/kimi
+    # trust stores, the curation file) — narrowed sources, never a blank tab.
+    issues: tuple[InventoryIssue, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "projects", tuple(self.projects))
+        object.__setattr__(self, "issues", tuple(self.issues))
+
+
+def scan_projects(sessions: Sequence[Session]) -> ProjectsScan:
+    """Discover member projects from every evidence source, in one pass.
+
+    ONE claude.json load feeds both the trust tier and candidate records — no
+    per-project re-parse. Expected source failures (unreadable claude.json,
+    broken provider trust store, malformed curation file) become typed issues
+    so the tab narrows honestly instead of silently showing less.
+    """
+    settings = read_project_settings(cfg.claude_json)
+    trust_scan = providers.scan_trusted_dirs()
+    curation = read_curation(cfg.curation_file)
+    entries = compute_membership(
+        claude_projects=settings.projects if settings.available else None,
+        provider_trust=trust_scan.directories,
+        sessions=sessions,
+        pinned=curation.pinned,
+        hidden=curation.hidden,
+        now=time.time(),
+    )
+    projects = [
+        Project(
+            name=_basename(entry.directory),
+            directory=entry.directory,
+            dir_exists=entry.dir_exists,
+            pinned=entry.pinned,
+            hidden=entry.hidden,
+            trusted_by=entry.trusted_by,
+            observed_by=entry.observed_by,
+        )
+        for entry in entries
+    ]
+    issues = list(trust_scan.issues)
+    if not settings.available:
+        detail = settings.detail or settings.state.value
+        issues.append(
+            InventoryIssue(
+                "claude.json project settings",
+                os.fspath(cfg.claude_json),
+                detail,
+            )
+        )
+    if not curation.available:
+        issues.append(
+            InventoryIssue(
+                "curation",
+                os.fspath(cfg.curation_file),
+                curation.detail or curation.state.value,
+            )
+        )
+    return ProjectsScan(tuple(projects), tuple(issues))
+
+
+def order_by_activity(
+    projects: Sequence[Project],
+    sessions: Sequence[Session],
+) -> list[Project]:
+    """Pinned projects first, then newest exact-cwd activity, then path."""
+
+    latest = _latest_activity(sessions)
+    return sorted(
+        projects,
+        key=lambda project: (
+            not project.pinned,
+            -latest.get(os.path.normpath(project.directory), 0.0),
+            project.directory,
+        ),
+    )

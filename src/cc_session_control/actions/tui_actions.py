@@ -1,6 +1,6 @@
 """Typed adapters for mutations that return to the TUI.
 
-Views pass the frozen ``Session``/``AgentJob`` domain models directly to
+Views pass the frozen ``Session`` domain models directly to
 these action adapters. Workers receive only those frozen models and return
 ``ActionResult`` data; they never receive or mutate an urwid widget, walker,
 selection, or App.
@@ -11,12 +11,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ..config import cfg
-from ..data import cleanup, providers, rc
+from ..data import cleanup, providers
 from ..data.curation import CurationWriteState, set_hidden, set_pinned
-from ..data.project_settings import SettingWriteState, write_rc_at_startup
 from ..data.removal import CleanupExecution
-from ..models import AgentJob, Session
-from . import agent_ops, session_ops
+from ..models import Session
+from . import session_ops
 from .feedback import (
     format_cleanup_notice,
     format_cli_delete_notice,
@@ -83,111 +82,6 @@ def copy_resume_command(session: Session) -> ActionResult:
     return ActionResult("已复制")
 
 
-def respawn_agent(job: AgentJob) -> ActionResult:
-    result = agent_ops.respawn_result(job)
-    if not result.success:
-        detail = result.detail or "无法创建 tmux 窗口"
-        return ActionResult(
-            f"重启失败：{detail}",
-            needs_refresh=True,
-        )
-    return ActionResult(
-        f"已重启：{result.agent_command}",
-        needs_refresh=True,
-    )
-
-
-def remove_agent(job: AgentJob) -> ActionResult:
-    return _delete_result(agent_ops.remove_job(job))
-
-
-def stop_agent(job: AgentJob) -> ActionResult:
-    result = agent_ops.stop_job_result(job)
-    if result.state is agent_ops.AgentStopState.STOPPED:
-        return ActionResult(
-            "已发送停止信号（可能残留孤儿进程，请手动确认）",
-            needs_refresh=True,
-        )
-    if result.state is agent_ops.AgentStopState.NOT_RUNNING:
-        return ActionResult(
-            "该后台 agent 未在运行",
-            needs_refresh=True,
-        )
-    if result.state is agent_ops.AgentStopState.REFUSED:
-        detail = result.detail or "安全判定不可用"
-        return ActionResult(
-            f"已拒绝停止：{detail}",
-            needs_refresh=True,
-        )
-    detail = result.detail or "无法发送停止信号"
-    return ActionResult(
-        f"停止失败：{detail}",
-        needs_refresh=True,
-    )
-
-
-def start_project(path: str, name: str) -> ActionResult:
-    result = rc.start_one_result(path)
-    if result.state is rc.StartState.STARTED:
-        return ActionResult(f"已启动 {name}", needs_refresh=True)
-    if result.state is rc.StartState.TRUST_UNAVAILABLE:
-        message = "项目设置不可用 — 已拒绝启动"
-        return ActionResult(message, needs_refresh=True)
-    if result.state is rc.StartState.UNTRUSTED:
-        return ActionResult("未信任 — 已拒绝启动", needs_refresh=True)
-    if result.state is rc.StartState.INVENTORY_UNAVAILABLE:
-        detail = f"：{result.detail}" if result.detail else ""
-        return ActionResult(
-            f"RC 清单不可用 — 已拒绝启动{detail}",
-            needs_refresh=True,
-        )
-    if result.state is rc.StartState.ALREADY_RUNNING:
-        return ActionResult("已在运行", needs_refresh=True)
-    if result.state is rc.StartState.NOT_DIRECTORY:
-        return ActionResult(
-            "目录缺失 — 无法启动",
-            needs_refresh=True,
-        )
-    if result.state is rc.StartState.METADATA_FAILED:
-        target = result.target or "unknown"
-        detail = result.detail or "tmux 元数据写入失败"
-        return ActionResult(
-            f"启动不完整：tmux 窗口 {target} 已创建，但元数据写入失败：{detail}",
-            needs_refresh=True,
-        )
-    detail = f"：{result.detail}" if result.detail else ""
-    return ActionResult(f"启动失败{detail}", needs_refresh=True)
-
-
-def stop_project(path: str, name: str) -> ActionResult:
-    result = rc.stop_one_result(path)
-    if result.state is rc.StopState.STOPPED:
-        return ActionResult(f"已停止 {name}", needs_refresh=True)
-    if result.state is rc.StopState.NOT_RUNNING:
-        return ActionResult("未在运行", needs_refresh=True)
-    detail = result.detail or "tmux 操作失败"
-    return ActionResult(f"停止失败：{detail}", needs_refresh=True)
-
-
-def write_auto_rc(
-    path: str,
-    name: str,
-    value: bool | None,
-) -> ActionResult:
-    result = write_rc_at_startup(path, value)
-    if result.state is SettingWriteState.FAILED:
-        reason = result.failure.value if result.failure is not None else "unknown"
-        return ActionResult(
-            f"配置写入失败（{reason}）: {result.detail}",
-        )
-    shown = {True: "开", False: "关", None: "未设置"}[value]
-    suffix = "（无变化）" if result.state is SettingWriteState.UNCHANGED else ""
-    return ActionResult(
-        f"{name} 自动远控: {shown}{suffix}",
-        needs_refresh=True,
-    )
-
-
 def toggle_project_pin(path: str, name: str, pinned: bool) -> ActionResult:
     """Pin/unpin one directory in the curation store (ADR-0007)."""
     result = set_pinned(cfg.curation_file, path, pinned)
@@ -208,16 +102,6 @@ def toggle_project_hidden(path: str, name: str, hidden: bool) -> ActionResult:
     verb = "已隐藏" if hidden else "已取消隐藏"
     suffix = "（无变化）" if result.state is CurationWriteState.UNCHANGED else ""
     return ActionResult(f"{verb} {name}{suffix}", needs_refresh=True)
-
-
-def stop_all_projects() -> ActionResult:
-    result = rc.stop_all_result()
-    if result.state is rc.StopState.STOPPED:
-        return ActionResult("已停止全部", needs_refresh=True)
-    if result.state is rc.StopState.NOT_RUNNING:
-        return ActionResult("本来就没在跑", needs_refresh=True)
-    detail = result.detail or "tmux 操作失败"
-    return ActionResult(f"停止全部失败：{detail}", needs_refresh=True)
 
 
 def run_cleanup(

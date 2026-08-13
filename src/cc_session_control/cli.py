@@ -88,9 +88,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resume.set_defaults(handler=cli_commands._cmd_resume)
 
-    agents = commands.add_parser("agents", help="List background agents")
-    agents.set_defaults(handler=cli_commands._cmd_agents)
-
     return parser
 
 

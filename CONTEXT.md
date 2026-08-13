@@ -1,23 +1,23 @@
 # cc-session-control
 
 This context defines the operator language for managing agent-CLI sessions
-(Claude Code, Codex CLI, Kimi Code), agents, and Remote Control environments
-from one local machine.
+(Claude Code, Codex CLI, Kimi Code) from one local machine, including their
+session-level Remote Control exposure.
 
 ## Language
 
 **Local Global Workbench**:
 A machine-wide management surface for seeing and acting on agent-CLI sessions
-across providers and projects, plus Claude Code agents and Remote Control
-environments. Works tmux-first: its primary verbs dispatch sessions into
-project-labelled windows in one shared `csctl` tmux session (ADR-0001/0006).
+across providers and projects. Works tmux-first: its primary verbs dispatch
+sessions into project-labelled windows in one shared `csctl` tmux session
+(ADR-0001/0006).
 _Avoid_: current project view, current session view, Claude-only panel
 
 **Provider**:
 The adapter owning ONE agent CLI *identity* inside the workbench (ADR-0005,
 ADR-0008): its identity key (`claude` / `codex` / `kimi`, plus
 `codex:<label>` for a second declared codex home), typed capabilities (fork,
-takeover, liveness grade, background agents, RC, cleanup), argv synthesis
+takeover, liveness grade, cleanup), argv synthesis
 (resume / new session / tmux window name), the environment its commands must
 carry, and — for non-Claude CLIs — disk session discovery.
 `Session.provider` is part of session identity: sids are unique only within a
@@ -66,19 +66,18 @@ _Avoid_: treating tmux presence or a window name alone as session identity
 
 **Session** (formerly "Claude Code Session"):
 A resumable agent-CLI conversation or execution context whose state may be
-visible through the owning CLI's on-disk records, agent listings, Remote
-Control, or background execution surfaces. The session is the durable record;
-agents and runtimes are ways that record is or was being executed. Rich
-liveness/registry semantics below (busy/idle status, bridge, background
-agents) are Claude-specific; non-Claude sessions carry only the conservative
-argv-exact and dispatch-metadata subset above.
+visible through the owning CLI's on-disk records, agent listings, or Remote
+Control exposure. The session is the durable record; agent records and
+runtimes are ways that record is or was being executed. Rich
+liveness/registry semantics below (busy/idle status, bridge) are
+Claude-specific; non-Claude sessions carry only the conservative argv-exact
+and dispatch-metadata subset above.
 _Avoid_: chat, transcript file
 
 **Agent**:
-A Claude Code execution entry that may run interactively, in the background, or
-under a managed lifecycle separate from a plain terminal session. An agent is a
-runtime or lifecycle wrapper for a Claude Code session, not a separate durable
-work unit.
+A Claude Code execution entry listed by `claude agents --json`; csctl reads it
+as liveness evidence (the 来源 `BG` badge) but no longer manages its
+lifecycle (ADR-0009).
 _Avoid_: process, task
 
 **tmux Residency (tmux 驻留)**:
@@ -89,11 +88,10 @@ _Avoid_: detached, daemonized, "in tmux" without saying resident
 
 **Workbench tmux Session**:
 The single tmux session named `csctl` into which the workbench dispatches new,
-resumed, forked, backgrounded, and respawned agent sessions. Project identity
-remains the absolute cwd; the project basename is display-only metadata in the
-window name. Existing resident windows in any tmux session are entered in
-place rather than migrated. Managed Remote Control servers remain in their
-separate configurable session.
+resumed, forked, and backgrounded agent sessions. Project identity remains the
+absolute cwd; the project basename is display-only metadata in the window
+name. Existing resident windows in any tmux session are entered in place
+rather than migrated.
 _Avoid_: one tmux session per project, treating a window name as identity
 
 **tmux Resume (tmux 接回)**:
@@ -125,8 +123,8 @@ decay), **Trusted** (a provider's trust store covers the directory — Claude
 effective trust with ancestor inheritance, codex/kimi exact-match records),
 **Observed** (any provider has session activity in the directory within the
 last 30 days). Temp roots and missing directories are hygiene-excluded
-unless the entry is pinned or holds an rc window; a hidden entry is
-suppressed regardless of evidence. Trust inheritance only ever *qualifies* a
+unless the entry is pinned; a hidden entry is suppressed regardless of
+evidence. Trust inheritance only ever *qualifies* a
 recorded candidate — it never *generates* one, so a trusted `/` cannot flood
 the tab. The absolute directory path is the project's identity everywhere
 (tmux window metadata, claude.json lookups); the display name is a derived
@@ -138,8 +136,8 @@ remains an upstream-dependent contract: each release must rerun
 temp directories (`tempfile.gettempdir()`, `/tmp`, `/var/tmp`, and anything
 beneath them) stay working space, not projects: discovery never lists them —
 the trust state itself stays untouched, so a deliberately trusted `/tmp`
-keeps suppressing dialogs for scratch sessions — while pinned or
-window-holding entries stay listed.
+keeps suppressing dialogs for scratch sessions — while pinned entries stay
+listed.
 _Avoid_: workspace-relative short names as identity, reading the raw
 `hasTrustDialogAccepted` flag as the trust set, assuming a workspace root,
 treating a trusted temp root as a project
@@ -149,8 +147,9 @@ The per-project record of WHY a directory is on the Projects tab:
 `trusted_by` (provider keys whose trust store covers it — claude via
 effective/inherited trust, codex/kimi via exact-match records) and
 `observed_by` (provider keys with session activity there), plus the
-`pinned`/`hidden` curation flags. Rendered as the 证据 column badges
-(钉/隐/信cc/信cx/信km/活…); `信cc` is exactly the RC start gate's predicate.
+`pinned`/`hidden` curation flags. Carried on the row model; the tab surfaces
+`pinned` via ordering and `hidden` via the status-bar count. No badge column
+(removed with the RC/agents surfaces, ADR-0009).
 _Avoid_: a single is-a-project boolean, deriving membership from one CLI's
 records only
 
@@ -173,37 +172,16 @@ so it can be driven from outside the terminal. Observable on the local machine
 when `~/.claude/sessions/<pid>.json` carries a `bridgeSessionId` in the
 `session_*` namespace. Enabled via `claude --remote-control [name]`, the
 in-session `/remote-control` command, or `remoteControlAtStartup`.
-_Avoid_: confusing it with the project RC server; tmux window.
-
-**Project RC Server** (secondary concept):
-A persistent `claude remote-control --name <name>` process that accepts multiple
-phone/web sessions for one directory. csctl currently models it as a tmux
-window — this is the only Remote Control concept csctl models today.
-
-Observability (verified): the server leaves **zero footprint** in `sessions/`,
-`jobs/`, or `claude agents --json`; its only reliable local signal is the
-`claude remote-control --name <name>` **process** itself, and its cloud env id
-(`env_*`) appears only on the server's stdout / QR. A server launched outside
-csctl's tmux is therefore invisible unless csctl scans `/proc` for the process.
-Verified via a live probe: the **server's** `/proc/<pid>/cmdline` shows the full
-`claude remote-control --name <name> --spawn <mode>` argv (a bare *interactive*
-`claude` instead collapses its cmdline to just `claude`), so match on the
-**cmdline argv** (program basename `claude` + `remote-control` + `--name`), not on
-`comm` alone — and exclude other tools, e.g. codex also runs `--remote-control`
-(as a flag), filtered out by cmdline.
-_Avoid_: equating it with session remote control.
+_Avoid_: confusing it with a project RC server (an upstream concept csctl no
+longer models); tmux window.
 
 **Bridge Environment**:
-The cloud-side linkage that backs remote control. Three observable prefixes,
-each tied to a different RC concept: `session_*` (in `sessions/*.json`, session
-remote control), `cse_*` (in `jobs/*/state.json`, background agents), and
-`env_*` (project RC server — appears only on the server's stdout / QR, in **no**
-state file). The **suffix is the canonical environment id _within_ a namespace** —
-within `cse_*`, a resume pair shares one env (e.g. two jobs binding the same
-`cse_…`). Cross-namespace linking (`session_*` ↔ `cse_*` by suffix) does **not**
-work: each RC-enable mints a unique suffix, so a session-RC env and a
-background-agent env never share one (verified: zero overlap). Dedup is
-within-namespace, not cross-view.
+The cloud-side linkage that backs remote control. The namespace csctl reads is
+`session_*` (in `sessions/*.json`, session remote control). The other upstream
+namespaces (`cse_*` in `jobs/*/state.json`, `env_*` on a project RC server's
+stdout) exist in Claude Code, but csctl no longer reads either — it models
+neither background agents nor project RC servers (ADR-0009). The **suffix is
+the canonical environment id _within_ a namespace**.
 
 Lifecycle (verified on this machine): enabling RC on a session **mints a new**
 environment id; disabling sets `bridgeSessionId` to `null` (a **transient** state
@@ -213,8 +191,7 @@ random snapshot usually shows only absent-or-string); re-enabling mints
 (single field, overwritten), so toggled-away environments vanish from structured
 state and survive only as noisy mentions in transcripts. Consequences:
 - csctl can reliably surface **currently bound** environments (bridge truthy
-  AND the owning pid alive, verified by `procStart`) — the session RC badge and
-  the background agent's env suffix.
+  AND the owning pid alive, verified by `procStart`) — the session RC badge.
 - Toggled-away / historical environments leave **no structured trace** on disk
   (no `null`/history), so csctl does not track them.
 - Claude Code exposes **no local command to deregister** a cloud / mobile entry;

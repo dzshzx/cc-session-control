@@ -11,12 +11,11 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Protocol
 
-from ..models import RCProject, Session
-from . import rc
+from ..models import Project, Session, format_inventory_issues
+from . import membership
 from .age_cleanup import AgeCleanupPlan, build_age_plan
 from .cleanup import CleanupPlan, build_plan
 from .liveness import LivenessSnapshot
-from .rc_outcomes import format_inventory_issues
 from .removal import CleanupIssue
 from .snapshot import WorldSnapshot, build_world_snapshot
 
@@ -30,7 +29,7 @@ class RefreshBatch:
     cleanup_plan: CleanupPlan
     cleanup_counts: Mapping[str, int]
     session_stats: Mapping[str, int]
-    ordered_projects: tuple[RCProject, ...]
+    ordered_projects: tuple[Project, ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -164,7 +163,7 @@ def build_refresh_result(
             "orphans": counts.get("orphan_dirs", 0),
         },
         ordered_projects=tuple(
-            rc.order_by_activity(snapshot.rc_projects, snapshot.sessions)
+            membership.order_by_activity(snapshot.projects, snapshot.sessions)
         ),
     )
 

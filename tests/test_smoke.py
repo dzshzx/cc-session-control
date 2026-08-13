@@ -25,7 +25,6 @@ def test_help_flag():
     )
     assert result.returncode == 0
     assert "resume" in result.stdout
-    assert "agents" in result.stdout
 
 
 def test_clipboard_importable():
@@ -35,7 +34,7 @@ def test_clipboard_importable():
 
 
 def test_models_importable():
-    from cc_session_control.models import RCProject, Session, TrustDecision
+    from cc_session_control.models import Project, Session, TrustDecision
 
     s = Session(
         sid="test",
@@ -48,13 +47,13 @@ def test_models_importable():
         current=False,
     )
     assert s.sid == "test"
-    p = RCProject(
+    p = Project(
         name="proj",
         directory="/tmp/proj",
-        trust_decision=TrustDecision.TRUSTED,
-        status="stopped",
+        trusted_by={"claude"},
     )
     assert p.name == "proj"
+    assert TrustDecision.TRUSTED.value == "trusted"
 
 
 def test_urwid_importable():
@@ -68,7 +67,7 @@ def test_app_instantiation():
 
     app = App()
     assert app.result is None
-    assert len(app.views) == 3
+    assert len(app.views) == 2
 
 
 @pytest.mark.parametrize(
@@ -85,7 +84,7 @@ def test_invalid_integer_environment_exits_two_without_traceback(name, raw):
     # Any parsed command reaches `apply_global_flags` env validation before
     # dispatch, so the process exits 2 without running the handler's IO.
     result = subprocess.run(
-        [sys.executable, "-m", "cc_session_control", "agents"],
+        [sys.executable, "-m", "cc_session_control", "resume"],
         capture_output=True,
         text=True,
         env=env,

@@ -11,11 +11,9 @@ typed detail consumer, whose failure the caller surfaces directly as an
 `subprocess` calls elsewhere.
 
 Bottom of the `data/` DAG: this module may import only `proc` from this
-package (plus stdlib) — it knows nothing about RC servers or sessions. `rc.py`
-consumes it for spawning/discovering managed RC-server windows;
-`actions/session_ops.py` and `actions/agent_ops.py` consume it directly for
-resume/relaunch tmux windows, deliberately without depending on `rc` (CONTEXT.md:
-don't conflate tmux windows with Remote Control).
+package (plus stdlib) — it knows nothing about sessions.
+`actions/session_ops.py` consumes it directly for resume/relaunch tmux
+windows.
 """
 
 from __future__ import annotations
@@ -26,19 +24,14 @@ from dataclasses import dataclass, replace
 
 from . import proc
 from .tmux_outcomes import (
-    KillResult,
-    KillState,
     PaneInventory,
     ResidencyInventory,
     ResidencyIssue,
     SessionWindowResult,
-    TmuxIssue,
     TmuxPane,
-    TmuxWindow,
     TmuxWriteResult,
     TmuxWriteStage,
     TmuxWriteState,
-    WindowInventory,
     create_target_result,
     window_option_result,
 )
@@ -83,12 +76,6 @@ def _tmux_run(args: list[str]) -> subprocess.CompletedProcess[str] | None:
     return _tmux_run_result(args).completed
 
 
-_WINDOWS_FMT = (
-    "#{window_id}\t#{window_name}\t#{pane_dead}\t#{pane_pid}"
-    "\t#{@csctl_path}\t#{pane_current_path}"
-)
-
-
 def exact_session_target(session: str) -> str:
     """Encode a literal session name as an exact tmux target.
 
@@ -104,61 +91,6 @@ def _exact_window_target(target: str) -> str:
 
     is_window_id = target.startswith("@") and target[1:].isdigit()
     return target if is_window_id else f"={target}"
-
-
-def list_windows_inventory(session: str) -> WindowInventory:
-    """Typed window inventory retaining external and malformed evidence.
-
-    ONE tmux round-trip feeds both project↔window joins (`rc.scan_result`) and
-    managed-server classification (`rc.scan_servers_result`)."""
-    invocation = _tmux_run_result(
-        ["list-windows", "-t", exact_session_target(session), "-F", _WINDOWS_FMT]
-    )
-    cp = invocation.completed
-    if cp is None:
-        return WindowInventory(
-            issues=(TmuxIssue("tmux list-windows", None, invocation.detail),),
-        )
-    if cp.returncode != 0:
-        if _target_not_found(invocation.detail):
-            return WindowInventory()
-        return WindowInventory(
-            issues=(TmuxIssue("tmux list-windows", None, invocation.detail),),
-        )
-    out: list[TmuxWindow] = []
-    issues: list[TmuxIssue] = []
-    for line_number, line in enumerate(cp.stdout.splitlines(), start=1):
-        parts = line.split("\t", 5)
-        if len(parts) != 6 or not parts[0] or parts[2] not in {"0", "1"}:
-            issues.append(
-                TmuxIssue(
-                    "tmux list-windows",
-                    None,
-                    f"malformed row {line_number}: {line!r}",
-                )
-            )
-            continue
-        try:
-            pid = int(parts[3])
-        except ValueError:
-            issues.append(
-                TmuxIssue(
-                    "tmux list-windows",
-                    None,
-                    f"malformed row {line_number}: invalid pane pid {parts[3]!r}",
-                )
-            )
-            continue
-        out.append(
-            TmuxWindow(
-                wid=parts[0],
-                name=parts[1],
-                dead=parts[2] == "1",
-                pid=pid,
-                path=parts[4] or parts[5],
-            )
-        )
-    return WindowInventory(tuple(out), tuple(issues))
 
 
 def set_window_option_result(
@@ -277,37 +209,11 @@ def _target_not_found(detail: str) -> bool:
     )
 
 
-def _kill_result(args: list[str], target: str) -> KillResult:
-    invocation = _tmux_run_result(args)
-    cp = invocation.completed
-    if cp is None:
-        return KillResult(KillState.FAILED, target, invocation.detail)
-    if cp.returncode == 0:
-        return KillResult(KillState.KILLED, target)
-    detail = invocation.detail
-    if _target_not_found(detail):
-        return KillResult(KillState.TARGET_NOT_FOUND, target, detail)
-    return KillResult(KillState.FAILED, target, detail)
-
-
-def kill_window_result(target: str) -> KillResult:
-    """Kill one window while distinguishing a vanished target from failure."""
-    return _kill_result(["kill-window", "-t", _exact_window_target(target)], target)
-
-
-def kill_session_result(session: str) -> KillResult:
-    """Kill one session while distinguishing absence from external failure."""
-    return _kill_result(
-        ["kill-session", "-t", exact_session_target(session)],
-        session,
-    )
-
-
 def project_name_for(cwd: str) -> str:
     """Stable display name for a project directory.
 
     Uses the basename and replaces tmux target separators ``.``/``:`` with
-    ``-``. The result names RC project windows and prefixes agent windows; it
+    ``-``. The result prefixes session windows in the workbench session; it
     is display metadata, never the project's identity. Empty cwd → "claude".
     """
     base = cwd.rstrip("/").rsplit("/", 1)[-1] if cwd else ""

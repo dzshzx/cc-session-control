@@ -17,7 +17,6 @@ keywords = [
     "session-manager",
     "tmux",
     "tui",
-    "remote-control",
     "urwid",
 ]
 dependencies = ["urwid>=2.0.0"]

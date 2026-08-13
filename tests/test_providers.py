@@ -81,7 +81,6 @@ class TestClaudeProvider:
     def test_caps(self):
         caps = providers.get("claude").caps
         assert caps.fork and caps.takeover and caps.cleanup
-        assert caps.background_agents and caps.remote_control
 
 
 class TestActionDispatch:

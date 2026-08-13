@@ -50,16 +50,10 @@ class ProviderCaps:
 
     Consumed today: `fork` (Sessions `f`), `cleanup` (Sessions `d` + the
     data-boundary refusal in `cleanup.remove_session`), `takeover`
-    (`resolve_argv_execution` refuses providers without it).
-    `background_agents` / `remote_control` are declarative: the Agents and
-    Projects-RC tabs read Claude-specific data sources directly, so these
-    document the contract a future non-Claude surface must consult rather
-    than gating an existing verb."""
+    (`resolve_argv_execution` refuses providers without it)."""
 
     fork: bool = False
     takeover: bool = False
-    background_agents: bool = False
-    remote_control: bool = False
     cleanup: bool = False
     liveness: LivenessGrade = LivenessGrade.NONE
 
@@ -254,8 +248,8 @@ class TrustDiscovery(Protocol):
     THIS CLI to trust, read exactly as recorded (no inheritance re-derivation
     — codex/kimi upstream inheritance semantics are unverified). Claude does
     NOT implement this protocol: its trust store is `~/.claude.json`, read
-    through `data.project_settings`, the same single reader the RC start gate
-    uses. csctl never writes any provider's trust store.
+    through `data.project_settings` — the single typed reader membership
+    discovery uses. csctl never writes any provider's trust store.
     """
 
     def trusted_dirs(self) -> TrustScan:

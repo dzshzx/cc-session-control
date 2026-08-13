@@ -1,4 +1,4 @@
-"""Public CLI entry/dispatch behavior, resume/agents commands, theme
+"""Public CLI entry/dispatch behavior, the resume command, theme
 flag wiring, and the TUI exit-intent handoff."""
 
 from __future__ import annotations
@@ -19,10 +19,7 @@ from cc_session_control.data import (
     registry,
     sessions,
 )
-from cc_session_control.models import (
-    AgentJob,
-    Session,
-)
+from cc_session_control.models import Session
 
 
 def _session(sid: str, label: str) -> Session:
@@ -83,9 +80,14 @@ def test_handler_streams_are_injected(
         "liveness_inputs",
         lambda: liveness.LivenessSnapshot(),
     )
+    monkeypatch.setattr(
+        sessions,
+        "scan_result",
+        lambda _inputs: sessions.SessionScanResult(),
+    )
     stdout = io.StringIO()
     stderr = io.StringIO()
-    args = cli.build_parser().parse_args(["agents"])
+    args = cli.build_parser().parse_args(["resume"])
 
     status = cli.dispatch(
         args,
@@ -95,7 +97,7 @@ def test_handler_streams_are_injected(
     )
 
     assert status == 0
-    assert stdout.getvalue() == "No background agents found.\n"
+    assert stdout.getvalue() == "No matching sessions.\n"
     assert stderr.getvalue() == ""
 
 
@@ -217,12 +219,6 @@ def test_resume_keyword_body_read_race_is_a_no_match_not_a_refusal(
             "invalid schema",
         ),
         (
-            "job",
-            "job registry",
-            "jobs/denied/state.json",
-            "permission denied",
-        ),
-        (
             "agents",
             "claude agents --json",
             "claude agents --json",
@@ -248,18 +244,6 @@ def test_resume_malformed_or_unreadable_liveness_emits_no_actionable_command(
         broken = cfg.sessions_dir / "broken.json"
         broken.parent.mkdir(parents=True)
         broken.write_text("{}")
-    elif source_kind == "job":
-        denied = cfg.jobs_dir / "denied" / "state.json"
-        denied.parent.mkdir(parents=True)
-        denied.write_text("{}")
-        original_read = registry._read_document
-
-        def deny_job(path: str) -> object:
-            if path == str(denied):
-                raise PermissionError("permission denied")
-            return original_read(path)
-
-        monkeypatch.setattr(registry, "_read_document", deny_job)
     agents_stdout = "{bad json" if source_kind == "agents" else "[]"
     monkeypatch.setattr(
         liveness.subprocess,
@@ -330,84 +314,6 @@ def test_resume_complete_liveness_is_injected_once(
     assert captured.err == ""
     assert snapshots == 1
     assert injected == [evidence]
-
-
-def test_agents_empty_and_status_rendering(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(
-        liveness,
-        "liveness_inputs",
-        lambda: liveness.LivenessSnapshot(),
-    )
-
-    assert cli.main(["agents"]) == 0
-    assert capsys.readouterr().out == "No background agents found.\n"
-
-    jobs = [
-        AgentJob(
-            short="live-id",
-            sid="sid-live",
-            resume_sid="resume-live",
-            cwd="/live",
-            name="builder",
-            tempo="fast",
-            host_alive=True,
-        ),
-        AgentJob(
-            short="done-id",
-            sid="sid-done",
-            resume_sid="resume-done",
-            cwd="/done",
-            state="settled",
-        ),
-    ]
-    monkeypatch.setattr(
-        liveness,
-        "liveness_inputs",
-        lambda: liveness.LivenessSnapshot(agent_jobs=tuple(jobs)),
-    )
-
-    assert cli.main(["agents"]) == 0
-    output = capsys.readouterr().out
-    assert "live-id  [live]  tempo=fast  builder  /live" in output
-    assert "done-id  [settled]  tempo=-  done-id  /done" in output
-
-
-def test_agents_keeps_partial_inventory_and_warns(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    job = AgentJob(
-        short="partial",
-        sid="sid-partial",
-        resume_sid="sid-partial",
-        cwd="/work",
-        state="settled",
-    )
-    monkeypatch.setattr(
-        liveness,
-        "liveness_inputs",
-        lambda: liveness.LivenessSnapshot(
-            agent_jobs=(job,),
-            issues=(
-                liveness.LivenessIssue(
-                    "job registry",
-                    "/runtime/jobs/broken/state.json",
-                    "invalid JSON",
-                ),
-            ),
-        ),
-    )
-
-    assert cli.main(["agents"]) == 1
-    captured = capsys.readouterr()
-    assert "partial  [settled]" in captured.out
-    assert "Warning: agent inventory is partial" in captured.err
-    assert "job registry" in captured.err
-    assert "/runtime/jobs/broken/state.json" in captured.err
-    assert "invalid JSON" in captured.err
 
 
 def test_no_command_runs_tui_and_handles_no_intent(

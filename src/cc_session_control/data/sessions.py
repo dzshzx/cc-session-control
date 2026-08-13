@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 
 from ..config import cfg
 from ..models import LiveInfo, Session, SessionProc
-from . import registry, tmux, transcripts
+from . import tmux, transcripts
 from .liveness import (
     LivenessSnapshot,
     alive_map,
@@ -49,7 +49,6 @@ def _project_transcript(
     transcript: transcripts.TranscriptRecord,
     idx: dict[str, LiveInfo],
     cur: AbstractSet[int],
-    job_shorts: set[str],
 ) -> Session:
     """Project one parsed transcript through the captured liveness generation."""
     sid = transcript.sid
@@ -105,7 +104,6 @@ def _project_transcript(
         entrypoint=entrypoint,
         source=source,
         rc_exposed=rc_exposed,
-        agent_short=sid[:8] if sid[:8] in job_shorts else None,
         status=status,
     )
 
@@ -167,12 +165,12 @@ def _inject_tmux_residency(
 def scan_result(inputs: LivenessSnapshot | None = None) -> SessionScanResult:
     """Unified typed transcript-driven session scan.
 
-    Merges the three liveness/identity sources once per scan — registry
-    `sessions/<pid>.json`, `claude agents --json`, and `jobs/*/state.json` — then
-    projects each transcript through `live_index()` to fill source/liveness/
-    rc-exposure, and batch-injects tmux residency (`tmux_target`). Scan stays
-    transcript-driven: an agent-only sid (present in the live index but with no
-    transcript) is surfaced by the Agents tab, not here.
+    Merges the liveness/identity sources once per scan — registry
+    `sessions/<pid>.json` and `claude agents --json` — then projects each
+    transcript through `live_index()` to fill source/liveness/rc-exposure, and
+    batch-injects tmux residency (`tmux_target`). Scan stays transcript-driven:
+    an agent-only sid (present in the live index but with no transcript) is not
+    surfaced here.
 
     When `inputs` is supplied by `build_world_snapshot`, this is an injected
     fast path: no registry or targeted `/proc` liveness read is repeated. With
@@ -185,20 +183,17 @@ def scan_result(inputs: LivenessSnapshot | None = None) -> SessionScanResult:
     if inputs is None:
         session_procs = live_session_procs()
         agents = alive_map()
-        job_shorts = {j.short for j in registry.read_agent_jobs()}
         cur = _ancestor_pids()
     else:
         session_procs = inputs.session_procs
         agents = inputs.agents_map
-        job_shorts = {j.short for j in inputs.agent_jobs}
         cur = inputs.cur
     idx = live_index(session_procs, agents)
     rows: list[Session] = []
 
     inventory = transcripts.load_inventory(root)
     rows.extend(
-        _project_transcript(transcript, idx, cur, job_shorts)
-        for transcript in inventory.records
+        _project_transcript(transcript, idx, cur) for transcript in inventory.records
     )
 
     rows = _inject_tmux_residency(rows, idx)

@@ -7,7 +7,6 @@ import time
 
 import pytest
 
-from cc_session_control.actions import agent_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import cleanup, liveness
 from cc_session_control.data.removal import (
@@ -15,7 +14,7 @@ from cc_session_control.data.removal import (
     anchor_path,
     remove_anchored,
 )
-from cc_session_control.models import AgentJob, Session, SessionProc
+from cc_session_control.models import Session, SessionProc
 
 
 def _old_enough(path, now: float) -> None:
@@ -439,42 +438,6 @@ def test_zombie_execution_refuses_root_inode_replacement(
     assert result.refused
     assert replacement.read_text() == "keep"
     assert (saved / "77.json").exists()
-
-
-def test_remove_agent_pins_before_fresh_liveness_and_refuses_base_swap(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
-    monkeypatch.setattr(
-        agent_ops.proc,
-        "probe_current_ancestors",
-        lambda: agent_ops.proc.AncestorProbe(frozenset({999})),
-    )
-    job = AgentJob(
-        short="jobshort",
-        sid="session-sid",
-        resume_sid="session-sid",
-    )
-    target = cfg.jobs_dir / job.short
-    target.mkdir(parents=True)
-    saved = tmp_path / "saved-jobs"
-    outside = tmp_path / "outside-jobs"
-    sentinel = outside / job.short / "keep.txt"
-
-    def fresh_after_swap():
-        cfg.jobs_dir.rename(saved)
-        sentinel.parent.mkdir(parents=True)
-        sentinel.write_text("keep")
-        cfg.jobs_dir.symlink_to(outside, target_is_directory=True)
-        return liveness.LivenessSnapshot()
-
-    monkeypatch.setattr(agent_ops.liveness, "liveness_inputs", fresh_after_swap)
-    result = agent_ops.remove_job(job)
-
-    assert result.refused
-    assert sentinel.read_text() == "keep"
-    assert (saved / job.short).exists()
 
 
 def test_remove_session_pins_before_fresh_liveness_and_refuses_parent_swap(

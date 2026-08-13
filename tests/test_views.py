@@ -18,7 +18,7 @@ from cc_session_control.actions.session_ops import (
 from cc_session_control.data.cleanup import CleanupPlan
 from cc_session_control.data.snapshot import WorldSnapshot
 from cc_session_control.views._confirm import DEGRADED
-from cc_session_control.views.rc import RCView
+from cc_session_control.views.projects import ProjectsView
 from cc_session_control.views.sessions import SessionRow, SessionsView
 
 
@@ -26,7 +26,7 @@ def test_views_satisfy_tabview_protocol():
     from cc_session_control.app import TabView
 
     assert isinstance(SessionsView(FakeApp()), TabView)
-    assert isinstance(RCView(FakeApp()), TabView)
+    assert isinstance(ProjectsView(FakeApp()), TabView)
 
 
 def test_session_row_selectable():
@@ -385,9 +385,7 @@ def test_session_header_and_row_share_one_colspec():
 def test_key_table_handlers_resolve():
     # KEY_TABLE binds handlers by method NAME; a typo would only surface on the
     # actual keypress, so resolve every handler up front.
-    from cc_session_control.views.agents import AgentsView
-
-    for view_cls in (SessionsView, RCView, AgentsView):
+    for view_cls in (SessionsView, ProjectsView):
         view = view_cls(FakeApp())
         for entry in view_cls.KEY_TABLE:
             handler = getattr(view, entry.handler, None)
@@ -401,21 +399,13 @@ def test_footer_keyhints_list_every_list_mode_key():
     for key in ("Enter", "t", "f", "s", "R", "d", "y", "h", "c", "/", "?"):
         assert f"{key} " in sessions_hints, f"sessions footer missing {key}"
 
-    from cc_session_control.views.agents import AgentsView
-
-    agents_hints = AgentsView(FakeApp()).keyhints()
-    for key in ("Enter", "t", "s", "d", "w", "R", "?"):
-        assert f"{key} " in agents_hints, f"agents footer missing {key}"
-
-    rc_hints = RCView(FakeApp()).keyhints()
-    for key in ("Enter", "o", "s", "c", "S", "?"):
-        assert f"{key} " in rc_hints, f"rc footer missing {key}"
+    projects_hints = ProjectsView(FakeApp()).keyhints()
+    for key in ("Enter", "x", "k", "p", "h", "H", "?"):
+        assert f"{key} " in projects_hints, f"projects footer missing {key}"
 
 
 def test_key_table_bindings_match_tmux_first_dispatch():
     # ADR-0001 rebinding regression guard: key -> handler name, per tab.
-    from cc_session_control.views.agents import AgentsView
-
     def binding(view_cls):
         return {k: e.handler for e in view_cls.KEY_TABLE for k in e.keys}
 
@@ -425,15 +415,11 @@ def test_key_table_bindings_match_tmux_first_dispatch():
     assert sessions["f"] == "_key_fork"  # 分叉进 tmux
     assert sessions["R"] == "_key_relaunch"  # 转后台 (no RC)
 
-    agents = binding(AgentsView)
-    assert agents["enter"] == "_takeover"  # tmux 接回
-    assert agents["t"] == "_terminal"  # 终端接回
-    assert "o" not in agents  # old alias dropped
-
-    rc = binding(RCView)
-    assert rc["enter"] == "_key_tmux_new"  # 新建 tmux 会话 (primary)
-    assert rc["o"] == "_key_start"  # 启动远控 (demoted)
-    assert "t" not in rc  # t unbound on 项目
+    projects = binding(ProjectsView)
+    assert projects["enter"] == "_key_tmux_new"  # 新建 tmux 会话 (primary)
+    assert projects["x"] == "_key_tmux_new_codex"  # 直达 codex
+    assert projects["k"] == "_key_tmux_new_kimi"  # 直达 kimi
+    assert "t" not in projects  # t unbound on 项目
 
 
 def test_footer_hint_text_wraps_not_clips():
@@ -742,14 +728,12 @@ def test_sessions_f_forks_into_tmux_no_confirm(monkeypatch):
 
 
 def test_session_row_renders_source_and_flag_badges():
-    row = SessionRow(
-        _make_session(source="cli", rc_exposed=True, agent_short="abcd1234")
-    )
+    row = SessionRow(_make_session(source="cli", rc_exposed=True))
     text = _row_text(row)
     assert "CLI" in text  # source badge
     assert "📱" in text  # RC-exposure marker (phone; Emoji_Presentation, width-stable)
     # Agent-link is intentionally NOT a row marker anymore: orthogonal to 远控,
-    # already covered by the 来源 BG badge + the 后台 tab. Lock that it is gone.
+    # already covered by the 来源 BG badge. Lock that it is gone.
     assert "代" not in text
     assert "⚙" not in text
 

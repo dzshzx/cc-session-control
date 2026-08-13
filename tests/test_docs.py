@@ -40,7 +40,6 @@ PINNED_EXTERNAL_USE = re.compile(
         "resume mybug",
         "resume --page 2",
         "resume --all",
-        "agents",
     ],
 )
 def test_readme_cli_examples_are_accepted_by_the_parser(command: str) -> None:
@@ -63,7 +62,8 @@ def test_public_descriptions_name_every_supported_provider(surface: str) -> None
 
 
 @pytest.mark.parametrize(
-    "retired_command", ["csctl prune", "csctl skill", "csctl rc ", "csctl env"]
+    "retired_command",
+    ["csctl prune", "csctl skill", "csctl rc ", "csctl env", "csctl agents"],
 )
 def test_readme_drops_retired_cli_surfaces(retired_command: str) -> None:
     assert retired_command not in README
@@ -73,7 +73,6 @@ def test_readme_drops_retired_cli_surfaces(retired_command: str) -> None:
 @pytest.mark.parametrize(
     "variable",
     [
-        "CSCTL_RC_SESSION",
         "CSCTL_CLEANUP_AGE_DAYS",
         "CSCTL_THEME",
     ],
@@ -103,7 +102,6 @@ def test_unified_tmux_adr_preserves_legacy_residency_and_rc_isolation() -> None:
     [
         "`transcripts.py`",
         "`sessions.scan_result(inputs)`",
-        "`proc.scan_rc_server_inventory()`",
         "`resolve_execution_session`",
         "`tmux.residency_inventory`",
         "`Session.tmux_inventory_complete`",
@@ -112,12 +110,7 @@ def test_unified_tmux_adr_preserves_legacy_residency_and_rc_isolation() -> None:
         "`_tmux_run_result`",
         "`tmux.run_in_tmux_result`",
         "`tmux_outcomes.py`",
-        "`_tmux_window_inventory`",
-        "`_window_for_inventory`",
         "`take_over_result`",
-        "`stop_job_result`",
-        "`prepare_takeover`",
-        "`respawn_result`",
         "`proc.probe_pid`",
         "`proc.probe_current_ancestors().complete`",
         "`atomic_write.py`",
@@ -144,6 +137,26 @@ def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None
         "`stop_job`",
         "`resume_takeover`",
         "`respawn`",
+        "`respawn_result`",
+        "`prepare_takeover`",
+        "`remove_job`",
+        "`stop_job_result`",
+        "`agent_ops`",
+        "`registry.read_agent_jobs`",
+        "`read_agent_jobs`",
+        "`AgentJob`",
+        "`enrich_jobs`",
+        "`agent_jobs`",
+        "`scan_rc_server_inventory`",
+        "`scan_servers_result`",
+        "`_match_rc_cmdline`",
+        "`RCProject`",
+        "`RCServer`",
+        "`rc_outcomes`",
+        "`CSCTL_RC_SESSION`",
+        "`split_env_id`",
+        "`_tmux_window_inventory`",
+        "`_window_for_inventory`",
         "`current_determinable`",
         "`proc.pid_exists`",
         # Autostart-list feature retired in 0.8 — the docs must not resurrect it.
