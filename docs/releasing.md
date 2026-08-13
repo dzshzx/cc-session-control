@@ -166,8 +166,12 @@ uv tool upgrade cc-session-control --reinstall --no-cache
 
 `uv tool upgrade` has no `--refresh` flag, and `--reinstall` alone (documented
 as implying `--refresh`) was not enough in the v0.8.8 release — `--no-cache` was
-required. Do not pin `cc-session-control==X.Y.Z` to force the upgrade: that
-writes a version constraint into the tool receipt and blocks later upgrades.
+required. Even that can still resolve the OLD version for a minute or two after
+the index lists the new one (v0.8.9: the first `--reinstall --no-cache`
+reinstalled the previous release; the same command 45s later got the new one),
+so retry rather than reaching for a pin. Do not pin `cc-session-control==X.Y.Z`
+to force the upgrade: that writes a version constraint into the tool receipt and
+blocks later upgrades.
 
 If a bad version reaches PyPI, do not try to overwrite it. Fix the issue, bump
 to the next patch version, and publish a new tag.
