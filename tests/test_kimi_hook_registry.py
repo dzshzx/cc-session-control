@@ -193,7 +193,7 @@ class TestFailureTrail:
 
         (line,) = _error_log(kimi_home)
         assert "reason=unknown-event" in line
-        assert "event=PostToolUse" in line
+        assert 'event="PostToolUse"' in line
 
     def test_a_renamed_event_key_shows_up_as_an_unknown_event(self, kimi_home, hosting):
         """The failure mode a future kimi payload rename would produce."""
@@ -202,7 +202,7 @@ class TestFailureTrail:
 
         (line,) = _error_log(kimi_home)
         assert "reason=unknown-event" in line
-        assert "event=?" in line
+        assert 'event="?"' in line
 
     def test_bad_json_and_missing_ancestry_are_recorded(self, kimi_home, monkeypatch):
         monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: None)
@@ -234,6 +234,49 @@ class TestFailureTrail:
 
         monkeypatch.setattr(kimi_hook, "atomic_replace", _boom)
         assert kimi_hook.run_hook(_start_payload()) == 3
+
+    def test_a_non_utf8_log_restarts_the_trail_instead_of_raising(
+        self, kimi_home, monkeypatch
+    ):
+        """`read_text` raises UnicodeDecodeError — a ValueError, not an
+        OSError — which would otherwise escape as a traceback and replace
+        the contract exit code."""
+        monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: None)
+        run = kimi_home / "run"
+        run.mkdir()
+        (run / kimi_hook.ERROR_LOG).write_bytes(b"\xff\xfe not utf-8\n")
+
+        assert kimi_hook.run_hook(_start_payload()) == 3
+        assert "reason=no-ancestry" in _error_log(kimi_home)[-1]
+
+    def test_an_event_name_cannot_forge_extra_lines(self, kimi_home, hosting):
+        """`hook_event_name` is arbitrary payload JSON: an embedded newline
+        would turn one outcome into many and evict real evidence."""
+        payload = json.dumps(
+            {"hook_event_name": "Evil\nreason=fake event=spoofed pid=1", "id": 1}
+        )
+        assert kimi_hook.run_hook(payload) == 0
+
+        (line,) = _error_log(kimi_home)
+        assert line.split('event="')[0].count("reason=") == 1
+        # the forged text survives only INSIDE the quoted value
+        assert line.split('event="')[1].startswith("Evil reason=fake")
+
+    def test_a_long_event_name_is_truncated(self, kimi_home, hosting):
+        payload = json.dumps({"hook_event_name": "E" * 500, "session_id": SID})
+        assert kimi_hook.run_hook(payload) == 0
+
+        (line,) = _error_log(kimi_home)
+        assert f'"{"E" * kimi_hook.MAX_EVENT_CHARS}"' in line
+        assert len(line) < 200
+
+    def test_stray_arguments_are_recorded(self, kimi_home, capsys):
+        """A misconfigured hook command is the same silence: kimi discards
+        both this stderr and the exit code."""
+        assert cmd_kimi_hook(["--oops"]) == 2
+
+        (line,) = _error_log(kimi_home)
+        assert "reason=stray-args" in line
 
 
 class TestPruneGone:

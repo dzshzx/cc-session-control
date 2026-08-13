@@ -38,11 +38,12 @@ import json
 import os
 from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
+from pathlib import Path
 
 from ...config import cfg
 from ...models import InventoryIssue, Session
 from .. import proc
-from ..proc import ProcCli, ProcCliInventory
+from ..proc import ProcCli, ProcCliInventory, ProcReadState
 from ..tmux_outcomes import PaneInventory
 from .argv_live import (
     ArgvMatch,
@@ -202,6 +203,26 @@ def _read_index(path: str) -> tuple[dict[str, dict], InventoryIssue | None]:
 REGISTRY_DIR = "run"
 
 
+def _entry_pid(path: Path) -> int | None:
+    """The pid a registry filename encodes — the `<pid>.json` name contract.
+
+    Sole owner of that shape: the reader below and `prune_gone_entries` both
+    go through here, so the layout is never spelled out twice."""
+    name = path.name[: -len(".json")]
+    return int(name) if name.isdigit() else None
+
+
+def _registry_entries(registry_dir: Path) -> tuple[list[Path], str | None]:
+    """Registry files, plus the listing error if the directory resisted.
+
+    Globbing `*.json` is also what keeps the hook's `hook-errors.log`
+    invisible to every reader of this directory."""
+    try:
+        return sorted(registry_dir.glob("*.json")), None
+    except OSError as exc:
+        return [], str(exc)
+
+
 def _read_registry() -> tuple[dict[int, tuple[str, str]], tuple[InventoryIssue, ...]]:
     """The runtime registry as pid → (sessionId, procStart), plus issues.
 
@@ -211,12 +232,11 @@ def _read_registry() -> tuple[dict[int, tuple[str, str]], tuple[InventoryIssue, 
     registry_dir = cfg.kimi_home / REGISTRY_DIR
     entries: dict[int, tuple[str, str]] = {}
     issues: list[InventoryIssue] = []
-    try:
-        files = sorted(registry_dir.glob("*.json"))
-    except OSError as exc:
-        return {}, (_issue(os.fspath(registry_dir), str(exc)),)
+    files, listing_error = _registry_entries(registry_dir)
+    if listing_error is not None:
+        return {}, (_issue(os.fspath(registry_dir), listing_error),)
     for path in files:
-        name = path.name[: -len(".json")]
+        pid = _entry_pid(path)
         try:
             record = json.loads(path.read_bytes())
         except (OSError, ValueError) as exc:
@@ -225,7 +245,7 @@ def _read_registry() -> tuple[dict[int, tuple[str, str]], tuple[InventoryIssue, 
         sid = record.get("sessionId") if isinstance(record, dict) else None
         proc_start = record.get("procStart") if isinstance(record, dict) else None
         if (
-            not name.isdigit()
+            pid is None
             or not isinstance(sid, str)
             or not sid
             or not isinstance(proc_start, str)
@@ -233,8 +253,28 @@ def _read_registry() -> tuple[dict[int, tuple[str, str]], tuple[InventoryIssue, 
         ):
             issues.append(_issue(os.fspath(path), "malformed registry entry"))
             continue
-        entries[int(name)] = (sid, proc_start)
+        entries[pid] = (sid, proc_start)
     return entries, tuple(issues)
+
+
+def prune_gone_entries(registry_dir: Path, keep_pid: int) -> None:
+    """Drop entries whose pid is PROVABLY gone (kimi's SessionEnd is not).
+
+    R10: only `GONE` qualifies — `UNAVAILABLE` (no `/proc`) and `MALFORMED`
+    leave the entry alone, so a platform that cannot judge liveness never
+    empties a registry it cannot read. Leftovers were already inert (the
+    reader re-verifies identity and starttime); this bounds the directory."""
+    files, _ = _registry_entries(registry_dir)
+    for path in files:
+        pid = _entry_pid(path)
+        if pid is None or pid == keep_pid:
+            continue
+        if proc.read_proc_stat(pid).state is not ProcReadState.GONE:
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def _registry_index(

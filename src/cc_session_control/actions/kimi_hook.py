@@ -15,8 +15,10 @@ spawning the command, so `hook_event_name`/`session_id` stay the contract.
   = {"sessionId", "procStart"}.
 - SessionEnd removes it — but do NOT count on it: 0.35.0 left the entry in
   place after a clean `kimi -p` exit and after a killed TUI (2026-08-13),
-  so entries accumulate. `_prune_gone` is what actually bounds the
-  directory; the reader's starttime recheck is what keeps leftovers inert.
+  so entries accumulate. `kimi.prune_gone_entries` is what actually bounds
+  the directory (it owns the `<pid>.json` name contract, so this module
+  never re-derives it); the reader's starttime recheck keeps leftovers
+  inert.
 - Any other event is ignored (forward-compatible with future rules) but
   recorded — an unknown event is how a renamed payload key would first
   show up, and silence is exactly what made the 2026-08-13 miss unreadable.
@@ -40,18 +42,37 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 
 from ..config import cfg
 from ..data import proc
-from ..data.atomic_write import AtomicWriteError, atomic_replace
+from ..data.atomic_write import AtomicWriteError, advisory_lock, atomic_replace
 from ..data.proc import ProcReadState
-from ..data.providers.kimi import REGISTRY_DIR
+from ..data.providers.kimi import REGISTRY_DIR, prune_gone_entries
 
 #: Diagnostic trail for hook runs that did not register a session, kept next
 #: to the registry it explains. Bounded: the newest lines win.
 ERROR_LOG = "hook-errors.log"
 MAX_ERROR_LINES = 50
+#: Cap on the echoed event name. `hook_event_name` is arbitrary payload JSON:
+#: unbounded or newline-bearing text would evict real evidence from a trail
+#: that only keeps `MAX_ERROR_LINES`.
+MAX_EVENT_CHARS = 60
+
+
+class HookFailure(StrEnum):
+    """Why a hook run did not register a session — the trail's `reason=`."""
+
+    BAD_JSON = "bad-json"
+    BAD_PAYLOAD = "bad-payload"
+    UNKNOWN_EVENT = "unknown-event"
+    NO_SESSION_ID = "no-session-id"
+    NO_ANCESTRY = "no-ancestry"
+    HOST_UNREADABLE = "host-unreadable"
+    WRITE_FAILED = "write-failed"
+    REMOVE_FAILED = "remove-failed"
+    STRAY_ARGS = "stray-args"
 
 
 def _kimi_pid() -> int | None:
@@ -62,87 +83,91 @@ def _kimi_pid() -> int | None:
     return shell.ppid
 
 
-def _record_failure(run_dir: Path, reason: str, event: object, pid: int | None) -> None:
+def _event_text(event: object) -> str:
+    """One quoted line's worth of an arbitrary payload value — never more.
+
+    `hook_event_name` is attacker-shaped input as far as this file is
+    concerned: unbounded text would evict real evidence from a trail that
+    keeps only `MAX_ERROR_LINES`, a control character would forge extra
+    lines, and bare text could imitate this line's own `reason=`/`pid=`
+    fields. Quoting plus a printable-only filter keeps a hostile value
+    legible AS a value."""
+    if not isinstance(event, str) or not event:
+        return '"?"'
+    cleaned = "".join(ch if ch.isprintable() and ch != '"' else " " for ch in event)
+    return f'"{cleaned[:MAX_EVENT_CHARS]}"'
+
+
+def record_failure(
+    run_dir: Path, reason: HookFailure, event: object = None, pid: int | None = None
+) -> None:
     """Append one bounded diagnostic line; never change the hook's outcome.
 
-    A failed write here has no recovery worth taking — the caller is a hook
-    whose exit code is discarded — so OSError is swallowed deliberately, and
-    only here."""
+    The caller is a hook whose exit code is discarded, so a trail that cannot
+    be written has no recovery worth taking: OSError (advisory-lock trouble
+    included — `AdvisoryLockError` is one) and a failed replace are swallowed
+    here, and only here. A log body that is missing or not UTF-8 restarts the
+    trail rather than escaping as a traceback. The read-modify-write runs
+    under the same advisory lock `curation` uses, so concurrent session
+    starts cannot drop the very evidence this exists to keep."""
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
-    event_text = event if isinstance(event, str) and event else "?"
     line = (
-        f"{stamp} reason={reason} event={event_text} "
+        f"{stamp} reason={reason} event={_event_text(event)} "
         f"pid={pid if pid is not None else '?'}"
     )
     path = run_dir / ERROR_LOG
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            kept = path.read_text().splitlines()
-        except FileNotFoundError:
-            kept = []
-        kept.append(line)
-        atomic_replace(path, "\n".join(kept[-MAX_ERROR_LINES:]) + "\n")
+        with advisory_lock(path.with_name(f".{ERROR_LOG}.lock")):
+            try:
+                kept = path.read_text().splitlines()
+            except (FileNotFoundError, UnicodeDecodeError):
+                kept = []
+            kept.append(line)
+            atomic_replace(path, "\n".join(kept[-MAX_ERROR_LINES:]) + "\n")
     except (OSError, AtomicWriteError):
         return
 
 
-def _prune_gone(run_dir: Path, keep_pid: int) -> None:
-    """Drop entries whose pid is PROVABLY gone (SessionEnd is unreliable).
-
-    R10: only `GONE` qualifies — `UNAVAILABLE` (no `/proc`) and `MALFORMED`
-    leave the entry alone, so a platform without `/proc` never empties the
-    registry it cannot judge."""
-    try:
-        entries = sorted(run_dir.glob("*.json"))
-    except OSError:
-        return
-    for entry in entries:
-        name = entry.name[: -len(".json")]
-        if not name.isdigit() or int(name) == keep_pid:
-            continue
-        if proc.read_proc_stat(int(name)).state is not ProcReadState.GONE:
-            continue
-        try:
-            entry.unlink(missing_ok=True)
-        except OSError:
-            continue
+def registry_dir() -> Path:
+    """Where both the registry and its diagnostic trail live."""
+    return cfg.kimi_home / REGISTRY_DIR
 
 
 def run_hook(payload_text: str) -> int:
     """Apply one hook event payload to the runtime registry."""
-    run_dir = cfg.kimi_home / REGISTRY_DIR
+    run_dir = registry_dir()
     try:
         payload = json.loads(payload_text)
     except ValueError:
-        _record_failure(run_dir, "bad-json", None, None)
+        record_failure(run_dir, HookFailure.BAD_JSON)
         return 2
     if not isinstance(payload, dict):
-        _record_failure(run_dir, "bad-payload", None, None)
+        record_failure(run_dir, HookFailure.BAD_PAYLOAD)
         return 2
     event = payload.get("hook_event_name")
     if event not in ("SessionStart", "SessionEnd"):
-        _record_failure(run_dir, "unknown-event", event, None)
+        record_failure(run_dir, HookFailure.UNKNOWN_EVENT, event)
         return 0
     sid = payload.get("session_id")
     if not isinstance(sid, str) or not sid:
-        _record_failure(run_dir, "no-session-id", event, None)
+        record_failure(run_dir, HookFailure.NO_SESSION_ID, event)
         return 2
     pid = _kimi_pid()
     if pid is None:
-        _record_failure(run_dir, "no-ancestry", event, None)
+        record_failure(run_dir, HookFailure.NO_ANCESTRY, event)
         return 3
     path = run_dir / f"{pid}.json"
     if event == "SessionEnd":
         try:
             path.unlink(missing_ok=True)
         except OSError:
-            _record_failure(run_dir, "remove-failed", event, pid)
+            record_failure(run_dir, HookFailure.REMOVE_FAILED, event, pid)
             return 4
         return 0
     stat = proc.read_proc_stat(pid)
     if stat.state is not ProcReadState.AVAILABLE or not stat.starttime:
-        _record_failure(run_dir, "host-unreadable", event, pid)
+        record_failure(run_dir, HookFailure.HOST_UNREADABLE, event, pid)
         return 3
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -150,7 +175,7 @@ def run_hook(payload_text: str) -> int:
             path, json.dumps({"sessionId": sid, "procStart": stat.starttime})
         )
     except (OSError, AtomicWriteError):
-        _record_failure(run_dir, "write-failed", event, pid)
+        record_failure(run_dir, HookFailure.WRITE_FAILED, event, pid)
         return 4
-    _prune_gone(run_dir, pid)
+    prune_gone_entries(run_dir, pid)
     return 0

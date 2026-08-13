@@ -32,7 +32,14 @@
   contract holds (0.35.0 builds hook input camelCase and converts before
   spawning), `SessionStart` still fires on both probed paths, and the
   "SessionEnd fires on a clean exit" claim in ADR-0005, `kimi.py`,
-  `kimi_hook.py`, and CONTEXT.md is now recorded as refuted.
+  `kimi_hook.py`, CONTEXT.md, and the version-stamped ledger in
+  `docs/claude-code-compatibility.md` is now recorded as refuted.
+- The `<pid>.json` name contract has one owner again: `kimi.py` exposes
+  `prune_gone_entries` and `_entry_pid`, so the hook endpoint no longer
+  re-derives the registry layout, and deletion of external state stays in
+  `data/` where the architecture puts it.
+- README documents what an unbound kimi session means for operators and
+  points at the trail.
 - `docs/releasing.md` and CLAUDE.md carry the post-publish cache-busting
   recipe that actually works (`uv tool upgrade --reinstall --no-cache`);
   `uv tool upgrade` has no `--refresh` flag and `--reinstall` alone was not

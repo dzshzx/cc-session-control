@@ -89,11 +89,17 @@ def cmd_kimi_hook(argv: list[str]) -> int:
     """Internal kimi hook endpoint (SessionStart/SessionEnd → runtime
     registry); the event payload arrives on stdin. Exit codes are the
     contract of `actions/kimi_hook.run_hook` (2 here = stray arguments)."""
-    if argv:
-        print("usage: csctl _kimi-hook  (event payload on stdin)", file=sys.stderr)
-        return 2
     from .actions import kimi_hook
 
+    if argv:
+        # Same silence the trail exists for: kimi discards this stderr and
+        # the exit code, so a misconfigured hook command would look like a
+        # hook that never fired.
+        kimi_hook.record_failure(
+            kimi_hook.registry_dir(), kimi_hook.HookFailure.STRAY_ARGS
+        )
+        print("usage: csctl _kimi-hook  (event payload on stdin)", file=sys.stderr)
+        return 2
     return kimi_hook.run_hook(sys.stdin.read())
 
 

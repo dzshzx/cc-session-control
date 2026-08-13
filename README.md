@@ -38,8 +38,8 @@ bare-launched TUI; unbound processes are never stop/takeover targets.
 Kimi can close that gap opt-in via its official hooks: add this to
 `~/.kimi-code/config.toml` and every kimi session — bare-launched ones
 included — self-reports its pid↔session binding (verified on Kimi Code
-0.34.0; csctl re-verifies pid identity and process start time per entry, so
-stale or forged entries never bind):
+0.34.0, re-verified on 0.35.0; csctl re-verifies pid identity and process
+start time per entry, so stale or forged entries never bind):
 
 ```toml
 [[hooks]]
@@ -55,6 +55,13 @@ timeout = 5
 
 The hook fires when a session materializes (a TUI's first prompt), and the
 binding appears on csctl's next refresh.
+
+That single firing is the whole coverage: kimi registers a new session's id
+only at its first prompt, so csctl cannot learn it at spawn, and a
+`SessionStart` that never lands leaves a running session unbound (shown as
+`? 未知`) until the session is reopened. If that happens, check
+`~/.kimi-code/run/hook-errors.log` — the endpoint records every run that did
+not register, including an unrecognized event name.
 
 All agent sessions csctl dispatches — new, resumed, forked, or backgrounded —
 share the tmux session named `csctl`; their window
