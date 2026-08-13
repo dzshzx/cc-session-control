@@ -1,9 +1,9 @@
 # Evidence-tier project membership
 
-Status: accepted (2026-08-12). Supersedes the membership-listing half of
-ADR-0003 (its trust predicate and the RC start gate are unchanged) and
-resolves the membership merge ADR-0005 deferred to "the RC-membership
-redesign (0.9+)".
+Status: accepted (2026-08-12). RC-window hygiene, RC-start-gate, and
+badge-rendering clauses are superseded by ADR-0009. Supersedes the
+membership-listing half of ADR-0003 (its trust predicate remains) and resolves
+the membership merge ADR-0005 deferred to "the RC-membership redesign (0.9+)".
 
 Projects-tab membership was single-source: the effectively-trusted keys of
 `~/.claude.json`, minus temp roots and dead directories, plus an rc-window

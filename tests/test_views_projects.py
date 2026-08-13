@@ -90,6 +90,17 @@ def test_projects_view_has_no_rc_surface_left():
     assert app._submitted_actions == []
 
 
+def test_projects_help_describes_missing_directory_hygiene():
+    from cc_session_control.views._keytable import help_lines
+
+    view = ProjectsView(FakeApp())
+    blob = "\n".join(help_lines(view.KEY_TABLE, view.HELP_LAYOUT))
+
+    assert "只有被钉选的行默认仍显示" in blob
+    assert "已隐藏记录在 H 模式仍可显示" in blob
+    assert "仍有证据引用时仍显示" not in blob
+
+
 def test_projects_view_status_bar_counts():
     app = FakeApp()
     view = ProjectsView(app)

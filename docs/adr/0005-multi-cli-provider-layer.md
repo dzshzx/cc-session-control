@@ -1,6 +1,7 @@
 # Multi-CLI provider layer
 
-Status: accepted (2026-08-04)
+Status: accepted (2026-08-04); RC/background-agent capability and surface
+clauses partially superseded by ADR-0009
 
 csctl was built as an operator panel for **Claude Code alone**: every scan
 reads `~/.claude`, every resume synthesizes a `claude --resume` argv, and the

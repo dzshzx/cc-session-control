@@ -117,13 +117,14 @@ def compute_membership(
     Claude then contributes nothing (typed evidence stays with the caller),
     while the other sources stand on their own.
     """
+    session_rows = tuple(sessions)
     decay_floor = now - OBSERVED_DECAY_DAYS * _SECONDS_PER_DAY
     pinned_dirs = {os.path.normpath(p) for p in pinned}
     hidden_dirs = {os.path.normpath(p) for p in hidden}
 
     trusted: dict[str, set[str]] = {}
     observed: dict[str, set[str]] = {}
-    latest = _latest_activity(sessions)
+    latest = _latest_activity(session_rows)
 
     # Trusted tier — recorded candidates only; inheritance qualifies a key's
     # trust status, it never enumerates the key's descendants.
@@ -142,15 +143,15 @@ def compute_membership(
                 trusted.setdefault(os.path.normpath(directory), set()).add(provider)
 
     # Observed tier — session cwd activity from ANY provider.
-    for session in sessions:
+    for session in session_rows:
         if not session.cwd:
             continue
         directory = os.path.normpath(session.cwd)
         observed.setdefault(directory, set()).add(session.provider)
 
-    # The claude trust badge qualifies every candidate (effective trust is
-    # what a trust-sensitive launch gate would read) — qualification, not
-    # generation.
+    # Claude effective trust qualifies every candidate — qualification, not
+    # generation. Provenance stays on the model even though the Projects view
+    # no longer renders a badge column.
     if claude_projects is not None:
         for directory in set(trusted) | set(observed):
             if "claude" not in trusted.get(directory, set()) and (

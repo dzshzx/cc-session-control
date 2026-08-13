@@ -1,12 +1,34 @@
 # Remove Remote Control management and background-agent management
 
-Status: accepted (2026-08-13). Supersedes the corresponding clauses of
-ADR-0001 (Remote Control stays "demoted, not removed"; the 后台 tab and
-项目 → 会话 → 后台 tab order), ADR-0004 (the headless CLI is
-`resume` + `agents`; the Projects tab is the sole RC surface; the
-per-project `remoteControlAtStartup` flag is "unaffected"), and ADR-0007
-(hygiene waives entries holding an rc window; provenance renders as
-钉/隐/信cc/信cx/信km/活… badges).
+Status: accepted (2026-08-13).
+
+This ADR supersedes only the following management clauses; the remaining
+decisions in each ADR stay in force:
+
+- **ADR-0001:** the 后台 tab and 项目 → 会话 → 后台 tab order, project-tab
+  `o`/`c` Remote Control management, and the conclusion that Remote Control
+  is "demoted, not removed" as a csctl-managed surface. The tmux-first
+  lifecycle and session-level `/remote-control` escape remain.
+- **ADR-0002:** `AgentJob` as a frozen view/action mutation model. Atomic
+  refresh generations, single-flight actions, and main-loop-only widget
+  mutation remain.
+- **ADR-0003:** the RC startup trust gate, `remoteControlAtStartup` writes,
+  and RC-specific lifecycle diagnostics. Typed `~/.claude.json` reads,
+  effective-trust semantics, fail-closed evidence, and cleanup diagnostics
+  remain.
+- **ADR-0004:** the `resume` + `agents` headless CLI, the Projects tab as the
+  sole RC surface, and the claim that per-project `remoteControlAtStartup`
+  is unaffected. Its other surface-reduction and cleanup decisions remain.
+- **ADR-0005:** provider capabilities and UI consequences for background
+  agents and RC, including Claude-only Agents and Projects-RC surfaces. The
+  provider session layer, conservative liveness, multi-CLI launcher, and
+  Claude-only cleanup boundary remain.
+- **ADR-0006:** background-agent respawn/window placement and the separate
+  managed `rc` tmux session, including `CSCTL_RC_SESSION`. The unified
+  `csctl` session and in-place entry for legacy/user tmux residency remain.
+- **ADR-0007:** the rc-window hygiene waiver, RC-start-gate consequences,
+  provenance badge rendering, and the promise that rc-window evidence keeps
+  a row visible. Evidence-tier membership and provenance on the model remain.
 
 Since ADR-0001 demoted Remote Control to a secondary surface, csctl kept
 two management surfaces for operators it does not have: project RC-server

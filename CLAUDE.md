@@ -35,7 +35,7 @@ uv run csctl                                                                    
 grep -rn --include='*.py' '/home/' src/      # no hardcoded paths in product source
 ```
 
-`csctl` 不只是 TUI——不带子命令运行会启动 TUI，`cli.py` 还暴露一个**面向 agent 的最小 headless CLI**（0.8 起只剩 `resume`；`agents` 随 0.9 移除——ADR-0004/0009。RC 管理与 cleanup 是 TUI 专属表面，`prune`/`env`/`skill`/`rc`/`agents` 子命令已移除。子命令输出为英文；见 Conventions 说明）：
+`csctl` 不只是 TUI——不带子命令运行会启动 TUI，`cli.py` 还暴露一个**面向 agent 的最小 headless CLI**（0.8 起只剩 `resume`；`agents` 随 0.9 移除——ADR-0004/0009。RC 管理已随 0.9 整体移除；cleanup 是 TUI 专属表面，`prune`/`env`/`skill`/`rc`/`agents` 子命令已移除。子命令输出为英文；见 Conventions 说明）：
 
 ```bash
 csctl resume [keyword] [--page N] [--limit N] [--all]  # cross-directory resume commands for ALL providers (incl. hidden sessions; body-search fallback; non-Claude rows tagged [codex]/[kimi], unbound-live rows flagged [live?], archived rows flagged (archived))
@@ -126,7 +126,7 @@ TUI 无法在自身内部运行 `claude`。resume 家族的动作退出 MainLoop
 
 ### Remote Control：session 级 exposure
 
-所有 tmux 访问都经单一 seam **`data/tmux.py`**：`_tmux_run_result` 独占普通的有界 `subprocess.run` 调用。纯 `KillResult` / inventory / write outcomes 位于 `tmux_outcomes.py`；破坏性/结果承载操作一律消费 typed results 并保留 stage/detail/issues——那批旧 primitive wrapper 已随 typed 迁移移除，不再新增。唯一保留的例外是 `enter_window`（`actions/session_ops.py`）落地 exec/attach 边界前的导航调用：`select_window`/`switch_client` 仍是 `_tmux_run` 之上的 bool 视图——`select_window` 失败非致命、返回值被丢弃（用户仍落进会话，能手动选窗口）；`switch_client` 只需一位成功/失败、无 typed detail 消费者，失败由调用方直接转成 "...attaching failed." 提示呈现。新的 tmux 操作作为封装加在 `tmux.py`，而不是在别处裸调 `subprocess`。`actions/session_ops.py` 为 resume/relaunch 的 tmux 调用直接 import `tmux`。
+所有 tmux 访问都经单一 seam **`data/tmux.py`**：`_tmux_run_result` 独占普通的有界 `subprocess.run` 调用。纯 inventory / write outcomes 位于 `tmux_outcomes.py`；创建、元数据写入与驻留探测一律消费 typed results，并按各自领域保留 stage/detail 或 issues——那批旧 primitive wrapper 已随 typed 迁移移除，不再新增。唯一保留的例外是 `enter_window`（`actions/session_ops.py`）落地 exec/attach 边界前的导航调用：`select_window`/`switch_client` 仍是 `_tmux_run` 之上的 bool 视图——`select_window` 失败非致命、返回值被丢弃（用户仍落进会话，能手动选窗口）；`switch_client` 只需一位成功/失败、无 typed detail 消费者，失败由调用方直接转成 "...attaching failed." 提示呈现。新的 tmux 操作作为封装加在 `tmux.py`，而不是在别处裸调 `subprocess`。`actions/session_ops.py` 为 resume/relaunch 的 tmux 调用直接 import `tmux`。
 
 **Session Remote Control 命名空间：** `sessions/<pid>.json` 中的 `bridgeSessionId: session_*`（一个前台 session 暴露自己）。三态：key 缺失（从未开启）/ `null`（瞬态——重新开启会覆盖它）/ string（已暴露）。「现在已暴露」= 上文的 `is_rc_exposed` 谓词。
 

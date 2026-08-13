@@ -391,7 +391,7 @@ def residency_inventory(pids: Iterable[int]) -> ResidencyInventory:
     THE batch tmux-residency computation (ADR-0001 badge + actions share it):
     ONE `list-panes -a` for the whole pid set, then each pid's `/proc` ancestor
     chain is matched against the pane root pids — finds windows in ANY tmux
-    session (per-project, rc, user-made)."""
+    session (csctl workbench, legacy per-project, or user-made)."""
     pid_list = list(pids)
     if not pid_list:
         return ResidencyInventory()

@@ -1,6 +1,7 @@
 # tmux-first session dispatch
 
-Status: accepted (2026-07-06); placement rule superseded by ADR-0006
+Status: accepted (2026-07-06); placement rule superseded by ADR-0006;
+project-RC and background-tab clauses superseded by ADR-0009
 
 csctl's core operator need is that Claude Code sessions survive terminal /
 network disconnects (flaky SSH, phone connections). Two mechanisms could carry

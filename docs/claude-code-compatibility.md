@@ -10,8 +10,7 @@ new Claude Code version still emits them.
 | Scope | Claude Code | Date | Evidence |
 |---|---:|---:|---|
 | Trust inheritance and `~/.claude.json` footprint | 2.1.218 | 2026-07-23 | Parent `true` suppresses the child dialog; the child may be recorded with explicit `false`; declining writes no project entry |
-| Isolated read-only command probe | 2.1.228 | 2026-08-12 | For the v0.8.5/v0.8.6 releases (identical same-day results): `claude --version` exited 0; `claude agents --help` exited 0 with `--json`; `claude agents --json` exited 0 with valid-JSON `[]` under an empty temporary home; unauthenticated `remote-control --help` exited 1 at the login boundary without starting a server |
-| Authenticated `remote-control --help` | 2.1.228 | 2026-08-12 | Reused the maintainer's existing Linux Claude.ai login for this read-only probe (re-run for v0.8.6): exit 0, with `--name`, `--spawn`, and `same-dir`; the credential file hash was unchanged and no server was started |
+| Isolated read-only command probe | 2.1.228 | 2026-08-12 | For the v0.8.5/v0.8.6 releases (identical same-day results): `claude --version` exited 0; `claude agents --help` exited 0 with `--json`; `claude agents --json` exited 0 with valid-JSON `[]` under an empty temporary home |
 
 The 2.1.228 release probes did **not** revalidate trust inheritance or non-empty
 registry fields. Do not advance the semantic “last verified” version from
@@ -20,8 +19,8 @@ registry fields. Do not advance the semantic “last verified” version from
 ## Tier 1: isolated read-only probe
 
 Run from the repository. It never reads the operator's real `~/.claude` and
-does not start a Remote Control server. Keep the printed temporary path with
-the release evidence and remove it after inspection.
+does not start an interactive Claude session. Keep the printed temporary path
+with the release evidence and remove it after inspection.
 
 ```bash
 compat_root="$(mktemp -d)"
@@ -46,7 +45,6 @@ run_read_only_probe() {
 run_read_only_probe version claude --version
 run_read_only_probe agents-help claude agents --help
 run_read_only_probe agents-json claude agents --json
-run_read_only_probe remote-control-help claude remote-control --help
 
 if python -m json.tool "$compat_root/agents-json.txt" >/dev/null
 then
@@ -63,10 +61,7 @@ The Tier 1 gate requires:
 
 - `claude agents --help` exits 0 and still advertises `--json`;
 - `claude agents --json` exits 0 and is a JSON array (an empty array verifies
-  only the command envelope, not entry fields);
-- `claude remote-control --help` never starts a server. In an unauthenticated
-  home, record the nonzero/authentication diagnostic rather than treating it
-  as proof of the authenticated help contract.
+  only the command envelope, not entry fields).
 
 Also run csctl's isolated compatibility fixtures:
 
@@ -74,6 +69,7 @@ Also run csctl's isolated compatibility fixtures:
 uv run --extra dev pytest \
   tests/test_trust.py \
   tests/test_project_settings.py \
+  tests/test_membership.py \
   tests/test_registry.py \
   tests/test_cli_entry.py
 ```
@@ -99,10 +95,6 @@ check:
 - `~/.claude/sessions/<pid>.json` is an object with an integer-convertible
   `pid`, nonempty `sessionId`, and the observed shapes of `cwd`, `kind`,
   `entrypoint`, `status`, `procStart`, and optional `bridgeSessionId`.
-- `~/.claude/jobs/<short>/state.json` is an object with `sessionId`; record the
-  observed shapes of `resumeSessionId`, `state`, `tempo`, `cwd`, `name`,
-  `respawnFlags`, and optional `bridgeSessionId`. Confirm that the job record
-  itself still has no host pid.
 - `~/.claude.json` is an object whose `projects` member is an object, project
   values are objects, and any `hasTrustDialogAccepted` value is boolean.
 
@@ -118,34 +110,18 @@ In disposable parent and child directories:
    record whether the child entry is absent or carries explicit `false`.
 3. From an unrelated directory, decline the dialog and record whether any
    project entry is written.
-4. Run the focused csctl tests above to confirm unreadable, malformed, invalid,
-   or unknown project settings produce `TrustDecision.UNAVAILABLE` and RC
-   startup is refused before tmux/Claude invocation.
+4. Run the focused csctl tests above to confirm unreadable, malformed, or
+   invalid project settings preserve their typed unavailable state and surface
+   a Projects membership-source issue instead of manufacturing Claude trust.
 
 If steps 1–3 differ from the recorded 2.1.218 semantics, stop the release and
 update the trust model, tests, ADR-0003, and `CONTEXT.md` together.
 
-### Remote Control help and exit contract
-
-In the authenticated disposable home, run only:
-
-```bash
-claude remote-control --help
-printf 'exit=%s\n' "$?"
-```
-
-It must exit 0 and document the `--name` and `--spawn` options used by csctl,
-including the `same-dir` spawn value. Do **not** invoke `claude remote-control`
-without `--help`; that would start a real server and may create cloud/network
-side effects. The unauthenticated Tier 1 result is useful evidence of the auth
-boundary but does not satisfy this gate.
-
 ## Release decision and fallback
 
-Block the release when a required field changes type or disappears, agents
-JSON stops being an array, trust inheritance changes, or the authenticated
-Remote Control help/exit contract cannot be proven. Do not weaken parsing or
-guess a replacement field.
+Block the release when a required session-registry field changes type or
+disappears, agents JSON stops being an array, or trust inheritance changes. Do
+not weaken parsing or guess a replacement field.
 
 Optional additive fields are compatible when existing fixtures and the full
 quality gate still pass. For an incompatible candidate, keep the last supported

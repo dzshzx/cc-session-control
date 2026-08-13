@@ -2,7 +2,8 @@
 
 Status: accepted (2026-07-29); partially superseded by ADR-0004 (2026-07-30),
 which removed the ledger-specific surfaces while retaining the typed,
-fail-closed boundary rules.
+fail-closed boundary rules. RC start, settings-write, and lifecycle clauses
+are superseded by ADR-0009.
 
 csctl depends on Claude Code state that it does not own, including
 `~/.claude.json`, per-project `.claude/settings.local.json`, session/job

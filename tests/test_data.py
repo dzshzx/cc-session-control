@@ -1,4 +1,4 @@
-"""Data-layer unit tests — pure functions, transcript parsing, rc toggles."""
+"""Core unit tests for cleanup selection, session/tmux actions, and transcripts."""
 
 import json
 import subprocess

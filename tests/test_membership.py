@@ -103,8 +103,8 @@ def test_provider_trusted_dirs_are_members(tmp_path):
 def test_inheritance_qualifies_but_never_generates(tmp_path):
     # The load-bearing invariant: a trusted ancestor (even `/`) does NOT
     # enumerate its descendants — only recorded keys and observed cwds are
-    # candidates. The observed child earns the claude badge through
-    # inheritance (effective trust == the RC start gate).
+    # candidates. The observed child earns Claude trust provenance through
+    # effective-trust inheritance.
     parent = tmp_path / "parent"
     child = parent / "child"
     child.mkdir(parents=True)
@@ -163,6 +163,18 @@ def test_observed_recent_activity_is_a_member(tmp_path):
     assert row.observed_by == frozenset({"codex", "kimi"})
     assert row.last_activity == RECENT
     assert row.trusted_by == frozenset()
+
+
+def test_observed_session_generator_is_consumed_once(tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    sessions = (_session(str(proj), RECENT, provider) for provider in ("codex", "kimi"))
+
+    rows = _by_dir(_compute(tmp_path, sessions=sessions))
+
+    row = rows[str(proj)]
+    assert row.observed_by == frozenset({"codex", "kimi"})
+    assert row.last_activity == RECENT
 
 
 def test_observed_only_decays_after_inactivity(tmp_path):

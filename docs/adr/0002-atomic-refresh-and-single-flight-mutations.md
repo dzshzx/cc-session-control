@@ -2,6 +2,7 @@
 
 Status: accepted (2026-07-29); partially superseded by ADR-0004 (2026-07-30),
 which removed the environment ledger while retaining this refresh/action model.
+The `AgentJob`/background-agent mutation clause is superseded by ADR-0009.
 
 csctl reads several independently changing local sources: transcripts,
 registries, `/proc`, tmux, project settings, and its environment ledger. A

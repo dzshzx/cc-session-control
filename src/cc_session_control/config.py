@@ -113,7 +113,7 @@ class Config:
 
     @property
     def jobs_dir(self) -> Path:
-        """Background agent job state (`jobs/<short>/state.json`)."""
+        """Upstream job artifacts retained only as session-cleanup anchors."""
         return self.claude_home / "jobs"
 
     @property

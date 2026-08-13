@@ -1,6 +1,7 @@
 # Unified interactive tmux session
 
-Status: accepted (2026-08-08)
+Status: accepted (2026-08-08); RC/background-agent placement clauses
+partially superseded by ADR-0009
 
 ## Context
 

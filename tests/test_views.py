@@ -1,4 +1,8 @@
-"""View unit tests: Sessions-view core — construct widgets, filter/hidden toggle, resume key handling (t/enter/R/f/y), status cell, and cross-tab key-table/footer infra shared with RC/Agents."""
+"""View unit tests for Sessions behavior and shared tab infrastructure.
+
+These cover widgets, filters, resume keys, status cells, and the key-table /
+footer contract shared by the current Projects and Sessions tabs.
+"""
 
 import pytest
 import urwid

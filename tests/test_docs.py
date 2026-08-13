@@ -17,11 +17,15 @@ README = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
 CLAUDE = (Path(__file__).parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
 CONTEXT = (Path(__file__).parents[1] / "CONTEXT.md").read_text(encoding="utf-8")
 AGENTS = (Path(__file__).parents[1] / "AGENTS.md").read_text(encoding="utf-8")
-ADR6 = (
-    Path(__file__).parents[1]
-    / "docs"
-    / "adr"
-    / "0006-unified-interactive-tmux-session.md"
+ADR_DIR = Path(__file__).parents[1] / "docs" / "adr"
+ADR6 = (ADR_DIR / "0006-unified-interactive-tmux-session.md").read_text(
+    encoding="utf-8"
+)
+ADR9 = (ADR_DIR / "0009-remove-rc-and-background-agent-management.md").read_text(
+    encoding="utf-8"
+)
+CLAUDE_COMPAT = (
+    Path(__file__).parents[1] / "docs" / "claude-code-compatibility.md"
 ).read_text(encoding="utf-8")
 PYPROJECT = tomllib.loads(
     (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
@@ -92,9 +96,34 @@ def test_current_knowledge_surfaces_describe_the_unified_tmux_session() -> None:
     )
 
 
-def test_unified_tmux_adr_preserves_legacy_residency_and_rc_isolation() -> None:
+def test_unified_tmux_adr_preserves_legacy_residency_after_rc_removal() -> None:
     assert "already resident in any tmux session is entered in place" in ADR6
-    assert "Managed Remote Control servers remain" in ADR6
+    assert "ADR-0006" in ADR9
+    assert "CSCTL_RC_SESSION" in ADR9
+
+
+@pytest.mark.parametrize("number", range(1, 8))
+def test_removal_adr_supersedes_every_affected_prior_adr(number: int) -> None:
+    name = f"ADR-{number:04d}"
+    prior_path = next(ADR_DIR.glob(f"{number:04d}-*.md"))
+
+    assert name in ADR9
+    assert "ADR-0009" in prior_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "retired_contract",
+    [
+        "~/.claude/jobs/<short>/state.json",
+        "claude remote-control --help",
+        "Remote Control help and exit contract",
+        "options used by csctl",
+    ],
+)
+def test_compatibility_checklist_drops_retired_management_contracts(
+    retired_contract: str,
+) -> None:
+    assert retired_contract not in CLAUDE_COMPAT
 
 
 @pytest.mark.parametrize(
@@ -173,6 +202,8 @@ def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None
         "`start_one`",
         "`job_host`",
         "`EnvRow`",
+        "`KillResult`",
+        "RC 管理与 cleanup 是 TUI 专属表面",
         # Bridge-environment ledger pipeline dropped in 0.8 — the docs must
         # not resurrect it.
         "environments.jsonl",

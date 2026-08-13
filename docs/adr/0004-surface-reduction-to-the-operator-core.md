@@ -1,6 +1,7 @@
 # Surface reduction to the operator core
 
-Status: accepted (2026-07-30)
+Status: accepted (2026-07-30); RC and background-agent management clauses
+partially superseded by ADR-0009
 
 By 0.7.6 csctl carried several surfaces built for operators it does not have:
 a bridge-environment ledger, a headless CLI mirroring most TUI verbs, an RC
