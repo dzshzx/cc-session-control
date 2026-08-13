@@ -9,6 +9,8 @@ elsewhere.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ...config import cfg
 from .base import LivenessGrade, ProviderCaps
 
@@ -16,6 +18,9 @@ from .base import LivenessGrade, ProviderCaps
 class ClaudeProvider:
     key = "claude"
     label = "cc"
+    window_tag = "claude"  # one instance — no disambiguation needed
+    # One state home (`cfg.claude_home`) — commands carry no extra identity.
+    env: Mapping[str, str] = {}
     caps = ProviderCaps(
         fork=True,
         takeover=True,

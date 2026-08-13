@@ -48,13 +48,14 @@ _RC_TRISTATE = {True: "开", False: "关", None: "未设置"}
 _NEXT_TRISTATE = {None: True, True: False, False: None}
 
 # One spec drives the tab header + project rows (_colspec.py).
-# 证据 width fits ~3 CJK-prefixed tokens (信cc/活km ≈ 6 display cols each);
-# longer provenance truncates on narrow terminals rather than wrapping.
+# 证据 width fits ~4 CJK-prefixed tokens (信cc/活km ≈ 6 display cols each);
+# widened for ADR-0008, where several codex identities can each contribute
+# 信/活 tokens. Longer provenance still truncates rather than wrapping.
 _PROJECT_COLS: list[ColSpec] = [
     (10, "left", "状态"),
     (8, "left", "自动远控"),
     (10, "left", "启动模式"),
-    (20, "left", "证据"),
+    (24, "left", "证据"),
     (("weight", 2), "left", "项目"),
     (("weight", 3), "left", "目录"),
 ]
@@ -156,7 +157,8 @@ class RCView(ListTabView):
             section="项目操作（仅对「项目」行生效）:",
             help_lines=(
                 "  x      直达新建 tmux codex 会话并进入（跳过选择器；多 CLI",
-                "         启动器，ADR-0005；codex 未启用时拒绝）",
+                "         启动器，ADR-0005；codex 未启用时拒绝。声明了多个",
+                "         codex 身份时，x 走默认身份，其余身份用 Enter 选择器）",
             ),
         ),
         Key(

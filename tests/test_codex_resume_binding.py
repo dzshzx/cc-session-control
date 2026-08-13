@@ -229,7 +229,7 @@ class TestNameResumeExecutionTakeover:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(
                 records=(
                     _proc(999999, "codex", "resume", "my-thread", starttime="88"),
                 ),

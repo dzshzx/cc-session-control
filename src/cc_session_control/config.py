@@ -38,6 +38,14 @@ def _literal_tmux_session_environment(name: str, default: str) -> str:
     return value
 
 
+def codex_default_home() -> Path:
+    """The home codex itself uses when `CODEX_HOME` is unset (upstream
+    contract). THE single spelling of that default: the single-instance
+    `codex_home` below starts from it, and the provider attributes a running
+    process that declares no `CODEX_HOME` to whichever instance owns it."""
+    return Path.home() / ".codex"
+
+
 class Config:
     def __init__(self) -> None:
         self.claude_home: Path = Path.home() / ".claude"
@@ -46,8 +54,14 @@ class Config:
         # rule (providers read these, never inline `Path.home() / ".codex"`),
         # honoring each CLI's OFFICIAL relocation variable so csctl scans
         # wherever the CLI itself actually writes.
+        #
+        # `codex_home` is the SINGLE-INSTANCE home only: once
+        # `provider_config_file` declares `codex_homes`, that list is the
+        # inventory and this inherited value stops participating (ADR-0008 —
+        # an inherited CODEX_HOME describes the launching process, not the
+        # machine).
         self.codex_home: Path = Path(
-            os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+            os.environ.get("CODEX_HOME") or codex_default_home()
         )
         self.kimi_home: Path = Path(
             os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code"
@@ -102,6 +116,16 @@ class Config:
     def curation_file(self) -> Path:
         """Operator curation store (pinned/hidden project directories)."""
         return self.config_home / "projects.json"
+
+    @property
+    def provider_config_file(self) -> Path:
+        """Operator declaration of this machine's CLI state homes (ADR-0008).
+
+        When it declares `codex_homes`, that list REPLACES `codex_home` below
+        as the codex inventory — see `data.provider_config` for why an
+        inherited `CODEX_HOME` cannot answer that question.
+        """
+        return self.config_home / "providers.json"
 
     # --- Claude Code state directories (single path authority) ---
     # All derive from claude_home so tests that monkeypatch cfg.claude_home flow

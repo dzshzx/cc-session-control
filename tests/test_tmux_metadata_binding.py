@@ -191,7 +191,7 @@ class TestSessionOpsPassMetadata:
     def _capture(self, monkeypatch):
         seen: list[dict] = []
 
-        def fake_run(session, window, cmd, sid="", provider=""):
+        def fake_run(session, window, cmd, sid="", provider="", env=None):
             seen.append(
                 {"session": session, "window": window, "sid": sid, "provider": provider}
             )
@@ -622,7 +622,7 @@ class TestScanNonClaudePaneEvidence:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(
                 records=(_rewritten(800, "/tmp/proj"),),
             ),
         )
@@ -647,7 +647,7 @@ class TestScanNonClaudePaneEvidence:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(),
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(),
         )
 
         def forbidden():
@@ -672,7 +672,7 @@ class TestExecutionTimeMetadataResolution:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(
                 records=(_rewritten(800, str(cwd)),),
             ),
         )
@@ -754,7 +754,7 @@ class TestExecutionTimeMetadataResolution:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(
                 records=(_rewritten(my_pid, str(cwd)),),
             ),
         )

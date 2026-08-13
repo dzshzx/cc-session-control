@@ -9,21 +9,25 @@ from __future__ import annotations
 
 import os
 import tomllib
+from pathlib import Path
 
-from ...config import cfg
 from ...models import InventoryIssue
 from .base import TrustScan
 
 
-def read_trusted_dirs() -> TrustScan:
+def read_trusted_dirs(home: Path) -> TrustScan:
     """Exact-match `trust_level = "trusted"` keys of `config.toml [projects]`.
+
+    `home` is the OWNING instance's state home (ADR-0008): each codex
+    identity keeps its own trust table, so the caller passes its own home
+    rather than this reader assuming a single global one.
 
     Whether codex's own runtime trust inherits down the directory tree is
     UNVERIFIED upstream (ADR-0007) — so only a recorded key itself counts,
     never its descendants. A missing config is a fresh install (no issue);
     an unreadable/malformed one narrows only this source.
     """
-    path = cfg.codex_home / "config.toml"
+    path = home / "config.toml"
     try:
         document = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:

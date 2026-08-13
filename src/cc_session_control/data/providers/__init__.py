@@ -1,13 +1,22 @@
-"""Provider registry — key → AgentProvider (ADR-0005).
+"""Provider registry — key → AgentProvider (ADR-0005, ADR-0008).
 
-The static table below is the single provider authority. A provider is
+The table built below is the single provider authority. A provider is
 *active* when the operator allows it (`cfg.providers`, env `CSCTL_PROVIDERS`)
 AND its CLI home state exists; activation never fails the refresh — an
 absent CLI simply contributes no rows.
+
+Claude and kimi are one instance each. Codex may be several (ADR-0008): the
+operator declares this machine's codex state homes in
+`cfg.provider_config_file`, and each declared home becomes its own provider
+with its own key, label, and sessions. Without that file there is exactly
+one codex instance following `cfg.codex_home`, identical to pre-0.8.7. The
+table is built once per process and cached — `reset()` drops it (tests, and
+any future explicit reload).
 """
 
 from __future__ import annotations
 
+import os
 import os.path
 from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
@@ -49,6 +58,8 @@ __all__ = [
     "TrustDiscovery",
     "TrustScan",
     "all_providers",
+    "config_issues",
+    "reset",
     "active_providers",
     "get",
     "is_active",
@@ -61,25 +72,93 @@ __all__ = [
     "execute_cli_delete",
 ]
 
-_ALL: tuple[AgentProvider, ...] = (ClaudeProvider(), CodexProvider(), KimiProvider())
+_REGISTRY: tuple[AgentProvider, ...] | None = None
+_REGISTRY_ISSUES: tuple[InventoryIssue, ...] = ()
+
+
+def _codex_providers() -> tuple[tuple[AgentProvider, ...], tuple[InventoryIssue, ...]]:
+    """This machine's codex instances plus any declaration-read degradation.
+
+    A missing declaration is the norm, not a failure: one instance following
+    `cfg.codex_home`. A present but unusable one keeps that same single
+    instance and reports why, so a typo in `providers.json` degrades to the
+    old behavior with a visible reason instead of emptying the codex view.
+    """
+    from ...config import cfg
+    from ..provider_config import read_provider_config
+
+    result = read_provider_config(cfg.provider_config_file)
+    if not result.codex_instances:
+        issues: tuple[InventoryIssue, ...] = ()
+        if not result.available:
+            issues = (
+                InventoryIssue(
+                    "provider config",
+                    os.fspath(cfg.provider_config_file),
+                    f"{result.state.value}: {result.detail}",
+                ),
+            )
+        return (CodexProvider(),), issues
+    return (
+        tuple(
+            CodexProvider(key=spec.key, label=spec.label, home=spec.home)
+            for spec in result.codex_instances
+        ),
+        (),
+    )
+
+
+def _registry() -> tuple[AgentProvider, ...]:
+    global _REGISTRY, _REGISTRY_ISSUES
+    if _REGISTRY is None:
+        codex_instances, _REGISTRY_ISSUES = _codex_providers()
+        _REGISTRY = (ClaudeProvider(), *codex_instances, KimiProvider())
+    return _REGISTRY
+
+
+def reset() -> None:
+    """Drop the cached table so the next call re-reads the declaration."""
+    global _REGISTRY, _REGISTRY_ISSUES
+    _REGISTRY = None
+    _REGISTRY_ISSUES = ()
+
+
+def config_issues() -> tuple[InventoryIssue, ...]:
+    """Degradation from reading the instance declaration (empty when clean).
+
+    Merged into the scan issue streams below so a broken `providers.json`
+    surfaces exactly like a broken trust store: visible, source-narrowing,
+    never fatal.
+    """
+    _registry()  # ensure the declaration has been read
+    return _REGISTRY_ISSUES
 
 
 def all_providers() -> tuple[AgentProvider, ...]:
-    return _ALL
+    return _registry()
 
 
 def active_providers() -> tuple[AgentProvider, ...]:
-    """Allowed AND locally present, in registry order (claude first)."""
+    """Allowed AND locally present, in registry order (claude first).
+
+    Allow-listing is by BASE key, so `CSCTL_PROVIDERS=claude,codex` keeps
+    every declared codex identity: the operator's list names CLIs, while
+    instances of one CLI are governed by the declaration itself.
+    """
     from ...config import cfg
 
-    return tuple(p for p in _ALL if p.key in cfg.providers and p.available())
+    return tuple(
+        p
+        for p in _registry()
+        if p.key.split(":", 1)[0] in cfg.providers and p.available()
+    )
 
 
 def get(key: str) -> AgentProvider:
     """The provider owning `key`; raises KeyError for an unknown provider —
     an unknown `Session.provider` is a programming error, not a degraded
     source, so it must stay loud."""
-    for p in _ALL:
+    for p in _registry():
         if p.key == key:
             return p
     raise KeyError(f"unknown provider {key!r}")
@@ -130,12 +209,13 @@ def scan_non_claude(
         if p.key != "claude" and isinstance(p, DiskDiscovery)
     ]
     if not discoverers:
-        return (), ()
+        return (), config_issues()
     basenames = frozenset().union(*(p.capture_basenames for p in discoverers))
-    inventory = proc.scan_cli_argv_inventory(basenames)
+    env_keys = frozenset().union(*(p.env_keys for p in discoverers))
+    inventory = proc.scan_cli_argv_inventory(basenames, env_keys)
     panes = _pane_evidence(inventory)
     rows: list[Session] = []
-    issues: list[InventoryIssue] = list(inventory.issues)
+    issues: list[InventoryIssue] = [*config_issues(), *inventory.issues]
     for p in discoverers:
         scan = p.discover(inventory, cur, panes)
         rows.extend(scan.sessions)
@@ -160,7 +240,7 @@ def scan_trusted_dirs() -> TrustedDirsScan:
     into the issue stream and narrow only their own source.
     """
     directories: dict[str, tuple[str, ...]] = {}
-    issues: list[InventoryIssue] = []
+    issues: list[InventoryIssue] = list(config_issues())
     for provider in active_providers():
         if not isinstance(provider, TrustDiscovery):
             continue
@@ -212,7 +292,10 @@ def execute_cli_delete(provider_key: str, sid: str) -> CliDeleteResult:
         return _delete_refusal(
             CliDeleteStage.EVIDENCE, f"ancestor evidence incomplete: {detail}"
         )
-    inventory = proc.scan_cli_argv_inventory(provider.capture_basenames)
+    inventory = proc.scan_cli_argv_inventory(
+        provider.capture_basenames,
+        provider.env_keys,
+    )
     if not inventory.complete:
         detail = "; ".join(i.detail for i in inventory.issues)
         return _delete_refusal(
@@ -307,7 +390,10 @@ def resolve_argv_execution(provider_key: str, sid: str) -> ArgvResolution:
     if not ancestors.complete:
         detail = "; ".join(i.detail for i in ancestors.issues)
         return ArgvResolution(detail=f"ancestor evidence incomplete: {detail}")
-    inventory = proc.scan_cli_argv_inventory(provider.capture_basenames)
+    inventory = proc.scan_cli_argv_inventory(
+        provider.capture_basenames,
+        provider.env_keys,
+    )
     if not inventory.complete:
         detail = "; ".join(i.detail for i in inventory.issues)
         return ArgvResolution(detail=f"process evidence incomplete: {detail}")

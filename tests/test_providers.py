@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cc_session_control.actions import session_ops
+from cc_session_control.actions import execution_target, session_ops
 from cc_session_control.config import cfg
 from cc_session_control.data import providers
 from cc_session_control.data.providers.base import LivenessGrade
@@ -107,11 +107,11 @@ class TestActionDispatch:
             return providers.ArgvResolution(session=fresh)
 
         monkeypatch.setattr(
-            session_ops.providers,
+            execution_target.providers,
             "resolve_argv_execution",
             fake_resolve,
         )
-        resolution = session_ops._session_for_execution(s, fork=False)
+        resolution = session_ops.session_for_execution(s, fork=False)
         assert seen == [("codex", s.sid)]
         assert resolution.success
         assert resolution.session is fresh
@@ -122,17 +122,17 @@ class TestActionDispatch:
     ):
         s = _session(provider="codex", alive=True, pid=4242)
         monkeypatch.setattr(
-            session_ops.providers,
+            execution_target.providers,
             "resolve_argv_execution",
             lambda provider_key, sid: providers.ArgvResolution(detail="nope"),
         )
-        resolution = session_ops._session_for_execution(s, fork=False)
+        resolution = session_ops.session_for_execution(s, fork=False)
         assert not resolution.success
         assert resolution.detail == "nope"
 
     def test_dead_non_claude_execution_resolves_as_is(self):
         s = _session(provider="codex", alive=False)
-        resolution = session_ops._session_for_execution(s, fork=False)
+        resolution = session_ops.session_for_execution(s, fork=False)
         assert resolution.success
         assert resolution.session is s
 

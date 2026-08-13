@@ -14,14 +14,26 @@ project-labelled windows in one shared `csctl` tmux session (ADR-0001/0006).
 _Avoid_: current project view, current session view, Claude-only panel
 
 **Provider**:
-The adapter owning ONE agent CLI inside the workbench (ADR-0005): its
-identity key (`claude` / `codex` / `kimi`), typed capabilities (fork,
+The adapter owning ONE agent CLI *identity* inside the workbench (ADR-0005,
+ADR-0008): its identity key (`claude` / `codex` / `kimi`, plus
+`codex:<label>` for a second declared codex home), typed capabilities (fork,
 takeover, liveness grade, background agents, RC, cleanup), argv synthesis
-(resume / new session / tmux window name), and — for non-Claude CLIs — disk
-session discovery. `Session.provider` is part of session identity: sids are
-unique only within a provider. A capability a provider lacks is refused with
-a typed reason, never emulated.
+(resume / new session / tmux window name), the environment its commands must
+carry, and — for non-Claude CLIs — disk session discovery.
+`Session.provider` is part of session identity: sids are unique only within a
+provider. A capability a provider lacks is refused with a typed reason, never
+emulated.
 _Avoid_: profile, plugin, treating every CLI as equally deep
+
+**Declared CLI Instance**:
+One state home the operator listed in `providers.json`, becoming its own
+Provider (ADR-0008). The declaration — not an inherited `CODEX_HOME` — is the
+machine's codex inventory: `CODEX_HOME` says which home ONE PROCESS uses and
+is inherited by everything a codex session spawns, so reading it as a machine
+fact made the workbench's world change with its launch environment. Each
+instance carries its home in every command it synthesizes.
+_Avoid_: profile (that is codex's own `--profile`, which layers config inside
+one home), account, workspace
 
 **Argv-exact Liveness**:
 The preferred takeover-grade pid↔session binding for non-Claude providers: a real

@@ -76,7 +76,8 @@ Built with [urwid](https://urwid.org/).
   and/or [Kimi Code](https://github.com/MoonshotAI/kimi-code) — each is
   discovered automatically when its state home exists (`~/.claude`,
   `~/.codex`, `~/.kimi-code`; official relocation variables `CODEX_HOME` /
-  `KIMI_CODE_HOME` are honored)
+  `KIMI_CODE_HOME` are honored). Several codex identities on one machine are
+  supported by declaring their homes — see Configuration below
 - tmux (the primary session-lifecycle carrier: launch, resume, background, and
   survive terminal/SSH disconnects; managed Remote Control servers also use it)
 - Linux / WSL. Other POSIX systems are not supported; without `/proc`, csctl
@@ -150,6 +151,35 @@ longer bundled with this package).
 | `CSCTL_RC_SESSION` | `rc` | Literal tmux session name for RC servers (target syntax `= : * ? [ ] $ @ %` is rejected); must differ from the reserved workbench session `csctl` |
 | `CSCTL_CLEANUP_AGE_DAYS` | `14` | Minimum age in days for the age sweep in the Sessions cleanup submenu (must be an integer ≥ 0) |
 | `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via `$COLORFGBG`, else `dark`) / `dark` / `light`. Most terminals (including tmux) don't set `$COLORFGBG`, so `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |
+
+### Multiple codex identities
+
+`CODEX_HOME` says which home *one codex process* uses, and it is inherited by
+everything that process spawns — including csctl. Reading it as the machine's
+inventory made csctl show only the identity it happened to be launched from.
+So when you run more than one codex identity, declare their homes in
+`~/.config/csctl/providers.json` (XDG-respecting) instead:
+
+```json
+{
+  "codex_homes": [
+    {"label": "cx",  "home": "~/.codex"},
+    {"label": "cx2", "home": "~/.codex-eva02"}
+  ]
+}
+```
+
+That list is then the complete codex inventory and `CODEX_HOME` no longer
+takes part, so csctl shows the same machine state from any terminal. Each
+entry becomes its own provider — separate sessions, trust records, badges,
+and launcher entry — tagged in the CLI column by its `label` (ASCII
+alphanumeric, ≤3 characters). The first entry keeps the provider key `codex`;
+later ones become `codex:<label>`. Every command csctl synthesizes for a
+declared identity carries its `CODEX_HOME` explicitly. Without this file
+there is exactly one codex instance following `CODEX_HOME`/`~/.codex`, and a
+malformed file falls back to that same single instance with a visible reason.
+Changes take effect on the next csctl start. See
+[ADR-0008](docs/adr/0008-declared-cli-instances.md).
 
 ## License
 

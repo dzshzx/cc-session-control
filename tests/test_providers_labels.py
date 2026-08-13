@@ -17,6 +17,7 @@ import pytest
 from cc_session_control.config import cfg
 from cc_session_control.data.proc import ProcCliInventory
 from cc_session_control.data.providers import codex as codex_mod
+from cc_session_control.data.providers import codex_rollout
 from cc_session_control.data.providers.codex import CodexProvider
 
 UUID1 = "019fc784-c365-70e0-af94-a6a0b15f05b8"
@@ -90,7 +91,7 @@ class TestCodexBodyLabelFallback:
         assert _discover_label(codex_home) == "调研任务"
 
     def test_message_beyond_line_cap_is_untitled(self, codex_home, monkeypatch):
-        monkeypatch.setattr(codex_mod, "_BODY_SCAN_MAX_LINES", 2)
+        monkeypatch.setattr(codex_rollout, "_BODY_SCAN_MAX_LINES", 2)
         _write_rollout(
             codex_home,
             f"rollout-c-{UUID1}.jsonl",
@@ -143,7 +144,7 @@ class TestCodexBodyLabelFallback:
         meta_line = json.dumps(
             {"timestamp": "t", "type": "session_meta", "payload": meta}
         )
-        assert 64 * 1024 < len(meta_line) < codex_mod._FIRST_LINE_CAP
+        assert 64 * 1024 < len(meta_line) < codex_mod.FIRST_LINE_CAP
         (directory / f"rollout-h-{UUID1}.jsonl").write_text(meta_line + "\n")
 
         scan = CodexProvider().discover(ProcCliInventory(), cur=frozenset())
@@ -160,7 +161,7 @@ class TestCodexBodyLabelFallback:
         meta_line = json.dumps(
             {"timestamp": "t", "type": "session_meta", "payload": meta}
         )
-        assert len(meta_line) > codex_mod._FIRST_LINE_CAP
+        assert len(meta_line) > codex_mod.FIRST_LINE_CAP
         (directory / f"rollout-i-{UUID1}.jsonl").write_text(meta_line + "\n")
 
         scan = CodexProvider().discover(ProcCliInventory(), cur=frozenset())
@@ -168,7 +169,7 @@ class TestCodexBodyLabelFallback:
         assert scan.sessions == ()
         assert not scan.complete
         (issue,) = scan.issues
-        assert str(codex_mod._FIRST_LINE_CAP) in issue.detail
+        assert str(codex_mod.FIRST_LINE_CAP) in issue.detail
         assert "cap" in issue.detail
         assert "upstream format change" not in issue.detail
 

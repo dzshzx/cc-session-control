@@ -12,9 +12,14 @@ from enum import StrEnum
 
 from .. import clipboard
 from ..config import cfg
-from ..data import liveness, proc, providers, sessions, tmux
+from ..data import proc, providers, tmux
 from ..data.liveness import invalidate_cache
 from ..models import Session, issue_detail
+from .execution_target import (
+    ExecutionSessionState,
+    resolve_execution_session,
+    session_for_execution,
+)
 
 
 class TakeOverState(StrEnum):
@@ -34,36 +39,6 @@ class TakeOverOutcome:
     @property
     def success(self) -> bool:
         return self.state in {TakeOverState.KILLED, TakeOverState.GONE}
-
-
-class ExecutionSessionState(StrEnum):
-    """Execution-time exact-SID resolution states.
-
-    RESOLVED is discriminated by `.success`; LIVENESS_INCOMPLETE /
-    TRANSCRIPT_INCOMPLETE / MISSING are discriminated by
-    `do_resume_sid_result` (detail prefixes; MISSING also appends the
-    non-Claude provider hint — `--take-over` only ever scans Claude state).
-    Every other rejection (ambiguous match, current-session guard, unusable
-    cwd, incomplete live identity) collapses into REFUSED, which still
-    carries the specific reason in `detail`.
-    """
-
-    RESOLVED = "resolved"
-    LIVENESS_INCOMPLETE = "liveness_incomplete"
-    TRANSCRIPT_INCOMPLETE = "transcript_incomplete"
-    MISSING = "missing"
-    REFUSED = "refused"
-
-
-@dataclass(frozen=True)
-class ExecutionSessionResolution:
-    state: ExecutionSessionState
-    session: Session | None = None
-    detail: str = ""
-
-    @property
-    def success(self) -> bool:
-        return self.state is ExecutionSessionState.RESOLVED
 
 
 def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
@@ -142,6 +117,22 @@ def would_take_over(s: Session, fork: bool = False) -> bool:
     return _resume_plan(s, fork)[2]
 
 
+def env_prefix(provider_key: str) -> str:
+    """`KEY=value ` assignments a copied command needs to state its identity.
+
+    Empty for every single-home CLI, so copied commands are unchanged. For a
+    declared codex identity it is `CODEX_HOME=… ` (ADR-0008): the shell the
+    operator pastes into may have inherited a DIFFERENT identity's home — or
+    none — and a bare `codex resume <sid>` would then look the sid up in the
+    wrong store and fail. Values pass through `shlex.quote`, so a home with
+    spaces stays one token.
+    """
+    env = providers.get(provider_key).env
+    if not env:
+        return ""
+    return "".join(f"{key}={shlex.quote(value)} " for key, value in sorted(env.items()))
+
+
 def resume_cmd(s: Session, fork: bool = False) -> str:
     """Return a ready-to-copy command without serializing destructive state.
 
@@ -152,15 +143,16 @@ def resume_cmd(s: Session, fork: bool = False) -> str:
     provider commands (ADR-0005) — none serialize a kill. An archived row
     copies its provider's official un-archive command instead (a direct
     archived-store resume is unverified upstream semantics)."""
+    prefix = env_prefix(s.provider)
     if s.archived:
-        return shlex.join(providers.unarchive_argv(s.provider, s.sid))
+        return prefix + shlex.join(providers.unarchive_argv(s.provider, s.sid))
     if s.provider == "claude" and s.alive and not fork:
         return shlex.join(["csctl", "resume", "--take-over", s.sid])
     cwd, args, _ = _resume_plan(s, fork)
     parts: list[str] = []
     if cwd:
         parts.append(f"cd {shlex.quote(cwd)}")
-    parts.append(shlex.join(args))
+    parts.append(prefix + shlex.join(args))
     return " && ".join(parts)
 
 
@@ -178,94 +170,6 @@ class TmuxResumeOutcome:
     @property
     def success(self) -> bool:
         return self.target is not None
-
-
-def resolve_execution_session(sid: str) -> ExecutionSessionResolution:
-    """Resolve one stable SID against one fresh liveness/transcript generation."""
-    evidence = liveness.liveness_inputs()
-    if not evidence.complete:
-        return ExecutionSessionResolution(
-            ExecutionSessionState.LIVENESS_INCOMPLETE,
-            detail=issue_detail(evidence.issues),
-        )
-    transcript_scan = sessions.scan_result(evidence)
-    if not transcript_scan.complete:
-        return ExecutionSessionResolution(
-            ExecutionSessionState.TRANSCRIPT_INCOMPLETE,
-            detail=issue_detail(transcript_scan.issues),
-        )
-    matches = tuple(
-        session for session in transcript_scan.sessions if session.sid == sid
-    )
-    if not matches:
-        return ExecutionSessionResolution(
-            ExecutionSessionState.MISSING,
-            detail=f"missing session id {sid!r}",
-        )
-    if len(matches) != 1:
-        return ExecutionSessionResolution(
-            ExecutionSessionState.REFUSED,
-            detail=f"ambiguous session id {sid!r}; found {len(matches)} exact matches",
-        )
-    target = matches[0]
-    if target.current:
-        return ExecutionSessionResolution(
-            ExecutionSessionState.REFUSED,
-            detail=f"session {sid!r} is the current session",
-        )
-    if not target.cwd or not os.path.isdir(target.cwd):
-        return ExecutionSessionResolution(
-            ExecutionSessionState.REFUSED,
-            detail=f"session {sid!r} has no usable execution-time cwd: {target.cwd!r}",
-        )
-    if target.alive:
-        missing = []
-        if target.pid is None:
-            missing.append("pid")
-        if not target.proc_start:
-            missing.append("proc_start")
-        if missing:
-            return ExecutionSessionResolution(
-                ExecutionSessionState.REFUSED,
-                detail=(
-                    f"live session {sid!r} has incomplete execution-time identity "
-                    f"({', '.join(missing)})"
-                ),
-            )
-    return ExecutionSessionResolution(
-        ExecutionSessionState.RESOLVED,
-        session=target,
-    )
-
-
-def _session_for_execution(
-    session: Session,
-    fork: bool,
-) -> ExecutionSessionResolution:
-    if not session.alive or fork:
-        return ExecutionSessionResolution(
-            ExecutionSessionState.RESOLVED,
-            session=session,
-        )
-    if session.provider != "claude":
-        # The Claude resolver below reads registry + transcripts; a live
-        # non-Claude takeover re-resolves through its provider's argv scan
-        # instead — same guarantee, different evidence: kill only on a fresh
-        # whole Session, never on snapshot identity (ADR-0005).
-        argv_resolution = providers.resolve_argv_execution(
-            session.provider,
-            session.sid,
-        )
-        if not argv_resolution.success:
-            return ExecutionSessionResolution(
-                ExecutionSessionState.REFUSED,
-                detail=argv_resolution.detail,
-            )
-        return ExecutionSessionResolution(
-            ExecutionSessionState.RESOLVED,
-            session=argv_resolution.session,
-        )
-    return resolve_execution_session(session.sid)
 
 
 def _required_takeover_failure(s: Session) -> str:
@@ -287,6 +191,10 @@ def _do_resume_resolved_result(s: Session, fork: bool = False) -> ResumeOutcome:
             return ResumeOutcome(False, takeover_failure)
     if cwd and os.path.isdir(cwd):
         os.chdir(cwd)
+    # The replacement process inherits this environment, so a declared
+    # identity must be stated here too (ADR-0008) — csctl's own CODEX_HOME
+    # (inherited from whatever launched it) is not necessarily this row's.
+    os.environ.update(providers.get(s.provider).env)
     # argv[0] IS the provider's binary (ADR-0005) — never a hardcoded CLI.
     os.execvp(args[0], args)
     return ResumeOutcome(True)
@@ -294,7 +202,7 @@ def _do_resume_resolved_result(s: Session, fork: bool = False) -> ResumeOutcome:
 
 def do_resume_result(s: Session, fork: bool = False) -> ResumeOutcome:
     """Resolve live takeover identity, then kill-if-needed, chdir, and exec."""
-    resolution = _session_for_execution(s, fork)
+    resolution = session_for_execution(s, fork)
     if not resolution.success:
         return ResumeOutcome(False, resolution.detail)
     if resolution.session is None:
@@ -345,7 +253,7 @@ def _spawn_in_tmux_result(
     fork: bool = False,
 ) -> TmuxResumeOutcome:
     """Resolve and kill-if-needed, then spawn in the shared csctl tmux session."""
-    resolution = _session_for_execution(s, fork)
+    resolution = session_for_execution(s, fork)
     if not resolution.success:
         return TmuxResumeOutcome(None, resolution.detail)
     if resolution.session is None:
@@ -379,6 +287,7 @@ def _spawn_in_tmux_result(
         # parent sid would mint a wrong kill target (ADR-0005 fork rule).
         sid="" if fork else target_session.sid,
         provider=target_session.provider,
+        env=provider.env,
     )
     target = result.target if result.success else None
     return TmuxResumeOutcome(target, result.diagnostic)
@@ -433,9 +342,10 @@ def do_tmux_new_result(
     cmd = f"cd {shlex.quote(directory)} && {line}"
     return tmux.run_in_tmux_result(
         cfg.tmux_session,
-        tmux.window_name_for(directory, provider.key),
+        tmux.window_name_for(directory, provider.window_tag),
         cmd,
         provider=provider.key,  # no sid exists yet — provider tag only
+        env=provider.env,
     )
 
 

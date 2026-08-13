@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
 
 from ...config import cfg
@@ -316,10 +316,16 @@ def _read_trusted_dirs() -> TrustScan:
 class KimiProvider:
     key = "kimi"
     label = "km"
+    window_tag = "kimi"  # one instance — no disambiguation needed
     basename = BASENAME
     # The /proc walk must also net title-rewritten processes (argv0 becomes
     # `kimi-code`) — identity is then re-verified per record (C1).
     capture_basenames = frozenset({BASENAME, TITLE_COMM})
+    # csctl models ONE kimi state home (`cfg.kimi_home`), so no environ
+    # evidence is needed to attribute a process and commands carry no
+    # extra identity (ADR-0008 covers codex's multi-home case only).
+    env_keys: frozenset[str] = frozenset()
+    env: Mapping[str, str] = {}
     caps = ProviderCaps(
         # argv-exact + runtime-registry + dispatch-metadata matches only
         takeover=True,

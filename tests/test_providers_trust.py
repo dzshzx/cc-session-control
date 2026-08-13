@@ -32,9 +32,9 @@ def _kimi_home(tmp_path, monkeypatch):
 
 
 def test_codex_missing_config_is_empty_without_issue(tmp_path, monkeypatch):
-    _codex_home(tmp_path, monkeypatch)
+    home = _codex_home(tmp_path, monkeypatch)
 
-    scan = codex_trust.read_trusted_dirs()
+    scan = codex_trust.read_trusted_dirs(home)
 
     assert scan.directories == ()
     assert scan.issues == ()
@@ -49,7 +49,7 @@ def test_codex_trusted_keys_only(tmp_path, monkeypatch):
         "[other]\nkey = 1\n"
     )
 
-    scan = codex_trust.read_trusted_dirs()
+    scan = codex_trust.read_trusted_dirs(home)
 
     assert scan.directories == ("/a",)
     assert scan.issues == ()
@@ -59,7 +59,7 @@ def test_codex_malformed_toml_narrows_only_this_source(tmp_path, monkeypatch):
     home = _codex_home(tmp_path, monkeypatch)
     (home / "config.toml").write_text("[projects\n")
 
-    scan = codex_trust.read_trusted_dirs()
+    scan = codex_trust.read_trusted_dirs(home)
 
     assert scan.directories == ()
     assert [issue.source for issue in scan.issues] == ["codex trust"]
@@ -69,7 +69,7 @@ def test_codex_non_table_projects_is_an_issue(tmp_path, monkeypatch):
     home = _codex_home(tmp_path, monkeypatch)
     (home / "config.toml").write_text("projects = 5\n")
 
-    scan = codex_trust.read_trusted_dirs()
+    scan = codex_trust.read_trusted_dirs(home)
 
     assert scan.directories == ()
     assert [issue.source for issue in scan.issues] == ["codex trust"]

@@ -21,7 +21,7 @@ don't conflate tmux windows with Remote Control).
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from . import proc
@@ -199,7 +199,28 @@ def _spawn_result(
     )
 
 
-def _tmux_new_window_result(session: str, name: str, cmd: str) -> TmuxWriteResult:
+def _env_args(env: Mapping[str, str] | None) -> list[str]:
+    """`-e KEY=VALUE` pairs for a spawn (ADR-0008).
+
+    tmux takes these as ARGV, not shell text, so a value never passes
+    through a shell. Setting them on the WINDOW (rather than prefixing the
+    command) is deliberate: the identity then also applies to whatever the
+    operator runs in that window afterwards — re-running codex in an eva
+    window must not silently land on the default home.
+    """
+    if not env:
+        return []
+    return [
+        arg for key, value in sorted(env.items()) for arg in ("-e", f"{key}={value}")
+    ]
+
+
+def _tmux_new_window_result(
+    session: str,
+    name: str,
+    cmd: str,
+    env: Mapping[str, str] | None = None,
+) -> TmuxWriteResult:
     invocation = _tmux_run_result(
         [
             "new-window",
@@ -210,6 +231,7 @@ def _tmux_new_window_result(session: str, name: str, cmd: str) -> TmuxWriteResul
             exact_session_target(session),
             "-n",
             name,
+            *_env_args(env),
             cmd,
         ]
     )
@@ -220,9 +242,10 @@ def _tmux_new_session_attempt(
     session: str,
     name: str,
     cmd: str,
+    env: Mapping[str, str] | None = None,
 ) -> tuple[TmuxWriteResult, _TmuxInvocation]:
     args = ["new-session", "-d", "-P", "-F", _TARGET_FMT]
-    args.extend(["-s", session, "-n", name, cmd])
+    args.extend(["-s", session, "-n", name, *_env_args(env), cmd])
     invocation = _tmux_run_result(args)
     return _spawn_result(invocation, TmuxWriteStage.NEW_SESSION), invocation
 
@@ -351,11 +374,13 @@ def run_in_tmux_result(
     cmd: str,
     sid: str = "",
     provider: str = "",
+    env: Mapping[str, str] | None = None,
 ) -> TmuxWriteResult:
     """Create a target while preserving probe/create stage and diagnostics.
 
     Non-empty `sid`/`provider` are declared on the created window as
-    `@csctl_sid`/`@csctl_provider` (see `_declare_dispatch_metadata`)."""
+    `@csctl_sid`/`@csctl_provider` (see `_declare_dispatch_metadata`); `env`
+    is set on the created window itself (ADR-0008)."""
 
     invocation = _tmux_run_result(["has-session", "-t", exact_session_target(session)])
     cp = invocation.completed
@@ -366,7 +391,7 @@ def run_in_tmux_result(
             detail=invocation.detail,
         )
     if cp.returncode == 0:
-        created = _tmux_new_window_result(session, window, cmd)
+        created = _tmux_new_window_result(session, window, cmd, env)
     elif not _target_not_found(invocation.detail):
         return TmuxWriteResult(
             TmuxWriteStage.SESSION_PROBE,
@@ -375,7 +400,7 @@ def run_in_tmux_result(
         )
     else:
         created, new_session_invocation = _tmux_new_session_attempt(
-            session, window, cmd
+            session, window, cmd, env
         )
         if _is_duplicate_session_failure(new_session_invocation, session):
             retry_probe = _tmux_run_result(
@@ -383,7 +408,7 @@ def run_in_tmux_result(
             )
             retry_cp = retry_probe.completed
             if retry_cp is not None and retry_cp.returncode == 0:
-                created = _tmux_new_window_result(session, window, cmd)
+                created = _tmux_new_window_result(session, window, cmd, env)
     return _declare_dispatch_metadata(created, sid, provider)
 
 

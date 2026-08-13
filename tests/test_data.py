@@ -379,6 +379,7 @@ def test_find_session_window_first_hit_over_residency(monkeypatch):
 
 def test_do_tmux_resume_kills_live_non_current(monkeypatch):
     import cc_session_control.actions.session_ops as so
+    from cc_session_control.actions import execution_target
 
     calls = {"kill": [], "spawn": []}
     monkeypatch.setattr(so.os, "kill", lambda pid, sig: calls["kill"].append(pid))
@@ -411,15 +412,17 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
         proc_start="known-start",
     )
 
-    def resolve_execution_session(sid: str) -> so.ExecutionSessionResolution:
+    def resolve_execution_session(
+        sid: str,
+    ) -> execution_target.ExecutionSessionResolution:
         assert sid == s.sid
-        return so.ExecutionSessionResolution(
-            so.ExecutionSessionState.RESOLVED,
+        return execution_target.ExecutionSessionResolution(
+            execution_target.ExecutionSessionState.RESOLVED,
             session=s,
         )
 
     monkeypatch.setattr(
-        so,
+        execution_target,
         "resolve_execution_session",
         resolve_execution_session,
     )

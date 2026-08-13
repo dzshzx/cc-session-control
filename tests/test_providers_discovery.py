@@ -300,7 +300,7 @@ class TestScanNonClaude:
         _write_kimi_session(kimi_home, kimi_sid, {"title": "t"})
         walks: list[frozenset[str]] = []
 
-        def fake_walk(basenames):
+        def fake_walk(basenames, env_keys=frozenset()):
             walks.append(basenames)
             return ProcCliInventory()
 
@@ -322,7 +322,7 @@ class TestResolveArgvExecution:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(),
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(),
         )
         resolution = providers.resolve_argv_execution("codex", UUID1)
         assert not resolution.success
@@ -349,7 +349,7 @@ class TestResolveArgvExecution:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(
                 records=(_proc(my_ancestor, "codex", "resume", UUID1),),
             ),
         )
@@ -380,7 +380,7 @@ class TestResolveArgvExecution:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(
                 records=(_proc(999999, "codex", "resume", UUID1, starttime="88"),),
             ),
         )
@@ -541,7 +541,7 @@ class TestResolveArgvExecutionBranches:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(
                 issues=(ProcIssue("CLI process inventory", None, "no /proc"),),
             ),
         )
@@ -558,7 +558,7 @@ class TestResolveArgvExecutionBranches:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(),
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(),
         )
         monkeypatch.setattr(
             CodexProvider,
@@ -594,7 +594,7 @@ class TestResolveArgvExecutionBranches:
         monkeypatch.setattr(
             providers.proc,
             "scan_cli_argv_inventory",
-            lambda basenames: ProcCliInventory(),
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(),
         )
         monkeypatch.setattr(
             providers.tmux,

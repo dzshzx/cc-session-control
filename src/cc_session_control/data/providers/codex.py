@@ -19,7 +19,7 @@ instead of gambling an unverified direct resume. zstd-compressed old rollouts
 Label fallback: `session_index.jsonl` barely overlaps active rollouts in
 practice, so when it has no `thread_name` for a sid, discovery does a
 bounded continuation read of the rollout body (still never the whole file —
-see `_first_user_message`) looking for the first real `user_message` event
+see `codex_rollout.first_user_message`) looking for the first real `user_message` event
 to use as the label.
 """
 
@@ -33,7 +33,7 @@ from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 
-from ...config import cfg
+from ...config import cfg, codex_default_home
 from ...models import InventoryIssue, Session
 from .. import proc
 from ..proc import ProcCli, ProcCliInventory
@@ -55,6 +55,7 @@ from .base import (
     ProviderScan,
     TrustScan,
 )
+from .codex_rollout import FIRST_LINE_CAP, first_user_message, read_meta
 from .codex_source import classify_source
 from .codex_trust import read_trusted_dirs
 
@@ -98,20 +99,6 @@ _UUID_RE = re.compile(
     r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
     r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z"
 )
-
-# First-line pre-check (same cheap-substring-guard pattern as transcripts.py).
-_META_MARK = b'"session_meta"'
-# 256KB — real-machine session_meta lines have been observed at ~35KB, so the
-# old 64KB cap left under 2x headroom; a line that reaches this cap without a
-# trailing newline is truncated, not malformed (see `_read_meta`).
-_FIRST_LINE_CAP = 256 * 1024
-
-# Label-fallback continuation read past the session_meta line: bounded by
-# BOTH line count and byte count so a huge rollout is never read in full —
-# same cheap-substring-guard discipline as `_read_meta`/transcripts.py.
-_USER_MSG_MARK = b'"user_message"'
-_BODY_SCAN_MAX_LINES = 64
-_BODY_SCAN_MAX_BYTES = 128 * 1024
 
 # Bounded `codex delete` invocation (same bounded-run + typed-outcome
 # discipline as tmux's `_tmux_run_result`); 10s matches the liveness seam's
@@ -203,13 +190,15 @@ def sid_extractor(name_to_sid: Mapping[str, str]) -> ArgvExtractor:
     return extract
 
 
-def _issue(path: str, detail: str) -> InventoryIssue:
-    return InventoryIssue("codex sessions", path, detail)
+def _issue(source: str, path: str, detail: str) -> InventoryIssue:
+    return InventoryIssue(source, path, detail)
 
 
-def _read_index(issues: list[InventoryIssue]) -> dict[str, str]:
+def _read_index(
+    home: Path, source: str, issues: list[InventoryIssue]
+) -> dict[str, str]:
     """`session_index.jsonl` id → thread_name (last write wins)."""
-    path = cfg.codex_home / "session_index.jsonl"
+    path = home / "session_index.jsonl"
     names: dict[str, str] = {}
     try:
         with open(path, "rb") as fh:
@@ -227,7 +216,7 @@ def _read_index(issues: list[InventoryIssue]) -> dict[str, str]:
     except FileNotFoundError:
         pass  # older codex without the index — labels degrade, no issue
     except OSError as exc:
-        issues.append(_issue(os.fspath(path), str(exc)))
+        issues.append(_issue(source, os.fspath(path), str(exc)))
     return names
 
 
@@ -247,106 +236,85 @@ def _name_index(names: Mapping[str, str]) -> dict[str, str]:
     return owners
 
 
-def _read_meta(path: str) -> tuple[dict | None, bool, bool]:
-    """(parsed `session_meta` payload or None, first-line-was-empty,
-    first-line-was-truncated-by-the-cap).
-
-    A line that reads out to exactly `_FIRST_LINE_CAP` bytes without a
-    trailing newline was cut off by the bounded read, not malformed by
-    upstream — that's a distinct, honest cause from a genuine parse failure
-    and must not be blamed on "upstream format change?" (see `discover`).
-    """
-    with open(path, "rb") as fh:
-        raw = fh.readline(_FIRST_LINE_CAP)
-    if not raw.strip():
-        return None, True, False
-    if len(raw) == _FIRST_LINE_CAP and not raw.endswith(b"\n"):
-        return None, False, True
-    if _META_MARK not in raw:
-        return None, False, False
-    try:
-        record = json.loads(raw)
-    except ValueError:
-        return None, False, False
-    payload = record.get("payload")
-    return (
-        (payload, False, False) if isinstance(payload, dict) else (None, False, False)
-    )
-
-
-def _clean_label(text: str) -> str:
-    """Collapse whitespace/newlines the same way transcripts.py cleans prompts."""
-    return " ".join(text.split()).strip()
-
-
-def _is_wrapper_block(text: str) -> bool:
-    """A leading `<...>` block (`<user_instructions>`, `<environment_context>`,
-    …) is injected context, not something the operator typed — skip it."""
-    return text.startswith("<")
-
-
-def _first_user_message(path: str) -> str | None:
-    """Bounded continuation read past the session_meta first line: the first
-    real `user_message` event body, cleaned — or None if nothing usable
-    turns up within the line/byte caps. Malformed lines are skipped
-    silently; this is a best-effort label fallback, not a completeness
-    signal, so it never raises and never contributes an `InventoryIssue`.
-    """
-    try:
-        with open(path, "rb") as fh:
-            fh.readline(_FIRST_LINE_CAP)  # skip the already-parsed session_meta line
-            total_bytes = 0
-            for line_number, raw in enumerate(fh, start=1):
-                total_bytes += len(raw)
-                if (
-                    line_number > _BODY_SCAN_MAX_LINES
-                    or total_bytes > _BODY_SCAN_MAX_BYTES
-                ):
-                    return None
-                if _USER_MSG_MARK not in raw:
-                    continue
-                try:
-                    record = json.loads(raw)
-                except ValueError:
-                    continue  # malformed body line — keep scanning
-                if not isinstance(record, dict) or record.get("type") != "event_msg":
-                    continue
-                event_payload = record.get("payload")
-                if not isinstance(event_payload, dict):
-                    continue
-                if event_payload.get("type") != "user_message":
-                    continue
-                message = event_payload.get("message")
-                if not isinstance(message, str):
-                    continue
-                cleaned = _clean_label(message)
-                if not cleaned or _is_wrapper_block(cleaned):
-                    continue
-                return cleaned
-    except OSError:
-        return None
-    return None
-
-
 class CodexProvider:
-    key = "codex"
-    label = "cx"
+    """One codex identity = one state home (ADR-0008).
+
+    A machine with a single codex identity instantiates this once with
+    `home=None`, which keeps following `cfg.codex_home` at call time — so
+    the pre-multi-home behavior (and every test that monkeypatches
+    `cfg.codex_home`) is unchanged. Operator-declared instances each pin
+    their own home and carry `CODEX_HOME` in `env`, so every command csctl
+    synthesizes states its identity explicitly instead of inheriting
+    whatever environment csctl happens to run in.
+    """
+
     basename = BASENAME
     capture_basenames = frozenset({BASENAME})  # no title rewrite observed
+    #: Whitelisted `/proc/<pid>/environ` key: which home a running codex uses.
+    #: Read only for processes the argv walk already matched, and only this
+    #: key is retained — an environ block otherwise carries secrets.
+    env_keys = frozenset({"CODEX_HOME"})
     caps = ProviderCaps(
         fork=True,  # native `codex fork <sid>`
         takeover=True,  # argv-exact + dispatch-metadata matches only
         liveness=LivenessGrade.TMUX,
     )
 
+    def __init__(
+        self,
+        key: str = "codex",
+        label: str = "cx",
+        home: Path | None = None,
+    ) -> None:
+        self.key = key
+        self.label = label
+        #: None = follow `cfg.codex_home` (single-instance mode, resolved per
+        #: call so monkeypatched config still flows through).
+        self._home = home
+
+    @property
+    def home(self) -> Path:
+        return self._home if self._home is not None else cfg.codex_home
+
+    @property
+    def declared(self) -> bool:
+        """Whether an operator declaration pinned this instance's home."""
+        return self._home is not None
+
+    @property
+    def env(self) -> Mapping[str, str]:
+        """Environment every command for THIS identity must carry.
+
+        Empty in single-instance mode: csctl then adds nothing to commands
+        that already behave correctly, keeping copied commands clean. A
+        declared instance always states `CODEX_HOME`, because the shell that
+        runs the command may well have inherited a different identity's.
+        """
+        if not self.declared:
+            return {}
+        return {"CODEX_HOME": os.fspath(self.home)}
+
+    @property
+    def window_tag(self) -> str:
+        """Launcher window leaf: the key with `:` swapped out, since a colon
+        is tmux target syntax. Single-instance stays plain `codex`, so
+        existing window names are untouched."""
+        return self.key.replace(":", "-")
+
+    @property
+    def _source(self) -> str:
+        """Issue-source tag; keyed so one identity's degraded store is
+        distinguishable from another's in the status line."""
+        return f"{self.key} sessions"
+
     def available(self) -> bool:
         # Home existence, per ADR-0005 — a fresh install with zero sessions
         # must still activate (launcher `x`); discover() tolerates the
         # missing sessions tree.
-        return cfg.codex_home.is_dir()
+        return self.home.is_dir()
 
     def trusted_dirs(self) -> TrustScan:
-        return read_trusted_dirs()
+        return read_trusted_dirs(self.home)
 
     def resume_argv(self, sid: str, fork: bool = False) -> list[str]:
         return ["codex", "fork" if fork else "resume", sid]
@@ -377,6 +345,10 @@ class CodexProvider:
                 capture_output=True,
                 text=True,
                 timeout=_DELETE_TIMEOUT_SECONDS,
+                # A declared instance deletes from ITS OWN store: without
+                # this the CLI would resolve the sid against whatever home
+                # csctl's own environment points at (ADR-0008).
+                env={**os.environ, **self.env} if self.env else None,
             )
         except subprocess.TimeoutExpired:
             return CliDeleteResult(
@@ -409,8 +381,36 @@ class CodexProvider:
         )
 
     def window_name(self, sid: str, fork: bool = False) -> str:
-        base = f"cx-{sid[:8]}"
+        base = f"{self.label}-{sid[:8]}"
         return f"{base}-fork" if fork else base
+
+    def owns_process(self, record: ProcCli) -> bool:
+        """PURE: could this bare codex process belong to THIS identity?
+
+        Both identities run the same binary with identical argv (a launcher
+        that `exec`s codex leaves no trace in argv0), so the only evidence is
+        the process's own `CODEX_HOME`; absent that key it uses codex's
+        default home. An environ that could not be read (`env is None`)
+        proves nothing, and every identity keeps the process as a candidate:
+        this feeds ONLY the unbound-live hint, where a redundant "possibly
+        held" marker costs one extra confirmation while a missing one loses
+        a double-open warning — so no evidence must fail toward warning.
+
+        Deliberately NOT applied to liveness: argv/metadata bindings are the
+        kill targets, and they are already identity-safe (a sid resolves
+        only against the home whose rollout tree records it, and dispatch
+        metadata carries the instance key). Filtering them on environ would
+        instead DROP real bindings whenever `/proc`环境 is unreadable.
+        """
+        if record.env is None:
+            return True
+        declared = record.env.get("CODEX_HOME")
+        home = (
+            Path(os.path.normpath(Path(declared).expanduser()))
+            if declared
+            else codex_default_home()
+        )
+        return home == Path(os.path.normpath(self.home))
 
     def discover(
         self,
@@ -419,9 +419,12 @@ class CodexProvider:
         panes: PaneInventory | None = None,
     ) -> ProviderScan:
         issues: list[InventoryIssue] = []
-        names = _read_index(issues)
+        names = _read_index(self.home, self._source, issues)
         extract = sid_extractor(_name_index(names))
         live = build_live_index(
+            # Liveness consumes EVERY codex process: bindings are already
+            # identity-safe, and dropping records on environ evidence would
+            # lose real kill targets when it is unreadable (see owns_process).
             cli_inventory.records,
             extract,
             cur,
@@ -431,8 +434,8 @@ class CodexProvider:
             ancestors_of=proc.probe_ancestors,
         )
 
-        active_root = cfg.codex_home / "sessions"
-        archived_root = cfg.codex_home / "archived_sessions"
+        active_root = self.home / "sessions"
+        archived_root = self.home / "archived_sessions"
         if not active_root.is_dir() and not archived_root.is_dir():
             return ProviderScan()  # fresh install — nothing recorded yet
         active = self._scan_root(active_root, names, live, issues, archived=False)
@@ -444,7 +447,9 @@ class CodexProvider:
         rows = apply_unbound_hints(
             best.values(),
             unbound_live_cwds(
-                cli_inventory.records,
+                # Hints DO narrow to this identity: another home's bare TUI
+                # must not mark this home's rows as possibly held.
+                tuple(r for r in cli_inventory.records if self.owns_process(r)),
                 extract,
                 is_tui_process,
                 bound_pids(live),
@@ -480,7 +485,9 @@ class CodexProvider:
         def _walk_error(exc: OSError) -> None:
             # os.walk swallows errors by default; an unreadable subtree must
             # surface as degradation, never silently narrow the list.
-            issues.append(_issue(getattr(exc, "filename", "") or "", str(exc)))
+            issues.append(
+                _issue(self._source, getattr(exc, "filename", "") or "", str(exc))
+            )
 
         for dirpath, _dirnames, filenames in os.walk(root, onerror=_walk_error):
             for filename in filenames:
@@ -491,7 +498,7 @@ class CodexProvider:
                     mtime = os.stat(path).st_mtime
                     payload, empty, truncated = self._row_payload(path)
                 except OSError as exc:
-                    issues.append(_issue(path, str(exc)))
+                    issues.append(_issue(self._source, path, str(exc)))
                     continue
                 if payload is None:
                     # An empty first line is a benign lazily-created rollout.
@@ -520,14 +527,16 @@ class CodexProvider:
         if over_cap:
             issues.append(
                 _issue(
+                    self._source,
                     os.fspath(root),
                     f"{over_cap} rollout file(s) whose first line exceeds "
-                    f"the {_FIRST_LINE_CAP}-byte read cap",
+                    f"the {FIRST_LINE_CAP}-byte read cap",
                 )
             )
         if unparseable:
             issues.append(
                 _issue(
+                    self._source,
                     os.fspath(root),
                     f"{unparseable} rollout file(s) without a parseable "
                     "session_meta first line (upstream format change?)",
@@ -536,7 +545,7 @@ class CodexProvider:
         return best
 
     def _row_payload(self, path: str) -> tuple[dict | None, bool, bool]:
-        return _read_meta(path)
+        return read_meta(path)
 
     def _project(
         self,
@@ -560,7 +569,7 @@ class CodexProvider:
         return Session(
             sid=sid,
             cwd=cwd if isinstance(cwd, str) else "",
-            label=names.get(sid) or _first_user_message(path) or "(untitled)",
+            label=names.get(sid) or first_user_message(path) or "(untitled)",
             mtime=mtime,
             prompts=0,
             pid=match.pid if match else None,

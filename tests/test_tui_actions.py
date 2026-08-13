@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from cc_session_control.actions import tui_actions
+from cc_session_control.actions import execution_target, tui_actions
 from cc_session_control.actions.runner import (
     Accepted,
     ActionResult,
@@ -71,9 +71,9 @@ def _install_execution_session(
     session: Session,
 ) -> None:
     monkeypatch.setattr(
-        tui_actions.session_ops.sessions,
+        execution_target.sessions,
         "scan_result",
-        lambda _inputs: tui_actions.session_ops.sessions.SessionScanResult((session,)),
+        lambda _inputs: execution_target.sessions.SessionScanResult((session,)),
     )
 
 
@@ -163,7 +163,7 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
     session = replace(_session(), alive=False, pid=None)
     spawn_calls: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
-        tui_actions.session_ops.liveness,
+        execution_target.liveness,
         "liveness_inputs",
         lambda: (_ for _ in ()).throw(AssertionError("must not acquire liveness")),
     )
@@ -235,9 +235,9 @@ def test_live_background_session_requires_successful_takeover_before_spawn(
     spawn_calls: list[tuple[str, str, str]] = []
     _install_execution_session(monkeypatch, session)
     monkeypatch.setattr(
-        tui_actions.session_ops.liveness,
+        execution_target.liveness,
         "liveness_inputs",
-        lambda: tui_actions.session_ops.liveness.LivenessSnapshot(),
+        lambda: execution_target.liveness.LivenessSnapshot(),
     )
     monkeypatch.setattr(
         tui_actions.session_ops,
@@ -270,9 +270,9 @@ def test_live_background_session_without_pid_fails_closed_before_spawn(
     session = replace(_session(), pid=None)
     _install_execution_session(monkeypatch, session)
     monkeypatch.setattr(
-        tui_actions.session_ops.liveness,
+        execution_target.liveness,
         "liveness_inputs",
-        lambda: tui_actions.session_ops.liveness.LivenessSnapshot(),
+        lambda: execution_target.liveness.LivenessSnapshot(),
     )
     monkeypatch.setattr(
         tui_actions.session_ops,
@@ -309,9 +309,9 @@ def test_live_background_session_uses_execution_time_session_generation(
     )
     _install_execution_session(monkeypatch, fresh)
     monkeypatch.setattr(
-        tui_actions.session_ops.liveness,
+        execution_target.liveness,
         "liveness_inputs",
-        lambda: tui_actions.session_ops.liveness.LivenessSnapshot(),
+        lambda: execution_target.liveness.LivenessSnapshot(),
     )
     takeovers: list[tuple[int, str]] = []
     spawns: list[tuple[str, str, str]] = []

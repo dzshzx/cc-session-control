@@ -12,6 +12,7 @@ cover what actions and views need uniformly across CLIs.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from enum import Enum
@@ -89,7 +90,18 @@ class AgentProvider(Protocol):
 
     key: str  # stable id, also `Session.provider` ("claude" / "codex" / "kimi")
     label: str  # short display tag for the CLI column (e.g. "cc" / "cx" / "km")
+    #: Leaf used in the launcher's tmux window name. Distinct from `key`
+    #: because a multi-instance key carries `:`, which IS tmux target syntax
+    #: (`session:window`) and would break addressing (ADR-0008).
+    window_tag: str
     caps: ProviderCaps
+    #: Environment every synthesized command for this provider must carry —
+    #: empty for a CLI with one state home, and `CODEX_HOME=<home>` for an
+    #: operator-declared codex identity (ADR-0008). Consumers inject it at
+    #: their own boundary: tmux `new-window -e`, `os.environ` before
+    #: `execvp`, a leading assignment in a copied shell command. A provider
+    #: with an empty mapping produces byte-identical commands to pre-0.8.7.
+    env: Mapping[str, str]
 
     def available(self) -> bool:
         """Whether this CLI's state home exists on this machine."""
@@ -193,6 +205,10 @@ class DiskDiscovery(Protocol):
     # of `basename` when the runtime rewrites its own title (kimi 0.31.1
     # collapses cmdline to `kimi-code`); identity is re-verified per record.
     capture_basenames: frozenset[str]
+    # Environment variables the walk must capture for this CLI's processes
+    # (ADR-0008): codex needs `CODEX_HOME` to tell two identities running the
+    # same binary apart. Empty for a CLI csctl models with one state home.
+    env_keys: frozenset[str]
 
     def discover(
         self,

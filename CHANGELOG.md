@@ -4,6 +4,23 @@
 
 ### Added
 
+- **Several codex identities on one machine (ADR-0008).** `~/.config/csctl/
+  providers.json` may declare `codex_homes`; each declared state home becomes
+  its own provider with its own sessions, trust records, provenance badges,
+  CLI-column label, and launcher entry. The declaration is the complete codex
+  inventory, so an inherited `CODEX_HOME` — which every codex session exports
+  to whatever it spawns, csctl included — no longer decides what csctl can
+  see: launched from inside a second identity's session, csctl previously
+  showed that identity's sessions and none of the default home's. Commands
+  csctl synthesizes for a declared identity now state `CODEX_HOME` explicitly
+  (tmux `-e` on the spawned window, `os.environ` before `execvp`, a quoted
+  leading assignment in copied commands, an env mapping for `codex delete`),
+  so a copied `codex resume <sid>` no longer fails in a shell that inherited
+  a different identity. Running processes are attributed to an identity via a
+  whitelisted `/proc/<pid>/environ` read of `CODEX_HOME`; this refines the
+  unbound-live hint only and never filters liveness, which was already
+  identity-safe. Without the file, behavior is unchanged in every detail.
+
 - **Projects-tab membership is now evidence-tiered and multi-CLI
   (ADR-0007).** A project is an absolute directory plus a provenance
   evidence set: **Pinned** (operator-curated, immune to hygiene and decay),

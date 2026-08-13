@@ -91,7 +91,7 @@ def _stub_evidence(
     monkeypatch.setattr(
         proc,
         "scan_cli_argv_inventory",
-        lambda basenames: (
+        lambda basenames, env_keys=frozenset(): (
             inventory if inventory is not None else proc.ProcCliInventory()
         ),
     )

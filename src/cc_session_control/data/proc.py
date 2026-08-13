@@ -11,6 +11,7 @@ from __future__ import annotations
 import errno
 import os
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -119,6 +120,12 @@ class ProcCli:
     cmdline alone cannot identify its processes. An unreadable comm/exe
     stays "" silently for the same reason as cwd — that record merely loses
     those identity alternatives.
+    `env` (ADR-0008) holds ONLY the CLI-home variables the scan asked for
+    (never the whole block, which carries secrets): it tells providers which
+    state home a process is actually using, the one thing argv cannot show
+    when two identities share a binary. `None` means no evidence — the keys
+    were not requested, or the environ block was unreadable — and is
+    deliberately distinct from `{}` ("read it; the variable is unset").
     """
 
     pid: int
@@ -127,6 +134,7 @@ class ProcCli:
     cwd: str = ""
     comm: str = ""
     exe: str = ""
+    env: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -382,19 +390,64 @@ def _read_inventory_link(
         return None, _rc_issue(path, str(exc)), False
 
 
+def _read_inventory_env(
+    path: str,
+    keys: frozenset[str],
+) -> dict[str, str] | None:
+    """The requested environment variables of one process, or None when the
+    environ block could not be read at all.
+
+    ONLY `keys` are retained: `/proc/<pid>/environ` carries API tokens and
+    other secrets wholesale, and csctl needs exactly the CLI-home variables
+    that identify which state home a process is using (ADR-0008). None is
+    meaningful — "no evidence either way" is different from "read it, the
+    variable is unset" — so consumers can keep their pre-environ behavior
+    instead of treating an unreadable block as a negative answer. Failure is
+    silent for the same reason `cwd`/`comm`/`exe` are: the argv record must
+    survive, and an inventory issue here would disable execution-time
+    takeovers R10-style.
+    """
+    if not keys:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    found: dict[str, str] = {}
+    for chunk in raw.split(b"\0"):
+        name, sep, value = chunk.partition(b"=")
+        if not sep:
+            continue
+        try:
+            decoded = name.decode()
+        except UnicodeError:
+            continue
+        if decoded not in keys:
+            continue
+        found[decoded] = value.decode(errors="replace")
+    return found
+
+
 def _cli_issue(path: str, detail: str) -> ProcIssue:
     return ProcIssue("CLI process inventory", path, detail)
 
 
-def scan_cli_argv_inventory(basenames: frozenset[str]) -> ProcCliInventory:
+def scan_cli_argv_inventory(
+    basenames: frozenset[str],
+    env_keys: frozenset[str] = frozenset(),
+) -> ProcCliInventory:
     """Walk `/proc` once for every process whose argv0 basename is in
     `basenames`, capturing argv + starttime + cwd (ADR-0005 argv-exact
     liveness for non-Claude providers).
 
     One walk serves ALL non-Claude providers per generation — callers pass
     the union of CLI basenames and match argv shapes themselves (pure
-    per-provider extractors). Degrades to an issue off Linux; per-pid
-    disappearance races are ignored like the RC walk does.
+    per-provider extractors). `env_keys` is the union of the environment
+    variables those providers need to tell their state homes apart
+    (ADR-0008); only matched processes are read, and only those keys are
+    kept. Degrades to an issue off Linux; per-pid disappearance races are
+    ignored like the RC walk does.
     """
     if not has_proc():
         return ProcCliInventory(
@@ -439,6 +492,7 @@ def scan_cli_argv_inventory(basenames: frozenset[str]) -> ProcCliInventory:
         cwd, _cwd_issue, _gone = _read_inventory_link(f"{_PROC}/{pid}/cwd")
         comm, _comm_issue, _gone = _read_inventory_text(f"{_PROC}/{pid}/comm")
         exe, _exe_issue, _gone = _read_inventory_link(f"{_PROC}/{pid}/exe")
+        env = _read_inventory_env(f"{_PROC}/{pid}/environ", env_keys)
         records.append(
             ProcCli(
                 pid=pid,
@@ -447,6 +501,7 @@ def scan_cli_argv_inventory(basenames: frozenset[str]) -> ProcCliInventory:
                 cwd=cwd or "",
                 comm=(comm or "").strip(),
                 exe=exe or "",
+                env=env,
             )
         )
     return ProcCliInventory(tuple(records), tuple(issues))
