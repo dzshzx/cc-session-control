@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.9 (2026-08-13)
 
 ### Added
 
@@ -21,8 +21,8 @@
 - **Stale runtime-registry entries are pruned on each successful
   registration.** kimi's `SessionEnd` does not dependably fire (0.35.0 kept
   `run/<pid>.json` after a clean `kimi -p` exit and after a killed TUI), so
-  the directory accumulated entries for dead pids. `_prune_gone` removes
-  only entries whose pid is provably `GONE`; `UNAVAILABLE` (no `/proc`) and
+  the directory accumulated entries for dead pids. `prune_gone_entries`
+  removes only entries whose pid is provably `GONE`; `UNAVAILABLE` and
   malformed entries are left alone, so a platform that cannot judge
   liveness never empties a registry it cannot read. Leftovers were already
   inert — the reader re-verifies identity and starttime — this bounds the
