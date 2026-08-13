@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`csctl _kimi-hook` now leaves a trail when it does not register a
+  session.** Every non-registering outcome appends one bounded line to
+  `~/.kimi-code/run/hook-errors.log` (newest 50 kept) — malformed payload,
+  unreadable ancestry, failed write, and notably an unrecognized
+  `hook_event_name`, which is how a future kimi payload rename would first
+  surface. Until now such a miss was invisible from all three sides: kimi
+  swallows hook failures, nothing reads the endpoint's exit code, and the
+  registry cannot record an event it was never handed — a live 0.35.0
+  session sat unbound for four hours on 2026-08-13 with no evidence left to
+  inspect. The trail is diagnostic only: it mints no binding, changes no
+  exit code, and an unwritable log never alters the hook's outcome.
+
+### Changed
+
+- **Stale runtime-registry entries are pruned on each successful
+  registration.** kimi's `SessionEnd` does not dependably fire (0.35.0 kept
+  `run/<pid>.json` after a clean `kimi -p` exit and after a killed TUI), so
+  the directory accumulated entries for dead pids. `_prune_gone` removes
+  only entries whose pid is provably `GONE`; `UNAVAILABLE` (no `/proc`) and
+  malformed entries are left alone, so a platform that cannot judge
+  liveness never empties a registry it cannot read. Leftovers were already
+  inert — the reader re-verifies identity and starttime — this bounds the
+  directory.
+- Kimi upstream contracts re-verified on 0.35.0 (2026-08-13) and the
+  records corrected where measurement disagreed: the snake_case payload
+  contract holds (0.35.0 builds hook input camelCase and converts before
+  spawning), `SessionStart` still fires on both probed paths, and the
+  "SessionEnd fires on a clean exit" claim in ADR-0005, `kimi.py`,
+  `kimi_hook.py`, and CONTEXT.md is now recorded as refuted.
+- `docs/releasing.md` and CLAUDE.md carry the post-publish cache-busting
+  recipe that actually works (`uv tool upgrade --reinstall --no-cache`);
+  `uv tool upgrade` has no `--refresh` flag and `--reinstall` alone was not
+  enough for 0.8.8.
+
 ## 0.8.8 (2026-08-13)
 
 ### Removed

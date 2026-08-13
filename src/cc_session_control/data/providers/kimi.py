@@ -1,7 +1,8 @@
 """Kimi Code provider — disk discovery + argv-exact liveness (ADR-0005).
 
 Upstream contracts (verified on Kimi Code 0.31.1, re-verified on 0.34.0
-2026-08-12, re-verify per release): `$KIMI_CODE_HOME/session_index.jsonl`
+2026-08-12 and 0.35.0 2026-08-13, re-verify per release):
+`$KIMI_CODE_HOME/session_index.jsonl`
 maps `sessionId` → `sessionDir` / `workDir`; each session dir holds
 `state.json` (`title`, `lastPrompt`, `workDir`, `updatedAt` — metadata only)
 and `agents/main/wire.jsonl`, the main agent's actual conversation log
@@ -177,12 +178,24 @@ def _read_index(path: str) -> tuple[dict[str, dict], InventoryIssue | None]:
 # (actions/kimi_hook), maintaining one `<pid>.json` (`sessionId` +
 # `procStart`) per live session in this directory — the CLI's OWN
 # self-report, the same shape csctl consumes for Claude
-# (`sessions/<pid>.json`). Hook contract verified on 0.34.0 (2026-08-12):
-# SessionStart fires when the session materializes (a TUI's first prompt;
-# immediately for `--prompt`; `source` is startup|resume) carrying
-# `session_id`/`cwd`; SessionEnd fires on a clean exit; the hook process is
-# kimi's grandchild (kimi → sh → hook). SIGKILL leaves a stale file — the
-# reader's starttime recheck fails closed on pid reuse.
+# (`sessions/<pid>.json`). Hook contract verified on 0.34.0 (2026-08-12),
+# re-verified on 0.35.0 (2026-08-13): SessionStart fires when the session
+# materializes (a TUI's first prompt; immediately for `--prompt` — both
+# paths re-probed) carrying `session_id`/`cwd`; the hook process is kimi's
+# grandchild (kimi → sh → hook).
+#
+# SessionEnd is NOT dependable: 0.35.0 left the entry behind after a clean
+# `kimi -p` exit and after a killed TUI, so this directory accumulates
+# entries for dead pids. Two things contain that: `kimi_hook._prune_gone`
+# drops provably-gone entries on each successful registration, and the
+# reader below re-verifies identity + starttime, so a leftover (or a pid
+# reused by an unrelated process) never binds.
+#
+# A registration that never happens is invisible here BY CONSTRUCTION — the
+# registry cannot record an event it was not handed. That gap is what left
+# a live 0.35.0 session unbound on 2026-08-13 with no evidence to inspect;
+# `run/hook-errors.log` (written by the hook endpoint) is where a failed
+# attempt now shows up.
 
 #: Registry directory name under the kimi home — part of the provider's
 #: contract surface, also written by `actions/kimi_hook`.

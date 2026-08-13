@@ -167,6 +167,33 @@ The provider designs below are grounded in probes of the actual CLIs
   spawn-snapshot index diff covering only csctl-dispatched NEW sessions),
   which is removed in the same release. C1's closing claim now reads: bare
   TUIs stay blind *unless the hook registry proves them*.
+- **Amendment (2026-08-13, 0.35.0 re-verification):** the payload contract
+  holds — 0.35.0 assembles hook input camelCase and runs it through
+  `toHookInputData`/`camelToSnake` before spawning the command, so
+  `hook_event_name`/`session_id` remain what the endpoint reads.
+  `SessionStart` still fires on both probed paths (`--prompt`, and a TUI's
+  first prompt). Two claims above are corrected by measurement:
+  - `SessionEnd` does **not** dependably fire — 0.35.0 left `run/<pid>.json`
+    in place after a clean `kimi -p` exit and after a killed TUI. Entries
+    therefore accumulate; `kimi_hook._prune_gone` drops provably-`GONE`
+    pids on each successful registration (never on `UNAVAILABLE` — R10),
+    and the reader's identity/starttime recheck keeps leftovers inert.
+  - A registration that never happens leaves **no evidence at all**. A live
+    0.35.0 session sat unbound for four hours on 2026-08-13 and the cause
+    was unrecoverable after the fact: kimi swallows hook failures
+    (`trigger(...).catch(() => [])`), nothing reads the endpoint's exit
+    code, and the registry cannot record an event it was not handed. The
+    endpoint now appends one bounded line per non-registering outcome to
+    `run/hook-errors.log` — including an unrecognized `hook_event_name`,
+    which is how a future payload rename would first surface. This is
+    diagnostic only: it mints no binding and changes no exit code.
+
+  The residual gap is structural and stays open: the late-sid gap means a
+  NEW session's sid does not exist at spawn, so dispatch metadata cannot
+  cover it and the hook is the only full-coverage evidence source — whose
+  firing csctl does not control. Inferring a binding from "one unbound live
+  kimi in this directory" was considered and rejected: it would mint kill
+  authority from ambiguity, which C1 exists to prevent.
 - **Takeover semantics generalize, with the same single decision point.**
   `should_kill = alive ∧ ¬current ∧ ¬fork` is provider-neutral;
   `take_over_result`'s kill-time recheck applies to any exact-matched pid.

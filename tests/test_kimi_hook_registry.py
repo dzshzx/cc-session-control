@@ -34,6 +34,17 @@ def kimi_home(tmp_path, monkeypatch):
     return home
 
 
+def _entries(home) -> list[str]:
+    """Registry entries only — the diagnostic log is not one."""
+    run = home / "run"
+    return sorted(p.name for p in run.glob("*.json")) if run.exists() else []
+
+
+def _error_log(home) -> list[str]:
+    path = home / "run" / kimi_hook.ERROR_LOG
+    return path.read_text().splitlines() if path.exists() else []
+
+
 def _registry_file(home, pid: int, sid: str = SID, proc_start: str = "555"):
     run = home / "run"
     run.mkdir(exist_ok=True)
@@ -90,22 +101,23 @@ def _start_payload(sid: str = SID, event: str = "SessionStart") -> str:
 # --- the hook command ----------------------------------------------------------
 
 
-class TestRunHook:
-    @pytest.fixture
-    def hosting(self, monkeypatch):
-        """The verified ancestry: hook(900) → sh(700) → kimi(800, start 555)."""
-        monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: 800)
-        monkeypatch.setattr(
-            kimi_hook.proc,
-            "read_proc_stat",
-            lambda pid: kimi_hook.proc.ProcStatRead(
-                pid=pid,
-                state=kimi_hook.ProcReadState.AVAILABLE,
-                path=f"/proc/{pid}/stat",
-                starttime="555",
-            ),
-        )
+@pytest.fixture
+def hosting(monkeypatch):
+    """The verified ancestry: hook(900) → sh(700) → kimi(800, start 555)."""
+    monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: 800)
+    monkeypatch.setattr(
+        kimi_hook.proc,
+        "read_proc_stat",
+        lambda pid: kimi_hook.proc.ProcStatRead(
+            pid=pid,
+            state=kimi_hook.ProcReadState.AVAILABLE,
+            path=f"/proc/{pid}/stat",
+            starttime="555",
+        ),
+    )
 
+
+class TestRunHook:
     def test_session_start_writes_the_registry_entry(self, kimi_home, hosting):
         assert kimi_hook.run_hook(_start_payload()) == 0
 
@@ -124,18 +136,18 @@ class TestRunHook:
     def test_unknown_events_are_ignored(self, kimi_home, hosting):
         payload = json.dumps({"hook_event_name": "PostToolUse", "session_id": SID})
         assert kimi_hook.run_hook(payload) == 0
-        assert not (kimi_home / "run").exists()
+        assert not _entries(kimi_home)
 
     def test_malformed_payloads_are_rejected(self, kimi_home, hosting):
         assert kimi_hook.run_hook("not json") == 2
         assert kimi_hook.run_hook(json.dumps(["a list"])) == 2
         assert kimi_hook.run_hook(json.dumps({"hook_event_name": "SessionStart"})) == 2
-        assert not (kimi_home / "run").exists()
+        assert not _entries(kimi_home)
 
     def test_unreadable_ancestry_binds_nothing(self, kimi_home, monkeypatch):
         monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: None)
         assert kimi_hook.run_hook(_start_payload()) == 3
-        assert not (kimi_home / "run").exists()
+        assert not _entries(kimi_home)
 
     def test_pid_comes_from_the_nearest_grandparent(self, monkeypatch):
         reads = {
@@ -166,6 +178,140 @@ class TestRunHook:
             ),
         )
         assert kimi_hook._kimi_pid() is None
+
+
+class TestFailureTrail:
+    """Every non-registering outcome must leave evidence.
+
+    kimi swallows hook failures and nobody reads the exit code, so a silent
+    miss is indistinguishable from "never called" — that is what made the
+    2026-08-13 unbound-session investigation unanswerable."""
+
+    def test_unknown_event_is_recorded(self, kimi_home, hosting):
+        payload = json.dumps({"hook_event_name": "PostToolUse", "session_id": SID})
+        assert kimi_hook.run_hook(payload) == 0
+
+        (line,) = _error_log(kimi_home)
+        assert "reason=unknown-event" in line
+        assert "event=PostToolUse" in line
+
+    def test_a_renamed_event_key_shows_up_as_an_unknown_event(self, kimi_home, hosting):
+        """The failure mode a future kimi payload rename would produce."""
+        payload = json.dumps({"hookEventName": "SessionStart", "session_id": SID})
+        assert kimi_hook.run_hook(payload) == 0
+
+        (line,) = _error_log(kimi_home)
+        assert "reason=unknown-event" in line
+        assert "event=?" in line
+
+    def test_bad_json_and_missing_ancestry_are_recorded(self, kimi_home, monkeypatch):
+        monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: None)
+        assert kimi_hook.run_hook("not json") == 2
+        assert kimi_hook.run_hook(_start_payload()) == 3
+
+        reasons = [
+            line.split("reason=")[1].split()[0] for line in _error_log(kimi_home)
+        ]
+        assert reasons == ["bad-json", "no-ancestry"]
+
+    def test_a_successful_registration_writes_no_trail(self, kimi_home, hosting):
+        assert kimi_hook.run_hook(_start_payload()) == 0
+        assert _error_log(kimi_home) == []
+
+    def test_the_trail_is_bounded(self, kimi_home, hosting):
+        for _ in range(kimi_hook.MAX_ERROR_LINES + 10):
+            kimi_hook.run_hook("not json")
+
+        assert len(_error_log(kimi_home)) == kimi_hook.MAX_ERROR_LINES
+
+    def test_an_unwritable_trail_never_changes_the_outcome(
+        self, kimi_home, monkeypatch
+    ):
+        monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: None)
+
+        def _boom(*args, **kwargs):
+            raise OSError("read-only")
+
+        monkeypatch.setattr(kimi_hook, "atomic_replace", _boom)
+        assert kimi_hook.run_hook(_start_payload()) == 3
+
+
+class TestPruneGone:
+    """SessionEnd does not reliably fire (0.35.0, 2026-08-13), so entries
+    accumulate; pruning is what bounds the directory."""
+
+    def _stat(self, states):
+        def read(pid):
+            return kimi_hook.proc.ProcStatRead(
+                pid=pid,
+                state=states.get(pid, kimi_hook.ProcReadState.GONE),
+                path=f"/proc/{pid}/stat",
+                starttime="555",
+            )
+
+        return read
+
+    def test_a_successful_write_drops_provably_dead_entries(
+        self, kimi_home, monkeypatch
+    ):
+        _registry_file(kimi_home, 111)
+        _registry_file(kimi_home, 222)
+        monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: 800)
+        monkeypatch.setattr(
+            kimi_hook.proc,
+            "read_proc_stat",
+            self._stat({800: kimi_hook.ProcReadState.AVAILABLE}),
+        )
+
+        assert kimi_hook.run_hook(_start_payload()) == 0
+        assert _entries(kimi_home) == ["800.json"]
+
+    def test_unreadable_proc_keeps_every_entry(self, kimi_home, monkeypatch):
+        """R10: a platform that cannot judge liveness must not delete."""
+        _registry_file(kimi_home, 111)
+        monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: 800)
+        monkeypatch.setattr(
+            kimi_hook.proc,
+            "read_proc_stat",
+            self._stat(
+                {
+                    800: kimi_hook.ProcReadState.AVAILABLE,
+                    111: kimi_hook.ProcReadState.UNAVAILABLE,
+                }
+            ),
+        )
+
+        assert kimi_hook.run_hook(_start_payload()) == 0
+        assert _entries(kimi_home) == ["111.json", "800.json"]
+
+    def test_a_live_entry_survives(self, kimi_home, monkeypatch):
+        _registry_file(kimi_home, 111)
+        monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: 800)
+        monkeypatch.setattr(
+            kimi_hook.proc,
+            "read_proc_stat",
+            self._stat(
+                {
+                    800: kimi_hook.ProcReadState.AVAILABLE,
+                    111: kimi_hook.ProcReadState.AVAILABLE,
+                }
+            ),
+        )
+
+        assert kimi_hook.run_hook(_start_payload()) == 0
+        assert _entries(kimi_home) == ["111.json", "800.json"]
+
+    def test_the_diagnostic_log_is_never_pruned(self, kimi_home, monkeypatch):
+        monkeypatch.setattr(kimi_hook, "_kimi_pid", lambda: 800)
+        monkeypatch.setattr(
+            kimi_hook.proc,
+            "read_proc_stat",
+            self._stat({800: kimi_hook.ProcReadState.AVAILABLE}),
+        )
+        kimi_hook.run_hook("not json")
+
+        assert kimi_hook.run_hook(_start_payload()) == 0
+        assert _error_log(kimi_home) != []
 
 
 def test_hook_command_routing(kimi_home, monkeypatch):
@@ -256,6 +402,21 @@ class TestRegistryBinding:
 
         assert not scan.complete
         assert scan.issues[0].source == "kimi sessions"
+
+    def test_the_diagnostic_log_is_not_read_as_an_entry(self, kimi_home):
+        """It shares the registry directory — it must stay invisible here."""
+        _write_session(kimi_home, SID)
+        _registry_file(kimi_home, 800)
+        (kimi_home / "run" / kimi_hook.ERROR_LOG).write_text(
+            "2026-08-13T18:00:00+08:00 reason=unknown-event event=Foo pid=?\n"
+        )
+        inventory = ProcCliInventory(records=(_bare(800),))
+
+        scan = KimiProvider().discover(inventory, cur=frozenset())
+
+        assert scan.complete
+        (row,) = scan.sessions
+        assert row.alive and row.pid == 800
 
     def test_two_live_pids_claiming_one_sid_bind_nobody(self, kimi_home):
         """Double-attach is genuinely ambiguous for kill authority — fail

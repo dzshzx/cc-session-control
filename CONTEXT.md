@@ -52,8 +52,13 @@ self-report, the same shape as Claude's `sessions/<pid>.json`. csctl
 re-verifies pid identity and start time per entry, so stale, forged, or
 disputed entries never bind. Covers every kimi session regardless of launch
 surface, bare-launched TUIs included; the hook fires when a session
-materializes (a TUI's first prompt).
-_Avoid_: treating the registry file alone as proof without the /proc recheck
+materializes (a TUI's first prompt). Coverage is only as good as that one
+firing: SessionEnd is unreliable (0.35.0 leaves entries behind, so
+`_prune_gone` bounds the directory), and a SessionStart that never lands
+leaves a live session permanently unbound — `run/hook-errors.log` is the
+only trace a registration was attempted.
+_Avoid_: treating the registry file alone as proof without the /proc recheck;
+inferring a binding for an unbound live process from its directory
 
 **Dispatch-metadata Liveness**:
 The supplementary non-Claude binding for sessions csctl dispatched into tmux.
