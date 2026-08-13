@@ -134,7 +134,7 @@ csctl --version
 
 The companion Claude Code skill (`claude-session-doctor`) is deprecated:
 its background-agent and Remote Control instructions depended on surfaces
-removed in 0.9. Session rescue lives in csctl itself (`csctl resume` and
+removed in 0.8.8. Session rescue lives in csctl itself (`csctl resume` and
 the TUI).
 
 ## Configuration

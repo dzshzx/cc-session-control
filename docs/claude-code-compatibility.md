@@ -11,10 +11,11 @@ new Claude Code version still emits them.
 |---|---:|---:|---|
 | Trust inheritance and `~/.claude.json` footprint | 2.1.218 | 2026-07-23 | Parent `true` suppresses the child dialog; the child may be recorded with explicit `false`; declining writes no project entry |
 | Isolated read-only command probe | 2.1.228 | 2026-08-12 | For the v0.8.5/v0.8.6 releases (identical same-day results): `claude --version` exited 0; `claude agents --help` exited 0 with `--json`; `claude agents --json` exited 0 with valid-JSON `[]` under an empty temporary home |
+| Isolated read-only command probe | 2.1.231 | 2026-08-13 | For the v0.8.8 release: `claude --version` exited 0; `claude agents --help` exited 0 and still advertises `--json`; `claude agents --json` exited 0 with valid-JSON `[]` under an empty temporary home |
 
-The 2.1.228 release probes did **not** revalidate trust inheritance or non-empty
-registry fields. Do not advance the semantic “last verified” version from
-2.1.218 until the remaining disposable-fixture steps below pass.
+The 2.1.228 and 2.1.231 release probes did **not** revalidate trust inheritance
+or non-empty registry fields. Do not advance the semantic “last verified”
+version from 2.1.218 until the remaining disposable-fixture steps below pass.
 
 ## Tier 1: isolated read-only probe
 

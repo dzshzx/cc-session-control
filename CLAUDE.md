@@ -35,14 +35,14 @@ uv run csctl                                                                    
 grep -rn --include='*.py' '/home/' src/      # no hardcoded paths in product source
 ```
 
-`csctl` 不只是 TUI——不带子命令运行会启动 TUI，`cli.py` 还暴露一个**面向 agent 的最小 headless CLI**（0.8 起只剩 `resume`；`agents` 随 0.9 移除——ADR-0004/0009。RC 管理已随 0.9 整体移除；cleanup 是 TUI 专属表面，`prune`/`env`/`skill`/`rc`/`agents` 子命令已移除。子命令输出为英文；见 Conventions 说明）：
+`csctl` 不只是 TUI——不带子命令运行会启动 TUI，`cli.py` 还暴露一个**面向 agent 的最小 headless CLI**（0.8 起只剩 `resume`；`agents` 随 0.8.8 移除——ADR-0004/0009。RC 管理已随 0.8.8 整体移除；cleanup 是 TUI 专属表面，`prune`/`env`/`skill`/`rc`/`agents` 子命令已移除。子命令输出为英文；见 Conventions 说明）：
 
 ```bash
 csctl resume [keyword] [--page N] [--limit N] [--all]  # cross-directory resume commands for ALL providers (incl. hidden sessions; body-search fallback; non-Claude rows tagged [codex]/[kimi], unbound-live rows flagged [live?], archived rows flagged (archived))
 csctl resume --take-over <sid>                 # execution-time re-resolution + guarded live takeover (Claude sids only)
 ```
 
-`claude-session-doctor` skill 已废弃（其依赖的后台 agent 与 RC 管理随 0.9 移除）；会话接回直接走 `csctl resume` / TUI。
+`claude-session-doctor` skill 已废弃（其依赖的后台 agent 与 RC 管理随 0.8.8 移除）；会话接回直接走 `csctl resume` / TUI。
 
 `CONTRIBUTING.md` 的约束：每个源文件保持 **600 行以内**，使用 type hints，不硬编码路径。
 
@@ -94,7 +94,7 @@ TUI 无法在自身内部运行 `claude`。resume 家族的动作退出 MainLoop
 
 **tmux 接回（`Enter`，主动作——ADR-0001/0006）：** 在 `cfg.tmux_session == "csctl"` 的统一 tmux session 内 resume 它；`tmux.window_name_for(cwd, leaf)` 生成 `<project>/<leaf>` window（普通 `claude --resume`，有意**不加 `--remote-control`**——每个 RC 进程都会铸造一个新的 cloud env 条目），并把用户的终端带*进*那个 window，这样 SSH/手机连接断掉也不再杀死 session。`sessions.scan_result()` 每代只调用一次 typed `tmux.residency_inventory`，把 pane-pid ∈ session pid 的 `/proc` 祖先链批量映射到任意 tmux session，并写入 `tmux_target` + evidence completeness/detail；界面三态是 `⧉` 确认 resident、无徽标确认 bare、ASCII `?` 表示证据不完整。只有具体 `tmux_target` 才会让 `attach_target` 判定 resident 并**就地**进入（不杀、不确认、无 R10 gate）；这也保留旧 per-project 或用户自建 tmux session 中的驻留会话，不移动它。unknown 绝不被当成 bare 后贸然接管，动作会保留 typed detail 并 fail closed。否则走 `would_take_over`/confirm/R10 路径，然后 `session_ops.py` 生成 window（`do_tmux_resume_result`）并进入它。整个 驻留→attach / 否则 confirm→spawn 序列只在 `views/_confirm.py::confirm_tmux_takeover` 中存在一次（Sessions `Enter`、Sessions `f` 且 `fork=True`——fork 绝不就地 attach，它会生成自己的 `<project>/<sid8>-fork` window）。进入 = `enter_window`：在 tmux 外用 `exec tmux attach-session`（替换 csctl，和 `do_resume_result` 一样）；在 tmux 内（`$TMUX` 已设置）用 `switch-client`，然后 csctl 正常退出——两条路径都会结束 csctl（「接回 = 离开 csctl」）。**终端接回（`t`，fallback）：** 经 `ResumeIntent`/`do_resume_result` 的裸终端 resume——session 随终端一起死掉；对 resident session，`t` 会通过同样的标准接管确认把它拉*出* tmux。
 
-**转后台（`R` 键——无 Remote Control）：** `do_tmux_resume_result` 在统一 `csctl` tmux session 里生成项目标记的普通 resume window（经 typed `tmux.run_in_tmux_result`，它通过 `-P` 返回精确的 "session:window_index" 目标并保留失败 stage/detail）**但不进入它**——操作员留在 csctl；notify 携带该目标。tmux-resident 的 session 会被拒绝并提示 已在 tmux（无可移动）。复用同样的 `should_kill` 交接与 execution-time resolver（live 且非 current 的 session → 用 fresh whole `Session` 先杀旧 pid；current session 被拒）。0.7 之前的 `R`（带 `--remote-control` 重启）已**移除**——Sessions tab 不再能铸造 cloud environment（ADR-0001）；csctl 也不再管理 project RC servers（`o`/`c` 已随 0.9 移除，ADR-0009），手机/网页接管仅剩 in-session `/remote-control`。
+**转后台（`R` 键——无 Remote Control）：** `do_tmux_resume_result` 在统一 `csctl` tmux session 里生成项目标记的普通 resume window（经 typed `tmux.run_in_tmux_result`，它通过 `-P` 返回精确的 "session:window_index" 目标并保留失败 stage/detail）**但不进入它**——操作员留在 csctl；notify 携带该目标。tmux-resident 的 session 会被拒绝并提示 已在 tmux（无可移动）。复用同样的 `should_kill` 交接与 execution-time resolver（live 且非 current 的 session → 用 fresh whole `Session` 先杀旧 pid；current session 被拒）。0.7 之前的 `R`（带 `--remote-control` 重启）已**移除**——Sessions tab 不再能铸造 cloud environment（ADR-0001）；csctl 也不再管理 project RC servers（`o`/`c` 已随 0.8.8 移除，ADR-0009），手机/网页接管仅剩 in-session `/remote-control`。
 
 **统一的跨 tab 按键表（tmux-first，ADR-0001/0006）。** 两个 tab 共享一套动词词汇，让肌肉记忆可迁移：`r` = 刷新（每个 tab——在 App 级 `FOOTER_PREFIX` 中经 `App.set_hints` 只渲染一次，不是每个 view 各渲染），`Enter` = **进 tmux**，tab 的主动作——Sessions 的 tmux 接回（resident → 就地进入；否则 resume 进统一 `csctl` tmux session 的项目标记 window 并进入）和 项目 的 tmux 新建（Enter 先弹 CLI 选择器——`_show_overlay` 管道的选择型 overlay，仅列已启用 provider、默认焦点 claude、Esc 取消，确认后与 `x`/`k` 直达共走 `_launch_new`→`do_tmux_new_result`：在统一 `csctl` tmux session 里开所选 CLI 的项目标记 window，无 `--remote-control`，不杀任何东西 → 无 confirm/R10/trust gate，然后 `enter_window`），`t` = **终端接回**（经 `ResumeIntent` 的裸终端 fallback；仅 Sessions——项目 上没有 `t`），`s` = 停止（停止/杀死一个 live 进程——Sessions），`R` = 转后台（Sessions：tmux，无 RC，留在 csctl），`f` = 分叉进 tmux（仅 Sessions），`d` = 删除一条已 settled 的记录（非 archived 的 dead codex 行委托官方 `codex delete <sid>`——`DeleteVerbs` typed 能力，csctl 自身 removal seam 仍拒绝非 Claude 状态；kimi 无官方 delete 子命令，仍走同一拒绝）。**「杀前确认」是统一的（不止两个键）：** 每个终止 live 进程的操作都经 App 级 `App.confirm(message, on_yes)` modal 确认（在 `_input` 中路由；`_confirm_yes` 把关）——Sessions `s` / `Enter`-live-非 resident / `t`-live / `R`-live。一个 resume 动词是否为接管（先杀旧 pid）读取 `session_ops.would_take_over`——唯一的 `should_kill`，所以确认关卡绝不重新推导它；resume 一个 DEAD session 什么都不杀，且*不*确认（唯一例外：带 `unbound_live_hint` 的行在 Enter/t/R 上先弹一个无 kill 的双开风险确认——同样只在 `confirm_takeover` 里存在一次，fork 照旧从不确认），就地进入一个 RESIDENT session 同样什么都不杀（无 confirm，无 gate）。整个 降级 gate → confirm → 执行 序列只在 `views/_confirm.py` 中存在一次——接管用 `confirm_takeover`，tmux-first 的 Enter/f 用 `confirm_tmux_takeover`（驻留→`AttachIntent`；否则 confirm→`TmuxResumeIntent`），以及普通停止的孪生 `confirm_stop`（降级 gate → alive → current → confirm，文案由一个名词派生）——外加 `_DEGRADED` 拒绝字符串和 `stop_message` 文案。view 调用这些，而不是把步骤重新内联。非 kill 操作保持单键：Sessions `d`（删除 settled）、`f`（fork——副本，从不确认）。`f` 分叉 有一个 current-session 守卫（和 `Enter`/`s` 一样）。相同键 → 跨 tab 相同汉字（`s`=停止，`Enter`=接回/新建=进 tmux，`t`=终端接回）。R10 降级 gate 在 confirm *之前*触发，且感知接管：它拒绝一个脱离 `/proc` 的 live 接管，但仍允许 resume 一个 dead session。confirm 文案遵循一个模板——`{动词}{对象}「name」？{后果}`（接管类「将先终止原进程。」/ 停止类「将终止其进程。」）。`c` 保持 tab 专属（Sessions cleanup）——不属于通用动词集。
 
@@ -120,7 +120,7 @@ TUI 无法在自身内部运行 `claude`。resume 家族的动作退出 MainLoop
 
 **RC exposure 是一个纯谓词。** `liveness.is_rc_exposed(bridge, pid_alive) = bool(bridge) and pid_alive`——一个 session 的 *session remote control* 只有在其 `bridgeSessionId` 为 truthy *且*其 proc alive 时才算「exposed」（僵尸的过期 bridge *不*算）。在完整的 missing/null/string × alive/dead 矩阵上做过单元测试；`sessions.scan_result` 调用这唯一的实现。
 
-### 后台 agents（0.9 起移除）
+### 后台 agents（0.8.8 起移除）
 
 后台 agents 管理已随 ADR-0009 整体移除：csctl 不再读取 `jobs/*/state.json`、不再管理 agent 生命周期。session cleanup 仍按原有锚点删除已 dead session 的 `jobs/<sid-prefix>` artifacts。`claude agents --json` 仍作为 liveness 证据读取（`alive_map`，来源 `BG` 徽标）。
 
