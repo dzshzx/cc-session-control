@@ -376,8 +376,13 @@ def test_hook_command_routing(kimi_home, monkeypatch):
     assert cmd_kimi_hook(["stray"]) == 2
 
 
-def test_hook_command_main_intercept_rejects_stray_args():
+def test_hook_command_main_intercept_rejects_stray_args(kimi_home):
+    """`kimi_home` is not decoration: the stray-args path now records a
+    diagnostic line, so without it this test writes into the operator's real
+    `~/.kimi-code/run/` (observed 2026-08-13)."""
     assert main(["_kimi-hook", "stray"]) == 2
+
+    assert (kimi_home / "run" / kimi_hook.ERROR_LOG).exists()
 
 
 def test_hook_command_stays_out_of_the_public_parser(capsys):
