@@ -9,7 +9,7 @@ absent CLI simply contributes no rows.
 from __future__ import annotations
 
 import os.path
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 
@@ -26,6 +26,8 @@ from .base import (
     LivenessGrade,
     ProviderCaps,
     ProviderScan,
+    TrustDiscovery,
+    TrustScan,
 )
 from .claude import ClaudeProvider
 from .codex import CodexProvider
@@ -43,12 +45,16 @@ __all__ = [
     "ProviderCaps",
     "ProviderScan",
     "ArgvResolution",
+    "TrustedDirsScan",
+    "TrustDiscovery",
+    "TrustScan",
     "all_providers",
     "active_providers",
     "get",
     "is_active",
     "merge_sessions",
     "scan_non_claude",
+    "scan_trusted_dirs",
     "resolve_argv_execution",
     "find_non_claude_session",
     "unarchive_argv",
@@ -135,6 +141,34 @@ def scan_non_claude(
         rows.extend(scan.sessions)
         issues.extend(scan.issues)
     return tuple(rows), tuple(issues)
+
+
+@dataclass(frozen=True)
+class TrustedDirsScan:
+    """Cross-provider trust evidence for membership (ADR-0007)."""
+
+    directories: Mapping[str, tuple[str, ...]]
+    issues: tuple[InventoryIssue, ...] = ()
+
+
+def scan_trusted_dirs() -> TrustedDirsScan:
+    """Every ACTIVE TrustDiscovery provider's trusted dirs, in one pass.
+
+    Claude is deliberately absent: its trust store is `~/.claude.json`, read
+    through `data.project_settings` — the same single reader the RC start
+    gate uses — never through this registry path. Per-provider failures merge
+    into the issue stream and narrow only their own source.
+    """
+    directories: dict[str, tuple[str, ...]] = {}
+    issues: list[InventoryIssue] = []
+    for provider in active_providers():
+        if not isinstance(provider, TrustDiscovery):
+            continue
+        scan = provider.trusted_dirs()
+        if scan.directories:
+            directories[provider.key] = scan.directories
+        issues.extend(scan.issues)
+    return TrustedDirsScan(directories, tuple(issues))
 
 
 def unarchive_argv(key: str, sid: str) -> list[str]:

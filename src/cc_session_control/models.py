@@ -229,9 +229,25 @@ class RCProject:
         default_factory=lambda: RCStartupSettingRead(RCStartupSettingState.MISSING)
     )
     spawn_mode: str | None = None  # per-project remoteControlSpawnMode (None=unset)
-    # False when the workspace directory is gone but claude.json still
-    # references the project — shown as 缺失, start-ops refused.
+    # False when the workspace directory is gone but membership evidence (or
+    # a pin / rc window) still references the project — shown as 缺失,
+    # start-ops refused.
     dir_exists: bool = True
+    # ADR-0007 evidence-tier provenance (all default so pre-0.9 constructions
+    # stay byte-identical): `trusted_by` holds the provider keys whose trust
+    # store covers this directory (claude = effective/inherited trust, i.e.
+    # exactly what `trust_decision` gates; codex/kimi = exact-match records);
+    # `observed_by` holds providers with session activity in the directory.
+    # `hidden` rows ship in the scan so the view's show-hidden mode can offer
+    # the unhide verb; the view filters them in normal mode.
+    pinned: bool = False
+    hidden: bool = False
+    trusted_by: frozenset[str] = frozenset()
+    observed_by: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "trusted_by", frozenset(self.trusted_by))
+        object.__setattr__(self, "observed_by", frozenset(self.observed_by))
 
     @property
     def rc_at_startup(self) -> bool | None:

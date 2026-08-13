@@ -56,6 +56,8 @@ class WorldSnapshot:
     )
     rc_servers: tuple[RCServer, ...] = ()
     rc_inventory_issues: tuple[InventoryIssue, ...] = ()
+    # ADR-0007 membership-source degradation (codex/kimi trust, curation).
+    membership_issues: tuple[InventoryIssue, ...] = ()
     liveness_snapshot: liveness.LivenessSnapshot | None = None
     transcript_scan: SessionScanResult = field(default_factory=SessionScanResult)
 
@@ -69,6 +71,11 @@ class WorldSnapshot:
             self,
             "rc_inventory_issues",
             tuple(self.rc_inventory_issues),
+        )
+        object.__setattr__(
+            self,
+            "membership_issues",
+            tuple(self.membership_issues),
         )
 
 
@@ -93,7 +100,7 @@ def build_world_snapshot() -> WorldSnapshot:
     provider_rows, provider_issues = providers.scan_non_claude(inputs.cur)
     all_sessions = _merged_sessions(transcript_scan.sessions, provider_rows)
     window_inventory = rc._tmux_window_inventory()
-    rc_scan = rc.scan_result(window_inventory=window_inventory)
+    rc_scan = rc.scan_result(window_inventory=window_inventory, sessions=all_sessions)
     server_scan = rc.scan_servers_result(window_inventory=window_inventory)
     return WorldSnapshot(
         sessions=all_sessions,
@@ -103,6 +110,7 @@ def build_world_snapshot() -> WorldSnapshot:
         rc_project_settings=rc_scan.settings,
         rc_servers=tuple(server_scan.servers),
         rc_inventory_issues=server_scan.issues,
+        membership_issues=rc_scan.membership_issues,
         liveness_snapshot=inputs,
         transcript_scan=transcript_scan,
     )

@@ -26,6 +26,9 @@ class RCScanResult:
     projects: list[RCProject]
     settings: ProjectSettingsResult
     issues: tuple[InventoryIssue, ...] = ()
+    # Non-fatal degradation of the ADR-0007 membership sources (codex/kimi
+    # trust stores, the curation file) — narrowed sources, never a blank tab.
+    membership_issues: tuple[InventoryIssue, ...] = ()
 
     @property
     def complete(self) -> bool:
@@ -138,7 +141,7 @@ def order_by_activity(
     projects: Sequence[RCProject],
     sessions: Sequence[Session],
 ) -> list[RCProject]:
-    """Order projects by newest exact-cwd activity, then path."""
+    """Pinned projects first, then newest exact-cwd activity, then path."""
 
     latest: dict[str, float] = {}
     for session in sessions:
@@ -148,6 +151,7 @@ def order_by_activity(
     return sorted(
         projects,
         key=lambda project: (
+            not project.pinned,
             -latest.get(os.path.normpath(project.directory), 0.0),
             project.directory,
         ),

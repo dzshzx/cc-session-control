@@ -105,25 +105,51 @@ _Avoid_: relaunch, RC relaunch (the pre-0.7 behavior that also minted a cloud
 environment)
 
 **Project**:
-A directory recorded in `~/.claude.json`'s `projects` map that is *effectively
-trusted*: its own entry or ANY ancestor entry carries
-`hasTrustDialogAccepted: true`. This mirrors claude's runtime trust-dialog
-gate, which inherits trust down the directory tree (last semantically verified
-on Claude Code 2.1.218, 2026-07-23). This is an upstream-dependent contract;
-each release must rerun `docs/claude-code-compatibility.md` and record any
-unverified item. The absolute directory path is the project's identity
-everywhere (tmux window metadata, claude.json lookups); the
-display name is a derived basename. An entry with an explicit False flag under
-a trusted ancestor IS a project — that footprint means "dialog suppressed, never asked",
-not "declined" (declining writes no entry at all). Platform temp directories
-(`tempfile.gettempdir()`, `/tmp`, `/var/tmp`, and anything beneath them) are
-working space, not projects: trust discovery alone never lists them — the
-trust state itself stays untouched, so a deliberately trusted `/tmp` keeps
-suppressing dialogs for scratch sessions — while explicitly actionable
-entries (existing rc window) stay listed.
+An absolute directory path carrying a provenance evidence set — the
+membership unit of the Projects tab (ADR-0007). Membership is the union of
+three evidence tiers, minus hygiene rules, with operator curation on top:
+**Pinned** (operator-curated in the curation store; immune to hygiene and
+decay), **Trusted** (a provider's trust store covers the directory — Claude
+effective trust with ancestor inheritance, codex/kimi exact-match records),
+**Observed** (any provider has session activity in the directory within the
+last 30 days). Temp roots and missing directories are hygiene-excluded
+unless the entry is pinned or holds an rc window; a hidden entry is
+suppressed regardless of evidence. Trust inheritance only ever *qualifies* a
+recorded candidate — it never *generates* one, so a trusted `/` cannot flood
+the tab. The absolute directory path is the project's identity everywhere
+(tmux window metadata, claude.json lookups); the display name is a derived
+basename. Claude effective trust keeps its ADR-0003 semantics (`hasTrustDialogAccepted: true`
+on the entry or any ancestor, explicit-False-is-not-a-veto, normpath never
+realpath, last semantically verified on Claude Code 2.1.218, 2026-07-23) and
+remains an upstream-dependent contract: each release must rerun
+`docs/claude-code-compatibility.md` and record any unverified item. Platform
+temp directories (`tempfile.gettempdir()`, `/tmp`, `/var/tmp`, and anything
+beneath them) stay working space, not projects: discovery never lists them —
+the trust state itself stays untouched, so a deliberately trusted `/tmp`
+keeps suppressing dialogs for scratch sessions — while pinned or
+window-holding entries stay listed.
 _Avoid_: workspace-relative short names as identity, reading the raw
 `hasTrustDialogAccepted` flag as the trust set, assuming a workspace root,
 treating a trusted temp root as a project
+
+**Membership Evidence (成员证据)**:
+The per-project record of WHY a directory is on the Projects tab:
+`trusted_by` (provider keys whose trust store covers it — claude via
+effective/inherited trust, codex/kimi via exact-match records) and
+`observed_by` (provider keys with session activity there), plus the
+`pinned`/`hidden` curation flags. Rendered as the 证据 column badges
+(钉/隐/信cc/信cx/信km/活…); `信cc` is exactly the RC start gate's predicate.
+_Avoid_: a single is-a-project boolean, deriving membership from one CLI's
+records only
+
+**Curation Store (取舍存储)**:
+The one csctl-OWNED membership source (`cfg.curation_file`, XDG config
+home): the operator's `pinned` and `hidden` directory lists, mutually
+exclusive (pinning unhides, hiding unpins). Read on every refresh; written
+only by the Projects tab's `p`/`h` verbs through advisory-locked atomic
+replace. Every other membership source (the CLI trust stores) is read-only
+for csctl.
+_Avoid_: writing operator intent into claude.json or any provider's files
 
 **Remote Control** (umbrella term — two distinct concepts, do not conflate):
 

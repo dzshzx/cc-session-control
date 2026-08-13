@@ -53,8 +53,10 @@ from .base import (
     LivenessGrade,
     ProviderCaps,
     ProviderScan,
+    TrustScan,
 )
 from .codex_source import classify_source
+from .codex_trust import read_trusted_dirs
 
 BASENAME = "codex"
 
@@ -342,6 +344,9 @@ class CodexProvider:
         # must still activate (launcher `x`); discover() tolerates the
         # missing sessions tree.
         return cfg.codex_home.is_dir()
+
+    def trusted_dirs(self) -> TrustScan:
+        return read_trusted_dirs()
 
     def resume_argv(self, sid: str, fork: bool = False) -> list[str]:
         return ["codex", "fork" if fork else "resume", sid]

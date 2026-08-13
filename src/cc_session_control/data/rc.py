@@ -1,23 +1,30 @@
-"""Manage path-keyed Claude Code Remote Control projects via tmux.
+"""Manage evidence-tier membership projects and their RC surface via tmux.
 
 Names are display-only; tmux and settings joins use absolute paths.
+Membership itself (which directories are projects at all) lives in
+`data.membership` (ADR-0007); this module owns the RC join: window status,
+per-project settings, spawn modes, and the start/stop verbs.
 """
 
 from __future__ import annotations
 
 import os
-import tempfile
-from collections.abc import Mapping
+import time
+from collections.abc import Mapping, Sequence
 
 from ..config import cfg
 from ..models import (
+    InventoryIssue,
     RCProject,
     RCServer,
+    Session,
     Status,
     TrustDecision,
     effective_trust_decision,
 )
-from . import proc, rc_outcomes, tmux
+from . import proc, providers, rc_outcomes, tmux
+from .curation import read_curation
+from .membership import compute_membership
 from .project_settings import (
     ProjectSettingsResult,
     read_project_settings,
@@ -39,36 +46,6 @@ def _read_projects() -> ProjectSettingsResult:
     """Typed single source for ``~/.claude.json`` project metadata."""
 
     return read_project_settings(cfg.claude_json)
-
-
-def _trusted_in(projects: Mapping[str, object]) -> set[str]:
-    """Effectively-trusted absolute-path keys of a claude.json projects map."""
-    return {
-        key
-        for key in projects
-        if isinstance(key, str)
-        and key.startswith("/")
-        and effective_trust_decision(key, projects) is TrustDecision.TRUSTED
-    }
-
-
-# Temp roots are working space, not projects; this affects membership, not trust.
-_TEMP_ROOTS = frozenset(
-    os.path.normpath(p) for p in (tempfile.gettempdir(), "/tmp", "/var/tmp")
-)
-
-
-def _is_temp_path(path: str) -> bool:
-    """PURE: is `path` a platform temp root, or beneath one?
-
-    Same segment-boundary matching as `models.effective_trust_decision`
-    (normpath only; `/tmpfoo` is not under `/tmp`).
-    """
-    target = os.path.normpath(path)
-    for root in _TEMP_ROOTS:
-        if target == root or target.startswith(root.rstrip("/") + "/"):
-            return True
-    return False
 
 
 def project_trust(path: str) -> ProjectTrustResult:
@@ -111,43 +88,45 @@ def _window_for_inventory(
 def scan_result(
     *,
     window_inventory: tmux.WindowInventory | None = None,
+    sessions: Sequence[Session] = (),
 ) -> RCScanResult:
     # ONE claude.json load feeds membership, trust flags and spawn modes —
     # no per-project re-parse.
     settings = _read_projects()
     projects_map = settings.projects
-    trusted = _trusted_in(projects_map)
     inventory = (
         _tmux_window_inventory() if window_inventory is None else window_inventory
     )
     by_path = {os.path.normpath(w.path): w for w in inventory.records if w.path}
+    trust_scan = providers.scan_trusted_dirs()
+    curation = read_curation(cfg.curation_file)
+    entries = compute_membership(
+        claude_projects=projects_map if settings.available else None,
+        provider_trust=trust_scan.directories,
+        sessions=sessions,
+        pinned=curation.pinned,
+        hidden=curation.hidden,
+        window_paths=by_path,
+        now=time.time(),
+    )
+    raw_by_norm = {os.path.normpath(key): key for key in projects_map}
 
     result: list[RCProject] = []
-    for path in sorted(trusted):
-        win = by_path.get(os.path.normpath(path))
-        dir_exists = os.path.isdir(path)
-        if not dir_exists and win is None:
-            # Pure trust residue: the directory is gone and only claude's own
-            # trust record (~/.claude.json) still references it. csctl can't
-            # act on it (no start, and it never edits claude's files), so it
-            # is dropped instead of rendered as a ✖ 缺失 row. Missing-dir
-            # projects that ARE actionable (with a live/dead tmux window)
-            # stay listed.
-            continue
-        if _is_temp_path(path) and win is None:
-            # Temp dirs reached via trust discovery alone are dropped —
-            # same escape hatch as above: explicitly actionable entries
-            # (existing rc window) stay listed.
-            continue
+    for entry in entries:
+        path = entry.directory
+        win = by_path.get(path)
         if win is not None:
             status: Status = "dead" if win.dead else "running"
         elif not inventory.complete:
             status = "unknown"
         else:
             status = "stopped"
-        entry = projects_map.get(path)
+        raw_key = raw_by_norm.get(path)
+        project_entry = projects_map.get(raw_key) if raw_key is not None else None
         spawn = (
-            entry.get("remoteControlSpawnMode") if isinstance(entry, Mapping) else None
+            project_entry.get("remoteControlSpawnMode")
+            if isinstance(project_entry, Mapping)
+            else None
         )
         decision = effective_trust_decision(
             path,
@@ -161,13 +140,27 @@ def scan_result(
                 status=status,
                 rc_at_startup_setting=read_rc_at_startup(path),
                 spawn_mode=str(spawn) if spawn else None,
-                dir_exists=dir_exists,
+                dir_exists=entry.dir_exists,
+                pinned=entry.pinned,
+                hidden=entry.hidden,
+                trusted_by=entry.trusted_by,
+                observed_by=entry.observed_by,
+            )
+        )
+    membership_issues = list(trust_scan.issues)
+    if not curation.available:
+        membership_issues.append(
+            InventoryIssue(
+                "curation",
+                os.fspath(cfg.curation_file),
+                curation.detail or curation.state.value,
             )
         )
     return RCScanResult(
         result,
         settings,
         inventory.issues,
+        tuple(membership_issues),
     )
 
 

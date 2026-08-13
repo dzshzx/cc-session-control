@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from ..config import cfg
 from ..data import cleanup, providers, rc
+from ..data.curation import CurationWriteState, set_hidden, set_pinned
 from ..data.project_settings import SettingWriteState, write_rc_at_startup
 from ..data.removal import CleanupExecution
 from ..models import AgentJob, Session
@@ -184,6 +186,28 @@ def write_auto_rc(
         f"{name} 自动远控: {shown}{suffix}",
         needs_refresh=True,
     )
+
+
+def toggle_project_pin(path: str, name: str, pinned: bool) -> ActionResult:
+    """Pin/unpin one directory in the curation store (ADR-0007)."""
+    result = set_pinned(cfg.curation_file, path, pinned)
+    if result.state is CurationWriteState.FAILED:
+        reason = result.failure.value if result.failure is not None else "unknown"
+        return ActionResult(f"钉选写入失败（{reason}）: {result.detail}")
+    verb = "已钉选" if pinned else "已取消钉选"
+    suffix = "（无变化）" if result.state is CurationWriteState.UNCHANGED else ""
+    return ActionResult(f"{verb} {name}{suffix}", needs_refresh=True)
+
+
+def toggle_project_hidden(path: str, name: str, hidden: bool) -> ActionResult:
+    """Hide/unhide one directory in the curation store (ADR-0007)."""
+    result = set_hidden(cfg.curation_file, path, hidden)
+    if result.state is CurationWriteState.FAILED:
+        reason = result.failure.value if result.failure is not None else "unknown"
+        return ActionResult(f"隐藏写入失败（{reason}）: {result.detail}")
+    verb = "已隐藏" if hidden else "已取消隐藏"
+    suffix = "（无变化）" if result.state is CurationWriteState.UNCHANGED else ""
+    return ActionResult(f"{verb} {name}{suffix}", needs_refresh=True)
 
 
 def stop_all_projects() -> ActionResult:

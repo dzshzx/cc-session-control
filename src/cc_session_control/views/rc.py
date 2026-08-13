@@ -1,13 +1,15 @@
-"""RC view — the 项目 tab (trusted projects + their Remote Control surface).
+"""RC view — the 项目 tab (evidence-tier membership + the Remote Control surface).
 
 Shows two things:
-  1. managed projects (RCProject) with typed `remoteControlAtStartup` evidence
-     and `remoteControlSpawnMode`, plus Enter (open the CLI chooser over the
-     ACTIVE providers, then start a NEW session of the picked CLI in the
-     project dir inside tmux and enter it — the tmux-first launcher,
-     ADR-0001/0005; `x`/`k` jump straight to codex/kimi),
-     `o` (start the project RC server, the demoted secondary), and the
-     stop / auto-RC keys;
+  1. member projects (RCProject) — directories carrying ADR-0007 evidence
+     (pin / any-CLI trust / any-CLI activity), with typed
+     `remoteControlAtStartup` evidence and `remoteControlSpawnMode`, plus
+     Enter (open the CLI chooser over the ACTIVE providers, then start a NEW
+     session of the picked CLI in the project dir inside tmux and enter it —
+     the tmux-first launcher, ADR-0001/0005; `x`/`k` jump straight to
+     codex/kimi), `o` (start the project RC server, the demoted secondary —
+     Claude-trust gated), the stop / auto-RC keys, and the `p`/`h`/`H`
+     curation verbs;
   2. project RC servers (RCServer) discovered via tmux ∪ /proc, badged
      managed/external — external servers are READ-ONLY (no takeover/restart key).
 
@@ -33,45 +35,48 @@ from ._base import ListTabView
 from ._colspec import ColSpec, header_columns, row_columns
 from ._confirm import confirm_stop
 from ._keytable import HelpLayout, Key, footer_hints, help_lines
+from ._rc_rows import RC_FOCUS, STATUS_ATTR, STATUS_MAP, DividerRow, ServerRow
 from ._rows import SelectableRow, TextRow
 
 if TYPE_CHECKING:
     from ..app import App
     from ..data.refresh import RefreshBatch
 
-_STATUS_MAP = {
-    "running": "● 运行中",
-    "dead": "✖ 已退出",
-    "stopped": "○ 已停止",
-    "unknown": "？ 未知",
-}
-# Row attr per server/project status — dead (crashed pane) is a semantic error
-# state and gets its own red entry (shape ✖ + word 已退出 + color: 3 channels).
-_STATUS_ATTR = {
-    "running": "alive",
-    "dead": "status_err",
-    "stopped": "dead",
-    "unknown": "status_err",
-}
-_RC_FOCUS = {
-    "alive": "selected",
-    "status_err": "selected",
-    "dead": "selected",
-    None: "selected",
-}
 _RC_TRISTATE = {True: "开", False: "关", None: "未设置"}
 # `c` cycles the per-project remoteControlAtStartup tri-state in full so the user
 # can return to an explicit True (the old 2-cycle could never set True again).
 _NEXT_TRISTATE = {None: True, True: False, False: None}
 
 # One spec drives the tab header + project rows (_colspec.py).
+# 证据 width fits ~3 CJK-prefixed tokens (信cc/活km ≈ 6 display cols each);
+# longer provenance truncates on narrow terminals rather than wrapping.
 _PROJECT_COLS: list[ColSpec] = [
     (10, "left", "状态"),
     (8, "left", "自动远控"),
     (10, "left", "启动模式"),
+    (20, "left", "证据"),
     (("weight", 2), "left", "项目"),
     (("weight", 3), "left", "目录"),
 ]
+
+
+def _evidence_text(project: RCProject) -> str:
+    """Provenance badges (ADR-0007): 钉/隐 markers, then per-CLI 信/活 tokens.
+
+    信<x> = that CLI's trust store covers the directory (信cc ⇔ the RC start
+    gate passes); 活<x> = that CLI has session activity in it.
+    """
+    tokens: list[str] = []
+    if project.pinned:
+        tokens.append("钉")
+    if project.hidden:
+        tokens.append("隐")
+    for provider in providers.all_providers():
+        if provider.key in project.trusted_by:
+            tokens.append(f"信{provider.label}")
+        if provider.key in project.observed_by:
+            tokens.append(f"活{provider.label}")
+    return " ".join(tokens) or "—"
 
 
 class _ProviderRow(SelectableRow):
@@ -93,8 +98,8 @@ class RCRow(SelectableRow):
         # Focus identity for the shared rebuild — activity ordering may move
         # this row between refreshes; the cursor follows the path key.
         self.row_key = project.directory
-        status_text = _STATUS_MAP.get(project.status, project.status)
-        attr = _STATUS_ATTR.get(project.status, "dead")
+        status_text = STATUS_MAP.get(project.status, project.status)
+        attr = STATUS_ATTR.get(project.status, "dead")
         directory = project.directory
         if not project.dir_exists:
             # Stale reference: claude.json still lists the project but its
@@ -117,61 +122,13 @@ class RCRow(SelectableRow):
                 status_text,
                 rc_at,
                 spawn,
+                _evidence_text(project),
                 project.name,
                 directory,
             ],
         )
-        mapped = urwid.AttrMap(cols, attr, focus_map=_RC_FOCUS)
+        mapped = urwid.AttrMap(cols, attr, focus_map=RC_FOCUS)
         super().__init__(mapped)
-
-
-class _DividerRow(urwid.WidgetWrap):
-    """Non-selectable section separator (focus skips it)."""
-
-    def __init__(self, text: str) -> None:
-        super().__init__(urwid.AttrMap(urwid.Text(text), "col_header"))
-
-    def selectable(self) -> bool:
-        return False
-
-
-class ServerRow(urwid.WidgetWrap):
-    """A project RC server (managed/external) — display only, never actionable."""
-
-    _COLS: list[ColSpec] = [
-        (10, "left", ""),
-        (8, "left", ""),
-        (8, "right", ""),
-        (("weight", 2), "left", ""),
-        (("weight", 3), "left", ""),
-    ]
-
-    def __init__(self, server: RCServer) -> None:
-        self.server = server
-        status_text = _STATUS_MAP.get(server.status, server.status)
-        badge = "托管" if server.managed else "外部"
-        pid = str(server.pid) if server.pid else "-"
-        cols = row_columns(
-            self._COLS,
-            [
-                status_text,
-                badge,
-                pid,
-                server.name,
-                server.cwd or "",
-            ],
-        )
-        attr = _STATUS_ATTR.get(server.status, "dead")
-        mapped = urwid.AttrMap(cols, attr, focus_map=_RC_FOCUS)
-        super().__init__(mapped)
-
-    def selectable(self) -> bool:
-        # P4: display-only — focus SKIPS it (like _DividerRow) so the user never
-        # lands on a highlighted row whose keys are all silently inert.
-        return False
-
-    def keypress(self, size: tuple, key: str) -> str | None:
-        return key
 
 
 class RCView(ListTabView):
@@ -235,12 +192,40 @@ class RCView(ListTabView):
             ),
         ),
         Key(
+            ("p",),
+            "p 钉选",
+            "_key_pin_toggle",
+            section="项目操作（仅对「项目」行生效）:",
+            help_lines=(
+                "  p      钉选/取消钉选：钉选目录恒为项目，不受 temp/目录缺失",
+                "         过滤与 30 天活动衰减影响（写入 csctl 自有配置）",
+            ),
+        ),
+        Key(
+            ("h",),
+            "h 隐藏",
+            "_key_hide_toggle",
+            section="项目操作（仅对「项目」行生效）:",
+            help_lines=(
+                "  h      隐藏/取消隐藏：压制所有证据来源的自动纳入",
+                "         （大写 H 切换显示已隐藏行，用于取消隐藏）",
+            ),
+        ),
+        Key(
             ("S",),
             "S 全部停止",
             "_key_stop_all",
             needs_selection=False,
             section="批量操作:",
             help_lines=("  S      停止全部远程控制服务（需确认）",),
+        ),
+        Key(
+            ("H",),
+            "H 显隐藏",
+            "_key_toggle_show_hidden",
+            needs_selection=False,
+            section="批量操作:",
+            help_lines=("  H      切换是否列出已隐藏的项目（列出时可按 h 取消隐藏）",),
         ),
         Key(
             ("r",),
@@ -256,8 +241,13 @@ class RCView(ListTabView):
     HELP_LAYOUT = HelpLayout(
         sections=("项目操作（仅对「项目」行生效）:", "批量操作:"),
         suffix=(
+            "成员模型（ADR-0007 证据分层）:",
+            "  项目 = 绝对目录 + 证据集：钉选（p）、任一 CLI 的信任记录（信cc/信cx/信km）、",
+            "  任一 CLI 的会话活动（活cc/活cx/活km，30 天无活动即出页）。temp 目录与",
+            "  已删目录不纳入，除非被钉选或仍持有远控窗口；h 隐藏压制全部来源。",
+            "  RC 服务仍是 Claude 专属：仅 信cc 的目录可启动远控。",
             "目录缺失（✖ 缺失）:",
-            "  项目目录已删除但其远控服务窗口还在时仍显示；停止该服务后此行消失。",
+            "  项目目录已删除但其远控服务窗口还在、或被钉选时仍显示；停止该服务后此行消失。",
             "  只剩 claude 信任记录（~/.claude.json）引用的已删项目不再显示；信任记录需手动清理。",
             "",
             "RC 服务（只读）:",
@@ -275,6 +265,8 @@ class RCView(ListTabView):
         self._servers: list[RCServer] = []
         self._settings = ProjectSettingsResult(ProjectSettingsState.MISSING, {})
         self._inventory_issues: tuple[InventoryIssue, ...] = ()
+        self._membership_issues: tuple[InventoryIssue, ...] = ()
+        self._show_hidden = False
         self._help = False
         # CLI chooser (Enter): the project pinned when the chooser opened,
         # plus the overlay walker whose focused row is the picked provider.
@@ -301,17 +293,22 @@ class RCView(ListTabView):
         self._settings = batch.snapshot.rc_project_settings
         self._servers = list(batch.snapshot.rc_servers)
         self._inventory_issues = batch.snapshot.rc_inventory_issues
+        self._membership_issues = batch.snapshot.membership_issues
         self._loaded = True
         if not self._help and self._chooser is None:
             self._rebuild()
 
     def _build_rows(self) -> None:
-        # Projects first, so default focus lands on an actionable row.
+        # Projects first, so default focus lands on an actionable row. Hidden
+        # rows ship in the scan (ADR-0007) but stay invisible until the `H`
+        # show-hidden mode asks for them (that mode exists so `h` can UNHIDE).
         for p in self._projects:
+            if p.hidden and not self._show_hidden:
+                continue
             self.walker.append(RCRow(p))
         if self._servers:
             self.walker.append(
-                _DividerRow("── RC 服务（仅展示 · 托管见项目行 · 外部不可接管）──")
+                DividerRow("── RC 服务（仅展示 · 托管见项目行 · 外部不可接管）──")
             )
             for s in self._servers:
                 self.walker.append(ServerRow(s))
@@ -319,16 +316,21 @@ class RCView(ListTabView):
             self.walker.append(urwid.AttrMap(urwid.Text(" 暂无远控项目"), "dead"))
 
     def _status_text(self) -> str:
-        running = sum(1 for p in self._projects if p.status == "running")
-        rc_off = sum(1 for p in self._projects if p.rc_at_startup is False)
-        rc_errors = sum(
-            1 for p in self._projects if not p.rc_at_startup_setting.available
-        )
-        missing = sum(1 for p in self._projects if not p.dir_exists)
+        visible = [p for p in self._projects if not p.hidden]
+        running = sum(1 for p in visible if p.status == "running")
+        rc_off = sum(1 for p in visible if p.rc_at_startup is False)
+        rc_errors = sum(1 for p in visible if not p.rc_at_startup_setting.available)
+        missing = sum(1 for p in visible if not p.dir_exists)
         rc_text = f" · 自动远控关 {rc_off}" if rc_off else ""
         rc_error_text = f" · 自动远控异常 {rc_errors}" if rc_errors else ""
         miss_text = f" · 目录缺失 {missing}" if missing else ""
         srv_text = f" · 服务 {len(self._servers)}" if self._servers else ""
+        hidden = len(self._projects) - len(visible)
+        hidden_text = (
+            f" · 已隐藏 {hidden}{'（列出中）' if self._show_hidden else ''}"
+            if hidden
+            else ""
+        )
         settings_text = (
             f" · 项目设置不可用（{self._settings.state.value}）"
             if not self._settings.available
@@ -338,10 +340,14 @@ class RCView(ListTabView):
         inventory_text = (
             f" · ⚠ RC 清单不完整 {inventory_count}" if inventory_count else ""
         )
+        membership_count = len(self._membership_issues)
+        membership_text = (
+            f" · ⚠ 项目来源异常 {membership_count}" if membership_count else ""
+        )
         return (
-            f" 共 {len(self._projects)} 项目 · 运行 {running}"
-            f"{rc_text}{rc_error_text}{miss_text}{srv_text}{settings_text}"
-            f"{inventory_text}"
+            f" 共 {len(visible)} 项目 · 运行 {running}"
+            f"{rc_text}{rc_error_text}{miss_text}{srv_text}{hidden_text}"
+            f"{settings_text}{inventory_text}{membership_text}"
         )
 
     def _close_overlay_mode(self) -> None:
@@ -472,6 +478,29 @@ class RCView(ListTabView):
             "project.write-settings",
             lambda: tui_actions.write_auto_rc(path, name, new),
         )
+
+    def _key_pin_toggle(self, p: RCProject) -> None:
+        """`p` — pin/unpin: a pinned directory stays a project regardless of
+        hygiene and decay (csctl's own curation store, ADR-0007)."""
+        path, name, pinned = p.directory, p.name, p.pinned
+        self.app.submit_action(
+            "project.pin",
+            lambda: tui_actions.toggle_project_pin(path, name, not pinned),
+        )
+
+    def _key_hide_toggle(self, p: RCProject) -> None:
+        """`h` — hide/unhide: hidden suppresses every evidence tier until the
+        operator unhides via the `H` show-hidden mode."""
+        path, name, hidden = p.directory, p.name, p.hidden
+        self.app.submit_action(
+            "project.hide",
+            lambda: tui_actions.toggle_project_hidden(path, name, not hidden),
+        )
+
+    def _key_toggle_show_hidden(self) -> None:
+        """`H` — list hidden rows so the `h` verb can unhide them."""
+        self._show_hidden = not self._show_hidden
+        self._rebuild()
 
     def _key_stop_all(self) -> None:
         if any(p.status == "unknown" for p in self._projects):

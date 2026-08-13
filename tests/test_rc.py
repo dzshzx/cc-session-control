@@ -10,10 +10,22 @@ from __future__ import annotations
 
 import json
 
-from cc_session_control.data import proc, rc
+from cc_session_control.data import membership, proc, rc
 from cc_session_control.data.proc import ProcIssue, ProcRC, ProcRCInventory
 from cc_session_control.data.tmux import TmuxIssue, TmuxWindow, WindowInventory
 from cc_session_control.models import RCServer, RCStartupSettingState
+
+
+def _isolate_membership(tmp_path, monkeypatch):
+    """Keep rc.scan_result off the real machine's other membership sources.
+
+    tmp_path lives under the real temp root, so the temp filter is
+    neutralized; codex/kimi trust stores and the curation file are pointed
+    at non-existent/isolated locations.
+    """
+    monkeypatch.setattr(rc.cfg, "providers", ("claude",))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr(membership, "_TEMP_ROOTS", frozenset())
 
 
 def _nul(*argv: str) -> str:
@@ -208,7 +220,7 @@ def test_project_status_is_unknown_when_window_inventory_is_incomplete(
         {str(project): {"hasTrustDialogAccepted": True}},
     )
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
-    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
+    _isolate_membership(tmp_path, monkeypatch)
     monkeypatch.setattr(
         rc,
         "_tmux_window_inventory",
@@ -472,8 +484,7 @@ def test_scan_populates_spawn_mode(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
     monkeypatch.setattr(rc, "_tmux_window_inventory", lambda: WindowInventory())
-    # tmp_path is under the real temp root — neutralize the membership filter.
-    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
+    _isolate_membership(tmp_path, monkeypatch)
 
     rows = {p.name: p for p in rc.scan_result().projects}
     assert rows["proj"].spawn_mode == "new-window"
@@ -498,7 +509,7 @@ def test_scan_preserves_per_project_setting_failure_without_fallback(
     )
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
     monkeypatch.setattr(rc, "_tmux_window_inventory", lambda: WindowInventory())
-    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
+    _isolate_membership(tmp_path, monkeypatch)
 
     [row] = rc.scan_result().projects
 
@@ -543,6 +554,38 @@ def test_order_by_activity_recent_first_never_active_sink():
     assert [p.directory for p in ordered] == ["/b", "/c", "/a", "/z-never"]
 
 
+def test_order_by_activity_pins_first_then_activity():
+    from cc_session_control.models import RCProject, Session, TrustDecision
+
+    def proj(d, pinned=False):
+        return RCProject(
+            name=d.rsplit("/", 1)[-1],
+            directory=d,
+            trust_decision=TrustDecision.TRUSTED,
+            status="stopped",
+            pinned=pinned,
+        )
+
+    def sess(cwd, mtime):
+        return Session(
+            sid="s",
+            cwd=cwd,
+            label="",
+            mtime=mtime,
+            prompts=0,
+            pid=None,
+            alive=False,
+            current=False,
+        )
+
+    projects = [proj("/a"), proj("/b"), proj("/z-pinned", pinned=True)]
+    sessions = [sess("/b", 100.0), sess("/a", 50.0)]
+
+    ordered = rc.order_by_activity(projects, sessions)
+    # Pinned leads even with zero activity; the rest stay activity-ordered.
+    assert [p.directory for p in ordered] == ["/z-pinned", "/b", "/a"]
+
+
 def test_scan_marks_missing_directory(tmp_path, monkeypatch):
     """A missing-dir project stays listed (dir_exists=False) only while it is
     still actionable — holding a tmux window. Pure trust residue (only
@@ -568,8 +611,7 @@ def test_scan_marks_missing_directory(tmp_path, monkeypatch):
             (TmuxWindow("@1", "gone-running", False, 5, gone_running),)
         ),
     )
-    # tmp_path is under the real temp root — neutralize the membership filter.
-    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
+    _isolate_membership(tmp_path, monkeypatch)
 
     rows = {p.directory: p for p in rc.scan_result().projects}
     assert set(rows) == {str(alive), gone_running}

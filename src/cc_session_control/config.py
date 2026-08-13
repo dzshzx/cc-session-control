@@ -91,6 +91,18 @@ class Config:
     def projects_root(self) -> Path:
         return self.claude_home / "projects"
 
+    @property
+    def config_home(self) -> Path:
+        """csctl's own XDG config directory (ADR-0007 curation store)."""
+        return (
+            Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "csctl"
+        )
+
+    @property
+    def curation_file(self) -> Path:
+        """Operator curation store (pinned/hidden project directories)."""
+        return self.config_home / "projects.json"
+
     # --- Claude Code state directories (single path authority) ---
     # All derive from claude_home so tests that monkeypatch cfg.claude_home flow
     # through. Never inline `claude_home / "..."` elsewhere — add it here.

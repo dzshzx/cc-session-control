@@ -51,7 +51,7 @@ from .argv_live import (
     flag_value,
     unbound_live_cwds,
 )
-from .base import LivenessGrade, ProviderCaps, ProviderScan
+from .base import LivenessGrade, ProviderCaps, ProviderScan, TrustScan
 
 BASENAME = "kimi"
 # The comm/argv0 an active kimi 0.31.1 process rewrites itself to (observed
@@ -257,6 +257,62 @@ def _registry_index(
     }
 
 
+# --- workspace trust (membership evidence, ADR-0007) --------------------------
+#
+# kimi's workspace trust dialog writes one record per accepted workspace at
+# `workspace-trust/<workspace-id>` (plain extension-less JSON files):
+# `{"root": <abs path>, "trustedAt": <epoch ms>}` — verified on this machine
+# 2026-08-12 (kimi 0.34.0). Records are self-contained (the id↔root join
+# needs no `workspaces.json`); exact-match only, no inheritance
+# re-derivation. Whether kimi has a decline/revoke footprint is unverified —
+# a record without a well-typed `root`/`trustedAt` is skipped with an issue
+# rather than trusted.
+
+
+def _read_trusted_dirs() -> TrustScan:
+    """Exact-match roots of `workspace-trust/` records (membership evidence).
+
+    A missing directory is not an issue (no trust dialog accepted yet); an
+    unreadable or malformed record narrows only this source."""
+    trust_dir = cfg.kimi_home / "workspace-trust"
+    try:
+        files = sorted(trust_dir.iterdir())
+    except FileNotFoundError:
+        return TrustScan()
+    except OSError as exc:
+        return TrustScan(
+            issues=(InventoryIssue("kimi trust", os.fspath(trust_dir), str(exc)),)
+        )
+    directories: list[str] = []
+    issues: list[InventoryIssue] = []
+    for path in files:
+        if not path.is_file():
+            continue
+        try:
+            record = json.loads(path.read_bytes())
+        except (OSError, ValueError) as exc:
+            issues.append(InventoryIssue("kimi trust", os.fspath(path), str(exc)))
+            continue
+        root = record.get("root") if isinstance(record, dict) else None
+        trusted_at = record.get("trustedAt") if isinstance(record, dict) else None
+        if (
+            not isinstance(root, str)
+            or not root.startswith("/")
+            or not isinstance(trusted_at, (int, float))
+            or isinstance(trusted_at, bool)
+        ):
+            issues.append(
+                InventoryIssue(
+                    "kimi trust",
+                    os.fspath(path),
+                    "malformed workspace-trust entry",
+                )
+            )
+            continue
+        directories.append(root)
+    return TrustScan(directories=tuple(directories), issues=tuple(issues))
+
+
 class KimiProvider:
     key = "kimi"
     label = "km"
@@ -275,6 +331,9 @@ class KimiProvider:
         # must still activate (launcher `k`); discover() tolerates the
         # missing index.
         return cfg.kimi_home.is_dir()
+
+    def trusted_dirs(self) -> TrustScan:
+        return _read_trusted_dirs()
 
     def resume_argv(self, sid: str, fork: bool = False) -> list[str]:
         if fork:

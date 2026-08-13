@@ -124,11 +124,15 @@ def _wire_scan(tmp_path, monkeypatch, projects, temp_roots=()):
     import json
     import os
 
-    from cc_session_control.data import rc
+    from cc_session_control.data import membership, rc
 
     cj = tmp_path / ".claude.json"
     cj.write_text(json.dumps({"projects": projects}))
     monkeypatch.setattr(rc.cfg, "claude_json", cj)
+    # Isolate the other ADR-0007 membership sources from the real machine:
+    # codex/kimi trust stores and the curation file.
+    monkeypatch.setattr(rc.cfg, "providers", ("claude",))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.setattr(
         rc,
         "_tmux_window_inventory",
@@ -137,7 +141,9 @@ def _wire_scan(tmp_path, monkeypatch, projects, temp_roots=()):
     # pytest tmp_path lives under the REAL platform temp root, so the temp-dir
     # membership filter is neutralized unless a test injects roots explicitly.
     monkeypatch.setattr(
-        rc, "_TEMP_ROOTS", frozenset(os.path.normpath(p) for p in temp_roots)
+        membership,
+        "_TEMP_ROOTS",
+        frozenset(os.path.normpath(p) for p in temp_roots),
     )
     return rc
 
@@ -182,19 +188,21 @@ def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
     tmp_path,
     monkeypatch,
 ):
-    from cc_session_control.data import rc
+    from cc_session_control.data import membership, rc
 
     project = tmp_path / "app"
     project.mkdir()
     claude_json = tmp_path / ".claude.json"
     claude_json.write_text("{broken")
     monkeypatch.setattr(rc.cfg, "claude_json", claude_json)
+    monkeypatch.setattr(rc.cfg, "providers", ("claude",))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.setattr(
         rc,
         "_tmux_window_inventory",
         lambda: rc.tmux.WindowInventory(),
     )
-    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset())
+    monkeypatch.setattr(membership, "_TEMP_ROOTS", frozenset())
     launches = []
     monkeypatch.setattr(
         rc.tmux,
@@ -217,13 +225,13 @@ def test_scan_and_start_keep_unavailable_trust_distinct_and_fail_closed(
 
 
 def test_is_temp_path_segment_boundary(monkeypatch):
-    from cc_session_control.data import rc
+    from cc_session_control.data import membership
 
-    monkeypatch.setattr(rc, "_TEMP_ROOTS", frozenset({"/tmp"}))
-    assert rc._is_temp_path("/tmp") is True
-    assert rc._is_temp_path("/tmp/x/y") is True
-    assert rc._is_temp_path("/tmpfoo") is False
-    assert rc._is_temp_path("/home/u/tmp") is False
+    monkeypatch.setattr(membership, "_TEMP_ROOTS", frozenset({"/tmp"}))
+    assert membership._is_temp_path("/tmp") is True
+    assert membership._is_temp_path("/tmp/x/y") is True
+    assert membership._is_temp_path("/tmpfoo") is False
+    assert membership._is_temp_path("/home/u/tmp") is False
 
 
 def test_scan_drops_temp_root_and_subtree(tmp_path, monkeypatch):

@@ -200,3 +200,37 @@ class DiskDiscovery(Protocol):
         cur: AbstractSet[int],
         panes: PaneInventory | None = None,
     ) -> ProviderScan: ...
+
+
+@dataclass(frozen=True)
+class TrustScan:
+    """One provider's trust-store read: directories plus degradation evidence.
+
+    A MISSING store is not an issue (a fresh install has no trust records);
+    an unreadable or malformed one surfaces as a non-fatal issue and narrows
+    only its own source (AGENTS.md 外部失败).
+    """
+
+    directories: tuple[str, ...] = ()
+    issues: tuple[InventoryIssue, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "directories", tuple(self.directories))
+        object.__setattr__(self, "issues", tuple(self.issues))
+
+
+@runtime_checkable
+class TrustDiscovery(Protocol):
+    """Providers whose CLI keeps an explicit per-directory trust store.
+
+    Membership evidence only (ADR-0007): the directories the operator told
+    THIS CLI to trust, read exactly as recorded (no inheritance re-derivation
+    — codex/kimi upstream inheritance semantics are unverified). Claude does
+    NOT implement this protocol: its trust store is `~/.claude.json`, read
+    through `data.project_settings`, the same single reader the RC start gate
+    uses. csctl never writes any provider's trust store.
+    """
+
+    def trusted_dirs(self) -> TrustScan:
+        """The CLI's recorded trusted directories plus read-failure evidence."""
+        ...

@@ -46,7 +46,7 @@ def _stub_sources(monkeypatch, procs):
     monkeypatch.setattr(
         snapshot.rc,
         "scan_result",
-        lambda *, window_inventory: snapshot.rc.RCScanResult(
+        lambda *, window_inventory, sessions=(): snapshot.rc.RCScanResult(
             [],
             ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
         ),
@@ -205,7 +205,7 @@ def test_snapshot_captures_each_liveness_source_once_per_generation(
     monkeypatch.setattr(
         snapshot.rc,
         "scan_result",
-        lambda *, window_inventory: snapshot.rc.RCScanResult(
+        lambda *, window_inventory, sessions=(): snapshot.rc.RCScanResult(
             [],
             ProjectSettingsResult(ProjectSettingsState.MISSING, {}),
         ),
@@ -257,7 +257,7 @@ def test_snapshot_reuses_one_window_inventory_for_project_and_server_joins(
         reads += 1
         return inventory
 
-    def scan_projects(*, window_inventory):
+    def scan_projects(*, window_inventory, sessions=()):
         injected.append(window_inventory)
         return snapshot.rc.RCScanResult(
             [],

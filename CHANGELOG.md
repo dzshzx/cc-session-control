@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Projects-tab membership is now evidence-tiered and multi-CLI
+  (ADR-0007).** A project is an absolute directory plus a provenance
+  evidence set: **Pinned** (operator-curated, immune to hygiene and decay),
+  **Trusted** (Claude effective trust as before, now joined by codex
+  `config.toml [projects.*] trust_level="trusted"` keys and kimi
+  `workspace-trust/<id>` roots — both exact-match only), and **Observed**
+  (any provider's session activity in the directory; observed-only entries
+  decay out of the tab after 30 days). Trust inheritance still only
+  qualifies recorded candidates and never generates them, so a trusted `/`
+  cannot flood the tab. Rows show their provenance as 钉/隐/信cc/信cx/信km/活…
+  badges; ordering is pinned-first, then activity. Migration is purely
+  additive — every previously listed directory still qualifies.
+- **New `p`/`h`/`H` curation verbs on the Projects tab**, backed by csctl's
+  own curation store (`~/.config/csctl/projects.json`, XDG-respecting):
+  `p` pins/unpins a directory, `h` hides it (suppresses every evidence
+  tier), `H` toggles listing hidden rows so they can be unhidden. The store
+  is advisory-locked, atomically replaced, and preserves foreign keys; the
+  CLI trust stores stay read-only. Membership-source degradation (codex/kimi
+  trust, curation) surfaces as a typed ⚠ 项目来源异常 status count, never a
+  blanked tab.
+
 ## 0.8.6 (2026-08-12)
 
 ### Added
