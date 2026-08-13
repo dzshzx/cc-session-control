@@ -56,9 +56,11 @@ from .argv_live import (
 from .base import LivenessGrade, ProviderCaps, ProviderScan, TrustScan
 
 BASENAME = "kimi"
-# The comm/argv0 an active kimi 0.31.1 process rewrites itself to (observed
-# 2026-08-04: cmdline collapses to `kimi-code` + padding, comm follows).
-# 0.34.0 collapses to bare `kimi` instead (observed 2026-08-12) — keep both
+# The comm/argv0 an active kimi process rewrites itself to (observed
+# 2026-08-04 on 0.31.1: cmdline collapses to `kimi-code` + padding, comm
+# follows). Both shapes are LIVE, and not by version as once recorded: on
+# 0.35.0 (2026-08-13) a NEW session collapsed to bare `kimi` while a
+# `--session` RESUME in the same version collapsed to `kimi-code`. Keep both
 # capture shapes; per-record identity is re-verified either way (C1).
 TITLE_COMM = "kimi-code"
 

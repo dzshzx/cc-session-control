@@ -9,10 +9,14 @@ Claude's `sessions/<pid>.json`). The payload keys are snake_case: 0.35.0
 builds them camelCase and runs `toHookInputData`/`camelToSnake` before
 spawning the command, so `hook_event_name`/`session_id` stay the contract.
 
-- SessionStart (payload: `session_id`, `cwd`, `source` startup|resume;
-  fires when the session materializes — a TUI's first prompt, immediately
-  for `--prompt`; both paths re-verified on 0.35.0) writes `run/<pid>.json`
-  = {"sessionId", "procStart"}.
+- SessionStart (payload: `session_id`, `cwd`, `source` startup|resume)
+  writes `run/<pid>.json` = {"sessionId", "procStart"}. It fires when the
+  session materializes, which is NOT always the first prompt: `--prompt`
+  and a `--session` RESUME both register immediately (0.35.0, 2026-08-13 —
+  a resumed TUI had its entry before any input). Only a NEW session waits
+  for its first prompt, because that is when its sid comes into existence.
+  So the unbindable window is narrower than "every TUI until it is used":
+  it is new sessions, pre-first-prompt.
 - SessionEnd removes it — but do NOT count on it: 0.35.0 left the entry in
   place after a clean `kimi -p` exit and after a killed TUI (2026-08-13),
   so entries accumulate. `kimi.prune_gone_entries` is what actually bounds

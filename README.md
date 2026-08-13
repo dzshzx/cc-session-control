@@ -56,12 +56,14 @@ timeout = 5
 The hook fires when a session materializes (a TUI's first prompt), and the
 binding appears on csctl's next refresh.
 
-That single firing is the whole coverage: kimi registers a new session's id
-only at its first prompt, so csctl cannot learn it at spawn, and a
-`SessionStart` that never lands leaves a running session unbound (shown as
-`? 未知`) until the session is reopened. If that happens, check
-`~/.kimi-code/run/hook-errors.log` — the endpoint records every run that did
-not register, including an unrecognized event name.
+A resumed session registers immediately; only a **new** one waits for its
+first prompt, because that is when kimi creates its id — which is also why
+csctl cannot learn a new session's id at spawn. So a running session can
+show as unbound (`? 未知`) if that one firing never lands. If it does,
+reopening the session fixes it, and
+`~/.kimi-code/run/hook-errors.log` says whether the hook ran at all — the
+endpoint records every run that did not register, including an unrecognized
+event name.
 
 All agent sessions csctl dispatches — new, resumed, forked, or backgrounded —
 share the tmux session named `csctl`; their window
