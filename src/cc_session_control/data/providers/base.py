@@ -90,18 +90,29 @@ class AgentProvider(Protocol):
 
     key: str  # stable id, also `Session.provider` ("claude" / "codex" / "kimi")
     label: str  # short display tag for the CLI column (e.g. "cc" / "cx" / "km")
-    #: Leaf used in the launcher's tmux window name. Distinct from `key`
-    #: because a multi-instance key carries `:`, which IS tmux target syntax
-    #: (`session:window`) and would break addressing (ADR-0008).
-    window_tag: str
     caps: ProviderCaps
-    #: Environment every synthesized command for this provider must carry —
-    #: empty for a CLI with one state home, and `CODEX_HOME=<home>` for an
-    #: operator-declared codex identity (ADR-0008). Consumers inject it at
-    #: their own boundary: tmux `new-window -e`, `os.environ` before
-    #: `execvp`, a leading assignment in a copied shell command. A provider
-    #: with an empty mapping produces byte-identical commands to pre-0.8.7.
-    env: Mapping[str, str]
+
+    # Read-only members: a provider may satisfy these with a plain class
+    # attribute (single-instance CLIs) or a property (codex derives both
+    # from its per-instance identity), so they are declared as properties —
+    # a settable variable member would forbid the property form.
+
+    @property
+    def window_tag(self) -> str:
+        """Leaf used in the launcher's tmux window name. Distinct from `key`
+        because a multi-instance key carries `:`, which IS tmux target syntax
+        (`session:window`) and would break addressing (ADR-0008)."""
+        ...
+
+    @property
+    def env(self) -> Mapping[str, str]:
+        """Environment every synthesized command for this provider must
+        carry — empty for a CLI with one state home, `CODEX_HOME=<home>` for
+        an operator-declared codex identity (ADR-0008). Consumers inject it
+        at their own boundary: tmux `new-window -e`, `os.environ` before
+        `execvp`, a leading assignment in a copied shell command. An empty
+        mapping produces byte-identical commands to pre-0.8.7."""
+        ...
 
     def available(self) -> bool:
         """Whether this CLI's state home exists on this machine."""
