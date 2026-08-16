@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.8.10 (2026-08-16)
+
+### Added
+
+- **The kimi hook endpoint now registers on `SessionHeartbeat` too — a
+  missed `SessionStart` self-heals within 60 seconds.** kimi delivers hook
+  events fire-and-forget and swallows all failures, and 2026-08-16 showed
+  the second real miss: a csctl-dispatched new session on kimi 0.36.1 ran
+  14 turns over two hours with no registry entry and no `hook-errors.log`
+  line, while the same launch path registered fine minutes before and
+  after. With a `SessionHeartbeat` rule added to `~/.kimi-code/config.toml`
+  (see README), kimi re-fires every 60 s while a session lives (the timer
+  only runs when the event is configured), and the endpoint re-registers
+  the session through the same verified write path — a missed start becomes
+  a ≤60 s unbound window instead of an unbound lifetime. Two boundaries
+  hold: hooks are startup config, so a session launched before the rule was
+  added stays unbound until reopened; and a pre-first-prompt new session
+  still has no sid at all, so nothing can bind it yet (the heartbeat does
+  not fire sessionless, so it adds no error-log noise). On a csctl older
+  than this release a configured heartbeat registers nothing and appends
+  one `unknown-event` line per minute to `hook-errors.log` — upgrade csctl
+  and add the rule together.
+- Kimi hook contract re-verified on 0.36.1 (2026-08-16): SessionStart at
+  first prompt for a new TUI, clean `/exit` now removes the entry via
+  SessionEnd (0.35.0 did not), and `SessionHeartbeat` re-registration
+  observed live (entry rewritten 62 s after the start registration).
+
 ## 0.8.9 (2026-08-13)
 
 ### Added
