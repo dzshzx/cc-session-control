@@ -169,6 +169,18 @@ class TestTmuxNewDispatch:
 
 
 class TestSessionSurface:
+    def test_help_states_each_providers_binding_evidence(self):
+        """The pre-registry claim ("launcher 新建与裸启动均不绑定") went stale
+        when the kimi hook registry landed — pin the current wording."""
+        from cc_session_control.views._keytable import help_lines
+
+        blob = "\n".join(help_lines(SessionsView.KEY_TABLE, SessionsView.HELP_LAYOUT))
+
+        assert "codex 绑定 resume argv 或可信派发元数据" in blob
+        assert "hook 注册表绑定已登记会话（含裸启动）" in blob
+        assert "新建会话首个" in blob  # the late-sid window stays documented
+        assert "仅精确绑定按 id resume 派发" not in blob
+
     def test_row_carries_provider_badge(self):
         from view_helpers import _row_text
 
