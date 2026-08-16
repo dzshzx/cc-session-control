@@ -17,6 +17,14 @@ spawning the command, so `hook_event_name`/`session_id` stay the contract.
   for its first prompt, because that is when its sid comes into existence.
   So the unbindable window is narrower than "every TUI until it is used":
   it is new sessions, pre-first-prompt.
+- SessionHeartbeat (payload adds `uptime_ms`) re-registers the hosting
+  session through the SAME write path: kimi fires it every 60 s while the
+  session is alive, and the timer only runs when the event is configured
+  (0.36.1 docs). SessionStart delivery is fire-and-forget and empirically
+  NOT guaranteed — a live 0.36.1 session went unbound on 2026-08-16 with
+  zero trace (no entry, no error-log line, hook verified working before
+  and after) — so the heartbeat is what turns a missed start into a
+  ≤60 s unbound window instead of an unbound lifetime.
 - SessionEnd removes it — but do NOT count on it: 0.35.0 left the entry in
   place after a clean `kimi -p` exit and after a killed TUI (2026-08-13),
   so entries accumulate. `kimi.prune_gone_entries` is what actually bounds
@@ -63,6 +71,11 @@ MAX_ERROR_LINES = 50
 #: unbounded or newline-bearing text would evict real evidence from a trail
 #: that only keeps `MAX_ERROR_LINES`.
 MAX_EVENT_CHARS = 60
+
+#: Events that (re)register the hosting session through the write path:
+#: SessionStart once per session, SessionHeartbeat every 60 s while it
+#: lives — the self-heal for a start event kimi never delivered.
+_REGISTER_EVENTS = frozenset({"SessionStart", "SessionHeartbeat"})
 
 
 class HookFailure(StrEnum):
@@ -150,7 +163,7 @@ def run_hook(payload_text: str) -> int:
         record_failure(run_dir, HookFailure.BAD_PAYLOAD)
         return 2
     event = payload.get("hook_event_name")
-    if event not in ("SessionStart", "SessionEnd"):
+    if event != "SessionEnd" and event not in _REGISTER_EVENTS:
         record_failure(run_dir, HookFailure.UNKNOWN_EVENT, event)
         return 0
     sid = payload.get("session_id")

@@ -1,11 +1,12 @@
 """Kimi runtime-registry binding (hook-maintained `run/<pid>.json`).
 
-kimi's official SessionStart/SessionEnd hooks (`csctl _kimi-hook`,
-actions/kimi_hook) maintain one `<pid>.json` per live session under the kimi
-home — the CLI's own self-report and the ONLY evidence covering bare TUIs
-(argv dies to the title rewrite; dispatch metadata covers csctl windows
-only). These tests pin both ends: the hook command's registry writes, and
-the provider's verified join (stale/forged/ambiguous entries never bind).
+kimi's official SessionStart/SessionHeartbeat/SessionEnd hooks
+(`csctl _kimi-hook`, actions/kimi_hook) maintain one `<pid>.json` per live
+session under the kimi home — the CLI's own self-report and the ONLY
+evidence covering bare TUIs (argv dies to the title rewrite; dispatch
+metadata covers csctl windows only). These tests pin both ends: the hook
+command's registry writes, and the provider's verified join (stale, forged,
+or ambiguous entries never bind).
 """
 
 from __future__ import annotations
@@ -123,6 +124,25 @@ class TestRunHook:
 
         record = json.loads((kimi_home / "run" / "800.json").read_text())
         assert record == {"sessionId": SID, "procStart": "555"}
+
+    def test_session_heartbeat_registers_through_the_same_path(
+        self, kimi_home, hosting
+    ):
+        """A SessionStart kimi never delivered self-heals at the next 60 s
+        heartbeat (the 2026-08-16 unbound-0.36.1-session gap)."""
+        assert kimi_hook.run_hook(_start_payload(event="SessionHeartbeat")) == 0
+
+        record = json.loads((kimi_home / "run" / "800.json").read_text())
+        assert record == {"sessionId": SID, "procStart": "555"}
+
+    def test_a_heartbeat_reregistration_leaves_no_trail(self, kimi_home, hosting):
+        _registry_file(kimi_home, 800)
+
+        assert kimi_hook.run_hook(_start_payload(event="SessionHeartbeat")) == 0
+
+        record = json.loads((kimi_home / "run" / "800.json").read_text())
+        assert record == {"sessionId": SID, "procStart": "555"}
+        assert _error_log(kimi_home) == []
 
     def test_session_end_removes_the_entry(self, kimi_home, hosting):
         path = _registry_file(kimi_home, 800)

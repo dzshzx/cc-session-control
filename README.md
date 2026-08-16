@@ -51,6 +51,13 @@ timeout = 5
 event = "SessionEnd"
 command = "csctl _kimi-hook"
 timeout = 5
+
+# Self-heal: re-registers the live session every 60 s, so a SessionStart
+# kimi never delivered becomes a ≤60 s unbound window instead of a lifetime.
+[[hooks]]
+event = "SessionHeartbeat"
+command = "csctl _kimi-hook"
+timeout = 5
 ```
 
 The hook fires when a session materializes, and the binding appears on
@@ -58,12 +65,14 @@ csctl's next refresh.
 
 A resumed session registers immediately; only a **new** one waits for its
 first prompt, because that is when kimi creates its id — which is also why
-csctl cannot learn a new session's id at spawn. So a running session can
-show as unbound (`? 未知`) if that one firing never lands. If it does,
-reopening the session fixes it, and
-`~/.kimi-code/run/hook-errors.log` says whether the hook ran at all — the
-endpoint records every run that did not register, including an unrecognized
-event name.
+csctl cannot learn a new session's id at spawn. SessionStart delivery is
+fire-and-forget and not guaranteed (a live 0.36.1 session went unbound for
+hours on 2026-08-16 with zero trace), so the `SessionHeartbeat` rule
+re-registers the session every 60 seconds and a missed start self-heals.
+A session already running when the rule is added keeps its old config —
+reopen it to bind. `~/.kimi-code/run/hook-errors.log` says whether the hook
+ran at all — the endpoint records every run that did not register,
+including an unrecognized event name.
 
 All agent sessions csctl dispatches — new, resumed, forked, or backgrounded —
 share the tmux session named `csctl`; their window

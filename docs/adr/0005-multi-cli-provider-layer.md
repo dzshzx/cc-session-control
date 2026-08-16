@@ -200,6 +200,24 @@ The provider designs below are grounded in probes of the actual CLIs
     `run/hook-errors.log` — including an unrecognized `hook_event_name`,
     which is how a future payload rename would first surface. This is
     diagnostic only: it mints no binding and changes no exit code.
+- **Amendment (2026-08-16, SessionHeartbeat self-heal):** the "no evidence
+  at all" miss recurred on 0.36.1 — a csctl-dispatched NEW session ran 14
+  turns over two hours with no registry entry and no error-log line, while
+  the same launch path registered fine minutes before and after. Hook
+  delivery is fire-and-forget, so the registry now ALSO listens to kimi's
+  `SessionHeartbeat` event (0.36.1 docs: fires every 60 s while the
+  session lives, and the timer only runs when the event is configured),
+  accepted through the same verified write path — a missed `SessionStart`
+  becomes a ≤60 s unbound window instead of an unbound lifetime. Verified
+  live on 0.36.1 (2026-08-16): a new TUI registered at its first prompt
+  and the entry was rewritten 62 s later with no input; a sessionless idle
+  TUI fired nothing (no write, no error-log noise); and a clean `/exit`
+  now removes the entry via `SessionEnd` — the first version observed
+  doing so (0.35.0 did not; pruning stays regardless). Two bounds hold:
+  hooks are startup config, so a session launched before the rule was
+  added stays unbound until reopened (a running 0.36.1 process polled for
+  135 s fired no heartbeat); and a pre-first-prompt NEW session still has
+  no sid, so nothing can bind it yet.
 
   The residual gap is structural and stays open: the late-sid gap means a
   NEW session's sid does not exist at spawn, so dispatch metadata cannot

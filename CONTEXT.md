@@ -46,7 +46,8 @@ _Avoid_: cwd-guessing as liveness, pane-text busy regexes
 
 **Runtime-registry Liveness** (kimi, opt-in):
 The strongest non-Claude binding when configured: kimi's official
-SessionStart/SessionEnd hooks run `csctl _kimi-hook`, which maintains
+SessionStart/SessionHeartbeat/SessionEnd hooks run `csctl _kimi-hook`,
+which maintains
 `~/.kimi-code/run/<pid>.json` (`sessionId` + `procStart`) — the CLI's own
 self-report, the same shape as Claude's `sessions/<pid>.json`. csctl
 re-verifies pid identity and start time per entry, so stale, forged, or
@@ -54,11 +55,15 @@ disputed entries never bind. Covers every kimi session regardless of launch
 surface, bare-launched TUIs included; the hook fires when a session
 materializes — at once for `--prompt` and for a `--session` resume, and at
 the first prompt for a NEW session, whose sid does not exist before then.
-Coverage is only as good as that one firing: SessionEnd is unreliable
+SessionEnd is unreliable
 (0.35.0 leaves entries behind, so `prune_gone_entries` bounds the
-directory), and a SessionStart that never lands leaves a live session
-unbound until it is reopened — `run/hook-errors.log` is the only trace a
-registration was attempted.
+directory), and SessionStart delivery itself is fire-and-forget: a start
+that never lands is invisible to the registry by construction (seen on
+0.35.0 and 0.36.1), leaving `run/hook-errors.log` unable to show it.
+The SessionHeartbeat rule (0.36.1+) is the self-heal: kimi re-fires every
+60 s while the session lives, so a missed start becomes a ≤60 s unbound
+window. Hooks are startup config — a session launched before the rule was
+added stays unbound until it is reopened.
 _Avoid_: treating the registry file alone as proof without the /proc recheck;
 inferring a binding for an unbound live process from its directory
 

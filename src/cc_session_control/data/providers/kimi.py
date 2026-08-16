@@ -179,14 +179,14 @@ def _read_index(path: str) -> tuple[dict[str, dict], InventoryIssue | None]:
 
 # --- runtime registry (opt-in, hook-maintained pid↔session evidence) --------
 #
-# kimi's official SessionStart/SessionEnd hooks run `csctl _kimi-hook`
-# (actions/kimi_hook), maintaining one `<pid>.json` (`sessionId` +
-# `procStart`) per live session in this directory — the CLI's OWN
-# self-report, the same shape csctl consumes for Claude
+# kimi's official SessionStart/SessionHeartbeat/SessionEnd hooks run
+# `csctl _kimi-hook` (actions/kimi_hook), maintaining one `<pid>.json`
+# (`sessionId` + `procStart`) per live session in this directory — the
+# CLI's OWN self-report, the same shape csctl consumes for Claude
 # (`sessions/<pid>.json`). Hook contract verified on 0.34.0 (2026-08-12),
-# re-verified on 0.35.0 (2026-08-13): SessionStart fires when the session
-# materializes, carrying `session_id`/`cwd`; the hook process is kimi's
-# grandchild (kimi → sh → hook).
+# re-verified on 0.35.0 (2026-08-13) and 0.36.1 (2026-08-16): SessionStart
+# fires when the session materializes, carrying `session_id`/`cwd`; the
+# hook process is kimi's grandchild (kimi → sh → hook).
 #
 # "Materializes" is per launch path, and only ONE path waits (0.35.0,
 # 2026-08-13): `--prompt` and a `--session` RESUME both register at once —
@@ -199,17 +199,22 @@ def _read_index(path: str) -> tuple[dict[str, dict], InventoryIssue | None]:
 #
 # SessionEnd is NOT dependable: 0.35.0 left the entry behind after a clean
 # `kimi -p` exit, after a killed TUI, and after SIGTERM to a resumed one,
-# so this directory accumulates entries for dead pids. Two things contain
-# that: `kimi_hook` calls `prune_gone_entries` on each successful
-# registration (verified live 2026-08-13: six entries → one), and the
-# reader below re-verifies identity + starttime, so a leftover (or a pid
-# reused by an unrelated process) never binds.
+# so this directory accumulates entries for dead pids (0.36.1 did remove it
+# on a clean `/exit`, 2026-08-16 — still not something to count on). Two
+# things contain that: `kimi_hook` calls `prune_gone_entries` on each
+# successful registration (verified live 2026-08-13: six entries → one),
+# and the reader below re-verifies identity + starttime, so a leftover (or
+# a pid reused by an unrelated process) never binds.
 #
-# A registration that never happens is invisible here BY CONSTRUCTION — the
-# registry cannot record an event it was not handed. That gap is what left
-# a live 0.35.0 session unbound on 2026-08-13 with no evidence to inspect;
-# `run/hook-errors.log` (written by the hook endpoint) is where a failed
-# attempt now shows up.
+# A registration that never happens used to be invisible AND permanent —
+# the registry cannot record an event it was not handed: 2026-08-13 (0.35.0)
+# and again 2026-08-16 (0.36.1 — a dispatched new session ran 14 turns,
+# no entry, no error-log line, hook proven working before and after).
+# `run/hook-errors.log` covers a failed attempt; a never-delivered one is
+# covered by the SessionHeartbeat rule (0.36.1+, verified live 2026-08-16):
+# kimi re-fires every 60 s while the session lives, so a missed start
+# self-heals at the next heartbeat. Hooks are startup config — a session
+# already running when the rule was added stays unbound until reopened.
 
 #: Registry directory name under the kimi home — part of the provider's
 #: contract surface, also written by `actions/kimi_hook`.
