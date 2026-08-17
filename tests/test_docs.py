@@ -27,6 +27,9 @@ ADR9 = (ADR_DIR / "0009-remove-rc-and-background-agent-management.md").read_text
 CLAUDE_COMPAT = (
     Path(__file__).parents[1] / "docs" / "claude-code-compatibility.md"
 ).read_text(encoding="utf-8")
+RELEASING = (Path(__file__).parents[1] / "docs" / "releasing.md").read_text(
+    encoding="utf-8"
+)
 PYPROJECT = tomllib.loads(
     (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
 )
@@ -233,3 +236,18 @@ def test_every_external_action_is_pinned_to_a_tagged_commit() -> None:
             assert reference == QUALITY_GATE_USE
         else:
             assert PINNED_EXTERNAL_USE.match(line), line
+
+
+def test_release_docs_gate_immutable_tags_on_green_master_candidates() -> None:
+    assert "wait for the `CI` workflow" in RELEASING
+    assert "SHA to finish successfully" in RELEASING
+    assert "git push origin refs/tags/v0.4.1" in RELEASING
+    assert "git push origin master --tags" not in RELEASING
+    assert "never move or reuse" in RELEASING
+
+
+def test_current_doctor_skill_is_described_as_external_not_deprecated() -> None:
+    for surface in (README, CLAUDE):
+        assert "dzshzx/agent-skills" in surface
+        assert "deprecated" not in surface
+        assert "已废弃" not in surface

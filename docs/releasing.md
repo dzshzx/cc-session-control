@@ -118,15 +118,28 @@ python scripts/bump_version.py patch
 python scripts/bump_version.py --set 0.4.1
 ```
 
-Commit the version bump and any release notes before tagging.
+Commit the version bump and any release notes as one release candidate. Put
+that exact commit on `origin/master`, then wait for the `CI` workflow for that
+SHA to finish successfully. Do not create the release tag while CI is pending
+or failing.
 
 ## Tag And Publish
 
-Use an annotated tag that matches the package version:
+After the candidate SHA is green on `origin/master`, confirm the remote tag is
+unused and create an annotated tag that matches the package version:
 
 ```bash
+candidate_sha="$(git rev-parse HEAD)"
+git push origin master
+# Wait for CI on $candidate_sha to complete successfully.
+git fetch origin master
+test "$candidate_sha" = "$(git rev-parse origin/master)"
+if git ls-remote --exit-code --tags origin refs/tags/v0.4.1; then
+  echo "release tag already exists" >&2
+  exit 1
+fi
 git tag -a v0.4.1 -m "v0.4.1"
-git push origin master --tags
+git push origin refs/tags/v0.4.1
 ```
 
 The `Release` workflow runs on `v*` tags. After the shared quality gate passes,
@@ -136,6 +149,9 @@ commit. Only then does it build the distributions, smoke test the wheel and
 source distribution, upload the built artifacts to the workflow run, and
 publish to PyPI through Trusted Publishing. Production publishing has no manual
 workflow trigger; use the manual TestPyPI workflow for dry runs.
+The post-tag quality gate is defense in depth, not a substitute for the green
+candidate CI check above. Published tags are immutable: never move or reuse
+one after a failed release; fix the problem in the next patch version.
 
 ## Post-Release Verification
 

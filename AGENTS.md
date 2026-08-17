@@ -15,4 +15,4 @@
 
 - 使用 type hints。不得硬编码机器路径；`grep -rn --include='*.py' '/home/' src/` 必须无输出。
 - 全量运行 `uv run --extra dev pytest tests/`，或运行聚焦节点，例如 `uv run --extra dev pytest tests/test_views.py::test_sessions_view_filter_logic`。用 `tmp_path` 和 `monkeypatch` 造假，不要触碰实时 `~/.claude` 或 tmux 状态。
-- 唯一版本源是 `src/cc_session_control/__init__.py`。用 `python scripts/bump_version.py {patch|minor|major}` 步进；匹配的带注解 `vX.Y.Z` tag 是 PyPI Trusted Publishing 的发布触发器。
+- 唯一版本源是 `src/cc_session_control/__init__.py`。用 `python scripts/bump_version.py {patch|minor|major}` 步进；候选提交必须先位于 `origin/master` 且该 SHA 的 CI 已成功，之后才创建匹配的带注解 `vX.Y.Z` tag 触发 PyPI Trusted Publishing。发布 tag 不移动、不复用；失败修复使用下一个 patch。

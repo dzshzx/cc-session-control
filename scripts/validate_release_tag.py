@@ -73,6 +73,15 @@ def main() -> int:
         print("release tag does not point to checkout HEAD", file=sys.stderr)
         return 1
 
+    master_ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "HEAD", "origin/master"],
+        capture_output=True,
+        text=True,
+    )
+    if master_ancestor.returncode != 0:
+        print("release tag commit is not on origin/master", file=sys.stderr)
+        return 1
+
     return 0
 
 

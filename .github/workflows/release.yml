@@ -32,7 +32,9 @@ jobs:
           python-version: "3.12"
 
       - name: Validate release tag
-        run: python scripts/validate_release_tag.py "$GITHUB_REF_NAME"
+        run: |
+          git fetch --no-tags origin +master:refs/remotes/origin/master
+          python scripts/validate_release_tag.py "$GITHUB_REF_NAME"
 
   publish:
     name: Build and publish to PyPI

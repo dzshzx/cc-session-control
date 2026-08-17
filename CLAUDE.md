@@ -44,7 +44,7 @@ csctl resume [keyword] [--page N] [--limit N] [--all]  # cross-directory resume 
 csctl resume --take-over <sid>                 # execution-time re-resolution + guarded live takeover (Claude sids only)
 ```
 
-`claude-session-doctor` skill 已废弃（其依赖的后台 agent 与 RC 管理随 0.8.8 移除）；会话接回直接走 `csctl resume` / TUI。
+本包原先内置的 `claude-session-doctor` 已移除；适配当前 csctl 表面的重写版由 `dzshzx/agent-skills` 独立维护。会话接回行为以 `csctl resume` / TUI 为权威。
 
 `CONTRIBUTING.md` 的约束：每个源文件保持 **600 行以内**，使用 type hints，不硬编码路径。
 
@@ -157,7 +157,7 @@ Cleanup 逻辑位于 `data/cleanup.py`（session-keyed 策略）与 `data/age_cl
 完整维护者指南：`docs/releasing.md`。不那么显然的点：
 
 - **版本号单一来源**于 `src/cc_session_control/__init__.py`（`pyproject.toml` 经 setuptools dynamic 派生它）。只能通过 `python scripts/bump_version.py {patch|minor|major}` 或 `--set X.Y.Z` 步进——它只编辑那一个文件。然后加一条 `CHANGELOG.md` 条目。
-- **打 tag 即发布。** 推送一个带注解的 `vX.Y.Z` tag（与 `__version__` 匹配）会触发 `.github/workflows/release.yml`，它重新运行检查、构建、对 wheel + sdist 做 smoke 测试，并**经 Trusted Publishing 发布到 PyPI**（GitHub environment `pypi`，OIDC——不存储 API token）。PyPI trusted publisher 已经配置好（owner `dzshzx`，repo `cc-session-control`，workflow `release.yml`，env `pypi`）。
+- **候选先过 CI，tag 后发布。** 版本提交先进入 `origin/master`，等该同一 SHA 的 `CI` 成功后，才创建并单独推送匹配 `__version__` 的带注解 `vX.Y.Z` tag。tag 会触发 `.github/workflows/release.yml` 再跑检查、构建及 wheel/sdist smoke，并**经 Trusted Publishing 发布到 PyPI**（GitHub environment `pypi`，OIDC——不存储 API token）。发布 tag 不移动、不复用；失败修复使用下一个 patch。PyPI trusted publisher 已配置（owner `dzshzx`，repo `cc-session-control`，workflow `release.yml`，env `pypi`）。
 - **CI**（`.github/workflows/ci.yml`）在每次推送到 `master` 和 PR 时运行相同的 测试 + `/home/` grep + 构建 + smoke 关卡。
 - **TestPyPI dry run**（`.github/workflows/release-testpypi.yml`）是一个手动 `workflow_dispatch`，发布到 TestPyPI（env `testpypi`）而不触碰真实索引——真正打 tag 前的可选彩排。
 - **Gotchas：** 已发布的版本是不可变的——绝不覆盖它，而是 bump 到下一个 patch。`dist/` 被 gitignore；本地的预发布序列镜像该 workflow（`uv run --extra dev pytest tests/`、`/home/` grep、`uv build --no-sources`、wheel/sdist 的 `csctl --version`、`uvx twine check dist/*`）。发布后立刻，`uv` 可能看不到新版本：PyPI 的 simple index 有 CDN 延迟，`uv` 自己还另有一层索引缓存。等 simple index 出现该版本后，`uv tool upgrade cc-session-control` 仍可能报 `Nothing to upgrade`——`uv tool upgrade` **没有** `--refresh` 这个 flag，且 `--reinstall`（号称 implies `--refresh`）实测也不够；打爆缓存要用 `uv tool upgrade cc-session-control --reinstall --no-cache`（v0.8.8 实测，2026-08-13）。绝不用 `==X.Y.Z` 固定版本绕过它。

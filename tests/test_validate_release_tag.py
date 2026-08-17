@@ -54,8 +54,10 @@ def _make_repo(tmp_path: Path, version: str = "1.2.3") -> Path:
         encoding="utf-8",
     )
     _git(repo, "init", "--quiet")
+    _git(repo, "branch", "-M", "master")
     _git(repo, "add", ".")
     _commit(repo, "initial")
+    _git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
     return repo
 
 
@@ -118,3 +120,16 @@ def test_annotated_tag_on_different_commit_fails(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "does not point to checkout HEAD" in result.stderr
+
+
+def test_annotated_tag_outside_origin_master_fails(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "README.md").write_text("release branch\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _commit(repo, "release branch")
+    _annotated_tag(repo, "v1.2.3")
+
+    result = _run_validator(repo, "v1.2.3")
+
+    assert result.returncode != 0
+    assert "not on origin/master" in result.stderr
