@@ -159,11 +159,7 @@ csctl --theme light            # Force the TUI palette (auto/dark/light)
 csctl --version
 ```
 
-The formerly bundled `claude-session-doctor` skill was removed from this
-package. A standalone successor is maintained in
-[`dzshzx/agent-skills`](https://github.com/dzshzx/agent-skills/tree/master/skills/claude-session-doctor);
-csctl itself (`csctl resume` and the TUI) remains the authority for session
-rescue behavior.
+Session rescue is built into csctl itself: use `csctl resume` or the TUI.
 
 ## Configuration
 
