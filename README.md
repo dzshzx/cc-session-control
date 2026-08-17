@@ -160,7 +160,7 @@ csctl --version
 ```
 
 The formerly bundled `claude-session-doctor` skill was removed from this
-package. A rewritten version for csctl's current surface is maintained in
+package. A standalone successor is maintained in
 [`dzshzx/agent-skills`](https://github.com/dzshzx/agent-skills/tree/master/skills/claude-session-doctor);
 csctl itself (`csctl resume` and the TUI) remains the authority for session
 rescue behavior.

@@ -246,7 +246,7 @@ def test_release_docs_gate_immutable_tags_on_green_master_candidates() -> None:
     assert "never move or reuse" in RELEASING
 
 
-def test_current_doctor_skill_is_described_as_external_not_deprecated() -> None:
+def test_doctor_skill_is_described_as_external_not_bundled() -> None:
     for surface in (README, CLAUDE):
         assert "dzshzx/agent-skills" in surface
         assert "deprecated" not in surface

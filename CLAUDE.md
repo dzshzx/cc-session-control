@@ -44,7 +44,7 @@ csctl resume [keyword] [--page N] [--limit N] [--all]  # cross-directory resume 
 csctl resume --take-over <sid>                 # execution-time re-resolution + guarded live takeover (Claude sids only)
 ```
 
-本包原先内置的 `claude-session-doctor` 已移除；适配当前 csctl 表面的重写版由 `dzshzx/agent-skills` 独立维护。会话接回行为以 `csctl resume` / TUI 为权威。
+本包原先内置的 `claude-session-doctor` 已移除；独立后继版由 `dzshzx/agent-skills` 维护。会话接回行为以 `csctl resume` / TUI 为权威。
 
 `CONTRIBUTING.md` 的约束：每个源文件保持 **600 行以内**，使用 type hints，不硬编码路径。
 
