@@ -14,6 +14,7 @@ from cc_session_control.data import providers
 from cc_session_control.data.proc import ProcCli, ProcCliInventory
 from cc_session_control.data.providers import kimi as kimi_mod
 from cc_session_control.data.providers.codex import CodexProvider
+from cc_session_control.data.providers.codex_hosted import HostedRolloutScan
 from cc_session_control.data.providers.kimi import KimiProvider
 
 UUID1 = "019fc784-c365-70e0-af94-a6a0b15f05b8"
@@ -58,6 +59,38 @@ def codex_home(tmp_path, monkeypatch):
 
 
 class TestCodexDiscover:
+    def test_app_server_held_rollout_is_hosted_not_alive(self, codex_home, monkeypatch):
+        name = f"rollout-hosted-{UUID1}.jsonl"
+        _write_rollout(
+            codex_home,
+            "01",
+            name,
+            {
+                "id": UUID1,
+                "session_id": UUID1,
+                "cwd": "/tmp/proj",
+                "originator": "Codex Desktop",
+                "source": "vscode",
+                "thread_source": "user",
+            },
+        )
+        path = codex_home / "sessions" / "2026" / "08" / "01" / name
+        monkeypatch.setattr(
+            "cc_session_control.data.providers.codex.scan_hosted_rollouts",
+            lambda *_args: HostedRolloutScan(frozenset({str(path)})),
+        )
+
+        scan = CodexProvider().discover(
+            ProcCliInventory(records=(_proc(42, "codex", "app-server"),)),
+            cur=frozenset(),
+        )
+
+        (row,) = scan.sessions
+        assert row.hosted
+        assert row.source == "desktop"
+        assert not row.alive
+        assert row.pid is None
+
     def test_projects_rows_with_index_labels_and_liveness(self, codex_home):
         _write_rollout(
             codex_home,

@@ -69,6 +69,14 @@ def test_copy_resume_command_notes_no_takeover_for_non_claude_live(
     # claim the copied command stops the running process.
     monkeypatch.setattr(tui_actions.session_ops, "to_clipboard", lambda _cmd: True)
     session = replace(_session(), provider="codex")
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "session_for_execution",
+        lambda _session, fork: execution_target.ExecutionSessionResolution(
+            execution_target.ExecutionSessionState.RESOLVED,
+            session=session,
+        ),
+    )
 
     result = tui_actions.copy_resume_command(session)
 
@@ -81,6 +89,40 @@ def test_copy_resume_command_reports_clipboard_failure(monkeypatch) -> None:
     result = tui_actions.copy_resume_command(_session())
 
     assert result.message.startswith("复制失败")
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        tui_actions.stop_session,
+        tui_actions.background_session,
+        tui_actions.delete_session,
+        tui_actions.copy_resume_command,
+    ],
+)
+def test_hosted_session_actions_are_read_only(action) -> None:
+    result = action(replace(_session(), provider="codex", alive=False, hosted=True))
+
+    assert "托管会话只读" in result.message
+    assert result.needs_refresh is False
+
+
+def test_copy_codex_command_refreshes_and_refuses_new_hosting(monkeypatch) -> None:
+    snapshot = replace(_session(), provider="codex", alive=False)
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "session_for_execution",
+        lambda _session, fork: execution_target.ExecutionSessionResolution(
+            execution_target.ExecutionSessionState.REFUSED,
+            detail="session is app-server hosted and read-only",
+        ),
+    )
+
+    result = tui_actions.copy_resume_command(snapshot)
+
+    assert "复制失败" in result.message
+    assert "hosted and read-only" in result.message
+    assert result.needs_refresh
 
 
 def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:

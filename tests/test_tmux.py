@@ -161,6 +161,104 @@ def test_run_in_tmux_result_retains_new_window_failure_detail(monkeypatch) -> No
     assert result.detail == "lost server connection"
 
 
+def test_mobile_switch_sets_scoped_prefix2_when_unset(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(argv, **_kwargs):
+        calls.append(argv)
+        operation = argv[1]
+        if operation == "has-session":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if operation == "new-window":
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="csctl:2\t@2\n", stderr=""
+            )
+        if operation == "list-sessions":
+            return subprocess.CompletedProcess(argv, 0, stdout="$7\tcsctl\n", stderr="")
+        if operation == "show-options":
+            return subprocess.CompletedProcess(argv, 0, stdout="None\n", stderr="")
+        if operation == "set-option":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    result = tmux.run_in_tmux_result(
+        "csctl", "project/codex", "codex", mobile_switch=True
+    )
+
+    assert result.success
+    assert calls[-2:] == [
+        ["tmux", "show-options", "-Aqv", "-t", "$7", "prefix2"],
+        ["tmux", "set-option", "-t", "$7", "prefix2", "C-a"],
+    ]
+
+
+def test_mobile_switch_preserves_existing_prefix2(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(argv, **_kwargs):
+        calls.append(argv)
+        operation = argv[1]
+        if operation == "has-session":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if operation == "new-window":
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="csctl:2\t@2\n", stderr=""
+            )
+        if operation == "list-sessions":
+            return subprocess.CompletedProcess(argv, 0, stdout="$7\tcsctl\n", stderr="")
+        if operation == "show-options":
+            return subprocess.CompletedProcess(argv, 0, stdout="C-g\n", stderr="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    result = tmux.run_in_tmux_result(
+        "csctl", "project/codex", "codex", mobile_switch=True
+    )
+
+    assert result.success
+    assert calls[-1] == [
+        "tmux",
+        "show-options",
+        "-Aqv",
+        "-t",
+        "$7",
+        "prefix2",
+    ]
+
+
+def test_mobile_switch_prefix_failure_keeps_spawn_and_diagnostic(monkeypatch) -> None:
+    def run(argv, **_kwargs):
+        operation = argv[1]
+        if operation == "has-session":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if operation == "new-window":
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="csctl:2\t@2\n", stderr=""
+            )
+        if operation == "list-sessions":
+            return subprocess.CompletedProcess(argv, 0, stdout="$7\tcsctl\n", stderr="")
+        if operation == "show-options":
+            return subprocess.CompletedProcess(argv, 0, stdout="None\n", stderr="")
+        if operation == "set-option":
+            return subprocess.CompletedProcess(
+                argv, 1, stdout="", stderr="permission denied\n"
+            )
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+
+    result = tmux.run_in_tmux_result(
+        "csctl", "project/codex", "codex", mobile_switch=True
+    )
+
+    assert result.success
+    assert result.target == "csctl:2"
+    assert result.detail == "mobile switch prefix: permission denied"
+
+
 def test_run_in_tmux_result_recovers_when_another_process_creates_session(
     monkeypatch,
 ) -> None:

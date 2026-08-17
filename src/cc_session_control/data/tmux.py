@@ -233,6 +233,59 @@ def window_name_for(cwd: str, leaf: str) -> str:
 # CLIs whose processes rewrite their own argv (kimi title rewrite).
 _SID_OPTION = "@csctl_sid"
 _PROVIDER_OPTION = "@csctl_provider"
+_MOBILE_PREFIX = "C-a"
+_SESSION_ID_FMT = "#{session_id}\t#{session_name}"
+
+
+def _append_detail(result: TmuxWriteResult, detail: str) -> TmuxWriteResult:
+    combined = "; ".join(part for part in (result.detail, detail) if part)
+    return replace(result, detail=combined)
+
+
+def _ensure_mobile_switch_prefix(
+    result: TmuxWriteResult,
+    session: str,
+) -> TmuxWriteResult:
+    """Give the managed session a phone-friendly second prefix when unset.
+
+    `prefix2` is a per-session tmux option, so this never changes the user's
+    global config or another tmux session. An existing non-None value wins.
+    With the stock prefix table, Ctrl-A then `s` opens `choose-tree -Zs` from
+    inside any provider TUI — the reachability gap an in-csctl key cannot solve.
+    """
+
+    if not result.success:
+        return result
+    sessions = _tmux_run_result(["list-sessions", "-F", _SESSION_ID_FMT])
+    sessions_cp = sessions.completed
+    if sessions_cp is None or sessions_cp.returncode != 0:
+        detail = sessions.detail or "could not list sessions"
+        return _append_detail(result, f"mobile switch prefix: {detail}")
+    ids = []
+    for line in sessions_cp.stdout.splitlines():
+        session_id, separator, name = line.partition("\t")
+        if separator and name == session and session_id.startswith("$"):
+            ids.append(session_id)
+    if len(ids) != 1:
+        return _append_detail(
+            result,
+            f"mobile switch prefix: expected one exact session id, found {len(ids)}",
+        )
+    target = ids[0]
+    probe = _tmux_run_result(["show-options", "-Aqv", "-t", target, "prefix2"])
+    cp = probe.completed
+    if cp is None or cp.returncode != 0:
+        detail = probe.detail or "could not read prefix2"
+        return _append_detail(result, f"mobile switch prefix: {detail}")
+    current = cp.stdout.strip()
+    if current and current != "None":
+        return result
+    write = _tmux_run_result(["set-option", "-t", target, "prefix2", _MOBILE_PREFIX])
+    write_cp = write.completed
+    if write_cp is not None and write_cp.returncode == 0:
+        return result
+    detail = write.detail or "could not set prefix2"
+    return _append_detail(result, f"mobile switch prefix: {detail}")
 
 
 def _declare_dispatch_metadata(
@@ -281,6 +334,7 @@ def run_in_tmux_result(
     sid: str = "",
     provider: str = "",
     env: Mapping[str, str] | None = None,
+    mobile_switch: bool = False,
 ) -> TmuxWriteResult:
     """Create a target while preserving probe/create stage and diagnostics.
 
@@ -315,6 +369,8 @@ def run_in_tmux_result(
             retry_cp = retry_probe.completed
             if retry_cp is not None and retry_cp.returncode == 0:
                 created = _tmux_new_window_result(session, window, cmd, env)
+    if mobile_switch:
+        created = _ensure_mobile_switch_prefix(created, session)
     return _declare_dispatch_metadata(created, sid, provider)
 
 

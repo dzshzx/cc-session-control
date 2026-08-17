@@ -77,7 +77,9 @@ def format_session(s: Session) -> list[str]:
     liveness — the resume command stays the plain non-destructive one.
     `(archived)` rows carry the un-archive command (resume_cmd's archived
     branch) plus a note, matching the TUI `y` copy payload."""
-    if s.alive:
+    if s.hosted:
+        state = "hosted"
+    elif s.alive:
         state = "live"
     elif s.unbound_live_hint:
         state = "live?"
@@ -88,7 +90,9 @@ def format_session(s: Session) -> list[str]:
     flags = f"  [hidden:{','.join(sorted(s.hidden))}]" if s.hidden else ""
     when = time.strftime("%m-%d %H:%M", time.localtime(s.mtime))
     lines = [f"[{state}] {when}  {provider}{archived}{s.sid}{flags}", f"    {s.label}"]
-    if s.current:
+    if s.hosted:
+        lines.append("    ^ app-server hosted — read-only; no resume command")
+    elif s.current:
         lines.append(
             "    <- you are IN this session (no resume needed; "
             "kill it only to take over from elsewhere)"

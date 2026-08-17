@@ -122,6 +122,8 @@ def _status_parts(session: Session) -> tuple[str, str]:
     same field the confirm layer reads) and reuses the semantic `status_err`
     warning attr — honest uncertainty, NOT liveness."""
     cur = "▸" if session.current else " "
+    if session.hosted:
+        return f"{cur}@ 托管", "alive"
     if session.alive:
         if session.provider != "claude":
             # Non-Claude registries carry no busy/idle status — "闲" would

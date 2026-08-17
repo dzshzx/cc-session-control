@@ -11,7 +11,7 @@ from __future__ import annotations
 import errno
 import os
 import shlex
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -115,6 +115,18 @@ class ProcCliInventory:
     """Known agent-CLI processes plus `/proc` walk completeness."""
 
     records: tuple[ProcCli, ...] = ()
+    issues: tuple[ProcIssue, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.issues
+
+
+@dataclass(frozen=True)
+class ProcOpenFileInventory:
+    """Open-file targets held by selected pids, with typed `/proc` failures."""
+
+    paths: frozenset[str] = frozenset()
     issues: tuple[ProcIssue, ...] = ()
 
     @property
@@ -258,6 +270,44 @@ def probe_ancestors(start_pid: int) -> AncestorProbe:
 def probe_current_ancestors() -> AncestorProbe:
     """Typed ancestor evidence for the csctl process."""
     return probe_ancestors(os.getpid())
+
+
+def scan_open_file_inventory(pids: Iterable[int]) -> ProcOpenFileInventory:
+    """Read exact fd symlink targets for selected live processes.
+
+    Process/fd disappearance is a normal race and contributes no issue. An
+    unreadable fd directory or link is evidence loss and stays visible so a
+    caller cannot turn "unknown hosted state" into permission to act.
+    """
+
+    if not has_proc():
+        return ProcOpenFileInventory(
+            issues=(ProcIssue("process open files", _PROC, f"{_PROC} is unavailable"),)
+        )
+    paths: set[str] = set()
+    issues: list[ProcIssue] = []
+    for pid in sorted(set(pids)):
+        fd_root = f"{_PROC}/{pid}/fd"
+        try:
+            entries = os.listdir(fd_root)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                continue
+            issues.append(ProcIssue("process open files", fd_root, str(exc)))
+            continue
+        for entry in entries:
+            path = f"{fd_root}/{entry}"
+            target, issue, disappeared = _read_inventory_link(path)
+            if disappeared:
+                continue
+            if issue is not None:
+                issues.append(ProcIssue("process open files", path, issue.detail))
+                continue
+            if target is not None:
+                paths.add(target)
+    return ProcOpenFileInventory(frozenset(paths), tuple(issues))
 
 
 def ancestor_pids() -> set[int]:

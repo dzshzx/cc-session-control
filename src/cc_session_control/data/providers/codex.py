@@ -55,6 +55,7 @@ from .base import (
     ProviderScan,
     TrustScan,
 )
+from .codex_hosted import scan_hosted_rollouts
 from .codex_rollout import FIRST_LINE_CAP, first_user_message, read_meta
 from .codex_source import classify_source
 from .codex_trust import read_trusted_dirs
@@ -433,13 +434,24 @@ class CodexProvider:
             is_tui_process=is_tui_process,
             ancestors_of=proc.probe_ancestors,
         )
+        hosted = scan_hosted_rollouts(
+            self.home,
+            self._source,
+            cli_inventory.records,
+            self.owns_process,
+        )
+        issues.extend(hosted.issues)
 
         active_root = self.home / "sessions"
         archived_root = self.home / "archived_sessions"
         if not active_root.is_dir() and not archived_root.is_dir():
             return ProviderScan()  # fresh install — nothing recorded yet
-        active = self._scan_root(active_root, names, live, issues, archived=False)
-        archived = self._scan_root(archived_root, names, live, issues, archived=True)
+        active = self._scan_root(
+            active_root, names, live, issues, hosted.paths, archived=False
+        )
+        archived = self._scan_root(
+            archived_root, names, live, issues, frozenset(), archived=True
+        )
         # A sid on both sides is defensive-only (upstream archive is a MOVE):
         # the archived copy is stale evidence and the active row wins
         # regardless of mtime — the dict union's right operand does that.
@@ -463,6 +475,7 @@ class CodexProvider:
         names: dict[str, str],
         live: dict[str, ArgvMatch],
         issues: list[InventoryIssue],
+        hosted_paths: frozenset[str],
         *,
         archived: bool,
     ) -> dict[str, Session]:
@@ -517,6 +530,7 @@ class CodexProvider:
                     mtime,
                     names,
                     live,
+                    hosted_paths,
                     archived=archived,
                 )
                 if row is None:
@@ -554,6 +568,7 @@ class CodexProvider:
         mtime: float,
         names: dict[str, str],
         live: dict[str, ArgvMatch],
+        hosted_paths: frozenset[str],
         *,
         archived: bool,
     ) -> Session | None:
@@ -580,4 +595,5 @@ class CodexProvider:
             file=path,
             source=source,
             archived=archived,
+            hosted=path in hosted_paths,
         )

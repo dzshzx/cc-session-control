@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.8.11 (2026-08-17)
+
+### Added
+
+- Codex Desktop/IDE threads whose exact active rollout is held open by their
+  identity's `codex app-server` now render as `@ 托管`. This state is explicitly
+  read-only: it carries no session pid and cannot be resumed, forked, stopped,
+  deleted, or copied as a resume command. Every Codex execution and command
+  copy refreshes the fd evidence first so a stale dead row cannot become a
+  duplicate resume.
+- Phone-friendly switching for csctl-managed tmux sessions: when the effective
+  per-session `prefix2` is unset, csctl scopes it to `Ctrl-A`. `Ctrl-A s` then
+  opens tmux's existing session tree from inside Claude, Codex, or Kimi without
+  changing the primary prefix, global configuration, or an existing `prefix2`.
+
+### Changed
+
+- Re-verified Claude Code 2.1.233's foreground/background registry shapes and
+  parent/child/unrelated trust semantics in a disposable authenticated fixture;
+  re-verified the isolated release probe and focused compatibility fixtures.
+- Re-verified Codex 0.147.0 project trust against official source and Kimi
+  0.36.1 workspace trust against its shipped source: Codex exact-matches cwd,
+  configured project root, and Git root; Kimi revoke deletes its positive
+  trust record and leaves no negative footprint.
+- Corrected the Sessions help and provider documentation to reflect Kimi's hook
+  registry as a liveness source; evidence-less bare processes remain unbound.
+
 ## 0.8.10 (2026-08-16)
 
 ### Added

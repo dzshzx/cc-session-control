@@ -69,8 +69,9 @@ Further rules:
 - codex/kimi-only directories become visible and launchable; each CLI's own
   onboarding/trust dialog still runs inside the tmux window (ADR-0005's
   no-trust-gate argument now covers the new members too).
-- Unverified upstream items to recheck: whether codex project trust
-  inherits to descendants (csctl currently exact-matches), and whether kimi
-  has a decline/revoke footprint beside the positive `workspace-trust`
-  records (a record without well-typed `root`/`trustedAt` is skipped with an
-  issue, never trusted).
+- Upstream items rechecked on 2026-08-17: codex 0.147.0 does not walk arbitrary
+  ancestors; it exact-matches normalized cwd, configured project-root, and Git
+  repo-root keys, so csctl's explicit-record candidate rule remains correct.
+  Kimi 0.36.1 `untrust()` deletes its positive `workspace-trust` document and
+  leaves no decline/revoke record. A missing record is therefore untrusted;
+  a record without well-typed `root`/`trustedAt` is skipped with an issue.

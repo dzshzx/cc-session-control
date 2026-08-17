@@ -107,6 +107,20 @@ name. Existing resident windows in any tmux session are entered in place
 rather than migrated.
 _Avoid_: one tmux session per project, treating a window name as identity
 
+**Mobile Switch Prefix (手机切换前缀)**:
+The managed `csctl` tmux session's second prefix. When its effective `prefix2`
+is `None`, csctl scopes `C-a` to that session; `C-a s` reaches tmux
+`choose-tree -Zs` even while a provider TUI owns pane input. Existing prefix2,
+the primary prefix, and global tmux configuration are preserved.
+_Avoid_: an in-csctl shortcut claimed to work from a provider TUI; global bind
+
+**Hosted Session (托管会话)**:
+A Codex active rollout whose exact path is open in the owning app-server fd
+table. It is present in Desktop/IDE but has no session-owning pid: `hosted` is
+independent of `alive`, read-only, and never authorizes resume, fork, stop, or
+delete. Source badges alone do not prove hosting.
+_Avoid_: using the shared app-server pid as a session pid; hosted = alive
+
 **tmux Resume (tmux 接回)**:
 Resuming a session inside its project-labelled window in the workbench tmux
 session and bringing the operator's terminal into that window — the primary

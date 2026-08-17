@@ -15,7 +15,8 @@ across all three, plus a tmux-first project launcher.
   (`Enter` resumes into a project-labelled window in the shared `csctl` tmux
   session via each CLI's native resume command; `t` bare-terminal fallback;
   `R` backgrounds into tmux;
-  `f` forks where the CLI supports it; ⧉ marks tmux-resident sessions),
+  `f` forks where the CLI supports it; ⧉ marks tmux-resident sessions;
+  Codex app-server-held rows show as hosted/read-only instead of dead),
   terminate, and delete; a cleanup submenu (`c`) prunes empty/short Claude
   sessions and sweeps orphan artifact directories, zombie session files, and
   aged global entries (cleanup models Claude state only)
@@ -34,6 +35,9 @@ supplement for dispatched windows, and is essential after Kimi rewrites its
 argv at runtime. A brand-new session started from the launcher (the `Enter`
 chooser or `x`/`k`) has no sid yet, so it stays unbound, as does any other
 bare-launched TUI; unbound processes are never stop/takeover targets.
+Codex app-server fd evidence is a separate hosted/read-only state: it never
+supplies a session pid, and csctl emits no resume/stop/fork/delete command for
+that row.
 
 Kimi can close that gap opt-in via its official hooks: add this to
 `~/.kimi-code/config.toml` and every kimi session — bare-launched ones
@@ -78,6 +82,11 @@ All agent sessions csctl dispatches — new, resumed, forked, or backgrounded �
 share the tmux session named `csctl`; their window
 names retain the project. Existing live sessions in older or user-created tmux
 sessions are entered in place and are never migrated automatically.
+
+For phone terminals, the managed `csctl` tmux session gets a scoped second
+prefix when none is already configured: press `Ctrl-A`, then `s`, to open
+tmux's session tree from inside Claude, Codex, or Kimi. An existing `prefix2`
+is preserved; csctl never changes the primary prefix or global tmux config.
 
 Built with [urwid](https://urwid.org/).
 

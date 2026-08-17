@@ -27,7 +27,15 @@ type CleanupTarget = Session | str | int
 type CleanupExecutor = Callable[[list], CleanupExecution]
 
 
+def _hosted_refusal(session: Session) -> ActionResult | None:
+    if session.hosted:
+        return ActionResult("托管会话只读，csctl 不接回、停止、分叉或删除")
+    return None
+
+
 def stop_session(session: Session) -> ActionResult:
+    if refusal := _hosted_refusal(session):
+        return refusal
     if session.pid is None:
         return ActionResult("停止失败", needs_refresh=True)
     outcome = session_ops.take_over_result(session.pid, session.proc_start)
@@ -44,6 +52,8 @@ def stop_session(session: Session) -> ActionResult:
 
 
 def background_session(session: Session) -> ActionResult:
+    if refusal := _hosted_refusal(session):
+        return refusal
     outcome = session_ops.do_tmux_resume_result(session)
     if outcome.target is None:
         detail = f"：{outcome.detail}" if outcome.detail else ""
@@ -55,6 +65,8 @@ def background_session(session: Session) -> ActionResult:
 
 
 def delete_session(session: Session) -> ActionResult:
+    if refusal := _hosted_refusal(session):
+        return refusal
     if providers.get(session.provider).caps.cleanup:
         return _delete_result(cleanup.remove_session(session))
     # Delegated official-CLI delete (`codex delete <sid>`): a bypass BESIDE
@@ -67,6 +79,14 @@ def delete_session(session: Session) -> ActionResult:
 
 
 def copy_resume_command(session: Session) -> ActionResult:
+    if refusal := _hosted_refusal(session):
+        return refusal
+    if session.provider.split(":", 1)[0] == "codex":
+        resolution = session_ops.session_for_execution(session, fork=False)
+        if not resolution.success or resolution.session is None:
+            detail = resolution.detail or "执行时会话证据不完整"
+            return ActionResult(f"复制失败：{detail}", needs_refresh=True)
+        session = resolution.session
     command = session_ops.resume_cmd(session)
     if not session_ops.to_clipboard(command):
         return ActionResult(f"复制失败: {command}")

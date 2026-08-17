@@ -100,6 +100,8 @@ def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
     `would_take_over` obey this single decision; copied live commands defer
     it to the execution-time `csctl resume --take-over` scan.
     """
+    if s.hosted:
+        raise ValueError(f"session {s.sid!r} is app-server hosted and read-only")
     args = providers.get(s.provider).resume_argv(s.sid, fork)
     should_kill = s.alive and not s.current and not fork
     return s.cwd, args, should_kill
@@ -143,6 +145,8 @@ def resume_cmd(s: Session, fork: bool = False) -> str:
     provider commands (ADR-0005) — none serialize a kill. An archived row
     copies its provider's official un-archive command instead (a direct
     archived-store resume is unverified upstream semantics)."""
+    if s.hosted:
+        raise ValueError(f"session {s.sid!r} is app-server hosted and read-only")
     prefix = env_prefix(s.provider)
     if s.archived:
         return prefix + shlex.join(providers.unarchive_argv(s.provider, s.sid))
@@ -288,6 +292,7 @@ def _spawn_in_tmux_result(
         sid="" if fork else target_session.sid,
         provider=target_session.provider,
         env=provider.env,
+        mobile_switch=True,
     )
     target = result.target if result.success else None
     return TmuxResumeOutcome(target, result.diagnostic)
@@ -346,6 +351,7 @@ def do_tmux_new_result(
         cmd,
         provider=provider.key,  # no sid exists yet — provider tag only
         env=provider.env,
+        mobile_switch=True,
     )
 
 

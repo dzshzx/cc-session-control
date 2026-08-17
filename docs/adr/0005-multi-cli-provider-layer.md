@@ -277,9 +277,11 @@ The provider designs below are grounded in probes of the actual CLIs
   destroys argv evidence. Bare fresh TUIs without registry evidence stay
   unbound. csctl discovers everything but only *binds* what these fail-closed
   evidence sources prove.
-- Desktop/IDE-hosted codex sessions (app-server-held rollouts) currently
-  read as not-alive. Surfacing them as "hosted, read-only" via the
-  app-server's fd table is a known follow-up, not in this change.
+- **Amendment (2026-08-17, ADR-0010):** Desktop/IDE-hosted codex sessions are
+  identified by exact active-rollout paths in the owning app-server's fd
+  table. They render as `hosted, read-only`, never as alive: the app-server pid
+  owns many threads and is never a session kill target. Missing/incomplete fd
+  evidence fails closed and no resume/stop/fork/delete command is emitted.
 - A copied resume command for a LIVE non-Claude session is the plain
   provider resume (`codex resume <sid>`): the Claude-only
   `csctl resume --take-over` deferral cannot cover it, and a plain resume

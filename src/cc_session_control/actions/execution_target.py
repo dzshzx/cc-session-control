@@ -114,7 +114,12 @@ def session_for_execution(
     session: Session,
     fork: bool,
 ) -> ExecutionSessionResolution:
-    if not session.alive or fork:
+    base_provider = session.provider.split(":", 1)[0]
+    # A Codex row can become app-server-hosted after the rendered generation.
+    # Re-resolve every Codex execution (including dead/fork) so stale "dead"
+    # evidence can never turn a newly hosted thread into an actionable row.
+    needs_provider_refresh = session.alive or session.hosted or base_provider == "codex"
+    if not needs_provider_refresh or (fork and base_provider != "codex"):
         return ExecutionSessionResolution(
             ExecutionSessionState.RESOLVED,
             session=session,
@@ -132,6 +137,13 @@ def session_for_execution(
             return ExecutionSessionResolution(
                 ExecutionSessionState.REFUSED,
                 detail=argv_resolution.detail,
+            )
+        if argv_resolution.session is None:
+            raise AssertionError("successful provider resolution must carry a Session")
+        if argv_resolution.session.hosted:
+            return ExecutionSessionResolution(
+                ExecutionSessionState.REFUSED,
+                detail=f"session {session.sid!r} is app-server hosted and read-only",
             )
         return ExecutionSessionResolution(
             ExecutionSessionState.RESOLVED,

@@ -40,14 +40,11 @@ if TYPE_CHECKING:
 
 
 class SessionsView(CleanupMixin, ListTabView):
-    # mode: "list" | "filter" | "cleanup" | "preview" | "help"
-
     OVERLAY_WIDTH = 70
+    _HOSTED_READ_ONLY_KEYS = frozenset({"enter", "t", "f", "s", "R", "d", "y"})
 
-    # Single source for every list-mode key: footer hints, help overlay, and
-    # dispatch are all generated from this table (views/_keytable.py). Full key
-    # table in the footer is a user preference (2026-07-05); `r 刷新` stays in
-    # the App-level FOOTER_PREFIX, so its entry is hint-less here.
+    # One source for list-mode dispatch, footer hints, and help overlay.
+    # App-level `r 刷新` stays hint-less here.
     KEY_TABLE = (
         Key(
             ("enter",),
@@ -151,6 +148,7 @@ class SessionsView(CleanupMixin, ListTabView):
             "状态列: ● 忙 = 正在生成/执行工具 · ● 闲 = 等待输入 ·",
             "        ● 活 = 运行中（cx/km 专属：已绑定进程，忙闲不可知）·",
             "        ○ 停 = 无进程（cx/km 行为「未发现可绑定进程」）·",
+            "        @ 托管 = Codex app-server 持有（只读，不接回/停止/删除）·",
             "        ? 未知 = 疑似运行（cx/km 专属：目录内有未绑定进程，",
             "        可能正持有该会话，接回/转后台会先确认双开风险）",
             "        ▸ = 当前会话（启动 csctl 的会话，受保护） · 📱 = 已开远控",
@@ -168,6 +166,7 @@ class SessionsView(CleanupMixin, ListTabView):
         suffix=(
             "导航:",
             "  Tab    切换标签页",
+            "  Ctrl-A s  从任一 provider TUI 打开 tmux 会话树（仅 csctl session）",
             "  q      退出",
         ),
     )
@@ -395,8 +394,7 @@ class SessionsView(CleanupMixin, ListTabView):
         return self._mode == "help"
 
     def handle_key(self, key: str) -> None:
-        """Extra modes first (filter/preview/cleanup are Sessions-only); the
-        help overlay + list dispatch fall through to the base handle_key."""
+        """Handle Sessions-only modes, then fall through to list dispatch."""
         if self._mode == "filter":
             if key == "enter":
                 self._exit_filter()
@@ -412,8 +410,7 @@ class SessionsView(CleanupMixin, ListTabView):
             elif key == "esc":
                 self._enter_cleanup()
             elif key == "r":
-                # Footer prefix promises `r 刷新` on every tab/mode — honor it
-                # (the preview list itself stays as computed at entry).
+                # The preview stays pinned while the global refresh still works.
                 self.app.refresh_with_notice()
             return
 
@@ -428,15 +425,20 @@ class SessionsView(CleanupMixin, ListTabView):
                 self.app.refresh_with_notice()
             return
 
-        # Help overlay + normal list mode: the base handle_key.
+        selected = self._selected()
+        if (
+            key in self._HOSTED_READ_ONLY_KEYS
+            and isinstance(selected, Session)
+            and selected.hosted
+        ):
+            self.app.notify("托管会话只读，csctl 不接回、停止、分叉或删除")
+            return
         super().handle_key(key)
 
     # --- key handlers (bound by name in KEY_TABLE) ---
 
     def _key_resume(self, s: Session) -> None:
-        """Enter — tmux 接回: enter a resident session in place, else resume
-        it inside its project-labelled window in the shared csctl tmux session
-        and enter (ADR-0001/0006 primary)."""
+        """Enter — enter resident tmux, else resume into managed tmux."""
         if s.current:
             self.app.notify("不能接回当前会话")
             return
@@ -454,8 +456,7 @@ class SessionsView(CleanupMixin, ListTabView):
         )
 
     def _key_terminal(self, s: Session) -> None:
-        """t — 终端接回 (fallback): bare-terminal resume; a resident session is
-        pulled OUT of tmux via the same standard takeover confirm."""
+        """t — bare-terminal resume; pull a resident session out of tmux."""
         if s.current:
             self.app.notify("不能接回当前会话")
             return
@@ -480,10 +481,7 @@ class SessionsView(CleanupMixin, ListTabView):
         )
 
     def _key_fork(self, s: Session) -> None:
-        """f — 分叉进 tmux: a fork is a copy (never kills, no confirm).
-
-        Capability-gated (ADR-0005): kimi has no CLI fork argv, so the verb
-        is refused with a reason instead of synthesizing a broken command."""
+        """f — fork into tmux without killing; capability-gated (ADR-0005)."""
         if not providers.get(s.provider).caps.fork:
             self.app.notify(f"{s.provider} 不支持从命令行分叉会话")
             return

@@ -191,9 +191,23 @@ class TestSessionOpsPassMetadata:
     def _capture(self, monkeypatch):
         seen: list[dict] = []
 
-        def fake_run(session, window, cmd, sid="", provider="", env=None):
+        def fake_run(
+            session,
+            window,
+            cmd,
+            sid="",
+            provider="",
+            env=None,
+            mobile_switch=False,
+        ):
             seen.append(
-                {"session": session, "window": window, "sid": sid, "provider": provider}
+                {
+                    "session": session,
+                    "window": window,
+                    "sid": sid,
+                    "provider": provider,
+                    "mobile_switch": mobile_switch,
+                }
             )
             return tmux.TmuxWriteResult(
                 tmux.TmuxWriteStage.NEW_WINDOW,
@@ -217,6 +231,7 @@ class TestSessionOpsPassMetadata:
                 "window": "tmp/km-019fc784",
                 "sid": KIMI_SID,
                 "provider": "kimi",
+                "mobile_switch": True,
             }
         ]
 
@@ -229,6 +244,7 @@ class TestSessionOpsPassMetadata:
         assert outcome.target == "csctl:5"
         assert seen[0]["sid"] == ""
         assert seen[0]["provider"] == "codex"
+        assert seen[0]["mobile_switch"] is True
 
     def test_launcher_new_session_declares_provider_only(self, monkeypatch, tmp_path):
         seen = self._capture(monkeypatch)
@@ -240,6 +256,7 @@ class TestSessionOpsPassMetadata:
         assert seen[0]["window"].endswith("/kimi")
         assert seen[0]["sid"] == ""
         assert seen[0]["provider"] == "kimi"
+        assert seen[0]["mobile_switch"] is True
 
 
 # --- read side: the one pane walk carries the metadata ----------------------

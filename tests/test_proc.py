@@ -155,3 +155,45 @@ def test_probe_ancestors_preserves_partial_chain_on_mid_chain_failure(
     assert result.complete is False
     assert len(result.issues) == 1
     assert result.issues[0].path == str(tmp_path / "20" / "stat")
+
+
+def test_scan_open_file_inventory_collects_exact_targets(tmp_path, monkeypatch):
+    fd_root = tmp_path / "42" / "fd"
+    fd_root.mkdir(parents=True)
+    (fd_root / "3").symlink_to("/state/rollout-one.jsonl")
+    (fd_root / "4").symlink_to("socket:[123]")
+    monkeypatch.setattr(proc, "_PROC", str(tmp_path))
+
+    result = proc.scan_open_file_inventory([42])
+
+    assert result.complete
+    assert result.paths == frozenset({"/state/rollout-one.jsonl", "socket:[123]"})
+
+
+def test_scan_open_file_inventory_ignores_disappeared_process(tmp_path, monkeypatch):
+    monkeypatch.setattr(proc, "_PROC", str(tmp_path))
+
+    result = proc.scan_open_file_inventory([404])
+
+    assert result.complete
+    assert result.paths == frozenset()
+
+
+def test_scan_open_file_inventory_preserves_fd_directory_failure(tmp_path, monkeypatch):
+    (tmp_path / "42" / "fd").mkdir(parents=True)
+    monkeypatch.setattr(proc, "_PROC", str(tmp_path))
+    real_listdir = proc.os.listdir
+
+    def deny(path):
+        if path == str(tmp_path / "42" / "fd"):
+            raise PermissionError(errno.EACCES, "permission denied")
+        return real_listdir(path)
+
+    monkeypatch.setattr(proc.os, "listdir", deny)
+
+    result = proc.scan_open_file_inventory([42])
+
+    assert not result.complete
+    assert result.paths == frozenset()
+    assert result.issues[0].source == "process open files"
+    assert result.issues[0].path == str(tmp_path / "42" / "fd")

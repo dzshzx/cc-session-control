@@ -327,6 +327,11 @@ def execute_cli_delete(provider_key: str, sid: str) -> CliDeleteResult:
         return _delete_refusal(
             CliDeleteStage.PROTECTION, f"session {sid!r} is live; stop it first"
         )
+    if target.hosted:
+        return _delete_refusal(
+            CliDeleteStage.PROTECTION,
+            f"session {sid!r} is app-server hosted and read-only",
+        )
     if target.archived:
         return _delete_refusal(
             CliDeleteStage.PROTECTION,

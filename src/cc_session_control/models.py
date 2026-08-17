@@ -84,6 +84,11 @@ class Session:
     # decisions, and its False default keeps every consumer's behavior
     # byte-identical (fail-safe).
     unbound_live_hint: bool = False
+    # Exact rollout-path evidence from a Codex app-server fd table. Hosted
+    # sessions are present in Desktop/IDE, but they are deliberately NOT
+    # `alive`: there is no session-owning pid that csctl may signal. The flag
+    # is display/read-only authority only and must never feed takeover/delete.
+    hosted: bool = False
     # tmux residency (CONTEXT.md / ADR-0001): non-None means a live pid of this
     # session runs inside a tmux pane; the value is the enterable
     # "session:window_index" target. Batch-computed in sessions.scan_result() via

@@ -129,11 +129,60 @@ class TestActionDispatch:
         assert not resolution.success
         assert resolution.detail == "nope"
 
-    def test_dead_non_claude_execution_resolves_as_is(self):
+    def test_dead_codex_execution_refreshes_hosted_evidence(self, monkeypatch):
         s = _session(provider="codex", alive=False)
+        fresh = _session(provider="codex", alive=False)
+        seen: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            execution_target.providers,
+            "resolve_argv_execution",
+            lambda provider_key, sid: (
+                seen.append((provider_key, sid))
+                or providers.ArgvResolution(session=fresh)
+            ),
+        )
         resolution = session_ops.session_for_execution(s, fork=False)
         assert resolution.success
-        assert resolution.session is s
+        assert resolution.session is fresh
+        assert seen == [("codex", s.sid)]
+
+    def test_fresh_hosted_codex_execution_is_read_only(self, monkeypatch):
+        s = _session(provider="codex", alive=False)
+        fresh = _session(provider="codex", alive=False, hosted=True)
+        monkeypatch.setattr(
+            execution_target.providers,
+            "resolve_argv_execution",
+            lambda _provider_key, _sid: providers.ArgvResolution(session=fresh),
+        )
+
+        resolution = session_ops.session_for_execution(s, fork=False)
+
+        assert not resolution.success
+        assert "hosted and read-only" in resolution.detail
+
+    def test_cli_delete_refuses_fresh_hosted_codex(self, monkeypatch):
+        provider = providers.get("codex")
+        hosted = _session(provider="codex", alive=False, hosted=True)
+        monkeypatch.setattr(
+            providers.proc,
+            "probe_current_ancestors",
+            lambda: providers.proc.AncestorProbe(frozenset()),
+        )
+        monkeypatch.setattr(
+            providers.proc,
+            "scan_cli_argv_inventory",
+            lambda *_args: providers.proc.ProcCliInventory(),
+        )
+        monkeypatch.setattr(
+            provider,
+            "discover",
+            lambda *_args: providers.ProviderScan(sessions=(hosted,)),
+        )
+
+        result = providers.execute_cli_delete("codex", hosted.sid)
+
+        assert result.state is providers.CliDeleteState.REFUSED
+        assert "hosted and read-only" in result.detail
 
     def test_terminal_resume_execs_the_provider_binary(
         self,

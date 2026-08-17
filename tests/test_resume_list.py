@@ -129,6 +129,17 @@ def test_format_live_session_gives_takeover_command(tmp_path):
     assert "re-checks the live process" in text
 
 
+def test_format_hosted_session_is_read_only_without_command(tmp_path):
+    s = _session(tmp_path, alive=False)
+    s = types.SimpleNamespace(**{**s.__dict__, "provider": "codex", "hosted": True})
+
+    text = "\n".join(resume_list.format_session(s))
+
+    assert "[hosted]" in text
+    assert "read-only" in text
+    assert "codex resume" not in text
+
+
 def test_format_non_claude_live_session_is_honest_about_no_takeover(tmp_path):
     # ADR-0005: non-Claude live rows print a direct provider resume command,
     # not the Claude-only guarded takeover path — the annotation must not

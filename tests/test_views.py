@@ -343,11 +343,26 @@ def test_status_cell_three_states():
     busy = _make_session(sid="b", alive=True, pid=1, status="busy")
     idle = _make_session(sid="i", alive=True, pid=1, status="idle")
     dead = _make_session(sid="d", alive=False)
+    hosted = _make_session(sid="h", provider="codex", hosted=True)
     cur = _make_session(sid="c", alive=True, current=True, pid=1, status="busy")
     assert _status_parts(busy) == (" ● 忙", "status_busy")
     assert _status_parts(idle) == (" ● 闲", "alive")
     assert _status_parts(dead) == (" ○ 停", "dead")
+    assert _status_parts(hosted) == (" @ 托管", "alive")
     assert _status_parts(cur)[0].startswith("▸")
+
+
+@pytest.mark.parametrize("key", ["enter", "t", "f", "s", "R", "d", "y"])
+def test_hosted_session_selected_verbs_are_refused_in_view(monkeypatch, key):
+    hosted = _make_session(
+        sid="hosted", provider="codex", source="desktop", hosted=True
+    )
+    app, view = _sessions_view_with(monkeypatch, hosted)
+
+    view.handle_key(key)
+
+    assert app.result is None
+    assert "托管会话只读" in app._notifications[-1]
 
 
 def test_status_cell_tmux_residency_badge():
