@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.12 (2026-08-17)
+
+### Fixed
+
+- Preserve the official `codex unarchive <sid>` copy path without attempting
+  active-session hosted discovery; archived rollouts cannot be app-server
+  hosted. Also isolate the Codex fork metadata test from the operator's real
+  Codex home. These fixes address the two Python 3.12 CI failures that blocked
+  the `v0.8.11` workflow before any package was published.
+
 ## 0.8.11 (2026-08-17)
 
 ### Added

@@ -238,6 +238,11 @@ class TestSessionOpsPassMetadata:
     def test_fork_declares_provider_only(self, monkeypatch):
         seen = self._capture(monkeypatch)
         s = make_session(sid=UUID1, provider="codex", alive=False, cwd="/tmp")
+        monkeypatch.setattr(
+            session_ops,
+            "session_for_execution",
+            lambda _session, _fork: providers.ArgvResolution(session=s),
+        )
 
         outcome = session_ops.do_tmux_resume_result(s, fork=True)
 

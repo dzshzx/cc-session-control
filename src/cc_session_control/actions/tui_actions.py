@@ -81,7 +81,7 @@ def delete_session(session: Session) -> ActionResult:
 def copy_resume_command(session: Session) -> ActionResult:
     if refusal := _hosted_refusal(session):
         return refusal
-    if session.provider.split(":", 1)[0] == "codex":
+    if session.provider.split(":", 1)[0] == "codex" and not session.archived:
         resolution = session_ops.session_for_execution(session, fork=False)
         if not resolution.success or resolution.session is None:
             detail = resolution.detail or "执行时会话证据不完整"
