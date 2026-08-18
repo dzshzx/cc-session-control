@@ -2,15 +2,17 @@
 
 tmux-first workbench (TUI + headless CLI) for the agent CLIs on one machine
 — [Claude Code](https://claude.ai/code), [Codex CLI](https://github.com/openai/codex),
-and [Kimi Code](https://github.com/MoonshotAI/kimi-code): one session list
-across all three, plus a tmux-first project launcher.
+[Kimi Code](https://github.com/MoonshotAI/kimi-code), and
+[opencode](https://github.com/sst/opencode): one session list
+across all four, plus a tmux-first project launcher.
 
 **CLI command: `csctl`**
 
 ## Features
 
-- **Sessions Tab** — One machine-wide list of Claude Code, Codex, and Kimi
-  Code sessions (CLI column: `cc`/`cx`/`km`), discovered from each CLI's own
+- **Sessions Tab** — One machine-wide list of Claude Code, Codex, Kimi
+  Code, and opencode sessions (CLI column: `cc`/`cx`/`km`/`oc`), discovered
+  from each CLI's own
   on-disk state — not just sessions csctl started. Resume tmux-first
   (`Enter` resumes into a project-labelled window in the shared `csctl` tmux
   session via each CLI's native resume command; `t` bare-terminal fallback;
@@ -25,15 +27,16 @@ across all three, plus a tmux-first project launcher.
   CLI's session activity). `Enter` opens a CLI chooser
   (active providers only, claude focused first — so Enter-Enter starts
   claude) to open a new project-labelled window in the shared `csctl` tmux
-  session; `x`/`k` jump
-  straight to codex/kimi; `p`/`h`/`H` pin, hide, and reveal projects
+  session; `x`/`k`/`O` jump
+  straight to codex/kimi/opencode; `p`/`h`/`H` pin, hide, and reveal projects
 
 Non-Claude liveness is deliberately conservative (ADR-0005). A real resume
-target in argv (`codex resume <sid-or-unique-name>` / `kimi --session <sid>`)
+target in argv (`codex resume <sid-or-unique-name>` / `kimi --session <sid>`
+/ `opencode --session <sid>`)
 has priority; csctl's own identity-checked tmux dispatch metadata is a
 supplement for dispatched windows, and is essential after Kimi rewrites its
 argv at runtime. A brand-new session started from the launcher (the `Enter`
-chooser or `x`/`k`) has no sid yet, so it stays unbound, as does any other
+chooser or `x`/`k`/`O`) has no sid yet, so it stays unbound, as does any other
 bare-launched TUI; unbound processes are never stop/takeover targets.
 Codex app-server fd evidence is a separate hosted/read-only state: it never
 supplies a session pid, and csctl emits no resume/stop/fork/delete command for
@@ -97,10 +100,12 @@ Built with [urwid](https://urwid.org/).
 - Python 3.12+
 - At least one supported agent CLI installed and authenticated:
   [Claude Code](https://claude.ai/code), [Codex CLI](https://github.com/openai/codex),
-  and/or [Kimi Code](https://github.com/MoonshotAI/kimi-code) — each is
+  [Kimi Code](https://github.com/MoonshotAI/kimi-code), and/or
+  [opencode](https://github.com/sst/opencode) — each is
   discovered automatically when its state home exists (`~/.claude`,
-  `~/.codex`, `~/.kimi-code`; official relocation variables `CODEX_HOME` /
-  `KIMI_CODE_HOME` are honored). Several codex identities on one machine are
+  `~/.codex`, `~/.kimi-code`, `~/.local/share/opencode`; official relocation
+  variables `CODEX_HOME` / `KIMI_CODE_HOME` are honored, and opencode's data
+  home follows `XDG_DATA_HOME`). Several codex identities on one machine are
   supported by declaring their homes — see Configuration below
 - tmux (the primary session-lifecycle carrier: launch, resume, background, and
   survive terminal/SSH disconnects)
@@ -130,7 +135,8 @@ uv tool install --reinstall git+https://github.com/dzshzx/cc-session-control.git
 ```
 
 `csctl` manages local state on the machine where it is installed: the active
-providers' `~/.claude`, `~/.codex`, and `~/.kimi-code` homes, local `tmux`, and
+providers' `~/.claude`, `~/.codex`, `~/.kimi-code`, and
+`~/.local/share/opencode` homes, local `tmux`, and
 the project launcher entries recorded in `~/.claude.json`. Install it separately
 on each machine whose sessions you want to manage. For working *on* the code
 instead of using it, see [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -148,7 +154,7 @@ csctl
 # Resume rescue (headless): list sessions of ALL providers across
 # directories with ready-to-copy resume commands (native /resume only
 # searches the cwd and hides sdk-ts/bridge sessions); non-Claude rows
-# are tagged [codex]/[kimi]
+# are tagged [codex]/[kimi]/[opencode]
 csctl resume                 # Page 1, 20 per page
 csctl resume mybug           # Keyword: sid/cwd/title, then transcript body
 csctl resume --page 2        # Next page
@@ -165,7 +171,7 @@ Session rescue is built into csctl itself: use `csctl resume` or the TUI.
 
 | Environment Variable | Default | Description |
 |---|---|---|
-| `CSCTL_PROVIDERS` | `claude,codex,kimi` | Comma list of allowed agent-CLI providers; a listed provider is active only when its state home also exists |
+| `CSCTL_PROVIDERS` | `claude,codex,kimi,opencode` | Comma list of allowed agent-CLI providers; a listed provider is active only when its state home also exists |
 | `CSCTL_CLEANUP_AGE_DAYS` | `14` | Minimum age in days for the age sweep in the Sessions cleanup submenu (must be an integer ≥ 0) |
 | `CSCTL_THEME` | `auto` | TUI palette: `auto` (detect the terminal background via `$COLORFGBG`, else `dark`) / `dark` / `light`. Most terminals (including tmux) don't set `$COLORFGBG`, so `auto` falls back to `dark` — set this (or `--theme`) explicitly for a light terminal |
 

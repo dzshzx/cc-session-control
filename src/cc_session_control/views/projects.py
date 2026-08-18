@@ -4,7 +4,7 @@ Shows member projects (Project) — directories carrying ADR-0007 evidence
 (pin / any-CLI trust / any-CLI activity). Enter opens the CLI chooser over
 the ACTIVE providers, then starts a NEW session of the picked CLI in the
 project dir inside tmux and enters it — the tmux-first launcher
-(ADR-0001/0005; `x`/`k` jump straight to codex/kimi). `p`/`h`/`H` are the
+(ADR-0001/0005; `x`/`k`/`O` jump straight to codex/kimi/opencode). `p`/`h`/`H` are the
 curation verbs. The tab is a pure launcher: no service lifecycle lives here.
 """
 
@@ -98,6 +98,15 @@ class ProjectsView(ListTabView):
             "_key_tmux_new_kimi",
             section="项目操作:",
             help_lines=("  k      直达新建 tmux kimi 会话并进入（同上）",),
+        ),
+        # Capital O on purpose: lowercase o is a retired verb on this tab
+        # (tests/test_views_projects.py pins o/s/c/S as inert).
+        Key(
+            ("O",),
+            "O 新opencode",
+            "_key_tmux_new_opencode",
+            section="项目操作:",
+            help_lines=("  O      直达新建 tmux opencode 会话并进入（同上）",),
         ),
         Key(
             ("p",),
@@ -274,6 +283,9 @@ class ProjectsView(ListTabView):
 
     def _key_tmux_new_kimi(self, p: Project) -> None:
         self._launch_new(p, "kimi")
+
+    def _key_tmux_new_opencode(self, p: Project) -> None:
+        self._launch_new(p, "opencode")
 
     def _launch_new(self, p: Project, provider_key: str) -> None:
         """Shared multi-CLI launcher body (ADR-0005): pure spawn, no gates

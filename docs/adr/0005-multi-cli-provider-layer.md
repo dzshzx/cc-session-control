@@ -263,6 +263,34 @@ The provider designs below are grounded in probes of the actual CLIs
   keyboards arrows + Enter beat letter mnemonics. The chooser scales with the
   registry while the shortcut keys remain a convenience. The bullet above is
   left as originally decided.
+- **Amendment (2026-08-18, opencode adapter):** opencode (verified 1.18.15)
+  joins the provider layer with this upstream contract: state lives under the
+  XDG data home (`$XDG_DATA_HOME/opencode`, default
+  `~/.local/share/opencode` — `opencode debug paths`; there is NO
+  OPENCODE_HOME-style variable); sessions are rows of the `session` table in
+  `opencode.db` (SQLite, WAL) with `id` (`ses_…`), `directory`, `title`,
+  `parent_id`, `time_updated` (epoch ms); resume is `opencode --session
+  <sid>` (`-s`); fork is a real verb (`--fork` with `--session`, so
+  `caps.fork` is True — the first non-Claude fork); delete is the official
+  `opencode session delete <sessionID>` (exit 1 + "Session not found" on a
+  missing sid), so the provider implements `DeleteVerbs` beside the
+  Claude-only removal seam, exactly like codex. Discovery reads the database
+  read-only (`mode=ro` URI; WAL readers never block the CLI's writers),
+  projecting root rows only (`parent_id IS NULL` — subagent sessions are
+  internal execution artifacts, same rule as codex's
+  `thread_source: subagent`) and SKIPPING archived rows (`time_archived NOT
+  NULL`): 1.18.15 exposes no unarchive verb, so there is no verified resume
+  or recovery semantics for them — listing them would either lie about
+  resume or dangle a nonexistent `ArchiveVerbs`, which the capability
+  discipline forbids. Liveness grade is `TMUX`: a bare TUI rewrites no
+  process title (probed live — comm and argv0 both stay `opencode`), so
+  `--session` argv evidence survives intact and binds with priority, with
+  csctl's dispatch metadata as the supplement; opencode has no shell-hook
+  seam (its plugins are in-process JS/TS, not pid-reporting hooks), so there
+  is no runtime registry and bare TUIs / `--continue` stay blind behind the
+  unbound-live hint. `attach` is denied the TUI predicate even though it IS
+  interactive — it is a client of a remote server, and its cwd proves
+  nothing about local sessions.
 
 ## Consequences
 

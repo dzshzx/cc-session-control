@@ -40,6 +40,7 @@ class TestRegistry:
     def test_non_claude_liveness_includes_dispatch_metadata(self):
         assert providers.get("codex").caps.liveness is LivenessGrade.TMUX
         assert providers.get("kimi").caps.liveness is LivenessGrade.TMUX
+        assert providers.get("opencode").caps.liveness is LivenessGrade.TMUX
 
     def test_get_unknown_raises(self):
         with pytest.raises(KeyError):
@@ -81,6 +82,33 @@ class TestClaudeProvider:
     def test_caps(self):
         caps = providers.get("claude").caps
         assert caps.fork and caps.takeover and caps.cleanup
+
+
+class TestOpencodeProvider:
+    def test_resume_argv(self):
+        p = providers.get("opencode")
+        assert p.resume_argv("ses_x") == ["opencode", "--session", "ses_x"]
+
+    def test_resume_argv_fork_is_a_real_verb(self):
+        p = providers.get("opencode")
+        assert p.resume_argv("ses_x", fork=True) == [
+            "opencode",
+            "--session",
+            "ses_x",
+            "--fork",
+        ]
+
+    def test_new_session_argv(self):
+        assert providers.get("opencode").new_session_argv() == ["opencode"]
+
+    def test_window_name(self):
+        p = providers.get("opencode")
+        assert p.window_name("ses_abcdefgh-rest") == "oc-abcdefgh"
+        assert p.window_name("ses_abcdefgh-rest", fork=True) == "oc-abcdefgh-fork"
+
+    def test_caps(self):
+        caps = providers.get("opencode").caps
+        assert caps.fork and caps.takeover and not caps.cleanup
 
 
 class TestActionDispatch:

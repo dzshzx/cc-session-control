@@ -5,7 +5,7 @@ The table built below is the single provider authority. A provider is
 AND its CLI home state exists; activation never fails the refresh — an
 absent CLI simply contributes no rows.
 
-Claude and kimi are one instance each. Codex may be several (ADR-0008): the
+Claude, kimi, and opencode are one instance each. Codex may be several (ADR-0008): the
 operator declares this machine's codex state homes in
 `cfg.provider_config_file`, and each declared home becomes its own provider
 with its own key, label, and sessions. Without that file there is exactly
@@ -41,6 +41,7 @@ from .base import (
 from .claude import ClaudeProvider
 from .codex import CodexProvider
 from .kimi import KimiProvider
+from .opencode import OpencodeProvider
 
 __all__ = [
     "AgentProvider",
@@ -112,7 +113,12 @@ def _registry() -> tuple[AgentProvider, ...]:
     global _REGISTRY, _REGISTRY_ISSUES
     if _REGISTRY is None:
         codex_instances, _REGISTRY_ISSUES = _codex_providers()
-        _REGISTRY = (ClaudeProvider(), *codex_instances, KimiProvider())
+        _REGISTRY = (
+            ClaudeProvider(),
+            *codex_instances,
+            KimiProvider(),
+            OpencodeProvider(),
+        )
     return _REGISTRY
 
 

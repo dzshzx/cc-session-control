@@ -1,7 +1,7 @@
 # cc-session-control
 
 This context defines the operator language for managing agent-CLI sessions
-(Claude Code, Codex CLI, Kimi Code) from one local machine, including their
+(Claude Code, Codex CLI, Kimi Code, opencode) from one local machine, including their
 session-level Remote Control exposure.
 
 ## Language

@@ -51,6 +51,21 @@ class TestLauncherKeys:
         assert app.result is None
         assert any("kimi" in n and "未启用" in n for n in app._notifications)
 
+    def test_O_launches_opencode_when_active(self, monkeypatch):
+        _activate(monkeypatch, "claude", "opencode")
+        app = FakeApp()
+        view = ProjectsView(app)
+        view._key_tmux_new_opencode(_make_project())
+        assert app.result == TmuxNewIntent("/tmp/myproj", provider="opencode")
+
+    def test_O_refused_when_opencode_inactive(self, monkeypatch):
+        _activate(monkeypatch, "claude")
+        app = FakeApp()
+        view = ProjectsView(app)
+        view._key_tmux_new_opencode(_make_project())
+        assert app.result is None
+        assert any("opencode" in n and "未启用" in n for n in app._notifications)
+
 
 class TestLauncherChooser:
     """Projects-tab Enter = CLI 选择器 (user-requested ADR-0005 amendment,

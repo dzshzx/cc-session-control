@@ -64,7 +64,7 @@ def test_readme_cli_examples_are_accepted_by_the_parser(command: str) -> None:
     ],
 )
 def test_public_descriptions_name_every_supported_provider(surface: str) -> None:
-    for provider in ("Claude Code", "Codex CLI", "Kimi Code"):
+    for provider in ("Claude Code", "Codex CLI", "Kimi Code", "opencode"):
         assert provider in surface
 
 

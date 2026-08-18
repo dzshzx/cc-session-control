@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cc-session-control"
 dynamic = ["version"]
-description = "tmux-first workbench for Claude Code, Codex CLI, and Kimi Code"
+description = "tmux-first workbench for Claude Code, Codex CLI, Kimi Code, and opencode"
 requires-python = ">=3.12"
 license = "MIT"
 readme = "README.md"

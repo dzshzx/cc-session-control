@@ -51,6 +51,12 @@ class Config:
         self.kimi_home: Path = Path(
             os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code"
         )
+        # opencode has no OPENCODE_HOME-style variable; its data home follows
+        # the XDG data home only (`opencode debug paths`, verified 1.18.15).
+        self.opencode_home: Path = (
+            Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+            / "opencode"
+        )
         # One operator-facing tmux workspace for every session csctl dispatches.
         # Project identity stays in each window name and cwd.
         self.tmux_session: str = "csctl"
@@ -71,7 +77,7 @@ class Config:
             name.strip()
             for name in os.environ.get(
                 "CSCTL_PROVIDERS",
-                "claude,codex,kimi",
+                "claude,codex,kimi,opencode",
             ).split(",")
             if name.strip()
         )

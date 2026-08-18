@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="csctl",
-        description="tmux-first workbench for Claude Code, Codex CLI, and Kimi Code",
+        description="tmux-first workbench for Claude Code, Codex CLI, Kimi Code, and opencode",
     )
     parser.add_argument(
         "--version",
