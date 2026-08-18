@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.14 (2026-08-18)
+
+### Changed
+
+- The Sessions view now hides archived Codex rows (discovered from
+  `archived_sessions/`) by default; a new `a` key toggles them back into view,
+  the status line counts them (`归档已隐藏 N` / `归档 N`), and the `/` filter
+  still matches the `归档` marker once they are shown. Archived rows stay
+  refusal-only (`codex unarchive <sid>` first) either way; the CLI
+  `resume-list` output is unchanged.
+
 ## 0.8.13 (2026-08-18)
 
 ### Added
