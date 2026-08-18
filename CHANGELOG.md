@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.13 (2026-08-18)
+
+### Added
+
+- opencode joins the provider layer (verified on 1.18.15; ADR-0005 amendment).
+  Sessions are discovered read-only from the `session` table of
+  `~/.local/share/opencode/opencode.db` (SQLite WAL; the data home follows
+  `XDG_DATA_HOME`), root non-archived rows only — archived rows are skipped
+  because 1.18.15 exposes no unarchive verb. Resume is
+  `opencode --session <sid>`; fork is a real verb (`--fork`, the first
+  non-Claude `caps.fork`); deletion delegates to the official
+  `opencode session delete` verb beside the Claude-only removal seam.
+  Liveness is TMUX-grade: the TUI rewrites no process title, so `--session`
+  argv binds with priority and csctl's dispatch metadata supplements; with no
+  shell-hook seam, bare TUIs stay behind the unbound-live hint. The Projects
+  tab gains the `O` direct launcher key (lowercase `o` stays inert as a
+  retired verb), and `CSCTL_PROVIDERS` now defaults to
+  `claude,codex,kimi,opencode`.
+
 ## 0.8.12 (2026-08-17)
 
 ### Fixed
