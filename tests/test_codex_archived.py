@@ -3,7 +3,8 @@
 `~/.codex/archived_sessions/` is a FLAT directory of rollout files (same
 first-line `session_meta` NDJSON contract as the active date tree, no date
 subtree). Discovery lists archived rows (`Session.archived`) so operators can
-find and search them; the resume family refuses them honestly and hands back
+find and search them (hidden by default in the Sessions view, `a` reveals);
+the resume family refuses them honestly and hands back
 the official `codex unarchive <sid>` recovery command — `codex resume`
 straight against an archived rollout is unverified upstream semantics.
 """
@@ -223,6 +224,25 @@ class TestArchivedViewSurface:
         plain = make_session(provider="codex", sid=UUID1, label="旧任务")
         assert "归档" not in _row_text(SessionRow(plain))
 
+    def test_archived_rows_hidden_by_default_and_revealed_by_a_key(self):
+        from view_helpers import FakeApp
+
+        from cc_session_control.views.sessions import SessionsView
+
+        view = SessionsView(FakeApp())
+        archived = _archived_session()
+        plain = make_session(provider="codex", sid=UUID2)
+        view._all_sessions = [archived, plain]
+        view._apply_filter()
+        view._rebuild()
+        assert view._sessions == [plain]
+        assert "归档已隐藏 1" in view.status.original_widget.get_text()[0]
+
+        view.handle_key("a")
+
+        assert view._sessions == [archived, plain]
+        assert "归档 1" in view.status.original_widget.get_text()[0]
+
     def test_filter_matches_the_archived_marker(self):
         from view_helpers import FakeApp
 
@@ -231,6 +251,7 @@ class TestArchivedViewSurface:
         view = SessionsView(FakeApp())
         archived = _archived_session()
         view._all_sessions = [archived, make_session(provider="codex", sid=UUID2)]
+        view._show_archived = True
         view._filter_text = "归档"
         view._apply_filter()
         assert view._sessions == [archived]

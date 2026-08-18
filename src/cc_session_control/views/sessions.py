@@ -15,7 +15,7 @@ from ..actions.session_ops import (
 )
 from ..data import proc, providers
 from ..data.cleanup import CleanupPlan
-from ..models import InventoryIssue, Session, issue_detail
+from ..models import InventoryIssue, Session
 from ._base import ListTabView
 from ._confirm import (
     accept_ancestor_probe,
@@ -33,6 +33,7 @@ from ._session_row import (
     _hidden_marker,
 )
 from ._sessions_cleanup import CleanupMixin, _CleanupPreview
+from ._sessions_status import status_text
 
 if TYPE_CHECKING:
     from ..app import App
@@ -117,6 +118,14 @@ class SessionsView(CleanupMixin, ListTabView):
             help_lines=("  h      显示/隐藏桥接、SDK 会话",),
         ),
         Key(
+            ("a",),
+            "a 归档显隐",
+            "_key_toggle_archived",
+            needs_selection=False,
+            section="会话操作:",
+            help_lines=("  a      显示/隐藏已归档会话（默认隐藏）",),
+        ),
+        Key(
             ("c",),
             "c 清理",
             "_enter_cleanup",
@@ -184,6 +193,9 @@ class SessionsView(CleanupMixin, ListTabView):
         self._preview: _CleanupPreview | None = None
         self._provider_issues: tuple[InventoryIssue, ...] = ()
         self._show_hidden = True
+        # Archived rows (codex `archived_sessions/`) are noise in the day-to-day
+        # list: hidden by default, `a` reveals them for the un-archive hint.
+        self._show_archived = False
         # The frozen cleanup plan (R11/D8 — built from the shared snapshot,
         # never re-scanned per view): counts and each new preview read it;
         # confirmation uses the plan pinned when that preview was rendered.
@@ -233,66 +245,14 @@ class SessionsView(CleanupMixin, ListTabView):
             self.walker.append(urwid.AttrMap(urwid.Text(f" {empty}"), "dead"))
 
     def _status_text(self) -> str:
-        alive_n = sum(1 for s in self._all_sessions if s.alive)
-        provider_text = ""
-        by_provider: dict[str, int] = {}
-        for s in self._all_sessions:
-            by_provider[s.provider] = by_provider.get(s.provider, 0) + 1
-        if len(by_provider) > 1:
-            provider_text = " · " + " ".join(
-                f"{providers.get(key).label} {count}"
-                for key, count in sorted(by_provider.items())
-            )
-        degraded_text = ""
-        if self._provider_issues:
-            degraded_text = (
-                f" · 外部源降级 {len(self._provider_issues)}"
-                f"（{issue_detail(self._provider_issues[:1])}）"
-            )
-        flt = f" · 过滤「{self._filter_text}」" if self._filter_text else ""
-        empty = self._cleanup_stats.get("empty", 0)
-        short = self._cleanup_stats.get("short", 0)
-        orphans = self._cleanup_stats.get("orphans", 0)
-        cleanup_text = ""
-        hidden_n = sum(1 for s in self._all_sessions if s.bridge_or_sdk)
-        hidden_text = ""
-        tmux_unknown = [
-            s
-            for s in self._all_sessions
-            if s.alive and not s.tmux_target and not s.tmux_inventory_complete
-        ]
-        tmux_text = ""
-        if tmux_unknown:
-            detail = next(
-                (
-                    s.tmux_inventory_detail
-                    for s in tmux_unknown
-                    if s.tmux_inventory_detail
-                ),
-                "",
-            )
-            tmux_text = f" · tmux 驻留未知 {len(tmux_unknown)}"
-            if detail:
-                tmux_text += f"（{detail}）"
-        if hidden_n:
-            hidden_text = (
-                f" · 桥接/SDK {hidden_n}"
-                if self._show_hidden
-                else f" · 桥接/SDK已隐藏 {hidden_n}"
-            )
-        if empty or short or orphans:
-            parts = []
-            if empty:
-                parts.append(f"空壳 {empty}")
-            if short:
-                parts.append(f"短 {short}")
-            if orphans:
-                parts.append(f"孤儿 {orphans}")
-            cleanup_text = f" · {' · '.join(parts)}"
-        return (
-            f" 共 {len(self._all_sessions)} 条会话{provider_text} · 运行 {alive_n}"
-            f" · 显示 {len(self._sessions)}"
-            f"{flt}{hidden_text}{tmux_text}{degraded_text}{cleanup_text}"
+        return status_text(
+            all_sessions=self._all_sessions,
+            shown_count=len(self._sessions),
+            filter_text=self._filter_text,
+            show_hidden=self._show_hidden,
+            show_archived=self._show_archived,
+            provider_issues=self._provider_issues,
+            cleanup_stats=self._cleanup_stats,
         )
 
     def _close_overlay_mode(self) -> None:
@@ -307,9 +267,13 @@ class SessionsView(CleanupMixin, ListTabView):
     def _apply_filter(self) -> None:
         # D9: the hide filter unions the transcript `hidden` tags with the
         # registry `source == "sdk"` signal (Session.bridge_or_sdk), so the
-        # badge and the `h` toggle never disagree.
+        # badge and the `h` toggle never disagree. Archived rows (codex
+        # `archived_sessions/`) are hidden by default; `a` reveals them.
         visible = [
-            s for s in self._all_sessions if self._show_hidden or not s.bridge_or_sdk
+            s
+            for s in self._all_sessions
+            if (self._show_archived or not s.archived)
+            and (self._show_hidden or not s.bridge_or_sdk)
         ]
         if not self._filter_text:
             self._sessions = visible
@@ -589,6 +553,12 @@ class SessionsView(CleanupMixin, ListTabView):
 
     def _key_toggle_hidden(self) -> None:
         self._show_hidden = not self._show_hidden
+        self._apply_filter()
+        self._rebuild()
+        self._update_footer()
+
+    def _key_toggle_archived(self) -> None:
+        self._show_archived = not self._show_archived
         self._apply_filter()
         self._rebuild()
         self._update_footer()
