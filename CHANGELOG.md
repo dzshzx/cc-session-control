@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.8.15 (2026-08-21)
+
+### Added
+
+- A declared Codex identity can carry its own launch environment: each
+  `codex_homes` entry in `providers.json` now accepts an optional `env_file`
+  naming a `KEY=value` file (ADR-0012). csctl parses it as data — never through
+  a shell — fresh at every spawn, so a rotated key needs no restart, and merges
+  it into the new `AgentProvider.launch_env` used at the real spawn boundaries
+  (`execvp`, tmux `-e`, the delete subprocess). This is what an identity backed
+  by an API key needs: `~/.codex-eva02` resolves its provider key through
+  `env_key` in its own `config.toml`, and csctl spawns the bare `codex` binary
+  itself, so the launcher script that would otherwise export the key is
+  bypassed and the session failed with `Missing environment variable`.
+  `AgentProvider.env` stays identity-only (`CODEX_HOME`) and remains the sole
+  source for the clipboard `env_prefix`, so a copied command never carries the
+  secret. Declaring no `env_file` leaves every command byte-identical.
+
+### Changed
+
+- The 600-line source-file gate is retired, along with
+  `scripts/check_file_sizes.py`, its CI step, and its tests. It was a numeric
+  proxy for a question it could not answer — a file crossing the threshold is
+  not evidence that it mixes responsibilities, and a file under it is not
+  evidence that it doesn't. `CONTRIBUTING.md` now states the design signal
+  directly: split on independently-nameable responsibilities and
+  reviewability, never merely to shorten a file. The module and test
+  docstrings that cited "the 600-line budget" as their split rationale now
+  state the cohesion reason they always stood for.
+
 ## 0.8.14 (2026-08-18)
 
 ### Changed
