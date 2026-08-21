@@ -1,5 +1,5 @@
-"""Codex launch-surface classification (pure), split out of `codex.py` so
-that file stays under the 600-line budget.
+"""Codex launch-surface classification (pure), split out of `codex.py` to keep
+this mapping independently readable beside the provider itself.
 
 One PURE mapping: a `session_meta` payload → the coarse `Session.source`
 bucket the Sessions tab badges. Unknown originator/source shapes fall through

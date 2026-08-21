@@ -6,9 +6,9 @@ name-resume bound via `session_index.jsonl`.
 UUIDs take precedence if it parses". Binding is the SIGTERM aiming rule for
 `s`/takeover, so every uncertain argv shape must stay UNBOUND (fail closed:
 a blind spot only risks a visible resume collision; a misbind kills the
-wrong process). Own file — test_providers_discovery.py is over the 600-line
-soft budget; the former `TestCodexExtract` cases live on here under the new
-grammar/extractor seams.
+wrong process). Own file — test_providers_discovery.py already covers too
+broad a surface; the former `TestCodexExtract` cases live on here under the
+new grammar/extractor seams.
 """
 
 from __future__ import annotations

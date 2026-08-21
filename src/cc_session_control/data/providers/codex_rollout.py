@@ -1,7 +1,7 @@
 """Codex rollout file reading — bounded parses of one NDJSON session file.
 
-Split out of `codex.py` for the 600-line budget (same sidecar discipline as
-`codex_source.py` / `codex_trust.py`). Everything here reads ONE rollout path
+Split out of `codex.py` to keep one concern per file (same sidecar discipline
+as `codex_source.py` / `codex_trust.py`). Everything here reads ONE rollout path
 and is shared by every codex instance (ADR-0008): the caps, the first-line
 `session_meta` parse, and the bounded label fallback are identity-agnostic.
 

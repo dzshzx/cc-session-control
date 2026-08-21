@@ -1,6 +1,6 @@
 """Cleanup-submenu half of the Sessions tab (mixin).
 
-Split out of `views/sessions.py` to keep that file under the 600-line budget.
+Split out of `views/sessions.py` to keep one concern per file.
 Each cleanup action is ONE `_CleanupAction` record — its counts key, R10 gate,
 plan targets, preview row/文案, and executor — so `_enter_preview` and
 `_confirm_cleanup` are table-driven (the same move `_keytable`/`_colspec` made

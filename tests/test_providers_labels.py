@@ -3,9 +3,8 @@
 `session_index.jsonl` thread_name barely overlaps active rollouts on real
 machines, so discovery falls back to a bounded continuation read of the
 rollout body for the first real `user_message` event. Kept in its own file
-(rather than growing test_providers_discovery.py, already near the 600-line
-soft budget) so this focused fallback behavior stays independently
-reviewable/removable.
+(rather than growing the already broad test_providers_discovery.py) so this
+focused fallback behavior stays independently reviewable/removable.
 """
 
 from __future__ import annotations

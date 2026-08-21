@@ -1,7 +1,7 @@
 """Codex trust-store reader — membership evidence (ADR-0007).
 
-Split out of `codex.py` for the 600-line budget (same sidecar discipline as
-`codex_source.py`). The store is `$CODEX_HOME/config.toml`'s
+Split out of `codex.py` to keep one concern per file (same sidecar discipline
+as `codex_source.py`). The store is `$CODEX_HOME/config.toml`'s
 `[projects."<abs path>"]` tables with `trust_level = "trusted"`.
 """
 

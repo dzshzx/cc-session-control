@@ -34,9 +34,6 @@ jobs:
       - name: Run mypy
         run: uv run --extra dev mypy src/
 
-      - name: Check source file sizes
-        run: uv run --extra dev python scripts/check_file_sizes.py --tests tests
-
       - name: Check for hardcoded home paths
         run: |
           if grep -rn --include='*.py' '/home/' src/; then

@@ -1,6 +1,7 @@
 """Row widgets + presentation helpers for the Sessions tab.
 
-Split out of `views/sessions.py` so that file stays under the 600-line budget.
+Split out of `views/sessions.py` to keep row presentation independently
+readable.
 Holds the selectable `SessionRow` (with the D9 source badge + the 📱 remote-
 control-exposure marker), the cleanup-submenu `_ActionRow`, and the column spec
 (read-only overlay text rows live in `_rows.TextRow`). Rows never handle keys — `keypress` returns the key so the

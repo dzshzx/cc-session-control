@@ -1,6 +1,6 @@
 """Execution-time session resolution — fresh evidence for a destructive verb.
 
-Split out of `session_ops.py` for the 600-line budget. A live takeover may
+Split out of `session_ops.py` as its own concern. A live takeover may
 only proceed on a WHOLE Session re-resolved against a fresh generation,
 never on snapshot identity: pid, generation, cwd, and current-ness all move
 while an operator looks at a list. Claude rows re-resolve through

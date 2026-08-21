@@ -24,7 +24,6 @@ uv run csctl --version
 uv run --extra dev ruff check src tests scripts
 uv run --extra dev ruff format --check src tests scripts
 uv run --extra dev mypy src/
-uv run --extra dev python scripts/check_file_sizes.py --tests tests
 uv run --extra dev pytest tests/ \
   --cov=cc_session_control --cov-branch \
   --cov-report=term-missing --cov-report=json
@@ -47,7 +46,12 @@ inspection; both are ignored by Git.
 
 ## Code Style
 
-- Keep each source file under 600 lines; test modules have a 1000-line hard cap
+- Treat file size as a design signal, not a line budget. Split a file when it
+  mixes several independently-nameable responsibilities, or when the change in
+  front of you makes it materially harder to navigate, test, or review — the
+  `codex_*.py` sidecars beside `codex.py` are the existing shape. Do not split
+  merely to shorten a file, and do not grow one past what a reader can hold in
+  mind at once.
 - Use type hints
 - Follow existing patterns in the codebase
 

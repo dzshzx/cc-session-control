@@ -6,8 +6,8 @@ show `"originator":"Codex Desktop","source":"vscode"` (Desktop reuses the IDE
 extension's pipeline, so only `originator` tells it apart — sampled
 2026-08-12, cli_version 0.130.0–0.147.0) and
 `"originator":"codex_chatgpt_android_remote"`, both previously flattened into
-the misleading "CLI" badge. Kept in its own file (rather than growing
-test_providers_discovery.py, already near the 600-line soft budget) so this
+the misleading "CLI" badge. Kept in its own file (rather than growing the
+already broad test_providers_discovery.py) so this
 focused mapping stays independently reviewable/removable — mirrors the split
 already used for test_providers_labels.py.
 """
