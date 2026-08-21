@@ -167,6 +167,41 @@ def is_tui_process(record: ProcCli) -> bool:
     return not any(tok in _NON_TUI_SUBCOMMANDS for tok in argv[1:])
 
 
+def _read_env_file(path: Path) -> dict[str, str]:
+    """Parse a KEY=value env file into a mapping, tolerating absence.
+
+    A launch-only secret store (e.g. a cred-scope `env` file) csctl merges
+    into a declared instance's spawn environment. Read fresh on every spawn,
+    so a rotated key takes effect without restarting csctl. A shell-`source`
+    subset: blank lines and `#` comments are skipped, an optional leading
+    `export ` is dropped, `KEY=VALUE` splits on the first `=`, and one layer
+    of matching single/double quotes is stripped. A missing or unreadable
+    file yields `{}` — codex then reports the absent key itself, which is
+    clearer than csctl deciding for it. No shell is spawned: the file is
+    parsed as data, never executed, so values with spaces or metacharacters
+    stay literal."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return {}
+    result: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export ") or line.startswith("export\t"):
+            line = line[len("export ") :].lstrip()
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or not key.isidentifier():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        result[key] = value
+    return result
+
+
 def sid_extractor(name_to_sid: Mapping[str, str]) -> ArgvExtractor:
     """THE codex argv→sid binding rule. Both consumers — the generation scan
     (`scan_non_claude`) and the execution-time takeover resolver
@@ -266,12 +301,16 @@ class CodexProvider:
         key: str = "codex",
         label: str = "cx",
         home: Path | None = None,
+        env_file: Path | None = None,
     ) -> None:
         self.key = key
         self.label = label
         #: None = follow `cfg.codex_home` (single-instance mode, resolved per
         #: call so monkeypatched config still flows through).
         self._home = home
+        #: Optional launch-only secret store (ADR-0008/0012): merged into
+        #: `launch_env` at spawn, never into `env` or a copied command.
+        self._env_file = env_file
 
     @property
     def home(self) -> Path:
@@ -294,6 +333,21 @@ class CodexProvider:
         if not self.declared:
             return {}
         return {"CODEX_HOME": os.fspath(self.home)}
+
+    @property
+    def launch_env(self) -> Mapping[str, str]:
+        """Identity `env` plus this instance's launch-only secrets (ADR-0012).
+
+        Only a declared instance with an `env_file` adds anything; those
+        secrets reach a spawned codex (execvp / tmux `-e` / delete subprocess)
+        but never the clipboard `env_prefix`, so a copied command stays free
+        of the key. Read fresh per spawn, so a rotated key needs no restart."""
+        if self._env_file is None:
+            return self.env
+        secrets = _read_env_file(self._env_file)
+        if not secrets:
+            return self.env
+        return {**self.env, **secrets}
 
     @property
     def window_tag(self) -> str:
@@ -349,7 +403,7 @@ class CodexProvider:
                 # A declared instance deletes from ITS OWN store: without
                 # this the CLI would resolve the sid against whatever home
                 # csctl's own environment points at (ADR-0008).
-                env={**os.environ, **self.env} if self.env else None,
+                env={**os.environ, **self.launch_env} if self.launch_env else None,
             )
         except subprocess.TimeoutExpired:
             return CliDeleteResult(

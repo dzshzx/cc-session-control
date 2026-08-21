@@ -397,6 +397,13 @@ class KimiProvider:
     # extra identity (ADR-0008 covers codex's multi-home case only).
     env_keys: frozenset[str] = frozenset()
     env: Mapping[str, str] = {}
+
+    @property
+    def launch_env(self) -> Mapping[str, str]:
+        """No launch-only secrets: this CLI models one state home, so the
+        spawn environment equals the identity `env` (ADR-0012)."""
+        return self.env
+
     caps = ProviderCaps(
         # argv-exact + runtime-registry + dispatch-metadata matches only
         takeover=True,

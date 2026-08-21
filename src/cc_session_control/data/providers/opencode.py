@@ -208,6 +208,13 @@ class OpencodeProvider:
     # codex's multi-home case only).
     env_keys: frozenset[str] = frozenset()
     env: Mapping[str, str] = {}
+
+    @property
+    def launch_env(self) -> Mapping[str, str]:
+        """No launch-only secrets: this CLI models one state home, so the
+        spawn environment equals the identity `env` (ADR-0012)."""
+        return self.env
+
     caps = ProviderCaps(
         fork=True,  # `--fork` with `--session` is a real verb (1.18.15)
         takeover=True,

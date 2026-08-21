@@ -21,6 +21,13 @@ class ClaudeProvider:
     window_tag = "claude"  # one instance — no disambiguation needed
     # One state home (`cfg.claude_home`) — commands carry no extra identity.
     env: Mapping[str, str] = {}
+
+    @property
+    def launch_env(self) -> Mapping[str, str]:
+        """No launch-only secrets: this CLI models one state home, so the
+        spawn environment equals the identity `env` (ADR-0012)."""
+        return self.env
+
     caps = ProviderCaps(
         fork=True,
         takeover=True,

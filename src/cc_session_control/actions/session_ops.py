@@ -198,7 +198,7 @@ def _do_resume_resolved_result(s: Session, fork: bool = False) -> ResumeOutcome:
     # The replacement process inherits this environment, so a declared
     # identity must be stated here too (ADR-0008) — csctl's own CODEX_HOME
     # (inherited from whatever launched it) is not necessarily this row's.
-    os.environ.update(providers.get(s.provider).env)
+    os.environ.update(providers.get(s.provider).launch_env)
     # argv[0] IS the provider's binary (ADR-0005) — never a hardcoded CLI.
     os.execvp(args[0], args)
     return ResumeOutcome(True)
@@ -291,7 +291,7 @@ def _spawn_in_tmux_result(
         # parent sid would mint a wrong kill target (ADR-0005 fork rule).
         sid="" if fork else target_session.sid,
         provider=target_session.provider,
-        env=provider.env,
+        env=provider.launch_env,
         mobile_switch=True,
     )
     target = result.target if result.success else None
@@ -350,7 +350,7 @@ def do_tmux_new_result(
         tmux.window_name_for(directory, provider.window_tag),
         cmd,
         provider=provider.key,  # no sid exists yet — provider tag only
-        env=provider.env,
+        env=provider.launch_env,
         mobile_switch=True,
     )
 

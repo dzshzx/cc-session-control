@@ -111,6 +111,17 @@ class AgentProvider(Protocol):
         mapping produces byte-identical commands to pre-0.8.7."""
         ...
 
+    @property
+    def launch_env(self) -> Mapping[str, str]:
+        """Environment for actually SPAWNING this provider's process: the
+        identity `env` plus any launch-only secrets that must reach the
+        process yet must NEVER appear in a copied command string. Equals
+        `env` for every provider except a declared codex instance with an
+        `env_file` (ADR-0012). Real spawn boundaries (execvp, tmux `-e`, the
+        delete subprocess) use THIS; the clipboard `env_prefix` uses `env`,
+        keeping secrets out of copied commands."""
+        ...
+
     def available(self) -> bool:
         """Whether this CLI's state home exists on this machine."""
         ...

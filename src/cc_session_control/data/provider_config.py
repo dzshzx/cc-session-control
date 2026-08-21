@@ -17,9 +17,16 @@ codex instance following `cfg.codex_home` (i.e. `CODEX_HOME` or `~/.codex`).
     {
       "codex_homes": [
         {"label": "cx",  "home": "~/.codex"},
-        {"label": "cx2", "home": "~/.codex-eva02"}
+        {"label": "cx2", "home": "~/.codex-eva02",
+         "env_file": "~/.config/deepseek/env"}
       ]
     }
+
+An optional `env_file` per entry names a KEY=value file whose variables csctl
+sources into THAT instance's spawn environment only (ADR-0012) — the way a
+declared codex identity carries a provider API key (`env_key` in its
+config.toml) without a launcher wrapper. The secret reaches a spawned codex
+but never a copied command string, which states only `CODEX_HOME`.
 
 The FIRST entry is the default instance and keeps provider key `codex`, so
 existing `Session.provider` values and dispatched windows' `@csctl_provider`
@@ -66,6 +73,10 @@ class CodexInstanceSpec:
     key: str
     label: str
     home: Path
+    #: Optional launch-only secret store (ADR-0012): a KEY=value file csctl
+    #: sources into the SPAWN environment for this instance (never into a
+    #: copied command). `None` = no extra environment beyond `CODEX_HOME`.
+    env_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +131,26 @@ def _instance_home(home: object) -> tuple[Path | None, str | None]:
     return Path(os.path.normpath(expanded)), None
 
 
+def _instance_env_file(value: object) -> tuple[Path | None, str | None]:
+    """Validate an OPTIONAL `env_file` into an absolute path (`~` expanded).
+
+    A KEY=value file csctl sources into this instance's spawn environment
+    only (`AgentProvider.launch_env`), so a declared codex identity can carry
+    its provider key without any launcher wrapper. Absence is legal (returns
+    `None, None`). Existence is deliberately NOT required, mirroring `home`: a
+    declared-but-absent file simply yields no extra environment, and codex
+    then reports the missing key itself — clearer than csctl deciding for it.
+    """
+    if value is None:
+        return None, None
+    if not isinstance(value, str) or not value:
+        return None, "'env_file' must be a non-empty string"
+    expanded = Path(value).expanduser()
+    if not expanded.is_absolute():
+        return None, f"env_file {value!r} is not an absolute path"
+    return Path(os.path.normpath(expanded)), None
+
+
 def _parse_codex_homes(entries: object) -> tuple[tuple[CodexInstanceSpec, ...], str]:
     """The `codex_homes` schema; returns (instances, invalidity detail)."""
     if not isinstance(entries, list):
@@ -144,6 +175,9 @@ def _parse_codex_homes(entries: object) -> tuple[tuple[CodexInstanceSpec, ...], 
         if invalid is not None:
             return (), f"codex_homes[{index}]: {invalid}"
         assert home is not None
+        env_file, invalid = _instance_env_file(entry.get("env_file"))
+        if invalid is not None:
+            return (), f"codex_homes[{index}]: {invalid}"
         if label in labels:
             return (), f"codex_homes[{index}]: duplicate label {label!r}"
         if home in homes:
@@ -155,6 +189,7 @@ def _parse_codex_homes(entries: object) -> tuple[tuple[CodexInstanceSpec, ...], 
                 key=DEFAULT_CODEX_KEY if index == 0 else f"codex:{label}",
                 label=label,
                 home=home,
+                env_file=env_file,
             )
         )
     return tuple(instances), ""

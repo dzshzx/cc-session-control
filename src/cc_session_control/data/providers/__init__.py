@@ -102,7 +102,12 @@ def _codex_providers() -> tuple[tuple[AgentProvider, ...], tuple[InventoryIssue,
         return (CodexProvider(),), issues
     return (
         tuple(
-            CodexProvider(key=spec.key, label=spec.label, home=spec.home)
+            CodexProvider(
+                key=spec.key,
+                label=spec.label,
+                home=spec.home,
+                env_file=spec.env_file,
+            )
             for spec in result.codex_instances
         ),
         (),

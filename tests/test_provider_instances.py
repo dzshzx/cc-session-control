@@ -129,6 +129,14 @@ def test_broken_declaration_degrades_to_one_instance_with_detail(tmp_path, monke
         ),
         ([{"home": "/a"}], "'label' must be a non-empty string"),
         (["/a"], "is not an object"),
+        (
+            [{"label": "cx", "home": "/a", "env_file": "rel/env"}],
+            "is not an absolute path",
+        ),
+        (
+            [{"label": "cx", "home": "/a", "env_file": 5}],
+            "'env_file' must be a non-empty string",
+        ),
     ],
 )
 def test_invalid_declarations_are_refused_with_a_reason(
@@ -308,3 +316,104 @@ class TestCommandIdentity:
         assert ":" not in provider.window_name(UUID_B)
         assert provider.window_name(UUID_B).startswith("cx2-")
         assert CodexProvider().window_tag == "codex"  # unchanged for one instance
+
+
+# --- per-instance env_file → launch_env (ADR-0012) ---------------------------
+
+
+class TestInstanceEnvFile:
+    """A declared `env_file` reaches the SPAWN environment as a launch-only
+    secret, never a copied command — so a codex identity can carry its
+    provider API key (`env_key` in config.toml) with no launcher wrapper."""
+
+    def _envfile(self, tmp_path, body="DEEPSEEK_API_KEY=sk-secret\n"):
+        f = tmp_path / "deepseek.env"
+        f.write_text(body)
+        return f
+
+    def test_declaration_parses_env_file_into_the_spec(self, tmp_path, monkeypatch):
+        secret = self._envfile(tmp_path)
+        path = _declare(
+            tmp_path,
+            monkeypatch,
+            [
+                {"label": "cx", "home": str(_codex_home(tmp_path, "default"))},
+                {
+                    "label": "cx2",
+                    "home": str(_codex_home(tmp_path, "eva02")),
+                    "env_file": str(secret),
+                },
+            ],
+        )
+
+        result = read_provider_config(path)
+
+        assert result.state is ProviderConfigState.AVAILABLE
+        assert [s.env_file for s in result.codex_instances] == [None, secret]
+
+    def test_absent_env_file_is_none(self, tmp_path, monkeypatch):
+        path = _declare(tmp_path, monkeypatch, [{"label": "cx", "home": "/a"}])
+        (spec,) = read_provider_config(path).codex_instances
+        assert spec.env_file is None
+
+    def test_launch_env_carries_the_secret_but_env_does_not(self, tmp_path):
+        secret = self._envfile(tmp_path)
+        provider = CodexProvider(
+            key="codex:cx2", label="cx2", home=tmp_path / "eva02", env_file=secret
+        )
+
+        assert provider.env == {"CODEX_HOME": str(tmp_path / "eva02")}
+        assert provider.launch_env == {
+            "CODEX_HOME": str(tmp_path / "eva02"),
+            "DEEPSEEK_API_KEY": "sk-secret",
+        }
+
+    def test_copied_command_never_leaks_the_secret(self, tmp_path, monkeypatch):
+        secret = self._envfile(tmp_path)
+        second = _codex_home(tmp_path, "eva02")
+        _declare(
+            tmp_path,
+            monkeypatch,
+            [
+                {"label": "cx", "home": str(_codex_home(tmp_path, "default"))},
+                {"label": "cx2", "home": str(second), "env_file": str(secret)},
+            ],
+        )
+        row = make_session(
+            sid=UUID_B, provider="codex:cx2", cwd="/tmp/proj", alive=False
+        )
+
+        command = session_ops.resume_cmd(row)
+        prefix = session_ops.env_prefix("codex:cx2")
+
+        assert "sk-secret" not in command
+        assert "DEEPSEEK_API_KEY" not in command
+        assert prefix == f"CODEX_HOME={second} "
+
+    def test_missing_env_file_degrades_to_env(self, tmp_path):
+        provider = CodexProvider(
+            key="codex:cx2",
+            label="cx2",
+            home=tmp_path / "eva02",
+            env_file=tmp_path / "gone.env",
+        )
+        assert provider.launch_env == provider.env
+
+    def test_env_file_read_fresh_so_a_rotated_key_takes_effect(self, tmp_path):
+        secret = self._envfile(tmp_path, "DEEPSEEK_API_KEY=old\n")
+        provider = CodexProvider(
+            key="codex:cx2", label="cx2", home=tmp_path / "eva02", env_file=secret
+        )
+        assert provider.launch_env["DEEPSEEK_API_KEY"] == "old"
+        secret.write_text("DEEPSEEK_API_KEY=new\n")
+        assert provider.launch_env["DEEPSEEK_API_KEY"] == "new"
+
+
+class TestNonCodexLaunchEnv:
+    def test_single_home_clis_launch_env_equals_env(self):
+        from cc_session_control.data.providers.claude import ClaudeProvider
+        from cc_session_control.data.providers.kimi import KimiProvider
+        from cc_session_control.data.providers.opencode import OpencodeProvider
+
+        for provider in (ClaudeProvider(), KimiProvider(), OpencodeProvider()):
+            assert provider.launch_env == provider.env == {}
