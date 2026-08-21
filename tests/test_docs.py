@@ -15,6 +15,13 @@ from cc_session_control.cli import build_parser
 
 README = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
 CLAUDE = (Path(__file__).parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
+# Architecture reference doc: holds the typed-seam terminology gated by
+# test_architecture_doc_uses_settled_typed_seams /
+# test_architecture_doc_rejects_retired_seam_claims (moved out of CLAUDE.md
+# in 581d354).
+ARCH = (Path(__file__).parents[1] / "docs" / "architecture.md").read_text(
+    encoding="utf-8"
+)
 CONTEXT = (Path(__file__).parents[1] / "CONTEXT.md").read_text(encoding="utf-8")
 AGENTS = (Path(__file__).parents[1] / "AGENTS.md").read_text(encoding="utf-8")
 ADR_DIR = Path(__file__).parents[1] / "docs" / "adr"
@@ -75,6 +82,7 @@ def test_public_descriptions_name_every_supported_provider(surface: str) -> None
 def test_readme_drops_retired_cli_surfaces(retired_command: str) -> None:
     assert retired_command not in README
     assert retired_command not in CLAUDE
+    assert retired_command not in ARCH
 
 
 @pytest.mark.parametrize(
@@ -92,7 +100,7 @@ def test_current_knowledge_surfaces_describe_the_unified_tmux_session() -> None:
     assert "share the tmux session named `csctl`" in README
     assert "single tmux session named `csctl`" in CONTEXT
     assert "`csctl` tmux session" in AGENTS
-    assert '`cfg.tmux_session == "csctl"`' in CLAUDE
+    assert '`cfg.tmux_session == "csctl"`' in ARCH
     assert (
         "Every agent session csctl dispatches uses one tmux session named `csctl`"
         in ADR6
@@ -148,8 +156,8 @@ def test_compatibility_checklist_drops_retired_management_contracts(
         "`atomic_write.py`",
     ],
 )
-def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None:
-    assert settled_term in CLAUDE
+def test_architecture_doc_uses_settled_typed_seams(settled_term: str) -> None:
+    assert settled_term in ARCH
 
 
 @pytest.mark.parametrize(
@@ -212,10 +220,11 @@ def test_claude_architecture_uses_settled_typed_seams(settled_term: str) -> None
         "environments.jsonl",
     ],
 )
-def test_claude_architecture_rejects_retired_seam_claims(
+def test_architecture_doc_rejects_retired_seam_claims(
     stale_claim: str,
 ) -> None:
     assert stale_claim not in CLAUDE
+    assert stale_claim not in ARCH
 
 
 def test_every_external_action_is_pinned_to_a_tagged_commit() -> None:
@@ -247,5 +256,5 @@ def test_release_docs_gate_immutable_tags_on_green_master_candidates() -> None:
 
 
 def test_session_rescue_does_not_advertise_a_companion_skill() -> None:
-    for surface in (README, CLAUDE):
+    for surface in (README, CLAUDE, ARCH):
         assert "claude-session-doctor" not in surface
