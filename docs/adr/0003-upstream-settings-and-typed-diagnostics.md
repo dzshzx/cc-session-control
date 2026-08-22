@@ -4,6 +4,9 @@ Status: accepted (2026-07-29); partially superseded by ADR-0004 (2026-07-30),
 which removed the ledger-specific surfaces while retaining the typed,
 fail-closed boundary rules. RC start, settings-write, and lifecycle clauses
 are superseded by ADR-0009.
+Membership-listing half superseded by ADR-0007 (the effective-trust predicate remains).
+Read-only re-check 2026-08-22 on Claude Code 2.1.239 (Tier 1 green; Tier 2 trust semantics last
+re-verified on 2.1.233 — see `docs/claude-code-compatibility.md`).
 
 csctl depends on Claude Code state that it does not own, including
 `~/.claude.json`, per-project `.claude/settings.local.json`, session/job

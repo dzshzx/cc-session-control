@@ -113,6 +113,45 @@ def test_unified_tmux_adr_preserves_legacy_residency_after_rc_removal() -> None:
     assert "CSCTL_RC_SESSION" in ADR9
 
 
+_ADR_RELATION = re.compile(
+    r"\b(supersed\w*|extend\w*|amend\w*|narrow\w*|resolves)\b[^.\n]{0,160}?ADR-(\d{4})",
+    re.IGNORECASE,
+)
+
+
+def _adr_status_block(text: str) -> str:
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("Status:"))
+    end = start + 1
+    while end < len(lines) and lines[end].strip():
+        end += 1
+    return "\n".join(lines[start:end])
+
+
+def _declared_adr_relations() -> list[tuple[str, str]]:
+    """(later ADR, earlier ADR) pairs for every supersedes/extends/amends declaration."""
+    pairs: list[tuple[str, str]] = []
+    for path in sorted(ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md")):
+        own = path.name[:4]
+        for match in _ADR_RELATION.finditer(path.read_text(encoding="utf-8")):
+            target = match.group(2)
+            if target < own:
+                pairs.append((own, target))
+    return sorted(set(pairs))
+
+
+@pytest.mark.parametrize("later, earlier", _declared_adr_relations())
+def test_every_declared_adr_relation_has_a_status_back_pointer(
+    later: str, earlier: str
+) -> None:
+    # Audit 2026-08-22: 0005/0007/0010/0011 changed earlier ADRs without the earlier
+    # file's Status saying so; a reader opening one ADR must see every later change.
+    earlier_path = next(ADR_DIR.glob(f"{earlier}-*.md"))
+    assert f"ADR-{later}" in _adr_status_block(
+        earlier_path.read_text(encoding="utf-8")
+    ), f"ADR-{earlier} Status must point at ADR-{later}"
+
+
 @pytest.mark.parametrize("number", range(1, 8))
 def test_removal_adr_supersedes_every_affected_prior_adr(number: int) -> None:
     name = f"ADR-{number:04d}"

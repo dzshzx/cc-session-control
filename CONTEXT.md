@@ -157,7 +157,7 @@ the tab. The absolute directory path is the project's identity everywhere
 (tmux window metadata, claude.json lookups); the display name is a derived
 basename. Claude effective trust keeps its ADR-0003 semantics (`hasTrustDialogAccepted: true`
 on the entry or any ancestor, explicit-False-is-not-a-veto, normpath never
-realpath, last semantically verified on Claude Code 2.1.218, 2026-07-23) and
+realpath; the semantic verification history lives in `docs/claude-code-compatibility.md`, not here) and
 remains an upstream-dependent contract: each release must rerun
 `docs/claude-code-compatibility.md` and record any unverified item. Platform
 temp directories (`tempfile.gettempdir()`, `/tmp`, `/var/tmp`, and anything

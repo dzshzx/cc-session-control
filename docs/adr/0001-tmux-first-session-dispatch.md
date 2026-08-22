@@ -2,6 +2,11 @@
 
 Status: accepted (2026-07-06); placement rule superseded by ADR-0006;
 project-RC and background-tab clauses superseded by ADR-0009
+Projects-tab `Enter` = new *claude* session clause superseded by ADR-0005 (Enter opens the
+provider chooser; claude is the default focus); hosted Codex rows are exempt from the
+Sessions verbs per ADR-0010.
+Extended by ADR-0004 (Remote Control demoted to a secondary surface; tmux residency is the
+anti-disconnect mechanism).
 
 csctl's core operator need is that Claude Code sessions survive terminal /
 network disconnects (flaky SSH, phone connections). Two mechanisms could carry

@@ -159,6 +159,7 @@ csctl resume                 # Page 1, 20 per page
 csctl resume mybug           # Keyword: sid/cwd/title, then transcript body
 csctl resume --page 2        # Next page
 csctl resume --all           # Everything, no paging
+csctl resume --take-over <sid>  # Claude only: re-resolve at execution time, then guarded live takeover
 
 # Options
 csctl --theme light            # Force the TUI palette (auto/dark/light)
@@ -187,7 +188,7 @@ So when you run more than one codex identity, declare their homes in
 {
   "codex_homes": [
     {"label": "cx",  "home": "~/.codex"},
-    {"label": "cx2", "home": "~/.codex-eva02"}
+    {"label": "cx2", "home": "~/.codex-eva02", "env_file": "~/.codex-eva02/launch.env"}
   ]
 }
 ```
@@ -201,8 +202,12 @@ later ones become `codex:<label>`. Every command csctl synthesizes for a
 declared identity carries its `CODEX_HOME` explicitly. Without this file
 there is exactly one codex instance following `CODEX_HOME`/`~/.codex`, and a
 malformed file falls back to that same single instance with a visible reason.
-Changes take effect on the next csctl start. See
-[ADR-0008](docs/adr/0008-declared-cli-instances.md).
+An optional `env_file` (ADR-0012) names a `KEY=value` file whose variables csctl injects
+only into the processes it spawns for that identity (new / resume / fork) — never
+persisted into the home, never shown in the TUI, never part of the clipboard command;
+the file is re-read at every spawn. Changes take effect on the next csctl start. See
+[ADR-0008](docs/adr/0008-declared-cli-instances.md) and
+[ADR-0012](docs/adr/0012-per-instance-launch-env-file.md).
 
 ## License
 

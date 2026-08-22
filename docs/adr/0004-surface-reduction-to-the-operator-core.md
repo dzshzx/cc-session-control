@@ -1,7 +1,9 @@
 # Surface reduction to the operator core
 
 Status: accepted (2026-07-30); RC and background-agent management clauses
-partially superseded by ADR-0009
+partially superseded by ADR-0009;
+the "only headless consumer is the claude-session-doctor skill" usage premise lapsed with
+ADR-0009 (that skill was retired) — `csctl resume` is the headless surface regardless.
 
 By 0.7.6 csctl carried several surfaces built for operators it does not have:
 a bridge-environment ledger, a headless CLI mirroring most TUI verbs, an RC

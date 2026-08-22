@@ -2,6 +2,11 @@
 
 Status: accepted (2026-08-13). Extends the ADR-0005 provider layer from
 "one provider per CLI" to "one provider per CLI *identity*".
+The 证据-column clause in Consequences ("widened 20→24") is superseded by ADR-0009, which
+removed the badge column the same day; `trusted_by`/`observed_by` stay on the row model.
+Read-only re-check 2026-08-22: codex 0.149.0 still exposes no `--codex-home`; the `CODEX_HOME`-only
+premise holds.
+Extended by ADR-0012 (a declared identity may carry a launch-only `env_file`).
 
 Codex supports a second identity purely through its official relocation
 variable: `CODEX_HOME=<path> codex …` (there is no `--codex-home` flag;

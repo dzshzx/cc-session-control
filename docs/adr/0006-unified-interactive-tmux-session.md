@@ -1,7 +1,9 @@
 # Unified interactive tmux session
 
 Status: accepted (2026-08-08); RC/background-agent placement clauses
-partially superseded by ADR-0009
+partially superseded by ADR-0009;
+ADR-0011 adds the scoped second prefix (`prefix2` = `C-a`) to the managed session's
+create/reuse path.
 
 ## Context
 

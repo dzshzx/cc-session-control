@@ -1,7 +1,14 @@
 # Multi-CLI provider layer
 
 Status: accepted (2026-08-04); RC/background-agent capability and surface
-clauses partially superseded by ADR-0009
+clauses partially superseded by ADR-0009.
+The 2026-08-18 amendment below adds opencode as the fourth provider; every "three CLIs"
+phrase in Context/Consequences is historical. Codex `delete <sid>` is proxied through
+`DeleteVerbs` (introduced with that amendment; see `docs/architecture.md`), narrowing the
+"cleanup stays Claude-only" decision to Claude-state cleanup only.
+Read-only re-check 2026-08-22: codex 0.149.0, kimi 0.38.0, opencode 1.18.15 (flags, verbs, hook
+registration); kimi heartbeat cadence and payload shape not re-verified since 0.36.1.
+Extended by ADR-0008 (one provider per CLI *identity*: declared codex homes).
 
 csctl was built as an operator panel for **Claude Code alone**: every scan
 reads `~/.claude`, every resume synthesizes a `claude --resume` argv, and the
