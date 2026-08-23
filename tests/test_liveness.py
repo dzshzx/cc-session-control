@@ -338,6 +338,62 @@ def test_live_session_procs_injects_proc_liveness(tmp_path, monkeypatch):
     assert procs[200].proc_alive is False
 
 
+def test_live_session_procs_row_missing_proc_start_stays_unknown(tmp_path, monkeypatch):
+    # B3: a registry row with no procStart must never fall back to "pid
+    # exists -> alive" (that would defeat the pid-reuse guard). It gets the
+    # same tri-state treatment as an unreadable /proc stat: proc_alive=None.
+    import json
+
+    from cc_session_control.config import cfg
+    from cc_session_control.data import proc, registry
+
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    registry.invalidate_cache()
+    sessions = tmp_path / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "300.json").write_text(
+        json.dumps({"pid": 300, "sessionId": "sid300"})  # no procStart key
+    )
+    # probe_pid would say "alive" (pid exists) if it were ever consulted for
+    # this row — proving the missing-procStart branch short-circuits before
+    # reaching the "pid alone" fallback other callers deliberately rely on.
+    monkeypatch.setattr(proc, "probe_pid", lambda pid, start: proc.PidProbe(pid, True))
+
+    procs = {sp.sid: sp for sp in liveness.live_session_procs(max_age=0.0)}
+    assert procs["sid300"].proc_alive is None
+
+
+def test_liveness_inputs_reports_issue_and_refuses_for_missing_proc_start(
+    tmp_path, monkeypatch
+):
+    import json
+    import subprocess as _subprocess
+
+    from cc_session_control.config import cfg
+    from cc_session_control.data import proc, registry
+
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+    sessions = tmp_path / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "300.json").write_text(json.dumps({"pid": 300, "sessionId": "sid300"}))
+    completed = _subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_current_ancestors",
+        lambda: liveness.proc.AncestorProbe(frozenset()),
+    )
+    monkeypatch.setattr(proc, "probe_pid", lambda pid, start: proc.PidProbe(pid, True))
+
+    inputs = liveness.liveness_inputs()
+
+    assert inputs.complete is False
+    assert any("sid300" in issue.detail for issue in inputs.issues)
+    assert inputs.session_procs[0].proc_alive is None
+
+
 def test_live_session_procs_propagates_programming_errors(monkeypatch):
     from cc_session_control.data import registry
 
@@ -510,6 +566,7 @@ def test_liveness_inputs_collects_multiple_low_level_source_issues(
 
 def test_liveness_inputs_normal_empty_sources_are_complete(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    (tmp_path / "sessions").mkdir()  # present but empty -> no issue
     registry.invalidate_cache()
     liveness.invalidate_cache()
     completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
@@ -526,3 +583,25 @@ def test_liveness_inputs_normal_empty_sources_are_complete(tmp_path, monkeypatch
     assert inputs.issues == ()
     assert inputs.session_procs == ()
     assert inputs.agents_map == {}
+
+
+def test_liveness_inputs_incomplete_when_sessions_dir_vanishes(tmp_path, monkeypatch):
+    # B1: claude_home exists (Claude installed) but sessions/ is gone — an
+    # upstream rename/migration must fail liveness closed, not read as "no
+    # live sessions" (that would double-open a still-running session and let
+    # it fall into prune candidates).
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+    completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    monkeypatch.setattr(
+        liveness.proc,
+        "probe_current_ancestors",
+        lambda: liveness.proc.AncestorProbe(frozenset()),
+    )
+
+    inputs = liveness.liveness_inputs()
+
+    assert inputs.complete is False
+    assert any(issue.source == "session registry" for issue in inputs.issues)

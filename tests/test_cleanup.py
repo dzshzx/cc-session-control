@@ -523,7 +523,8 @@ def test_remove_session_removes_jobs_dir_when_no_live_host(tmp_path, monkeypatch
     projects = _mkdir(tmp_path, "projects", "proj1")
     transcript = os.path.join(projects, f"{sid}.jsonl")
     open(transcript, "w").close()
-    registry.invalidate_cache()  # no sessions/<pid>.json -> no live host
+    _mkdir(tmp_path, "sessions")  # present but empty -> no live host, no issue
+    registry.invalidate_cache()
     jobs_dir = _mkdir(tmp_path, "jobs", sid[:8])
     with open(os.path.join(jobs_dir, "state.json"), "w") as fh:
         json.dump({"sessionId": sid}, fh)

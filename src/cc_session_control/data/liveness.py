@@ -8,12 +8,14 @@ session files with injected proc liveness + `claude agents --json`).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
+from ..config import cfg
 from ..models import InventoryIssue, LiveInfo, SessionProc
 from . import proc, registry
 
@@ -73,12 +75,40 @@ class LivenessSnapshot:
         return not self.issues
 
 
+def _missing_proc_start_issue(session_proc: SessionProc) -> LivenessIssue:
+    return LivenessIssue(
+        "session registry",
+        os.fspath(cfg.sessions_dir / f"{session_proc.pid}.json"),
+        f"session {session_proc.sid!r} row has no procStart; pid-reuse liveness "
+        "left unknown",
+    )
+
+
 def _probe_proc_liveness(
     session_procs: Sequence[SessionProc],
 ) -> tuple[list[SessionProc], list[LivenessIssue]]:
+    """Inject `/proc` liveness into each registry row — THE Claude registry
+    call site for `proc.probe_pid`.
+
+    A row with no `procStart` (upstream schema drift; every real fixture in
+    `docs/claude-code-compatibility.md` carries one) is refused the ordinary
+    `probe_pid` fallback ("proc_start unknown -> pid existence alone means
+    alive") that `_probe_agent_pids` below deliberately relies on for
+    `claude agents --json` (which never carries a start time at all): here it
+    would silently defeat the pid-reuse guard for a source that is SUPPOSED
+    to carry the field. Such a row gets the exact same tri-state treatment as
+    an unreadable `/proc` stat — `proc_alive=None` plus a typed issue — so it
+    can never resolve to `alive=True` and `LivenessSnapshot.complete` goes
+    False, fail-closing every destructive verb (R10-style) until the
+    registry data itself is trustworthy again.
+    """
     records: list[SessionProc] = []
     issues: list[LivenessIssue] = []
     for session_proc in session_procs:
+        if not session_proc.proc_start:
+            records.append(replace(session_proc, proc_alive=None))
+            issues.append(_missing_proc_start_issue(session_proc))
+            continue
         probe = proc.probe_pid(session_proc.pid, session_proc.proc_start)
         records.append(replace(session_proc, proc_alive=probe.alive))
         if probe.issue is not None:

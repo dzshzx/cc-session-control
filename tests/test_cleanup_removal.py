@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -447,6 +448,62 @@ def test_session_execution_refuses_real_malformed_registry_before_removal(
     assert transcript.exists()
 
 
+def test_session_execution_refuses_row_missing_proc_start_before_removal(
+    tmp_path,
+    monkeypatch,
+):
+    # B3: a `sessions/*.json` row with no procStart must fail the whole
+    # generation closed (same tier as an unreadable /proc stat), not just
+    # quietly resolve that one row to "dead".
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    monkeypatch.setattr(
+        proc,
+        "probe_current_ancestors",
+        lambda: proc.AncestorProbe(frozenset({999})),
+    )
+    monkeypatch.setattr(proc, "ancestor_pids", lambda: set())
+    transcript = tmp_path / "sid.jsonl"
+    transcript.write_text("{}")
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "300.json").write_text(
+        json.dumps({"pid": 300, "sessionId": "sid300"})  # no procStart key
+    )
+    completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
+    monkeypatch.setattr(liveness.subprocess, "run", lambda *a, **k: completed)
+    # If probe_pid were ever consulted for the missing-procStart row it would
+    # say "alive" (pid exists) — proving the refusal below does not depend on
+    # /proc actually reporting pid 300 as gone.
+    monkeypatch.setattr(proc, "probe_pid", lambda pid, start: proc.PidProbe(pid, True))
+    removed: list[str] = []
+    monkeypatch.setattr(
+        cleanup,
+        "remove_anchored",
+        lambda target: removed.append(os.fspath(target)),
+    )
+    registry.invalidate_cache()
+    liveness.invalidate_cache()
+    target = Session(
+        sid="sid",
+        cwd="/tmp/p",
+        label="session",
+        mtime=0.0,
+        prompts=0,
+        pid=None,
+        alive=False,
+        current=False,
+        file=os.fspath(transcript),
+    )
+
+    result = cleanup.execute_session_removals([target])
+
+    assert removed == []
+    assert len(result.refused) == 1
+    assert result.issues[0].source == "session registry"
+    assert "sid300" in result.issues[0].error
+    assert transcript.exists()
+
+
 def test_session_execution_refuses_real_agents_nonzero_before_removal(
     tmp_path,
     monkeypatch,
@@ -458,6 +515,7 @@ def test_session_execution_refuses_real_agents_nonzero_before_removal(
         lambda: proc.AncestorProbe(frozenset({999})),
     )
     monkeypatch.setattr(proc, "ancestor_pids", lambda: set())
+    (tmp_path / "sessions").mkdir()  # present but empty -> no registry issue
     transcript = tmp_path / "sid.jsonl"
     transcript.write_text("{}")
     completed = subprocess.CompletedProcess(
@@ -507,6 +565,7 @@ def test_session_execution_allows_normal_complete_empty_protection_sources(
         lambda: proc.AncestorProbe(frozenset({999})),
     )
     monkeypatch.setattr(proc, "ancestor_pids", lambda: set())
+    (tmp_path / "sessions").mkdir()  # present but empty -> no registry issue
     transcript = tmp_path / "sid.jsonl"
     transcript.write_text("{}")
     completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")

@@ -68,6 +68,41 @@ def test_read_session_procs_missing_dir(tmp_path, monkeypatch):
     assert registry.read_session_procs(max_age=0.0) == []
 
 
+def test_scan_session_procs_reports_issue_when_sessions_dir_missing_but_claude_home_exists(
+    tmp_path, monkeypatch
+):
+    # `~/.claude` (claude_home) exists — Claude Code is installed — but its
+    # `sessions/` dir does not: an upstream rename/migration, not "provider
+    # not installed". This must NOT read as "zero live sessions".
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    registry.invalidate_cache()
+
+    result = registry.scan_session_procs(max_age=0.0)
+
+    assert result.records == ()
+    assert result.complete is False
+    assert len(result.issues) == 1
+    issue = result.issues[0]
+    assert issue.source == "session registry"
+    assert issue.path == os.fspath(tmp_path / "sessions")
+    assert "missing" in issue.detail
+
+
+def test_scan_session_procs_no_issue_when_claude_home_itself_is_absent(
+    tmp_path, monkeypatch
+):
+    # Claude Code is simply not installed on this machine — the existing
+    # "provider unavailable" semantics: empty, no issue.
+    monkeypatch.setattr(cfg, "claude_home", tmp_path / "no-such-claude-home")
+    registry.invalidate_cache()
+
+    result = registry.scan_session_procs(max_age=0.0)
+
+    assert result.records == ()
+    assert result.complete is True
+    assert result.issues == ()
+
+
 def test_scan_session_procs_keeps_partial_records_and_reports_malformed(
     tmp_path, monkeypatch
 ):
