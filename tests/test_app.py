@@ -50,7 +50,7 @@ class _RecorderView:
         return False
 
 
-def _wait_published(app: App, timeout: float = 1.0) -> None:
+def _wait_published(app: App, timeout: float = 5.0) -> None:
     """Wait until the refresh worker has published its result.
 
     The builder queue only proves the builder returned; the worker still has

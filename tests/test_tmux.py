@@ -155,7 +155,6 @@ def test_run_in_tmux_result_retains_new_window_failure_detail(monkeypatch) -> No
     result = tmux.run_in_tmux_result("project", "claude", "cmd")
 
     assert result.stage is tmux.TmuxWriteStage.NEW_WINDOW
-    assert result.stage is tmux.TmuxWriteStage.NEW_WINDOW
     assert result.state is tmux.TmuxWriteState.FAILED
     assert result.target is None
     assert result.detail == "lost server connection"
