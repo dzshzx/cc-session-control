@@ -18,7 +18,8 @@ uv tool install cc-session-control
 
 `csctl` is local-machine tooling. Each user installs it on their own Linux/WSL
 machine, signs in to the agent CLIs they use, and runs it against those CLIs'
-local state homes (`~/.claude`, `~/.codex`, `~/.kimi-code`), `tmux`, and
+local state homes (`~/.claude`, `~/.codex`, `~/.kimi-code`,
+`~/.local/share/opencode`), `tmux`, and
 workspace state.
 
 ## One-Time PyPI Setup
@@ -93,6 +94,7 @@ scripts/check.sh
 uv build --no-sources
 uv run --isolated --no-project --with dist/*.whl csctl --version
 uv run --isolated --no-project --with dist/*.tar.gz csctl --version
+uvx twine check dist/*   # metadata sanity check; local only, CI does not run it
 ```
 
 If the gate reports a product-code path under `/home/`, fix it before release.

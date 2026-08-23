@@ -49,19 +49,8 @@ statement and branch floors held in `scripts/check_coverage.py`). Remove
 
 ## Releasing / version bump
 
-The version lives in **one place**: `__version__` in `src/cc_session_control/__init__.py`.
-`pyproject.toml` derives its version from that attribute (setuptools `dynamic`), and
-`csctl --version` reads the same attribute, so there is nothing to keep in sync.
-
-Use the helper to bump it (never hand-edit two files):
-
-```bash
-python scripts/bump_version.py patch    # 0.2.1 -> 0.2.2
-python scripts/bump_version.py minor    # 0.2.1 -> 0.3.0
-python scripts/bump_version.py major    # 0.2.1 -> 1.0.0
-python scripts/bump_version.py --set 1.2.3   # explicit
-python scripts/bump_version.py --show        # print current, no change
-```
-
-It edits only `__init__.py` and prints the suggested commit + annotated-tag
-commands.
+The version lives in one place (`__version__` in `src/cc_session_control/__init__.py`;
+`pyproject.toml` and `csctl --version` both read it) and is bumped only through
+`scripts/bump_version.py` (`--help` lists the modes). The release procedure — bump,
+green candidate CI, annotated tag, Trusted Publishing — is in
+[docs/releasing.md](docs/releasing.md).

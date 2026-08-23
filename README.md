@@ -46,9 +46,8 @@ that row.
 
 Kimi can close that gap opt-in via its official hooks: add this to
 `~/.kimi-code/config.toml` and every kimi session — bare-launched ones
-included — self-reports its pid↔session binding (verified on Kimi Code
-0.34.0, re-verified on 0.35.0; csctl re-verifies pid identity and process
-start time per entry, so stale or forged entries never bind):
+included — self-reports its pid↔session binding, which csctl re-verifies
+against `/proc` before trusting it:
 
 ```toml
 [[hooks]]
@@ -69,19 +68,13 @@ command = "csctl _kimi-hook"
 timeout = 5
 ```
 
-The hook fires when a session materializes, and the binding appears on
-csctl's next refresh.
-
-A resumed session registers immediately; only a **new** one waits for its
-first prompt, because that is when kimi creates its id — which is also why
-csctl cannot learn a new session's id at spawn. SessionStart delivery is
-fire-and-forget and not guaranteed (a live 0.36.1 session went unbound for
-hours on 2026-08-16 with zero trace), so the `SessionHeartbeat` rule
-re-registers the session every 60 seconds and a missed start self-heals.
-A session already running when the rule is added keeps its old config —
-reopen it to bind. `~/.kimi-code/run/hook-errors.log` says whether the hook
-ran at all — the endpoint records every run that did not register,
-including an unrecognized event name.
+The hooks are needed because kimi rewrites away its own argv at runtime and
+creates a new session's id only at its first prompt, so neither argv nor
+csctl's dispatch metadata can bind every session. The kimi versions this was
+verified on and the registration timing per launch path are recorded in
+[docs/claude-code-compatibility.md](docs/claude-code-compatibility.md); the
+`run/hook-errors.log` diagnostics and the full evidence trail are in
+[ADR-0005](docs/adr/0005-multi-cli-provider-layer.md).
 
 All agent sessions csctl dispatches — new, resumed, forked, or backgrounded —
 share the tmux session named `csctl`; each window is named for the bare CLI
@@ -132,7 +125,9 @@ cc-session-control`).
 
 ### Latest `master` build
 
-To try the newest `master` before it is released, install from GitHub:
+To try the newest `master` before it is released, install from GitHub
+(`--reinstall` forces a rebuild — a plain `uv tool upgrade` keeps the cached
+git ref):
 
 ```bash
 uv tool install --reinstall git+https://github.com/dzshzx/cc-session-control.git

@@ -17,22 +17,13 @@ ADR-0010/0011 再补两条现行事实：Codex app-server 只凭同身份进程 
 ## 命令
 
 ```bash
-# csctl is a uv tool. Install / refresh it FROM PyPI — the package is published
-# and this machine now tracks the PyPI release (not GitHub HEAD). Requires Python 3.12+.
-uv tool install cc-session-control          # first install (or: pipx install cc-session-control)
-uv tool upgrade cc-session-control          # refresh to the latest published release
-#   csctl is a uv tool at ~/.local/bin/csctl — it is NOT mise-managed (no mise pin;
-#   `mise install`/`mise uninstall …pipx…` are no-ops here). Verify: csctl --version
-#   ESCAPE HATCH — to run UNRELEASED master before a tag, install the GitHub HEAD
-#   build with a FORCED rebuild (plain `uv tool upgrade` keeps the cached git ref):
-#     uv tool install --reinstall git+https://github.com/dzshzx/cc-session-control.git
-#   This is no longer the default — prefer the PyPI release above.
+# csctl is a uv tool (~/.local/bin/csctl) tracking the PyPI release — NOT mise-managed
+# (no mise pin; `mise install`/`mise uninstall …pipx…` are no-ops). Install / upgrade /
+# GitHub-HEAD escape hatch: README.md "Installation"; post-release upgrade cache
+# gotchas: docs/releasing.md "Post-Release Verification". Verify: csctl --version
+csctl                                                                           # the installed TUI
 
-# Run the installed TUI
-csctl
-
-# Dev/test ONLY — uv manages a transient .venv here; this is NOT how csctl is installed
-# for use. Do not treat the editable .venv as the csctl you run day-to-day.
+# Dev/test ONLY — uv manages a transient .venv here; it is NOT the csctl you run day-to-day
 uv run --extra dev pytest tests/                                                # all
 uv run --extra dev pytest tests/test_views.py::test_sessions_view_filter_logic  # single test
 uv run csctl                                                                    # exercise local source changes
@@ -86,4 +77,4 @@ csctl resume --take-over <sid>                 # execution-time re-resolution + 
 - **`scripts/validate_release_tag.py` 不再只信自己**：它还用 `gh run list --workflow CI --commit <sha>` 反查该 SHA 的 `CI` 成功与否（pending/failure/查不到一律拒绝），并校验 `CHANGELOG.md` 顶部 `## X.Y.Z` 标题与 `__version__` 一致——早 tag 一次不再能绕过 CI 矩阵或漏写 changelog 就直发 PyPI。
 - **CI**（`.github/workflows/ci.yml`）在每次推送到 `master` 和 PR 时运行相同的 测试 + 路径硬编码检查（见 `## 约定`）+ 构建 + smoke 关卡；`quality-gate` job 已经在 3.12 上跑过带覆盖率的 pytest，矩阵 job（`.github/workflows/test-matrix.yml`，`workflow_call` 复用）只再跑 3.13/3.14，`release.yml` 的 `publish` 同样 `needs` 这个矩阵 job，tag 触发链不再只靠 3.12 的 quality-gate 把关。
 - **TestPyPI dry run**（`.github/workflows/release-testpypi.yml`）是一个手动 `workflow_dispatch`，发布到 TestPyPI（env `testpypi`）而不触碰真实索引——真正打 tag 前的可选彩排。
-- **Gotchas：** 已发布的版本是不可变的——绝不覆盖它，而是 bump 到下一个 patch。`dist/` 被 gitignore；本地的预发布序列镜像该 workflow（`uv run --extra dev pytest tests/`、路径硬编码检查（`## 约定`）、`uv build --no-sources`、wheel/sdist 的 `csctl --version`、`uvx twine check dist/*`）。发布后立刻，`uv` 可能看不到新版本：PyPI 的 simple index 有 CDN 延迟，`uv` 自己还另有一层索引缓存。等 simple index 出现该版本后，`uv tool upgrade cc-session-control` 仍可能报 `Nothing to upgrade`——`uv tool upgrade` **没有** `--refresh` 这个 flag，且 `--reinstall`（号称 implies `--refresh`）实测也不够；打爆缓存要用 `uv tool upgrade cc-session-control --reinstall --no-cache`（v0.8.8 实测，2026-08-13）。绝不用 `==X.Y.Z` 固定版本绕过它。
+- **Gotchas：** 已发布的版本是不可变的——绝不覆盖它，而是 bump 到下一个 patch。`dist/` 被 gitignore。本地预发布序列（`scripts/check.sh` + 构建 + wheel/sdist smoke）见 `docs/releasing.md`「Pre-Release Checks」；发布后 `uv tool upgrade` 因 PyPI simple index CDN 延迟 + `uv` 自身索引缓存而报 `Nothing to upgrade` 的处理（`--reinstall --no-cache`，绝不用 `==X.Y.Z` 固定版本绕过）见同文件「Post-Release Verification」。

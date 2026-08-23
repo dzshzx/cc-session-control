@@ -13,18 +13,37 @@ import pytest
 import cc_session_control
 from cc_session_control.cli import build_parser
 
-README = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
-CLAUDE = (Path(__file__).parents[1] / "CLAUDE.md").read_text(encoding="utf-8")
+REPO = Path(__file__).parents[1]
+README = (REPO / "README.md").read_text(encoding="utf-8")
+CLAUDE = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
 # Architecture reference doc: holds the typed-seam terminology gated by
-# test_architecture_doc_uses_settled_typed_seams /
-# test_architecture_doc_rejects_retired_seam_claims (moved out of CLAUDE.md
-# in 581d354).
-ARCH = (Path(__file__).parents[1] / "docs" / "architecture.md").read_text(
-    encoding="utf-8"
-)
-CONTEXT = (Path(__file__).parents[1] / "CONTEXT.md").read_text(encoding="utf-8")
-AGENTS = (Path(__file__).parents[1] / "AGENTS.md").read_text(encoding="utf-8")
-ADR_DIR = Path(__file__).parents[1] / "docs" / "adr"
+# test_architecture_doc_uses_settled_typed_seams (moved out of CLAUDE.md in
+# 581d354).
+ARCH = (REPO / "docs" / "architecture.md").read_text(encoding="utf-8")
+CONTEXT = (REPO / "CONTEXT.md").read_text(encoding="utf-8")
+AGENTS = (REPO / "AGENTS.md").read_text(encoding="utf-8")
+ADR_DIR = REPO / "docs" / "adr"
+# Surfaces that state CURRENT knowledge. ADR bodies are deliberately absent:
+# they are the record of what was retired and must keep naming it (ADR-0009
+# names `CSCTL_RC_SESSION`, ADR-0004 the removed subcommands); only the ADR
+# index is a navigation surface.
+CURRENT_KNOWLEDGE_SURFACES = {
+    path.relative_to(REPO).as_posix(): path.read_text(encoding="utf-8")
+    for path in [
+        *sorted((REPO / "docs").glob("*.md")),
+        ADR_DIR / "index.md",
+        *(
+            REPO / name
+            for name in (
+                "CLAUDE.md",
+                "AGENTS.md",
+                "CONTEXT.md",
+                "README.md",
+                "CONTRIBUTING.md",
+            )
+        ),
+    ]
+}
 ADR6 = (ADR_DIR / "0006-unified-interactive-tmux-session.md").read_text(
     encoding="utf-8"
 )
@@ -83,16 +102,6 @@ def test_public_descriptions_name_every_supported_provider(surface: str) -> None
 
 
 @pytest.mark.parametrize(
-    "retired_command",
-    ["csctl prune", "csctl skill", "csctl rc ", "csctl env", "csctl agents"],
-)
-def test_readme_drops_retired_cli_surfaces(retired_command: str) -> None:
-    assert retired_command not in README
-    assert retired_command not in CLAUDE
-    assert retired_command not in ARCH
-
-
-@pytest.mark.parametrize(
     "variable",
     [
         "CSCTL_CLEANUP_AGE_DAYS",
@@ -103,17 +112,19 @@ def test_readme_lists_every_public_environment_setting(variable: str) -> None:
     assert f"`{variable}`" in README
 
 
+# Match the identifiers, not one sentence: the docs may rephrase freely as
+# long as they still name the single `csctl` tmux session.
+_UNIFIED_TMUX_SESSION = re.compile(
+    r"tmux session (named )?`csctl`|`csctl` tmux session"
+)
+
+
 def test_current_knowledge_surfaces_describe_the_unified_tmux_session() -> None:
-    assert "share the tmux session named `csctl`" in README
-    # 2026-08-23: windows are named for the bare CLI, never the project or sid.
-    assert "never the project or sid" in README
-    assert "single tmux session named `csctl`" in CONTEXT
-    assert "`csctl` tmux session" in AGENTS
+    for surface in (README, CONTEXT, AGENTS, ADR6):
+        assert _UNIFIED_TMUX_SESSION.search(surface)
     assert '`cfg.tmux_session == "csctl"`' in ARCH
-    assert (
-        "Every agent session csctl dispatches uses one tmux session named `csctl`"
-        in ADR6
-    )
+    # 2026-08-23: windows are named for the bare CLI, never the project or sid.
+    assert "`claude`/`codex`/`kimi`/`opencode`" in README
 
 
 def test_unified_tmux_adr_preserves_legacy_residency_after_rc_removal() -> None:
@@ -208,71 +219,44 @@ def test_architecture_doc_uses_settled_typed_seams(settled_term: str) -> None:
     assert settled_term in ARCH
 
 
-@pytest.mark.parametrize(
-    "stale_claim",
-    [
-        "`sessions.scan()`",
-        "`sessions.scan(inputs)`",
-        "`proc.scan_rc_servers()`",
-        "`tmux.residency_targets`",
-        "`tmux.run_in_tmux`",
-        "`environments.upsert`",
-        "`_tmux_windows`",
-        "`_window_for`",
-        "只有它的 `_tmux_run` 触碰 `subprocess`",
-        "ledger 是 **CLI-only**",
-        "`terminate_session`",
-        "`stop_job`",
-        "`resume_takeover`",
-        "`respawn`",
-        "`respawn_result`",
-        "`prepare_takeover`",
-        "`remove_job`",
-        "`stop_job_result`",
-        "`agent_ops`",
-        "`registry.read_agent_jobs`",
-        "`read_agent_jobs`",
-        "`AgentJob`",
-        "`enrich_jobs`",
-        "`agent_jobs`",
-        "`scan_rc_server_inventory`",
-        "`scan_servers_result`",
-        "`_match_rc_cmdline`",
-        "`RCProject`",
-        "`RCServer`",
-        "`rc_outcomes`",
-        "`CSCTL_RC_SESSION`",
-        "`split_env_id`",
-        "`_tmux_window_inventory`",
-        "`_window_for_inventory`",
-        "`current_determinable`",
-        "`proc.pid_exists`",
-        # Autostart-list feature retired in 0.8 — the docs must not resurrect it.
-        "`list_enabled`",
-        "`toggle_autostart`",
-        "`EnabledListResult`",
-        "`start_all_listed_result`",
-        "rc-enabled",
-        "开机自启",
-        "`capture_pane`",
-        "`residency_targets`",
-        "`list_orphan_dirs`",
-        "`pid_alive`",
-        "`start_one`",
-        "`job_host`",
-        "`EnvRow`",
-        "`KillResult`",
-        "RC 管理与 cleanup 是 TUI 专属表面",
-        # Bridge-environment ledger pipeline dropped in 0.8 — the docs must
-        # not resurrect it.
-        "environments.jsonl",
-    ],
-)
-def test_architecture_doc_rejects_retired_seam_claims(
-    stale_claim: str,
+# Reverse assertions ("this term is gone") only earn their place while the
+# term has a live resurrection path; each entry names that path. Anything
+# without one is covered by the positive settled-seam test above instead.
+RETIRED_TERMS = [
+    # ADR-0004/0009 removed the headless subcommands; old agent-facing usage
+    # blocks and skills still quote them and get pasted back into README/CLAUDE.
+    pytest.param(r"csctl (prune|env|skill|rc|agents)\b", id="headless-subcommands"),
+    # Retired tmux-session override (ADR-0006/0009); the README config table is
+    # exactly where someone re-adds it from memory.
+    pytest.param(r"CSCTL_RC_SESSION", id="env-var"),
+    # Window names are bare CLI names since the 2026-08-23 ADR-0005/0006
+    # amendments; master docs still carried both older schemes until 9ca8c01.
+    pytest.param(r"<project>/<leaf>", id="project-leaf-window-names"),
+    pytest.param(r"\b(cx|km|oc)-<sid8>", id="sid-bearing-window-names"),
+    # The bridge-environment ledger pipeline dropped in 0.8 (ADR-0004) is the
+    # most extensively documented dead feature in git history.
+    pytest.param(r"environments\.jsonl", id="bridge-env-ledger"),
+    # The companion skill moved to agent-skills in 0.8.0; README/CLAUDE used to
+    # advertise it next to `csctl resume`.
+    pytest.param(r"claude-session-doctor", id="companion-skill"),
+    # CONTRIBUTING replaced the line cap with a design-signal rule; commit
+    # messages and old memories still say "all files <600 lines".
+    pytest.param(r"\b600[ -]?(行|lines?)", id="file-size-line-budget"),
+    # 0.8.5 kimi backfill watch removed by the ADR-0005 2026-08-12 amendment;
+    # the kimi binding story is the most rewritten part of the docs.
+    pytest.param(r"_bind-window", id="kimi-backfill-watch"),
+]
+
+
+@pytest.mark.parametrize("pattern", RETIRED_TERMS)
+def test_current_knowledge_surfaces_do_not_resurrect_retired_terms(
+    pattern: str,
 ) -> None:
-    assert stale_claim not in CLAUDE
-    assert stale_claim not in ARCH
+    regex = re.compile(pattern)
+    hits = [
+        name for name, body in CURRENT_KNOWLEDGE_SURFACES.items() if regex.search(body)
+    ]
+    assert not hits, f"{pattern!r} resurfaced in {hits}"
 
 
 def test_every_external_action_is_pinned_to_a_tagged_commit() -> None:
@@ -301,8 +285,3 @@ def test_release_docs_gate_immutable_tags_on_green_master_candidates() -> None:
     assert "git push origin refs/tags/v0.4.1" in RELEASING
     assert "git push origin master --tags" not in RELEASING
     assert "never move or reuse" in RELEASING
-
-
-def test_session_rescue_does_not_advertise_a_companion_skill() -> None:
-    for surface in (README, CLAUDE, ARCH):
-        assert "claude-session-doctor" not in surface
