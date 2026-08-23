@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.8.16 (2026-08-23)
+
+Safety and governance batch from the 2026-08-23 project evaluation.
+
+### Changed
+
+- **tmux windows are named by the bare CLI** — `claude`, `codex`, `kimi`,
+  `opencode`, or `codex-<label>` for a declared codex identity. The
+  `<project>/<sid8>` scheme is gone; project identity was never in the name
+  (the cwd and the `@csctl_sid`/`@csctl_provider` window options carry it),
+  and the prefix read as noise inside the single `csctl` session
+  (ADR-0006 amendment).
+- **Sessions `d` now asks for confirmation.** Irreversible deletion — the
+  Claude transcript and its `session-env`/`file-history`/`tasks`/`uploads`/
+  `jobs` directories, or a delegated `codex delete` / `opencode session
+  delete` — was the only destructive single key; it now goes through
+  `confirm_delete`, the `confirm_stop` twin, and the delegated variant names
+  the exact command it will run.
+- **Takeover verifies the kill.** `take_over_result` used to fire SIGTERM,
+  sleep one second and report `KILLED`. It now polls `/proc` (0.1 s steps,
+  3 s cap, returns as soon as the pid is gone or recycled) and reports a new
+  `SURVIVED` state when the process ignored the signal — every resume path
+  then refuses instead of double-opening the session. A `/proc` outage
+  during the recheck is `REFUSED`, never `KILLED`. No SIGKILL escalation.
+- **`s` stop re-resolves at execution time** like the resume family (fresh
+  pid/proc_start, hosted/current/R10 refusals), but without the resume-only
+  "usable cwd" precondition — a live session whose directory was deleted is
+  still a kill target.
+- **Codex thread-name bindings require identity evidence.** With several
+  declared codex homes, `codex resume <name>` only binds when the process's
+  `CODEX_HOME` environ confirms the identity whose `session_index.jsonl`
+  resolved the name; unreadable environ never binds a name. UUID targets are
+  unchanged (ADR-0008 amendment).
+- Upstream drift that used to be silent is now a typed issue, failing
+  destructive verbs closed: a missing `~/.claude/sessions/` directory while
+  `projects/` holds transcripts, and a registry row without `procStart`
+  (which previously degraded to "pid exists ⇒ alive", defeating the
+  pid-reuse guard). Transcript prompt counting no longer depends on compact
+  JSON layout (`"type": "user"` with a space counted zero prompts and made
+  every session a cleanup candidate).
+- Release tagging is gated on evidence, not memory: `validate_release_tag.py`
+  queries the tag commit's `CI` workflow conclusion via `gh run list` and
+  checks that `CHANGELOG.md`'s top entry matches `__version__`; the 3.13/3.14
+  test matrix (`test-matrix.yml`, reusable) now also runs on the tag trigger
+  chain, and `ci.yml` no longer runs 3.12 twice.
+- Architecture invariants are mechanical: `tests/test_architecture.py` parses
+  `src/` with `ast` and enforces the `views → actions/data` import direction,
+  the `data/` bottom→top layering (cycle-free), and `config.py` as the only
+  place that joins `cfg.<root> / …` — seven inline joins moved into `Config`.
+  mypy now runs with `disallow_any_generics`, `disallow_untyped_defs`,
+  `disallow_incomplete_defs`, `warn_return_any`, `warn_unused_ignores`.
+- The two hand-copied fresh-evidence chains behind `codex delete` and
+  non-Claude takeover are one `_resolve_fresh`; dead `prune_sessions` /
+  `find_session_window_result` and a no-op "three-layer" protection in
+  cleanup are removed; session batch removal re-checks `provider == "claude"`
+  on the execute side.
+- Docs: duplicate copies of the same facts were merged into their single
+  source (CONTEXT.md is a glossary again; `docs/architecture.md`'s provider
+  narrative is split into sections; README/CLAUDE.md/CONTRIBUTING point at
+  `docs/releasing.md` and the compatibility table instead of restating
+  them). Classifier is `Development Status :: 4 - Beta`.
+
+### Fixed
+
+- A non-object JSON line in kimi's `session_index.jsonl` no longer aborts
+  discovery with `AttributeError`.
+- `clipboard.py` is fully tested (was 21% covered, including the WSL
+  `clip.exe` UTF-16-LE branch).
+
 ## 0.8.15 (2026-08-21)
 
 ### Added
