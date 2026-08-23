@@ -71,6 +71,7 @@ def test_readme_cli_examples_are_accepted_by_the_parser(command: str) -> None:
     "surface",
     [
         README,
+        CONTEXT,
         PYPROJECT["project"]["description"],
         cc_session_control.__doc__,
         build_parser().description,
@@ -104,6 +105,8 @@ def test_readme_lists_every_public_environment_setting(variable: str) -> None:
 
 def test_current_knowledge_surfaces_describe_the_unified_tmux_session() -> None:
     assert "share the tmux session named `csctl`" in README
+    # 2026-08-23: windows are named for the bare CLI, never the project or sid.
+    assert "never the project or sid" in README
     assert "single tmux session named `csctl`" in CONTEXT
     assert "`csctl` tmux session" in AGENTS
     assert '`cfg.tmux_session == "csctl"`' in ARCH

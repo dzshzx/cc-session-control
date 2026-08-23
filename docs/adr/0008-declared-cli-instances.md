@@ -7,6 +7,7 @@ removed the badge column the same day; `trusted_by`/`observed_by` stay on the ro
 Read-only re-check 2026-08-22: codex 0.149.0 still exposes no `--codex-home`; the `CODEX_HOME`-only
 premise holds.
 Extended by ADR-0012 (a declared identity may carry a launch-only `env_file`).
+Window-name wording revised 2026-08-23.
 
 Codex supports a second identity purely through its official relocation
 variable: `CODEX_HOME=<path> codex …` (there is no `--codex-home` flag;
@@ -72,7 +73,8 @@ read by `data/provider_config.py`) may declare `codex_homes`:
   `@csctl_provider` metadata, and `CSCTL_PROVIDERS=…,codex,…` (allow-listing
   is by base key) therefore need no migration.
 - `label` is the CLI-column tag (ASCII alphanumeric, ≤3 chars — the column
-  is 3 cells wide) and prefixes per-session tmux window names.
+  is 3 cells wide) and names the identity's tmux windows (`codex-<label>`;
+  windows carry no per-session name since 2026-08-23).
 
 ### Every command states its identity
 

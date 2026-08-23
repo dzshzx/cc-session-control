@@ -36,9 +36,6 @@ csctl
 uv run --extra dev pytest tests/                                                # all
 uv run --extra dev pytest tests/test_views.py::test_sessions_view_filter_logic  # single test
 uv run csctl                                                                    # exercise local source changes
-
-# Guardrail enforced for contributions (must return nothing)
-grep -rn --include='*.py' '/home/' src/      # no hardcoded paths in product source
 ```
 
 `csctl` 不只是 TUI——不带子命令运行会启动 TUI，`cli.py` 还暴露一个**面向 agent 的最小 headless CLI**（0.8 起只剩 `resume`；`agents` 随 0.8.8 移除——ADR-0004/0009。RC 管理已随 0.8.8 整体移除；cleanup 是 TUI 专属表面，`prune`/`env`/`skill`/`rc`/`agents` 子命令已移除。子命令输出为英文；见 Conventions 说明）：
@@ -70,7 +67,7 @@ csctl resume --take-over <sid>                 # execution-time re-resolution + 
 - 可预期的外部失败由所属边界显式建模：允许降级的只读探测返回有类型的安全值；trust/settings、cleanup、refresh 和写操作保留 typed result、失败阶段与详情，并让 CLI/TUI 可见。不得用 broad `except Exception` 把 parser/invariant/编程错误伪装成空结果或成功。
 - 破坏性 cleanup 总是先 preview：`_enter_preview` 在一个 `Overlay` 中显示目标，`_confirm_cleanup` 在第二次 `Enter` 时执行。单条删除（`d`）先经 `confirm_delete` 弹 `App.confirm` 二次确认（2026-08-23 裁定）。
 - Config 是 `config.py` 中单一的全局 `cfg = Config()`；测试通过 monkeypatch `cfg` 属性来覆盖路径（例如 `cfg.claude_home`、`cfg.claude_json`）。
-- **不硬编码机器专属路径**：产品源码（`src/`）不得内联 `/home/...` 之类的绝对路径；CI 与本地预发布序列都跑 `grep -rn --include='*.py' '/home/' src/`（见 `## 命令`），必须返回空。
+- **不硬编码机器专属路径**：产品源码（`src/`）不得内联 `/home/...` 之类的绝对路径；`scripts/check.sh` 跑 `grep -rn --include='*.py' '/home/' src/` 守卫此项，必须返回空。
 - **架构不变量**（详见 `docs/architecture.md`）：
   - Import 方向：`views` 只从 `data`/`actions` import；`data`/`actions` 绝不向上 import；`data/` 内部的 bottom→top DAG 单向、无环。
   - `config.py` 的全局 `cfg` 是唯一的路径权威——绝不在别处内联拼接 `claude_home / "..."` 之类路径。

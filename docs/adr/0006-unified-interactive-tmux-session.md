@@ -37,12 +37,8 @@ session or window name.
   were the authority before and remain so; `data/tmux.py` no longer owns any
   project/window naming (`project_name_for`/`window_name_for` and the per-provider
   `window_name` are removed; `window_tag` is the single name source).
-- Managed Remote Control servers remain in the separate configurable `rc`
-  session. `CSCTL_RC_SESSION` accepts a literal name, rejects tmux target
-  expression syntax, and must differ from `csctl`; mixing RC and agent windows
-  would make RC inventory and stop-all unsafe. Existing session/window names are
-  always addressed with tmux's exact-match `=` form, never prefix/glob fallback.
-  Project window names and the `@csctl_path` join are unchanged.
+- (RC placement clause superseded by ADR-0009; `CSCTL_RC_SESSION` no longer
+  exists.)
 - A session already resident in any tmux session is entered in place. Existing
   per-project or user-created sessions are never moved, killed, or cleaned up
   as part of this change; new dispatches provide a natural migration path.

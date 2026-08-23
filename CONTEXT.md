@@ -15,7 +15,7 @@ _Avoid_: current project view, current session view, Claude-only panel
 
 **Provider**:
 The adapter owning ONE agent CLI *identity* inside the workbench (ADR-0005,
-ADR-0008): its identity key (`claude` / `codex` / `kimi`, plus
+ADR-0008): its identity key (`claude` / `codex` / `kimi` / `opencode`, plus
 `codex:<label>` for a second declared codex home), typed capabilities (fork,
 takeover, liveness grade, cleanup), argv synthesis
 (resume / new session / tmux window name), the environment its commands must
@@ -38,7 +38,7 @@ one home), account, workspace
 **Argv-exact Liveness**:
 The preferred takeover-grade pid↔session binding for non-Claude providers: a real
 resume argv that identifies the session (`codex resume <sid-or-unique-name>`,
-`kimi --session <sid>`). Unknown or ambiguous Codex names, bare pickers,
+`kimi --session <sid>`, `opencode --session <sid>`). Unknown or ambiguous Codex names, bare pickers,
 launcher-created NEW sessions, bare-launched TUIs, and CLI daemons remain
 unbound and are never stop/takeover targets — unless the kimi runtime
 registry (below) proves them.

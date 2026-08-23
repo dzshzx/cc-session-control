@@ -19,7 +19,9 @@ across all four, plus a tmux-first project launcher.
   `R` backgrounds into tmux;
   `f` forks where the CLI supports it; ⧉ marks tmux-resident sessions;
   Codex app-server-held rows show as hosted/read-only instead of dead),
-  terminate, and delete; a cleanup submenu (`c`) prunes empty/short Claude
+  terminate, and delete; `y` copies the resume command to the clipboard;
+  `a` shows/hides archived Codex sessions (hidden by default since 0.8.14);
+  a cleanup submenu (`c`) prunes empty/short Claude
   sessions and sweeps orphan artifact directories, zombie session files, and
   aged global entries (cleanup models Claude state only)
 - **Projects Tab** — The startup tab / launcher: member directories are
@@ -82,9 +84,11 @@ ran at all — the endpoint records every run that did not register,
 including an unrecognized event name.
 
 All agent sessions csctl dispatches — new, resumed, forked, or backgrounded —
-share the tmux session named `csctl`; their window
-names retain the project. Existing live sessions in older or user-created tmux
-sessions are entered in place and are never migrated automatically.
+share the tmux session named `csctl`; each window is named for the bare CLI
+(`claude`/`codex`/`kimi`/`opencode`, or `codex-<label>` for a declared codex
+identity) — never the project or sid. Existing live sessions in older or
+user-created tmux sessions are entered in place and are never migrated
+automatically.
 
 For phone terminals, the managed `csctl` tmux session gets a scoped second
 prefix when none is already configured: press `Ctrl-A`, then `s`, to open
