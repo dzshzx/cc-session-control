@@ -14,6 +14,10 @@ from view_helpers import (
     _set_proc_complete,
 )
 
+from cc_session_control.actions.execution_target import (
+    ExecutionSessionResolution,
+    ExecutionSessionState,
+)
 from cc_session_control.actions.session_ops import (
     AttachIntent,
     ResumeIntent,
@@ -497,6 +501,13 @@ def test_sessions_s_key_confirms_then_terminates(monkeypatch):
     import cc_session_control.views.sessions as sv_mod
 
     killed = {"n": 0}
+    monkeypatch.setattr(
+        sv_mod.tui_actions.session_ops,
+        "session_for_execution",
+        lambda s, fork: ExecutionSessionResolution(
+            ExecutionSessionState.RESOLVED, session=s
+        ),
+    )
     monkeypatch.setattr(
         sv_mod.tui_actions.session_ops,
         "take_over_result",

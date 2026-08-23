@@ -127,6 +127,13 @@ def test_copy_codex_command_refreshes_and_refuses_new_hosting(monkeypatch) -> No
 
 def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
     session = _session()
+    _install_execution_session(monkeypatch, session)
+    monkeypatch.setattr(
+        execution_target.liveness,
+        "liveness_inputs",
+        lambda: execution_target.liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(tui_actions.session_ops.os.path, "isdir", lambda _path: True)
     monkeypatch.setattr(
         tui_actions.session_ops,
         "take_over_result",
@@ -161,6 +168,13 @@ def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
 
 def test_stop_session_refuses_unknown_proc_probe_without_signal(monkeypatch) -> None:
     session = _session()
+    _install_execution_session(monkeypatch, session)
+    monkeypatch.setattr(
+        execution_target.liveness,
+        "liveness_inputs",
+        lambda: execution_target.liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(tui_actions.session_ops.os.path, "isdir", lambda _path: True)
     issue = proc.ProcIssue(
         "process stat",
         "/proc/42/stat",
@@ -186,6 +200,92 @@ def test_stop_session_refuses_unknown_proc_probe_without_signal(monkeypatch) -> 
 
     assert "/proc/42/stat" in result.message
     assert "permission denied" in result.message
+
+
+def test_stop_session_uses_execution_time_session_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `s` kill path re-resolves like the resume family (Enter/t/R/f):
+    a stale snapshot pid must never reach `take_over_result` — only the
+    freshly re-resolved pid/proc_start may."""
+    stale = _session()
+    fresh = replace(stale, cwd="/fresh-project", pid=9002, proc_start="fresh-start")
+    _install_execution_session(monkeypatch, fresh)
+    monkeypatch.setattr(
+        execution_target.liveness,
+        "liveness_inputs",
+        lambda: execution_target.liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(tui_actions.session_ops.os.path, "isdir", lambda _path: True)
+    takeovers: list[tuple[int, str]] = []
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "take_over_result",
+        lambda pid, start: (
+            takeovers.append((pid, start))
+            or tui_actions.session_ops.TakeOverOutcome(
+                tui_actions.session_ops.TakeOverState.KILLED
+            )
+        ),
+    )
+
+    result = tui_actions.stop_session(stale)
+
+    assert result.message == "已停止"
+    assert takeovers == [(9002, "fresh-start")]
+
+
+def test_stop_session_refused_by_execution_time_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row that turned hosted (or hit an R10 liveness downgrade) between
+    render and dispatch must be refused by re-resolution, never signalled."""
+    session = replace(_session(), provider="codex")
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "session_for_execution",
+        lambda _session, fork: execution_target.ExecutionSessionResolution(
+            execution_target.ExecutionSessionState.REFUSED,
+            detail="session is app-server hosted and read-only",
+        ),
+    )
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
+    )
+
+    result = tui_actions.stop_session(session)
+
+    assert "停止失败" in result.message
+    assert "hosted and read-only" in result.message
+    assert result.needs_refresh
+
+
+def test_stop_session_dead_after_resolution_skips_takeover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-resolution finding the session already dead is success, not a
+    signal target: `take_over_result` must not run against a dead row."""
+    stale = _session()
+    dead = replace(stale, alive=False, pid=None, proc_start="")
+    _install_execution_session(monkeypatch, dead)
+    monkeypatch.setattr(
+        execution_target.liveness,
+        "liveness_inputs",
+        lambda: execution_target.liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(tui_actions.session_ops.os.path, "isdir", lambda _path: True)
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "take_over_result",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not take over")),
+    )
+
+    result = tui_actions.stop_session(stale)
+
+    assert "已停止" in result.message
+    assert result.needs_refresh
 
 
 def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) -> None:

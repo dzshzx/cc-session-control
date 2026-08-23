@@ -34,11 +34,23 @@ def _hosted_refusal(session: Session) -> ActionResult | None:
 
 
 def stop_session(session: Session) -> ActionResult:
+    # `_hosted_refusal` stays as a fast, snapshot-time check even though
+    # `session_for_execution` below refuses a freshly-hosted non-Claude row
+    # too (execution_target.py): the two catch different generations (a row
+    # already hosted at render time vs. one that turned hosted while this
+    # action queued) and speak in different registers (the operator-facing
+    # Chinese notice mirrored from the view gate vs. the resolver's typed
+    # English detail) — not the same judgment made twice.
     if refusal := _hosted_refusal(session):
         return refusal
-    if session.pid is None:
-        return ActionResult("停止失败", needs_refresh=True)
-    outcome = session_ops.take_over_result(session.pid, session.proc_start)
+    resolution = session_ops.session_for_execution(session, fork=False)
+    if not resolution.success or resolution.session is None:
+        detail = resolution.detail or "执行时会话证据不完整"
+        return ActionResult(f"停止失败：{detail}", needs_refresh=True)
+    fresh = resolution.session
+    if fresh.pid is None:
+        return ActionResult("已停止（进程已不存在）", needs_refresh=True)
+    outcome = session_ops.take_over_result(fresh.pid, fresh.proc_start)
     if outcome.success:
         return ActionResult("已停止", needs_refresh=True)
     if outcome.state is session_ops.TakeOverState.REFUSED:
