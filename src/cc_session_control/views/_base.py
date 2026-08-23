@@ -142,7 +142,7 @@ class ListTabView:
     def _show_overlay(
         self,
         title: str,
-        rows: list,
+        rows: list[urwid.Widget],
         height: int | None = None,
     ) -> urwid.SimpleFocusListWalker:
         """Show rows in the centered overlay; return the overlay's walker so a

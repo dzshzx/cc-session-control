@@ -139,7 +139,7 @@ def _issue(path: str, detail: str) -> InventoryIssue:
 
 def _read_state(
     session_dir: str,
-) -> tuple[dict | None, InventoryIssue | None]:
+) -> tuple[dict[str, object] | None, InventoryIssue | None]:
     """`state.json` of one session dir as (state, degradation evidence).
 
     A MISSING file degrades silently (the append-only index outlives deleted
@@ -158,13 +158,15 @@ def _read_state(
     return state, None
 
 
-def _read_index(path: str) -> tuple[dict[str, dict], InventoryIssue | None]:
+def _read_index(
+    path: str,
+) -> tuple[dict[str, dict[str, object]], InventoryIssue | None]:
     """The append-only session index as sid → entry, plus read-failure evidence.
 
     A MISSING index is not an issue (a fresh install has no state — callers
     get an empty mapping); torn tail lines of the append-only file are
     skipped; an unreadable index surfaces as an issue (AGENTS.md 外部失败)."""
-    entries: dict[str, dict] = {}
+    entries: dict[str, dict[str, object]] = {}
     try:
         with open(path, "rb") as fh:
             for raw in fh:
@@ -468,8 +470,8 @@ class KimiProvider:
     def _project(
         self,
         sid: str,
-        entry: dict,
-        live: dict,
+        entry: dict[str, object],
+        live: dict[str, ArgvMatch],
         issues: list[InventoryIssue],
     ) -> Session:
         session_dir = entry.get("sessionDir")

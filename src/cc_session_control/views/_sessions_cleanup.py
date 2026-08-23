@@ -42,24 +42,49 @@ if TYPE_CHECKING:
     from ..app import App
 
 
-def _execute_sessions(plan: CleanupPlan, targets: list) -> CleanupExecution:
-    return execute_session_removals(targets, anchors=plan.session_anchors)
+def _only[T](targets: list[tui_actions.CleanupTarget], kind: type[T]) -> list[T]:
+    """Narrow a dispatch-table target list to its one concrete kind. Each
+    `_CleanupAction.targets` lambda yields a homogeneous list, so a stray
+    element is a programming error — raise, never drop it silently (a
+    silent filter would read as "nothing to delete")."""
+    narrowed: list[T] = []
+    for target in targets:
+        if not isinstance(target, kind):
+            raise AssertionError(
+                f"cleanup targets must all be {kind.__name__}, got {type(target).__name__}"
+            )
+        narrowed.append(target)
+    return narrowed
 
 
-def _execute_orphans(plan: CleanupPlan, entries: list[str]) -> CleanupExecution:
+def _execute_sessions(
+    plan: CleanupPlan, targets: list[tui_actions.CleanupTarget]
+) -> CleanupExecution:
+    return execute_session_removals(
+        _only(targets, Session), anchors=plan.session_anchors
+    )
+
+
+def _execute_orphans(
+    plan: CleanupPlan, targets: list[tui_actions.CleanupTarget]
+) -> CleanupExecution:
     """Route preview targets to the self-revalidating public executor."""
     return execute_orphan_removals(
-        entries,
+        _only(targets, str),
         anchors=plan.orphan_anchors,
     )
 
 
-def _execute_zombies(plan: CleanupPlan, pids: list[int]) -> CleanupExecution:
-    return execute_zombie_removals(pids, anchors=plan.zombie_anchors)
+def _execute_zombies(
+    plan: CleanupPlan, targets: list[tui_actions.CleanupTarget]
+) -> CleanupExecution:
+    return execute_zombie_removals(_only(targets, int), anchors=plan.zombie_anchors)
 
 
-def _execute_aged(plan: CleanupPlan, entries: list[str]) -> CleanupExecution:
-    return execute_aged_removals(entries, anchors=plan.aged_anchors)
+def _execute_aged(
+    plan: CleanupPlan, targets: list[tui_actions.CleanupTarget]
+) -> CleanupExecution:
+    return execute_aged_removals(_only(targets, str), anchors=plan.aged_anchors)
 
 
 def _session_line(target: object) -> str:
@@ -80,7 +105,7 @@ class _CleanupAction:
     gated: bool  # R10-gated (age sweep is not)
     targets: Callable[[CleanupPlan], Sequence[Session | str | int]]
     format_row: Callable[[object], str]  # one preview row per target
-    execute: Callable[[CleanupPlan, list], CleanupExecution]
+    execute: Callable[[CleanupPlan, list[tui_actions.CleanupTarget]], CleanupExecution]
     none_notice: str  # "无…需要清理"
     title_tpl: str  # preview overlay title
     done_tpl: str  # post-confirm notify

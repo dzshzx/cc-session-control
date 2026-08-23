@@ -20,7 +20,7 @@ _ANDROID_REMOTE_ORIGINATOR = "codex_chatgpt_android_remote"
 _DESKTOP_ORIGINATOR = "Codex Desktop"
 
 
-def classify_source(payload: dict) -> str:
+def classify_source(payload: dict[str, object]) -> str:
     """PURE: coarse `Session.source` bucket from a codex session_meta payload.
 
     Priority (highest first, first match wins):

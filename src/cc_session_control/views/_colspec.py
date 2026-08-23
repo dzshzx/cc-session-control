@@ -22,7 +22,9 @@ ColSpec = tuple[int | tuple[str, int], str, str]
 GUTTER = 2
 
 
-def _sized(sizing: int | tuple[str, int], widget: urwid.Widget):
+def _sized(
+    sizing: int | tuple[str, int], widget: urwid.Widget
+) -> tuple[str, int, urwid.Widget] | tuple[int, urwid.Widget]:
     if isinstance(sizing, tuple):
         return (*sizing, widget)
     return (sizing, widget)

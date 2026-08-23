@@ -42,6 +42,7 @@ from .. import proc
 from ..proc import ProcCli, ProcCliInventory
 from ..tmux_outcomes import PaneInventory
 from .argv_live import (
+    ArgvMatch,
     apply_unbound_hints,
     bound_pids,
     build_live_index,
@@ -333,7 +334,7 @@ class OpencodeProvider:
         cwd: str,
         title: str,
         mtime: float,
-        live: dict,
+        live: dict[str, ArgvMatch],
     ) -> Session:
         match = live.get(sid)
         return Session(

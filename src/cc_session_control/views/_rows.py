@@ -50,7 +50,7 @@ class SelectableRow(urwid.WidgetWrap):
     def selectable(self) -> bool:
         return True
 
-    def keypress(self, size: tuple, key: str) -> str | None:
+    def keypress(self, size: tuple[int, ...], key: str) -> str | None:
         return key
 
 

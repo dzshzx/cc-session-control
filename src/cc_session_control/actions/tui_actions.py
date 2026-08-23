@@ -24,7 +24,7 @@ from .feedback import (
 from .runner import ActionResult
 
 type CleanupTarget = Session | str | int
-type CleanupExecutor = Callable[[list], CleanupExecution]
+type CleanupExecutor = Callable[[list[CleanupTarget]], CleanupExecution]
 
 
 def _hosted_refusal(session: Session) -> ActionResult | None:

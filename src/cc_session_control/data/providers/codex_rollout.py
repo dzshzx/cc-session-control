@@ -29,7 +29,7 @@ _BODY_SCAN_MAX_LINES = 64
 _BODY_SCAN_MAX_BYTES = 128 * 1024
 
 
-def read_meta(path: str) -> tuple[dict | None, bool, bool]:
+def read_meta(path: str) -> tuple[dict[str, object] | None, bool, bool]:
     """(parsed `session_meta` payload or None, first-line-was-empty,
     first-line-was-truncated-by-the-cap).
 

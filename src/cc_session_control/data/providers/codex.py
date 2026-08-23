@@ -661,12 +661,12 @@ class CodexProvider:
             )
         return best
 
-    def _row_payload(self, path: str) -> tuple[dict | None, bool, bool]:
+    def _row_payload(self, path: str) -> tuple[dict[str, object] | None, bool, bool]:
         return read_meta(path)
 
     def _project(
         self,
-        payload: dict,
+        payload: dict[str, object],
         path: str,
         mtime: float,
         names: dict[str, str],
