@@ -276,7 +276,11 @@ class TestExecutionProtection:
         result = providers.execute_cli_delete("codex", UUID1)
         assert result.state is CliDeleteState.REFUSED
         assert result.stage is CliDeleteStage.PROTECTION
-        assert "not found in fresh discovery" in result.detail
+        # C3: the "missing" wording is now shared verbatim with
+        # `resolve_argv_execution`'s fresh-evidence chain (`_resolve_fresh`)
+        # rather than delete owning its own "not found in fresh discovery"
+        # phrasing.
+        assert "missing session id" in result.detail
 
     @pytest.mark.parametrize("key", ["claude", "kimi"])
     def test_registry_dispatch_is_loud_without_delete_verbs(self, key):

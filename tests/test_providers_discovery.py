@@ -438,6 +438,70 @@ class TestResolveArgvExecution:
         assert resolution.session.tmux_inventory_complete
 
 
+class TestResolveFresh:
+    """`providers._resolve_fresh` — the ONE fresh-evidence chain `execute_cli_delete`
+    and `resolve_argv_execution` both key on (C3, was two hand-copied chains)."""
+
+    def test_incomplete_evidence_refuses_with_evidence_stage(
+        self, monkeypatch, codex_home
+    ):
+        issue = providers.proc.ProcIssue("process ancestors", "/proc", "unavailable")
+        monkeypatch.setattr(
+            providers.proc,
+            "probe_current_ancestors",
+            lambda: providers.proc.AncestorProbe(frozenset(), (issue,)),
+        )
+        resolution = providers._resolve_fresh(CodexProvider(), UUID1)
+        assert not resolution.success
+        assert resolution.stage is providers.CliDeleteStage.EVIDENCE
+        assert "ancestor evidence incomplete" in resolution.detail
+
+    def test_missing_sid_refuses_with_protection_stage(self, monkeypatch, codex_home):
+        monkeypatch.setattr(
+            providers.proc,
+            "scan_cli_argv_inventory",
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(),
+        )
+        resolution = providers._resolve_fresh(CodexProvider(), UUID1)
+        assert not resolution.success
+        assert resolution.stage is providers.CliDeleteStage.PROTECTION
+        assert "missing session id" in resolution.detail
+
+    def test_success_returns_fresh_session_without_residency(
+        self, monkeypatch, codex_home, tmp_path
+    ):
+        cwd = tmp_path / "proj"
+        cwd.mkdir()
+        _write_rollout(
+            codex_home,
+            "01",
+            f"rollout-a-{UUID1}.jsonl",
+            {
+                "id": UUID1,
+                "session_id": UUID1,
+                "cwd": str(cwd),
+                "thread_source": "user",
+            },
+        )
+        monkeypatch.setattr(
+            providers.proc,
+            "scan_cli_argv_inventory",
+            lambda basenames, env_keys=frozenset(): ProcCliInventory(
+                records=(_proc(999999, "codex", "resume", UUID1, starttime="88"),),
+            ),
+        )
+
+        def _forbid_residency(pids):
+            raise AssertionError("_resolve_fresh must not fill residency itself")
+
+        monkeypatch.setattr(providers.tmux, "residency_inventory", _forbid_residency)
+        resolution = providers._resolve_fresh(CodexProvider(), UUID1)
+        assert resolution.success
+        assert resolution.session is not None
+        assert resolution.session.pid == 999999
+        assert resolution.session.proc_start == "88"
+
+
 class TestSourceDegradationSurfaces:
     def test_kimi_malformed_state_json_is_an_issue(self, kimi_home):
         sid = f"session_{UUID1}"

@@ -292,30 +292,49 @@ def _delete_refusal(stage: CliDeleteStage, detail: str) -> CliDeleteResult:
     return CliDeleteResult(CliDeleteState.REFUSED, stage, detail)
 
 
-def execute_cli_delete(provider_key: str, sid: str) -> CliDeleteResult:
-    """Execution-time protection + delegated official delete (Sessions `d`).
+@dataclass(frozen=True)
+class _FreshResolution:
+    """Outcome of the ONE fresh-evidence resolution chain shared by
+    `execute_cli_delete` and `resolve_argv_execution` (C3): a freshly
+    re-scanned, unambiguous, non-current `Session` on success, or a
+    stage-classified refusal detail on failure. Callers append their own
+    domain-specific rejections (alive/hosted/archived for delete; cwd
+    usability for argv takeover) on top of a successful resolution — this
+    type carries no more than the shared chain itself decides."""
 
-    Mirror of `resolve_argv_execution`'s fresh-evidence discipline: the CLI
-    only ever runs against a freshly re-scanned row that is confirmed dead,
-    not current, and not archived (`codex delete` against the archived store
-    is unverified upstream semantics — B7's refusal chain holds). Incomplete
-    ancestors / argv-walk / discovery evidence refuses (fail closed, R10 —
-    the same `probe_current_ancestors().complete` gate the cleanup family
-    keys on). Loud on a provider without delete verbs: only `DeleteVerbs`
-    rows ever reach this dispatch, so a mismatch is a programming error."""
-    provider = get(provider_key)
-    if not isinstance(provider, DeleteVerbs):
-        raise TypeError(f"provider {provider_key!r} has no delete verbs")
+    session: Session | None = None
+    stage: CliDeleteStage = CliDeleteStage.EVIDENCE
+    detail: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.session is not None
+
+
+def _resolve_fresh(provider: AgentProvider, sid: str) -> _FreshResolution:
+    """THE fresh-evidence resolution chain both execution-time non-Claude
+    resolvers key on (C3 — was two hand-copied chains, one per caller):
+    disk-discovery capability → complete ancestor probe → complete argv
+    inventory → complete provider discovery → exact-sid match (missing /
+    ambiguous refused) → not-current. A freshly re-scanned whole `Session`
+    never a snapshot's — is the only thing either a live SIGTERM or a
+    delegated `codex delete` may act on (CLAUDE.md). Incomplete evidence at
+    any step refuses fail-closed (R10) with `CliDeleteStage.EVIDENCE`; a
+    resolved-but-rejected identity refuses with `CliDeleteStage.PROTECTION`.
+    Residency is deliberately NOT filled here — only the live-takeover path
+    needs it, so `_with_residency` stays that caller's own step.
+    """
     if not isinstance(provider, DiskDiscovery):
-        return _delete_refusal(
-            CliDeleteStage.EVIDENCE,
-            f"provider {provider_key!r} has no execution-time discovery",
+        return _FreshResolution(
+            stage=CliDeleteStage.EVIDENCE,
+            detail=f"provider {provider.key!r} has no execution-time discovery",
         )
     ancestors = proc.probe_current_ancestors()
     if not ancestors.complete:
         detail = "; ".join(i.detail for i in ancestors.issues)
-        return _delete_refusal(
-            CliDeleteStage.EVIDENCE, f"ancestor evidence incomplete: {detail}"
+        return _FreshResolution(
+            stage=CliDeleteStage.EVIDENCE,
+            detail=f"ancestor evidence incomplete: {detail}",
         )
     inventory = proc.scan_cli_argv_inventory(
         provider.capture_basenames,
@@ -323,31 +342,55 @@ def execute_cli_delete(provider_key: str, sid: str) -> CliDeleteResult:
     )
     if not inventory.complete:
         detail = "; ".join(i.detail for i in inventory.issues)
-        return _delete_refusal(
-            CliDeleteStage.EVIDENCE, f"process evidence incomplete: {detail}"
+        return _FreshResolution(
+            stage=CliDeleteStage.EVIDENCE,
+            detail=f"process evidence incomplete: {detail}",
         )
     scan = provider.discover(inventory, ancestors.pids, _pane_evidence(inventory))
     if not scan.complete:
         detail = "; ".join(i.detail for i in scan.issues)
-        return _delete_refusal(
-            CliDeleteStage.EVIDENCE, f"session discovery incomplete: {detail}"
+        return _FreshResolution(
+            stage=CliDeleteStage.EVIDENCE,
+            detail=f"session discovery incomplete: {detail}",
         )
     matches = tuple(row for row in scan.sessions if row.sid == sid)
     if not matches:
-        return _delete_refusal(
-            CliDeleteStage.PROTECTION,
-            f"session {sid!r} not found in fresh discovery",
+        return _FreshResolution(
+            stage=CliDeleteStage.PROTECTION,
+            detail=f"missing session id {sid!r}",
         )
     if len(matches) != 1:
-        return _delete_refusal(
-            CliDeleteStage.PROTECTION,
-            f"ambiguous session id {sid!r}; found {len(matches)} matches",
+        return _FreshResolution(
+            stage=CliDeleteStage.PROTECTION,
+            detail=f"ambiguous session id {sid!r}; found {len(matches)} matches",
         )
     target = matches[0]
     if target.current:
-        return _delete_refusal(
-            CliDeleteStage.PROTECTION, f"session {sid!r} is the current session"
+        return _FreshResolution(
+            stage=CliDeleteStage.PROTECTION,
+            detail=f"session {sid!r} is the current session",
         )
+    return _FreshResolution(session=target)
+
+
+def execute_cli_delete(provider_key: str, sid: str) -> CliDeleteResult:
+    """Execution-time protection + delegated official delete (Sessions `d`).
+
+    Shares `_resolve_fresh`'s fresh-evidence chain with `resolve_argv_execution`
+    (C3): the CLI only ever runs against a freshly re-scanned row that is
+    confirmed dead, not current, and not archived (`codex delete` against the
+    archived store is unverified upstream semantics — B7's refusal chain
+    holds). Loud on a provider without delete verbs: only `DeleteVerbs` rows
+    ever reach this dispatch, so a mismatch is a programming error."""
+    provider = get(provider_key)
+    if not isinstance(provider, DeleteVerbs):
+        raise TypeError(f"provider {provider_key!r} has no delete verbs")
+    resolution = _resolve_fresh(provider, sid)
+    if not resolution.success:
+        return _delete_refusal(resolution.stage, resolution.detail)
+    target = resolution.session
+    if target is None:
+        raise AssertionError("successful fresh resolution must carry a Session")
     if target.alive:
         return _delete_refusal(
             CliDeleteStage.PROTECTION, f"session {sid!r} is live; stop it first"
@@ -402,8 +445,9 @@ def resolve_argv_execution(provider_key: str, sid: str) -> ArgvResolution:
     """Re-resolve one non-Claude sid against fresh disk + `/proc` + tmux
     dispatch-metadata evidence (both liveness sources, argv first — C1).
 
-    Mirror of the Claude execution-time resolver's guarantees (CLAUDE.md):
-    a live takeover may only proceed on a freshly re-scanned whole Session —
+    Shares `_resolve_fresh`'s fresh-evidence chain with `execute_cli_delete`
+    (C3) — the Claude execution-time resolver's same guarantee (CLAUDE.md):
+    a live takeover may only proceed on a freshly re-scanned whole Session,
     never on snapshot identity. Refuses missing sids, the current session,
     unusable cwds, and incomplete argv-walk evidence (fail closed, R10-like).
     """
@@ -412,35 +456,12 @@ def resolve_argv_execution(provider_key: str, sid: str) -> ArgvResolution:
         return ArgvResolution(
             detail=f"provider {provider_key!r} does not support takeover",
         )
-    if not isinstance(provider, DiskDiscovery):
-        return ArgvResolution(
-            detail=f"provider {provider_key!r} has no execution-time discovery",
-        )
-    ancestors = proc.probe_current_ancestors()
-    if not ancestors.complete:
-        detail = "; ".join(i.detail for i in ancestors.issues)
-        return ArgvResolution(detail=f"ancestor evidence incomplete: {detail}")
-    inventory = proc.scan_cli_argv_inventory(
-        provider.capture_basenames,
-        provider.env_keys,
-    )
-    if not inventory.complete:
-        detail = "; ".join(i.detail for i in inventory.issues)
-        return ArgvResolution(detail=f"process evidence incomplete: {detail}")
-    scan = provider.discover(inventory, ancestors.pids, _pane_evidence(inventory))
-    if not scan.complete:
-        detail = "; ".join(i.detail for i in scan.issues)
-        return ArgvResolution(detail=f"session discovery incomplete: {detail}")
-    matches = tuple(row for row in scan.sessions if row.sid == sid)
-    if not matches:
-        return ArgvResolution(detail=f"missing session id {sid!r}")
-    if len(matches) != 1:
-        return ArgvResolution(
-            detail=f"ambiguous session id {sid!r}; found {len(matches)} matches",
-        )
-    target = matches[0]
-    if target.current:
-        return ArgvResolution(detail=f"session {sid!r} is the current session")
+    resolution = _resolve_fresh(provider, sid)
+    if not resolution.success:
+        return ArgvResolution(detail=resolution.detail)
+    target = resolution.session
+    if target is None:
+        raise AssertionError("successful fresh resolution must carry a Session")
     if not target.cwd or not os.path.isdir(target.cwd):
         return ArgvResolution(
             detail=f"session {sid!r} has no usable execution-time cwd: {target.cwd!r}",
