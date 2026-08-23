@@ -189,7 +189,7 @@ def _parse_transcript(path: str) -> TranscriptRecord | None:
                 candidate = document.get("lastPrompt") if document is not None else None
                 if isinstance(candidate, str) and candidate:
                     last_prompt = candidate
-            if '"type":"user"' in line:
+            if '"user"' in line:
                 document = _json_object(line, line_number)
                 if document is None or document.get("type") != "user":
                     continue

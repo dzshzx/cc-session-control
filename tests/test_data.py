@@ -4,6 +4,7 @@ import json
 import subprocess
 import time
 
+import pytest
 from factories import make_session
 
 from cc_session_control.actions.session_ops import resume_cmd
@@ -628,12 +629,15 @@ def test_every_spawn_names_its_window_by_the_bare_cli(monkeypatch):
 # --- D4: _parse_transcript ---
 
 
-def _write_jsonl(tmp_path, sid, lines):
-    # Compact separators so the '"type":"user"' substring pre-check in
-    # _parse_transcript matches, mirroring Claude's actual transcript format.
+def _write_jsonl(tmp_path, sid, lines, separators=(",", ":")):
+    # Compact separators by default, mirroring Claude's actual transcript
+    # format. The line pre-checks in _parse_transcript are whitespace- and
+    # key-order-insensitive (see test_parse_transcript_serialization_variants
+    # and test_parse_transcript_key_order_reversed), so other separator
+    # styles are supported too — this default just matches production.
     f = tmp_path / f"{sid}.jsonl"
     f.write_text(
-        "\n".join(json.dumps(line, separators=(",", ":")) for line in lines) + "\n"
+        "\n".join(json.dumps(line, separators=separators) for line in lines) + "\n"
     )
     return str(f)
 
@@ -833,3 +837,79 @@ def test_parse_transcript_hidden_tags(tmp_path):
     )
     s = _parse_transcript(path, idx={}, cur=set())
     assert s.hidden == {"sdk", "bridge"}
+
+
+# --- B2: line pre-check must not depend on exact JSON layout ---
+#
+# Regression for a real incident: upstream serializers vary whitespace
+# ("type":"user" vs "type": "user") and key order. The old pre-check
+# `'"type":"user"' in line` only matched the first compact form, so any
+# other layout silently produced prompts=0 for every session — which then
+# classified real sessions as empty-shell cleanup candidates. The pre-check
+# is performance-only; the actual classification always comes from the
+# json.loads()'d document.
+
+
+@pytest.mark.parametrize(
+    "separators",
+    [
+        (",", ":"),  # compact, e.g. {"type":"user"}
+        (",", ": "),  # colon-space, the exact upstream variant that broke this
+        (", ", ":"),  # comma-space
+        (", ", ": "),  # both spaces (json.dumps default)
+    ],
+    ids=["compact", "colon_space", "comma_space", "both_spaces"],
+)
+def test_parse_transcript_serialization_variants(tmp_path, separators):
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"aiTitle": "The Title"},
+            {"lastPrompt": "the last prompt"},
+            {"type": "user", "message": {"content": "hello world"}},
+        ],
+        separators=separators,
+    )
+    s = _parse_transcript(path, idx={}, cur=set())
+    assert s is not None
+    assert s.cwd == "/tmp/proj"
+    assert s.label == "The Title"
+    assert s.prompts == 1
+
+
+def test_parse_transcript_key_order_reversed(tmp_path):
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"lastPrompt": "the last prompt", "aiTitle": "The Title"},
+            {"message": {"content": "hello world"}, "type": "user"},
+        ],
+    )
+    s = _parse_transcript(path, idx={}, cur=set())
+    assert s is not None
+    assert s.cwd == "/tmp/proj"
+    assert s.label == "The Title"
+    assert s.prompts == 1
+
+
+def test_parse_transcript_user_substring_is_not_enough_to_count(tmp_path):
+    # The relaxed pre-check `'"user"' in line` is intentionally over-inclusive
+    # (e.g. it also matches a line whose type is "assistant" but whose prose
+    # mentions "user"). Classification must still come from json.loads(),
+    # so such a line must not be miscounted as a prompt.
+    path = _write_jsonl(
+        tmp_path,
+        "sid1",
+        [
+            {"cwd": "/tmp/proj"},
+            {"type": "assistant", "message": {"content": "ask the user to confirm"}},
+            {"type": "user", "message": {"content": "real prompt"}},
+        ],
+    )
+    s = _parse_transcript(path, idx={}, cur=set())
+    assert s is not None
+    assert s.prompts == 1
