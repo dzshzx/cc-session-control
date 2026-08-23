@@ -41,7 +41,13 @@ PYPROJECT = tomllib.loads(
     (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
 )
 WORKFLOWS = Path(__file__).parents[1] / ".github" / "workflows"
-QUALITY_GATE_USE = "./.github/workflows/quality-gate.yml"
+# Reusable local workflows callable via `uses: ./...`. Both are shared quality
+# gates (scripts/check.sh; the 3.13/3.14 pytest matrix), so being local is not
+# a pinning gap the way an external `owner/repo@ref` reference would be.
+ALLOWED_LOCAL_WORKFLOW_USES = {
+    "./.github/workflows/quality-gate.yml",
+    "./.github/workflows/test-matrix.yml",
+}
 PINNED_EXTERNAL_USE = re.compile(
     r"^\s*uses:\s*[\w.-]+/[\w.-]+@([0-9a-f]{40})\s+#\s+(\S+)\s*$"
 )
@@ -281,7 +287,7 @@ def test_every_external_action_is_pinned_to_a_tagged_commit() -> None:
     for line in uses_lines:
         reference = line.split("uses:", 1)[1].strip()
         if reference.startswith("./"):
-            assert reference == QUALITY_GATE_USE
+            assert reference in ALLOWED_LOCAL_WORKFLOW_USES
         else:
             assert PINNED_EXTERNAL_USE.match(line), line
 

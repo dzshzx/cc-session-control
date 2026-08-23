@@ -14,11 +14,21 @@ jobs:
       contents: read
     uses: ./.github/workflows/quality-gate.yml
 
+  # quality-gate only runs pytest on 3.12; a tag push otherwise never reaches
+  # the 3.13/3.14 matrix that ci.yml runs on master pushes/PRs, so a release
+  # candidate could be tagged and published without ever testing those
+  # interpreters. Reuse the same reusable workflow ci.yml calls.
+  test-matrix:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/test-matrix.yml
+
   validate-release-tag:
     name: Validate release tag
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
 
     steps:
       - name: Check out repository
@@ -32,6 +42,8 @@ jobs:
           python-version: "3.12"
 
       - name: Validate release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git fetch --no-tags origin +master:refs/remotes/origin/master
           python scripts/validate_release_tag.py "$GITHUB_REF_NAME"
@@ -40,6 +52,7 @@ jobs:
     name: Build and publish to PyPI
     needs:
       - quality-gate
+      - test-matrix
       - validate-release-tag
     runs-on: ubuntu-latest
     environment:

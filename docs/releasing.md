@@ -136,9 +136,16 @@ git push origin refs/tags/v0.4.1
 The `Release` workflow runs on `v*` tags. After the shared quality gate passes,
 it also verifies that the triggering tag is an exact `vMAJOR.MINOR.PATCH`
 annotated tag, matches the package version, and points to the checked-out
-commit. Only then does it build the distributions, smoke test the wheel and
-source distribution, upload the built artifacts to the workflow run, and
-publish to PyPI through Trusted Publishing. Production publishing has no manual
+commit. `scripts/validate_release_tag.py` additionally queries
+`gh run list --workflow CI --commit <sha>` and rejects the tag unless that
+SHA's `CI` workflow run is `completed`/`success` (pending, failing, or missing
+all fail closed), and checks that `CHANGELOG.md`'s top `## X.Y.Z` heading
+matches the package version. Only then does it build the distributions, smoke
+test the wheel and source distribution, upload the built artifacts to the
+workflow run, and publish to PyPI through Trusted Publishing. `publish` also
+`needs` a `test-matrix` job (the same reusable 3.13/3.14 pytest matrix
+`ci.yml` runs on push/PR) so a tag can't reach PyPI on the strength of the
+quality gate's 3.12-only pytest run alone. Production publishing has no manual
 workflow trigger; use the manual TestPyPI workflow for dry runs.
 The post-tag quality gate is defense in depth, not a substitute for the green
 candidate CI check above. Published tags are immutable: never move or reuse
