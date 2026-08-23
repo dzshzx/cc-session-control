@@ -9,7 +9,7 @@ from threading import Event, ExceptHookArgs, Thread
 import pytest
 
 from cc_session_control.config import cfg
-from cc_session_control.data import age_cleanup, cleanup
+from cc_session_control.data import age_cleanup, proc
 from cc_session_control.data.age_cleanup import AgeCleanupPlan
 from cc_session_control.data.cleanup import CleanupPlan
 from cc_session_control.data.liveness import LivenessIssue, LivenessSnapshot
@@ -376,7 +376,7 @@ def test_refresh_plan_uses_generation_evidence_without_second_probe(
     def unexpected_acquisition(*_args, **_kwargs):
         raise AssertionError("refresh planning must not reacquire liveness")
 
-    monkeypatch.setattr(cleanup.proc, "probe_current_ancestors", unexpected_acquisition)
+    monkeypatch.setattr(proc, "probe_current_ancestors", unexpected_acquisition)
 
     result = build_refresh_result(8, snapshot_builder=lambda: snapshot)
 

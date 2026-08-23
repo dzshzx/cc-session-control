@@ -27,7 +27,6 @@ from .tmux_outcomes import (
     PaneInventory,
     ResidencyInventory,
     ResidencyIssue,
-    SessionWindowResult,
     TmuxPane,
     TmuxWriteResult,
     TmuxWriteStage,
@@ -446,16 +445,6 @@ def residency_inventory(pids: Iterable[int]) -> ResidencyInventory:
         if target:
             out[pid] = target
     return ResidencyInventory(out, tuple(issues))
-
-
-def find_session_window_result(pids: list[int]) -> SessionWindowResult:
-    """Typed first-target convenience over :func:`residency_inventory`."""
-
-    inventory = residency_inventory(pids)
-    for pid in pids:
-        if pid in inventory.targets:
-            return SessionWindowResult(inventory.targets[pid], inventory.issues)
-    return SessionWindowResult(issues=inventory.issues)
 
 
 def select_window(target: str) -> bool:

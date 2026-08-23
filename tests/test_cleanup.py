@@ -377,7 +377,7 @@ def test_build_plan_uses_only_injected_generation_evidence(tmp_path, monkeypatch
     def unexpected_acquisition(*_args, **_kwargs):
         raise AssertionError("plan construction must not reacquire liveness")
 
-    monkeypatch.setattr(cleanup.proc, "probe_current_ancestors", unexpected_acquisition)
+    monkeypatch.setattr(proc_mod, "probe_current_ancestors", unexpected_acquisition)
 
     plan = cleanup.build_plan(
         [session],
@@ -410,15 +410,6 @@ def test_build_plan_rejects_incomplete_generation_evidence():
 
 def _degrade(monkeypatch):
     monkeypatch.setattr(proc_mod, "has_proc", lambda: False)
-
-
-def test_prune_refuses_without_proc(tmp_path, monkeypatch):
-    import time
-
-    _degrade(monkeypatch)
-    old = time.time() - 700
-    sessions = [_make_session(sid="dead", prompts=0, mtime=old, alive=False)]
-    assert cleanup.prune_sessions(sessions, max_prompts=0) == []
 
 
 def test_remove_orphans_refuses_without_proc(tmp_path, monkeypatch):
@@ -477,6 +468,25 @@ def test_execute_session_removals_skips_now_alive_target(tmp_path, monkeypatch):
     assert os.path.exists(transcript)
 
 
+def test_execute_session_removals_refuses_non_claude_row(tmp_path, monkeypatch):
+    # C6: execute_session_removals must not rely solely on the upstream
+    # refresh.py provider filter (data/refresh.py:141-142) — a non-claude
+    # row that reaches this executor is refused in-place, and the other
+    # claude-provider targets in the same batch are still removed.
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    claude_transcript = os.path.join(tmp_path, "claude.jsonl")
+    open(claude_transcript, "w").close()
+    claude_target = _make_session(sid="claude-sid", file=claude_transcript)
+    codex_target = _make_session(
+        sid="codex-sid", file="/does/not/matter", provider="codex"
+    )
+    _fresh_execution(monkeypatch)
+    result = cleanup.execute_session_removals([codex_target, claude_target])
+    assert [n.target for n in result.refused] == ["codex-sid"]
+    assert result.completed == ["claude-sid"]
+    assert not os.path.exists(claude_transcript)
+
+
 def test_remove_session_refuses_when_agent_host_is_live(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
     sid = "abcdef0123456789"
@@ -488,9 +498,9 @@ def test_remove_session_refuses_when_agent_host_is_live(tmp_path, monkeypatch):
     with open(os.path.join(sessions_dir, "5555.json"), "w") as fh:
         json.dump({"pid": 5555, "sessionId": sid, "procStart": "999"}, fh)
     monkeypatch.setattr(
-        cleanup.proc,
+        proc_mod,
         "probe_pid",
-        lambda pid, start: cleanup.proc.PidProbe(pid, pid == 5555),
+        lambda pid, start: proc_mod.PidProbe(pid, pid == 5555),
     )
     registry.invalidate_cache()
     # Its jobs/<short> dir + a sid-keyed artifact dir.

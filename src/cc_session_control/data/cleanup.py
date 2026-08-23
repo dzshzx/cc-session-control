@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ..config import cfg
 from ..models import Session, SessionProc
-from . import liveness, proc, registry, transcripts
+from . import liveness, registry, transcripts
 from .age_cleanup import (
     AgeCleanupPlan,
     build_age_plan,
@@ -48,13 +48,15 @@ def known_sids_from_transcripts(
     transcript_sids: Iterable[str],
     session_procs: Sequence[SessionProc],
     agents_map: Mapping[str, int | None],
-    cur: AbstractSet[int],
 ) -> set[str]:
-    """Return every sid protected by transcripts or liveness evidence."""
+    """Return every sid protected by transcripts or liveness evidence.
+
+    Every registry row's sid is protected unconditionally, regardless of
+    whether its pid is currently alive — `session_procs` already IS the set
+    of sids with a registry `sessions/<pid>.json` row (dead pids included).
+    """
     known = set(transcript_sids)
     known |= {sp.sid for sp in session_procs}
-    known |= {sp.sid for sp in session_procs if sp.proc_alive}
-    known |= {sp.sid for sp in session_procs if sp.pid in cur}
     known |= {sid for sid in agents_map if sid}
     return known
 
@@ -194,7 +196,6 @@ def execute_orphan_removals(
         transcript_inventory.sids,
         evidence.session_procs,
         evidence.agents_map,
-        evidence.cur,
     )
     for entry in entries:
         label, _, sid = entry.partition("/")
@@ -279,26 +280,6 @@ def execute_zombie_removals(
 # --- Session prune + full delete -------------------------------------------
 
 
-def prune_sessions(
-    sessions: Sequence[Session],
-    max_prompts: int = 0,
-    *,
-    evidence: liveness.LivenessSnapshot | None = None,
-) -> list[Session]:
-    """Prunable sessions: not alive, not current, <= max_prompts, not recent.
-
-    Uses an injected complete generation without acquiring sources. Compatibility
-    callers self-probe and refuse when current cannot be determined (R10).
-    """
-    if evidence is None:
-        protection_complete = proc.probe_current_ancestors().complete
-    else:
-        protection_complete = evidence.complete
-    if not protection_complete:
-        return []
-    return _select_prunable_sessions(sessions, max_prompts, time.time())
-
-
 def _session_is_protected(
     session: Session,
     session_procs: Sequence[SessionProc],
@@ -332,6 +313,26 @@ def _remove_session_paths(
     return result
 
 
+def _refuse_non_claude_provider(s: Session, result: CleanupExecution) -> bool:
+    """Refuse `s` into `result` and return True when it is not a Claude row.
+
+    Cleanup models Claude state only (ADR-0005): a non-Claude row's `file`
+    anchor points INTO the owning CLI's own store (codex rollout, kimi
+    state.json) — csctl never deletes state it does not fully model. The
+    codex `d` path (`providers.execute_cli_delete` → official `codex
+    delete`) is a typed bypass BESIDE this boundary, not a relaxation of
+    it — this seam still refuses every non-Claude row. Shared by every
+    session-removal entry point so the gate cannot drift between them.
+    """
+    if s.provider == "claude":
+        return False
+    result.refuse(
+        [s.sid],
+        f"provider {s.provider!r} sessions are not csctl-deletable",
+    )
+    return True
+
+
 def remove_session(
     s: Session,
     *,
@@ -339,17 +340,7 @@ def remove_session(
 ) -> CleanupExecution:
     """Delete anchored session artifacts after fresh R10/M3 protection gates."""
     result = CleanupExecution()
-    if s.provider != "claude":
-        # Cleanup models Claude state only (ADR-0005): a non-Claude row's
-        # `file` anchor points INTO the owning CLI's own store (codex rollout,
-        # kimi state.json) — csctl never deletes state it does not fully model.
-        # The codex `d` path (`providers.execute_cli_delete` → official
-        # `codex delete`) is a typed bypass BESIDE this boundary, not a
-        # relaxation of it — this seam still refuses every non-Claude row.
-        result.refuse(
-            [s.sid],
-            f"provider {s.provider!r} sessions are not csctl-deletable",
-        )
+    if _refuse_non_claude_provider(s, result):
         return result
     try:
         pinned = anchors if anchors is not None else session_removal_anchors([s])[s.sid]
@@ -395,6 +386,8 @@ def execute_session_removals(
     agents_map = dict(evidence.agents_map)
     cur = set(evidence.cur)
     for s in targets:
+        if _refuse_non_claude_provider(s, result):
+            continue
         if _session_is_protected(s, session_procs, agents_map, cur):
             result.skip(s.sid, "session is now live or current")
             continue
@@ -456,7 +449,6 @@ def build_plan(
         (s.sid for s in sessions),
         evidence.session_procs,
         evidence.agents_map,
-        evidence.cur,
     ) | set(transcript_sids)
     orphan_entries: list[str] = _plan_source(
         "orphan_dirs",

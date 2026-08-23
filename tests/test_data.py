@@ -2,7 +2,6 @@
 
 import json
 import subprocess
-import time
 
 import pytest
 from factories import make_session
@@ -10,7 +9,6 @@ from factories import make_session
 from cc_session_control.actions.session_ops import resume_cmd
 from cc_session_control.data import sessions as sessions_mod
 from cc_session_control.data import transcripts as transcripts_mod
-from cc_session_control.data.cleanup import prune_sessions
 from cc_session_control.models import LiveInfo
 
 
@@ -31,58 +29,6 @@ def _create_failure(tmux, detail="tmux unavailable"):
 
 
 _make_session = make_session
-
-
-# --- D1: prune_sessions ---
-
-
-def test_prune_sessions_excludes_alive():
-    now = time.time()
-    old = now - 700
-    sessions = [
-        _make_session(sid="dead", prompts=0, mtime=old, alive=False),
-        _make_session(sid="alive", prompts=0, mtime=old, alive=True, pid=999),
-    ]
-    pruned = {s.sid for s in prune_sessions(sessions, max_prompts=0)}
-    assert "dead" in pruned
-    assert "alive" not in pruned
-
-
-def test_prune_sessions_excludes_current():
-    now = time.time()
-    old = now - 700
-    sessions = [
-        _make_session(sid="normal", prompts=0, mtime=old, current=False),
-        _make_session(sid="cur", prompts=0, mtime=old, current=True),
-    ]
-    pruned = {s.sid for s in prune_sessions(sessions, max_prompts=0)}
-    assert "normal" in pruned
-    assert "cur" not in pruned
-
-
-def test_prune_sessions_excludes_recent():
-    now = time.time()
-    sessions = [
-        _make_session(sid="old", prompts=0, mtime=now - 700),
-        _make_session(sid="recent", prompts=0, mtime=now - 100),
-    ]
-    pruned = {s.sid for s in prune_sessions(sessions, max_prompts=0)}
-    assert "old" in pruned
-    assert "recent" not in pruned
-
-
-def test_prune_sessions_threshold():
-    now = time.time()
-    old = now - 700
-    sessions = [
-        _make_session(sid="p0", prompts=0, mtime=old),
-        _make_session(sid="p2", prompts=2, mtime=old),
-        _make_session(sid="p3", prompts=3, mtime=old),
-    ]
-    empties = {s.sid for s in prune_sessions(sessions, max_prompts=0)}
-    assert empties == {"p0"}
-    shorts = {s.sid for s in prune_sessions(sessions, max_prompts=2)}
-    assert shorts == {"p0", "p2"}
 
 
 # --- D1: resume_cmd ---
@@ -438,25 +384,6 @@ def test_residency_targets_tmux_failure_returns_empty(monkeypatch):
         ),
     )
     assert dict(tmux.residency_inventory([4242]).targets) == {}
-
-
-def test_find_session_window_first_hit_over_residency(monkeypatch):
-    # find_session_window_result is the typed first-target view over the
-    # residency result — first hit in pids order, None on no hit.
-    from cc_session_control.data import tmux
-
-    monkeypatch.setattr(
-        tmux,
-        "residency_inventory",
-        lambda _pids: tmux.ResidencyInventory({4343: "other:2", 4242: "proj:1"}),
-    )
-    assert tmux.find_session_window_result([4242, 4343]).target == "proj:1"
-    monkeypatch.setattr(
-        tmux,
-        "residency_inventory",
-        lambda _pids: tmux.ResidencyInventory(),
-    )
-    assert tmux.find_session_window_result([4242]).target is None
 
 
 def test_do_tmux_resume_kills_live_non_current(monkeypatch):

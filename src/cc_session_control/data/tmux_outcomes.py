@@ -169,15 +169,3 @@ class ResidencyInventory:
             + f": {issue.detail}"
             for issue in self.issues
         )
-
-
-@dataclass(frozen=True)
-class SessionWindowResult:
-    """First matching pane target plus evidence completeness."""
-
-    target: str | None = None
-    issues: tuple[ResidencyIssue, ...] = ()
-
-    @property
-    def complete(self) -> bool:
-        return not self.issues

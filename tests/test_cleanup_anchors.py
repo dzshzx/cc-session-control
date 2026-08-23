@@ -8,7 +8,7 @@ import time
 import pytest
 
 from cc_session_control.config import cfg
-from cc_session_control.data import cleanup, liveness
+from cc_session_control.data import cleanup, liveness, proc
 from cc_session_control.data.removal import (
     RemovalStatus,
     anchor_path,
@@ -322,9 +322,9 @@ def test_cleanup_plan_pins_every_cleanup_category(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
     monkeypatch.setattr(cfg, "cleanup_age_days", 14)
     monkeypatch.setattr(
-        cleanup.proc,
+        proc,
         "probe_current_ancestors",
-        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+        lambda: proc.AncestorProbe(frozenset({999})),
     )
     now = time.time()
     transcript = cfg.projects_root / "project" / "session-sid.jsonl"
@@ -360,9 +360,9 @@ def test_orphan_execution_refuses_replaced_base_and_preserves_external(
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
     monkeypatch.setattr(
-        cleanup.proc,
+        proc,
         "probe_current_ancestors",
-        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+        lambda: proc.AncestorProbe(frozenset({999})),
     )
     base = cfg.session_env_dir
     (base / "orphan").mkdir(parents=True)
@@ -406,17 +406,17 @@ def test_zombie_execution_refuses_root_inode_replacement(
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
     monkeypatch.setattr(
-        cleanup.proc,
+        proc,
         "probe_current_ancestors",
-        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+        lambda: proc.AncestorProbe(frozenset({999})),
     )
-    proc = SessionProc(pid=77, sid="dead", proc_alive=False)
+    dead_proc = SessionProc(pid=77, sid="dead", proc_alive=False)
     target = cfg.sessions_dir / "77.json"
     target.parent.mkdir(parents=True)
     target.write_text("{}")
     plan = cleanup.build_plan(
         [],
-        liveness.LivenessSnapshot(session_procs=(proc,)),
+        liveness.LivenessSnapshot(session_procs=(dead_proc,)),
         transcript_sids=frozenset(),
     )
 
@@ -428,7 +428,7 @@ def test_zombie_execution_refuses_root_inode_replacement(
     monkeypatch.setattr(
         cleanup,
         "fresh_liveness_inputs",
-        lambda: liveness.LivenessSnapshot(session_procs=(proc,)),
+        lambda: liveness.LivenessSnapshot(session_procs=(dead_proc,)),
     )
     result = cleanup.execute_zombie_removals(
         plan.zombie_pids,
@@ -446,9 +446,9 @@ def test_remove_session_pins_before_fresh_liveness_and_refuses_parent_swap(
 ):
     monkeypatch.setattr(cfg, "claude_home", tmp_path / "claude")
     monkeypatch.setattr(
-        cleanup.proc,
+        proc,
         "probe_current_ancestors",
-        lambda: cleanup.proc.AncestorProbe(frozenset({999})),
+        lambda: proc.AncestorProbe(frozenset({999})),
     )
     transcript = cfg.projects_root / "project" / "session-sid.jsonl"
     transcript.parent.mkdir(parents=True)
