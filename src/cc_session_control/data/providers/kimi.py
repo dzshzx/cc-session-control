@@ -223,10 +223,6 @@ def _read_index(path: str) -> tuple[dict[str, dict], InventoryIssue | None]:
 # self-heals at the next heartbeat. Hooks are startup config — a session
 # already running when the rule was added stays unbound until reopened.
 
-#: Registry directory name under the kimi home — part of the provider's
-#: contract surface, also written by `actions/kimi_hook`.
-REGISTRY_DIR = "run"
-
 
 def _entry_pid(path: Path) -> int | None:
     """The pid a registry filename encodes — the `<pid>.json` name contract.
@@ -254,7 +250,7 @@ def _read_registry() -> tuple[dict[int, tuple[str, str]], tuple[InventoryIssue, 
     A missing directory is not an issue (the hook is opt-in — no config, no
     registry, not a failure); an unreadable or malformed entry surfaces as an
     issue (AGENTS.md 外部失败)."""
-    registry_dir = cfg.kimi_home / REGISTRY_DIR
+    registry_dir = cfg.kimi_run_dir
     entries: dict[int, tuple[str, str]] = {}
     issues: list[InventoryIssue] = []
     files, listing_error = _registry_entries(registry_dir)
@@ -352,7 +348,7 @@ def _read_trusted_dirs() -> TrustScan:
 
     A missing directory is not an issue (no trust dialog accepted yet); an
     unreadable or malformed record narrows only this source."""
-    trust_dir = cfg.kimi_home / "workspace-trust"
+    trust_dir = cfg.kimi_workspace_trust_dir
     try:
         files = sorted(trust_dir.iterdir())
     except FileNotFoundError:
@@ -453,7 +449,7 @@ class KimiProvider:
             ancestors_of=proc.probe_ancestors,
             registry=_registry_index(registry, cli_inventory.records, cur),
         )
-        index_path = cfg.kimi_home / "session_index.jsonl"
+        index_path = cfg.kimi_session_index_file
         entries, index_issue = _read_index(os.fspath(index_path))
         if index_issue is not None:
             return ProviderScan(issues=(index_issue,))

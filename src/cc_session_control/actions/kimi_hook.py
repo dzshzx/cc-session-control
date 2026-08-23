@@ -61,7 +61,7 @@ from ..config import cfg
 from ..data import proc
 from ..data.atomic_write import AtomicWriteError, advisory_lock, atomic_replace
 from ..data.proc import ProcReadState
-from ..data.providers.kimi import REGISTRY_DIR, prune_gone_entries
+from ..data.providers.kimi import prune_gone_entries
 
 #: Diagnostic trail for hook runs that did not register a session, kept next
 #: to the registry it explains. Bounded: the newest lines win.
@@ -148,7 +148,7 @@ def record_failure(
 
 def registry_dir() -> Path:
     """Where both the registry and its diagnostic trail live."""
-    return cfg.kimi_home / REGISTRY_DIR
+    return cfg.kimi_run_dir
 
 
 def run_hook(payload_text: str) -> int:

@@ -164,5 +164,34 @@ class Config:
     def tasks_dir(self) -> Path:
         return self.claude_home / "tasks"
 
+    def session_proc_file(self, pid: int) -> Path:
+        """Per-pid session registry file (`sessions/<pid>.json`)."""
+        return self.sessions_dir / f"{pid}.json"
+
+    # --- Non-Claude CLI state paths (single path authority) ---
+    # Same rule as above, scoped to kimi_home/opencode_home: never inline
+    # `kimi_home / "..."` or `opencode_home / "..."` elsewhere — add it here.
+
+    @property
+    def kimi_run_dir(self) -> Path:
+        """kimi hook runtime registry directory (`run/`) — also where the
+        hook's own diagnostic trail (`run/hook-errors.log`) lives."""
+        return self.kimi_home / "run"
+
+    @property
+    def kimi_workspace_trust_dir(self) -> Path:
+        """kimi workspace-trust records (membership evidence, ADR-0007)."""
+        return self.kimi_home / "workspace-trust"
+
+    @property
+    def kimi_session_index_file(self) -> Path:
+        """kimi's `session_index.jsonl` (name→sid resolution)."""
+        return self.kimi_home / "session_index.jsonl"
+
+    @property
+    def opencode_db_file(self) -> Path:
+        """opencode's SQLite session store (`opencode.db`)."""
+        return self.opencode_home / "opencode.db"
+
 
 cfg = Config()

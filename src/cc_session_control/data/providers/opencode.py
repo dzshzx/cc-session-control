@@ -308,7 +308,7 @@ class OpencodeProvider:
             is_tui_process=is_tui_process,
             ancestors_of=proc.probe_ancestors,
         )
-        db_path = os.fspath(cfg.opencode_home / "opencode.db")
+        db_path = os.fspath(cfg.opencode_db_file)
         rows, db_issue = _read_sessions(db_path)
         if db_issue is not None:
             return ProviderScan(issues=(db_issue,))

@@ -78,7 +78,7 @@ class LivenessSnapshot:
 def _missing_proc_start_issue(session_proc: SessionProc) -> LivenessIssue:
     return LivenessIssue(
         "session registry",
-        os.fspath(cfg.sessions_dir / f"{session_proc.pid}.json"),
+        os.fspath(cfg.session_proc_file(session_proc.pid)),
         f"session {session_proc.sid!r} row has no procStart; pid-reuse liveness "
         "left unknown",
     )

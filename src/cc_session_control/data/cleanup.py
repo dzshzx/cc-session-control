@@ -249,7 +249,7 @@ def execute_zombie_removals(
             anchors = {
                 pid: anchor_path(
                     cfg.sessions_dir,
-                    cfg.sessions_dir / f"{pid}.json",
+                    cfg.session_proc_file(pid),
                 )
                 for pid in pids
             }
