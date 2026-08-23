@@ -271,6 +271,23 @@ class TestKimiDiscover:
         (row,) = scan.sessions
         assert row.label == "建仓库"
 
+    def test_non_object_index_lines_are_skipped_not_fatal(self, kimi_home):
+        # A JSON line that parses but is not an object (a bare list/string
+        # containing the "sessionId" marker) must be skipped like a torn
+        # line — it used to raise AttributeError on `.get` and abort the scan.
+        sid = f"session_{UUID2}"
+        _write_kimi_session(kimi_home, sid, None)
+        index = kimi_home / "session_index.jsonl"
+        index.write_text(
+            '["sessionId", "not-an-object"]\n'
+            + '"sessionId"\n'
+            + index.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        scan = KimiProvider().discover(ProcCliInventory(), cur=frozenset())
+        assert scan.complete
+        assert [row.sid for row in scan.sessions] == [sid]
+
     def test_no_index_means_no_rows(self, kimi_home):
         scan = KimiProvider().discover(ProcCliInventory(), cur=frozenset())
         assert scan.sessions == () and scan.complete

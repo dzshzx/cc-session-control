@@ -176,6 +176,8 @@ def _read_index(
                     entry = json.loads(raw)
                 except ValueError:
                     continue  # torn tail line of an append-only index
+                if not isinstance(entry, dict):
+                    continue  # a non-object line is malformed, not an entry
                 sid = entry.get("sessionId")
                 if isinstance(sid, str) and sid:
                     entries[sid] = entry  # last write wins
