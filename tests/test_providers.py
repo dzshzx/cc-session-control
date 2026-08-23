@@ -74,10 +74,8 @@ class TestClaudeProvider:
     def test_new_session_argv(self):
         assert providers.get("claude").new_session_argv() == ["claude"]
 
-    def test_window_name_keeps_bare_sid8(self):
-        p = providers.get("claude")
-        assert p.window_name("abcdefgh-rest") == "abcdefgh"
-        assert p.window_name("abcdefgh-rest", fork=True) == "abcdefgh-fork"
+    def test_window_tag_is_the_bare_cli(self):
+        assert providers.get("claude").window_tag == "claude"
 
     def test_caps(self):
         caps = providers.get("claude").caps
@@ -101,10 +99,8 @@ class TestOpencodeProvider:
     def test_new_session_argv(self):
         assert providers.get("opencode").new_session_argv() == ["opencode"]
 
-    def test_window_name(self):
-        p = providers.get("opencode")
-        assert p.window_name("ses_abcdefgh-rest") == "oc-abcdefgh"
-        assert p.window_name("ses_abcdefgh-rest", fork=True) == "oc-abcdefgh-fork"
+    def test_window_tag_is_the_bare_cli(self):
+        assert providers.get("opencode").window_tag == "opencode"
 
     def test_caps(self):
         caps = providers.get("opencode").caps

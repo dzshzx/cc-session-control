@@ -228,7 +228,7 @@ class TestSessionOpsPassMetadata:
         assert seen == [
             {
                 "session": "csctl",
-                "window": "tmp/km-019fc784",
+                "window": "kimi",
                 "sid": KIMI_SID,
                 "provider": "kimi",
                 "mobile_switch": True,
@@ -258,7 +258,7 @@ class TestSessionOpsPassMetadata:
 
         assert result.success
         assert seen[0]["session"] == "csctl"
-        assert seen[0]["window"].endswith("/kimi")
+        assert seen[0]["window"] == "kimi"
         assert seen[0]["sid"] == ""
         assert seen[0]["provider"] == "kimi"
         assert seen[0]["mobile_switch"] is True

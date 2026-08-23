@@ -204,7 +204,7 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
     assert result.message == "已转入后台（tmux csctl:4）"
     assert result.needs_refresh is True
     assert spawn_calls == [
-        ("csctl", "project/sid-1", "cd /tmp/project && claude --resume sid-1")
+        ("csctl", "claude", "cd /tmp/project && claude --resume sid-1")
     ]
 
 
@@ -232,14 +232,14 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
                 tui_actions.session_ops.TakeOverState.KILLED,
             ),
             "已转入后台（tmux csctl:4）",
-            [("csctl", "project/sid-1", "cd /tmp/project && claude --resume sid-1")],
+            [("csctl", "claude", "cd /tmp/project && claude --resume sid-1")],
         ),
         (
             tui_actions.session_ops.TakeOverOutcome(
                 tui_actions.session_ops.TakeOverState.GONE,
             ),
             "已转入后台（tmux csctl:4）",
-            [("csctl", "project/sid-1", "cd /tmp/project && claude --resume sid-1")],
+            [("csctl", "claude", "cd /tmp/project && claude --resume sid-1")],
         ),
     ],
 )
@@ -363,7 +363,7 @@ def test_live_background_session_uses_execution_time_session_generation(
     assert spawns == [
         (
             "csctl",
-            "fresh-project/sid-1",
+            "claude",  # window is the bare CLI; the fresh cwd shows in cmd
             "cd /fresh-project && claude --resume sid-1",
         )
     ]

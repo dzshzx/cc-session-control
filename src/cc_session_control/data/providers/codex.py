@@ -351,9 +351,10 @@ class CodexProvider:
 
     @property
     def window_tag(self) -> str:
-        """Launcher window leaf: the key with `:` swapped out, since a colon
-        is tmux target syntax. Single-instance stays plain `codex`, so
-        existing window names are untouched."""
+        """Window name: the key with `:` swapped out, since a colon is tmux
+        target syntax. Single-instance stays plain `codex`; a declared
+        identity reads `codex-<label>` so two identities stay tellable apart
+        in the window list."""
         return self.key.replace(":", "-")
 
     @property
@@ -434,10 +435,6 @@ class CodexProvider:
             CliDeleteStage.CLI,
             returncode=completed.returncode,
         )
-
-    def window_name(self, sid: str, fork: bool = False) -> str:
-        base = f"{self.label}-{sid[:8]}"
-        return f"{base}-fork" if fork else base
 
     def owns_process(self, record: ProcCli) -> bool:
         """PURE: could this bare codex process belong to THIS identity?

@@ -58,7 +58,7 @@ class Config:
             / "opencode"
         )
         # One operator-facing tmux workspace for every session csctl dispatches.
-        # Project identity stays in each window name and cwd.
+        # Windows are named by the bare CLI; project identity stays in the cwd.
         self.tmux_session: str = "csctl"
         # Age threshold (days) for the time/global-keyed cleanup strategy.
         # 0 is a valid operator value (sweep every aged entry) — pre-0.8

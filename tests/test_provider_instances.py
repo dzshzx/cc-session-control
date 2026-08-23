@@ -312,9 +312,7 @@ class TestCommandIdentity:
         """`:` is tmux target syntax — a multi-instance key must not leak in."""
         provider = CodexProvider(key="codex:cx2", label="cx2", home=tmp_path)
 
-        assert ":" not in provider.window_tag
-        assert ":" not in provider.window_name(UUID_B)
-        assert provider.window_name(UUID_B).startswith("cx2-")
+        assert provider.window_tag == "codex-cx2"
         assert CodexProvider().window_tag == "codex"  # unchanged for one instance
 
 

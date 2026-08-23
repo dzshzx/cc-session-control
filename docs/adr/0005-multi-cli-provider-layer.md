@@ -93,6 +93,12 @@ The provider designs below are grounded in probes of the actual CLIs
   time resolution, window naming) carries the provider key. tmux windows for
   non-Claude sessions get a provider prefix (`cx-<sid8>`, `km-<sid8>`);
   Claude keeps bare `<sid8>` for continuity.
+  - **Amendment (2026-08-23):** the sid-bearing window names above are gone;
+    every spawn is named by `provider.window_tag` — the bare CLI name
+    (`claude`/`codex`/`kimi`/`opencode`, `codex-<label>` for a declared
+    identity). Provider identity still reaches the window through the name
+    and the `@csctl_provider` option; the sid only through `@csctl_sid`. The
+    naming revision is recorded in ADR-0006's same-dated note.
 - **Capabilities gate verbs; nothing is emulated.** Providers declare typed
   capabilities (fork, takeover, background agents, RC, cleanup, liveness
   grade). The UI consults them: `f` fork covers Claude (`--fork-session`)

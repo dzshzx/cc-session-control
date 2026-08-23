@@ -423,7 +423,7 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
     assert target == "csctl:1"  # unified workbench session, exact spawned target
     session, window, cmd = calls["spawn"][0]
     assert session == "csctl"
-    assert window == "proj/abcdef01"
+    assert window == "claude"  # bare CLI name — no project, no sid
     assert "--remote-control" not in cmd
 
 
@@ -480,7 +480,7 @@ def test_do_tmux_new_spawns_and_returns_target(monkeypatch):
     assert result.target == "csctl:0"
     session, window, cmd = spawns[0]
     assert session == "csctl"
-    assert window == "proj with space/claude"
+    assert window == "claude"  # the cwd never leaks into the window name
     assert cmd == "cd '/tmp/proj with space' && claude"
     assert "--remote-control" not in cmd and "--resume" not in cmd
 
@@ -499,8 +499,9 @@ def test_do_tmux_new_spawn_failure_returns_none(monkeypatch):
 
 
 def test_do_tmux_resume_fork_spawns_fork_window_no_kill(monkeypatch):
-    # A fork is a copy: never kills, and gets its own <sid8>-fork window so it
-    # doesn't shadow the original session's window.
+    # A fork is a copy: never kills, and spawns its own window (named by the
+    # bare CLI like every spawn — `@csctl_sid` is left EMPTY, so the fork's
+    # unknown new sid is never confused with the parent's).
     import cc_session_control.actions.session_ops as so
 
     calls = {"kill": 0, "tmux": None}
@@ -525,7 +526,7 @@ def test_do_tmux_resume_fork_spawns_fork_window_no_kill(monkeypatch):
     assert calls["kill"] == 0  # fork leaves the original running
     session, window, cmd = calls["tmux"]
     assert session == "csctl"
-    assert window == "proj/abcdef01-fork"
+    assert window == "claude"
     assert "--fork-session" in cmd
     assert "--remote-control" not in cmd
 
@@ -601,20 +602,27 @@ def test_run_in_tmux_returns_printed_target(monkeypatch):
     assert tmux.run_in_tmux_result("proj", "claude", "cmd").target == "proj:3"
 
 
-def test_project_name_for_sanitizes_tmux_target_separators():
-    from cc_session_control.data.tmux import project_name_for
+def test_every_spawn_names_its_window_by_the_bare_cli(monkeypatch):
+    """Resume, fork and new-session windows all carry just the CLI name —
+    the project basename and sid8 prefixes are gone (2026-08-23 operator
+    request); identity stays in `@csctl_sid`/`@csctl_provider`."""
+    import cc_session_control.actions.session_ops as so
 
-    assert project_name_for("/tmp/myproj") == "myproj"
-    assert project_name_for("/tmp/myproj/") == "myproj"
-    assert project_name_for("/tmp/my.proj") == "my-proj"
-    assert project_name_for("/tmp/a:b.c") == "a-b-c"
-    assert project_name_for("") == "claude"
+    windows: list[str] = []
+    monkeypatch.setattr(
+        so.tmux,
+        "run_in_tmux_result",
+        lambda session, window, cmd, **_kwargs: (
+            windows.append(window) or _created_target(so.tmux, f"{session}:0")
+        ),
+    )
+    for key in ("claude", "codex", "kimi", "opencode"):
+        so.do_tmux_new_result("/tmp/my.proj", key)
+    dead = _make_session(sid="abcdef0123456789", cwd="/tmp/my.proj", alive=False)
+    so.do_tmux_resume_result(dead)
+    so.do_tmux_resume_result(dead, fork=True)
 
-
-def test_window_name_for_keeps_project_visible_in_unified_session():
-    from cc_session_control.data.tmux import window_name_for
-
-    assert window_name_for("/tmp/my.proj", "cx-abcdef01") == "my-proj/cx-abcdef01"
+    assert windows == ["claude", "codex", "kimi", "opencode", "claude", "claude"]
 
 
 # --- D4: _parse_transcript ---

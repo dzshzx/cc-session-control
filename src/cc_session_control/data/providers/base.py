@@ -96,9 +96,14 @@ class AgentProvider(Protocol):
 
     @property
     def window_tag(self) -> str:
-        """Leaf used in the launcher's tmux window name. Distinct from `key`
-        because a multi-instance key carries `:`, which IS tmux target syntax
-        (`session:window`) and would break addressing (ADR-0008)."""
+        """The tmux window name of every window csctl spawns for this
+        provider — new session, resume, and fork alike: the bare CLI name
+        (`claude`/`codex`/`kimi`/`opencode`), or `codex-<label>` for a
+        declared identity. Display-only — neither project nor sid is encoded;
+        `@csctl_sid`/`@csctl_provider` window options carry identity. Distinct
+        from `key` because a multi-instance key carries `:`, which IS tmux
+        target syntax (`session:window`) and would break addressing
+        (ADR-0008)."""
         ...
 
     @property
@@ -134,11 +139,6 @@ class AgentProvider(Protocol):
 
     def new_session_argv(self) -> list[str]:
         """The argv starting a fresh session in the caller-chosen cwd."""
-        ...
-
-    def window_name(self, sid: str, fork: bool = False) -> str:
-        """The per-session tmux window name (provider-prefixed for
-        non-Claude so operators can tell CLIs apart at a glance)."""
         ...
 
 

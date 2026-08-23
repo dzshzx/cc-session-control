@@ -76,7 +76,7 @@ class ProjectsView(ListTabView):
             help_lines=(
                 "  Enter  新建会话：先弹 CLI 选择器（仅列已启用的 CLI，↑↓ 选择，",
                 "         默认选中首行 claude，Esc 取消），再次 Enter 确认后在统一",
-                "         csctl tmux session 新建项目窗口并直接进入（离开 csctl；",
+                "         csctl tmux session 新建 CLI 同名窗口并直接进入（离开 csctl；",
                 "         tmux-first",
                 "         主入口，会话默认获得断线保护）",
             ),

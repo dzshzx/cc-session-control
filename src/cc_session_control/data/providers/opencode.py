@@ -286,10 +286,6 @@ class OpencodeProvider:
             returncode=completed.returncode,
         )
 
-    def window_name(self, sid: str, fork: bool = False) -> str:
-        base = f"oc-{sid.removeprefix('ses_')[:8]}"
-        return f"{base}-fork" if fork else base
-
     def discover(
         self,
         cli_inventory: ProcCliInventory,

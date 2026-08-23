@@ -279,13 +279,10 @@ def _spawn_in_tmux_result(
         if takeover_failure:
             return TmuxResumeOutcome(None, takeover_failure)
     provider = providers.get(target_session.provider)
-    window = tmux.window_name_for(
-        target_session.cwd, provider.window_name(target_session.sid, fork)
-    )
     cmd = tmux_foreground_cmd(target_session, fork)
     result = tmux.run_in_tmux_result(
         cfg.tmux_session,
-        window,
+        provider.window_tag,  # bare CLI name — identity lives in the options
         cmd,
         # A fork window hosts a NEW sid unknown at spawn — declaring the
         # parent sid would mint a wrong kill target (ADR-0005 fork rule).
@@ -333,7 +330,8 @@ def do_tmux_new_result(
     provider_key: str = "claude",
 ) -> tmux.TmuxWriteResult:
     """Start `provider_key` in `directory` inside the shared csctl tmux session,
-    retaining exact create-stage diagnostics and a project-visible window name.
+    retaining exact create-stage diagnostics; the window is named by the bare
+    CLI (`provider.window_tag`), like every other csctl spawn.
 
     The 项目-tab launcher keys: same skeleton as `do_tmux_resume_result` but
     nothing exists yet — no kill, no confirm, no R10 gate (no process is
@@ -347,7 +345,7 @@ def do_tmux_new_result(
     cmd = f"cd {shlex.quote(directory)} && {line}"
     return tmux.run_in_tmux_result(
         cfg.tmux_session,
-        tmux.window_name_for(directory, provider.window_tag),
+        provider.window_tag,
         cmd,
         provider=provider.key,  # no sid exists yet — provider tag only
         env=provider.launch_env,

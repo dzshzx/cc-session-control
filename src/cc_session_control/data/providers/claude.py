@@ -46,7 +46,3 @@ class ClaudeProvider:
 
     def new_session_argv(self) -> list[str]:
         return ["claude"]
-
-    def window_name(self, sid: str, fork: bool = False) -> str:
-        # Bare <sid8> keeps continuity with pre-provider window names.
-        return f"{sid[:8]}-fork" if fork else sid[:8]

@@ -4,6 +4,8 @@ Status: accepted (2026-08-08); RC/background-agent placement clauses
 partially superseded by ADR-0009;
 ADR-0011 adds the scoped second prefix (`prefix2` = `C-a`) to the managed session's
 create/reuse path.
+The `<project>/<leaf>` window-naming clause is revised in place by the 2026-08-23
+amendment below: windows carry only the bare CLI name.
 
 ## Context
 
@@ -24,6 +26,17 @@ session or window name.
   provider key for a brand-new session, the provider-owned SID/fork name for a
   resume, or the background-agent name. Names are display-only; exact tmux
   targets and identity metadata remain authoritative.
+- **Amendment (2026-08-23, operator request):** the `<project>/<leaf>` scheme is
+  replaced by the bare CLI name — every window csctl spawns (new session, resume,
+  fork) is named `claude`, `codex`, `kimi`, or `opencode`; a declared codex
+  identity uses `codex-<label>`. Neither the project basename nor the sid
+  appears in the name. The operator found the project prefix noise, not a
+  grouping cue: the tmux window list already sits inside one `csctl` session and
+  the active pane's cwd shows in the CLI itself. Nothing identity-bearing
+  changes — `@csctl_sid`/`@csctl_provider` window options and exact tmux targets
+  were the authority before and remain so; `data/tmux.py` no longer owns any
+  project/window naming (`project_name_for`/`window_name_for` and the per-provider
+  `window_name` are removed; `window_tag` is the single name source).
 - Managed Remote Control servers remain in the separate configurable `rc`
   session. `CSCTL_RC_SESSION` accepts a literal name, rejects tmux target
   expression syntax, and must differ from `csctl`; mixing RC and agent windows
@@ -41,9 +54,9 @@ session or window name.
 
 - All newly dispatched agent windows are visible in one tmux window list, so
   switching projects no longer requires cross-session navigation.
-- The shared list can be longer. Project-prefixed window names preserve the
-  grouping cue; tmux indices and server-unique window ids preserve exact
-  addressing even when display names collide.
+- The shared list can be longer. Since the 2026-08-23 amendment display names
+  collide by design (every claude window is `claude`); tmux indices and
+  server-unique window ids preserve exact addressing regardless.
 - Historical per-project sessions drain only when their processes end. No
   automatic migration or cleanup is introduced.
 - This ADR supersedes only ADR-0001's placement rule and ADR-0005's historical

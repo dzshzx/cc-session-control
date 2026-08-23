@@ -54,7 +54,7 @@ class SessionsView(CleanupMixin, ListTabView):
             section="会话操作:",
             help_lines=(
                 "  Enter  tmux 接回（主操作：会话恢复进统一 csctl tmux session 的",
-                "         项目标记窗口并接入前台；终端断线会话不死；",
+                "         CLI 同名窗口并接入前台；终端断线会话不死；",
                 "         已驻留 tmux 的会话就地进入不重启；",
                 "         接运行中的裸终端会话会先确认接管）",
             ),

@@ -464,7 +464,7 @@ def test_live_tmux_resume_uses_execution_time_session_generation(
     assert spawns == [
         (
             "csctl",
-            "fresh-project/resume",
+            "claude",  # window is the bare CLI; the fresh cwd shows in cmd
             "cd /fresh-project && claude --resume resume",
         )
     ]
@@ -796,9 +796,7 @@ def test_tui_dead_tmux_resume_skips_liveness_and_spawns(
     monkeypatch.setenv("TMUX", "resident")
 
     assert cli.main([]) == 0
-    assert spawn_calls == [
-        ("csctl", "project/resume", "cd /project && claude --resume resume")
-    ]
+    assert spawn_calls == [("csctl", "claude", "cd /project && claude --resume resume")]
     assert enter_calls == ["csctl:7", "csctl:7"]
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -850,7 +848,7 @@ def test_tui_live_fork_skips_incomplete_liveness_and_residency(
     assert spawn_calls == [
         (
             "csctl",
-            "project/resume-fork",
+            "claude",
             "cd /project && claude --resume resume --fork-session",
         )
     ]

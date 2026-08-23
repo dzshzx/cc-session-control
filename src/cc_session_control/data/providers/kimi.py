@@ -427,10 +427,6 @@ class KimiProvider:
     def new_session_argv(self) -> list[str]:
         return ["kimi"]
 
-    def window_name(self, sid: str, fork: bool = False) -> str:
-        short = sid.removeprefix("session_")[:8]
-        return f"km-{short}"
-
     def discover(
         self,
         cli_inventory: ProcCliInventory,

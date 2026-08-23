@@ -209,25 +209,6 @@ def _target_not_found(detail: str) -> bool:
     )
 
 
-def project_name_for(cwd: str) -> str:
-    """Stable display name for a project directory.
-
-    Uses the basename and replaces tmux target separators ``.``/``:`` with
-    ``-``. The result prefixes session windows in the workbench session; it
-    is display metadata, never the project's identity. Empty cwd → "claude".
-    """
-    base = cwd.rstrip("/").rsplit("/", 1)[-1] if cwd else ""
-    name = base.replace(".", "-").replace(":", "-").strip()
-    return name or "claude"
-
-
-def window_name_for(cwd: str, leaf: str) -> str:
-    """Project-visible window name inside the unified workbench session."""
-
-    project = project_name_for(cwd)
-    return f"{project}/{leaf}" if leaf else project
-
-
 # C1: the dispatch-identity window options every csctl spawn declares and
 # `list_panes_inventory` reads back — the tmux-metadata liveness source for
 # CLIs whose processes rewrite their own argv (kimi title rewrite).

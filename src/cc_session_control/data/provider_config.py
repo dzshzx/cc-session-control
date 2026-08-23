@@ -46,7 +46,8 @@ from enum import Enum
 from pathlib import Path
 
 #: Longest instance label — the Sessions CLI column is 3 cells wide
-#: (`_session_row.SESSION_COLS`), and a label also prefixes tmux window names.
+#: (`_session_row.SESSION_COLS`), and a declared identity's label also names
+#: its tmux windows (`codex-<label>`).
 _LABEL_MAX_CHARS = 3
 
 #: The default instance's provider key. Keeping the FIRST declared instance on

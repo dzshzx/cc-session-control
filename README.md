@@ -14,7 +14,7 @@ across all four, plus a tmux-first project launcher.
   Code, and opencode sessions (CLI column: `cc`/`cx`/`km`/`oc`), discovered
   from each CLI's own
   on-disk state — not just sessions csctl started. Resume tmux-first
-  (`Enter` resumes into a project-labelled window in the shared `csctl` tmux
+  (`Enter` resumes into a CLI-named window in the shared `csctl` tmux
   session via each CLI's native resume command; `t` bare-terminal fallback;
   `R` backgrounds into tmux;
   `f` forks where the CLI supports it; ⧉ marks tmux-resident sessions;
@@ -26,7 +26,7 @@ across all four, plus a tmux-first project launcher.
   discovered from evidence tiers (operator pins, any CLI's trust records, any
   CLI's session activity). `Enter` opens a CLI chooser
   (active providers only, claude focused first — so Enter-Enter starts
-  claude) to open a new project-labelled window in the shared `csctl` tmux
+  claude) to open a new CLI-named window in the shared `csctl` tmux
   session; `x`/`k`/`O` jump
   straight to codex/kimi/opencode; `p`/`h`/`H` pin, hide, and reveal projects
 

@@ -9,7 +9,7 @@ session-level Remote Control exposure.
 **Local Global Workbench**:
 A machine-wide management surface for seeing and acting on agent-CLI sessions
 across providers and projects. Works tmux-first: its primary verbs dispatch
-sessions into project-labelled windows in one shared `csctl` tmux session
+sessions into CLI-named windows in one shared `csctl` tmux session
 (ADR-0001/0006).
 _Avoid_: current project view, current session view, Claude-only panel
 
@@ -102,10 +102,12 @@ _Avoid_: detached, daemonized, "in tmux" without saying resident
 **Workbench tmux Session**:
 The single tmux session named `csctl` into which the workbench dispatches new,
 resumed, forked, and backgrounded agent sessions. Project identity remains the
-absolute cwd; the project basename is display-only metadata in the window
-name. Existing resident windows in any tmux session are entered in place
-rather than migrated.
-_Avoid_: one tmux session per project, treating a window name as identity
+absolute cwd; a window is named only by the bare CLI it runs (`claude`,
+`codex`, `kimi`, `opencode`, or a declared identity's tag) and names are
+display-only. Existing resident windows in any tmux session are entered in
+place rather than migrated.
+_Avoid_: one tmux session per project, treating a window name as identity,
+project- or sid-labelled window names
 
 **Mobile Switch Prefix (手机切换前缀)**:
 The managed `csctl` tmux session's second prefix. When its effective `prefix2`
@@ -122,7 +124,7 @@ delete. Source badges alone do not prove hosting.
 _Avoid_: using the shared app-server pid as a session pid; hosted = alive
 
 **tmux Resume (tmux 接回)**:
-Resuming a session inside its project-labelled window in the workbench tmux
+Resuming a session inside a CLI-named window in the workbench tmux
 session and bringing the operator's terminal into that window — the primary
 resume verb; makes the session tmux-resident. A session already resident in
 any tmux session is entered in place.
@@ -135,7 +137,7 @@ unwanted.
 _Avoid_: unqualified "resume/接回"
 
 **Backgrounding (转后台)**:
-Moving a session into its project-labelled window in the workbench tmux
+Moving a session into a CLI-named window in the workbench tmux
 session without entering it and without enabling Remote Control; the operator
 stays in csctl.
 _Avoid_: relaunch, RC relaunch (the pre-0.7 behavior that also minted a cloud

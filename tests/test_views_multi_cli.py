@@ -179,7 +179,7 @@ class TestTmuxNewDispatch:
         assert result.success
         ((tmux_session, window, cmd),) = calls
         assert tmux_session == "csctl"
-        assert window == "proj/codex"
+        assert window == "codex"
         assert cmd.endswith("&& codex")
 
 
