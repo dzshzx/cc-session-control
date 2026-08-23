@@ -126,6 +126,22 @@ This attribution is deliberately scoped to the **unbound-live hint** only:
 - Nothing here is codex-specific by construction, but only codex is wired:
   kimi and Claude declare one home each (`env_keys = frozenset()`, `env =
   {}`). A future multi-home kimi would reuse the same seam.
+- **Amendment (2026-08-23):** the "Liveness is not filtered by it" claim in
+  Attributing running processes above held only for UUID targets. A
+  `codex resume <name>` target is unique only WITHIN one identity's own
+  `session_index.jsonl` — nothing stops two identities from each minting an
+  unambiguous same-named thread — yet `discover` feeds EVERY running codex
+  process into EVERY identity's liveness join. Without an environ check, one
+  identity's `codex resume <name>` process could bind against another
+  identity's same-named thread, and that identity's `s`/takeover would then
+  SIGTERM the wrong process. Fixed by adding `_confirms_home`, a STRICTER
+  twin of the existing attribution predicate used only to gate name-target
+  binding: it requires `record.env`'s `CODEX_HOME` to positively resolve to
+  this identity's home, and treats unreadable environ (`env is None`) as
+  NOT confirmed (fail closed) — the opposite of the permissive hint
+  predicate's "no evidence, keep as candidate" rule. UUID targets are
+  unaffected and stay fail-open without environ evidence, since a UUID
+  resolves only against the home whose own rollout tree records it.
 
 ## Rejected alternatives
 

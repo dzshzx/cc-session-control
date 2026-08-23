@@ -59,6 +59,13 @@ def _codex_home(root, name, sid=None, cwd="/tmp/proj", when="2026/08/13"):
     return home
 
 
+def _write_index(home, *entries: dict) -> None:
+    """A home's `session_index.jsonl` (id → thread_name), for name-resume
+    binding tests."""
+    lines = [json.dumps(entry) for entry in entries]
+    (home / "session_index.jsonl").write_text("\n".join(lines) + "\n")
+
+
 # --- the declaration itself --------------------------------------------------
 
 
@@ -260,6 +267,142 @@ class TestProcessAttribution:
         scan = provider.discover(ProcCliInventory(records=(record,)), frozenset())
 
         assert [(r.sid, r.alive, r.pid) for r in scan.sessions] == [(UUID_B, True, 901)]
+
+
+class TestNameResumeBindingIsIdentitySafe:
+    """`codex resume <name>` (2026-08-23 amendment, ADR-0008): unlike a UUID
+    target, a thread NAME is unique only WITHIN one identity's
+    `session_index.jsonl`. Two identities can each mint an unambiguous
+    same-named thread, so `discover` — which feeds every codex process to
+    every identity's liveness join — must not bind a name target unless
+    THAT record's environ positively confirms THIS identity; otherwise home
+    A's Enter/`s` would SIGTERM home B's process (the leak this closes)."""
+
+    def test_same_name_in_two_homes_binds_only_the_confirmed_identity(self, tmp_path):
+        default = _codex_home(tmp_path, "default", sid=UUID_A)
+        second = _codex_home(tmp_path, "eva02", sid=UUID_B)
+        _write_index(default, {"id": UUID_A, "thread_name": "my-thread"})
+        _write_index(second, {"id": UUID_B, "thread_name": "my-thread"})
+        # One process, actually running under identity B's CODEX_HOME.
+        record = ProcCli(
+            pid=900,
+            argv=("codex", "resume", "my-thread"),
+            starttime="100",
+            cwd="/tmp/proj",
+            env={"CODEX_HOME": str(second)},
+        )
+        provider_a = CodexProvider(home=default)
+        provider_b = CodexProvider(key="codex:cx2", label="cx2", home=second)
+
+        scan_a = provider_a.discover(ProcCliInventory(records=(record,)), frozenset())
+        scan_b = provider_b.discover(ProcCliInventory(records=(record,)), frozenset())
+
+        # A's SAME-named thread does NOT bind to B's process — A must never
+        # aim a takeover/SIGTERM at a process it does not own.
+        assert [(r.sid, r.alive) for r in scan_a.sessions] == [(UUID_A, False)]
+        assert [(r.sid, r.alive, r.pid) for r in scan_b.sessions] == [
+            (UUID_B, True, 900)
+        ]
+
+    def test_name_target_unbound_when_environ_unreadable(self, tmp_path):
+        """`env is None` proves nothing (unlike the UUID case): a name-target
+        binding must fail closed instead of guessing."""
+        second = _codex_home(tmp_path, "eva02", sid=UUID_B)
+        _write_index(second, {"id": UUID_B, "thread_name": "my-thread"})
+        name_record = ProcCli(
+            pid=900,
+            argv=("codex", "resume", "my-thread"),
+            starttime="100",
+            cwd="/tmp/proj",
+            env=None,
+        )
+        uuid_record = ProcCli(
+            pid=901,
+            argv=("codex", "resume", UUID_B),
+            starttime="100",
+            cwd="/tmp/proj",
+            env=None,
+        )
+        provider = CodexProvider(key="codex:cx2", label="cx2", home=second)
+
+        name_scan = provider.discover(
+            ProcCliInventory(records=(name_record,)), frozenset()
+        )
+        uuid_scan = provider.discover(
+            ProcCliInventory(records=(uuid_record,)), frozenset()
+        )
+
+        assert [(r.sid, r.alive) for r in name_scan.sessions] == [(UUID_B, False)]
+        # Same missing environ evidence, but a UUID target stays fail-open.
+        assert [(r.sid, r.alive, r.pid) for r in uuid_scan.sessions] == [
+            (UUID_B, True, 901)
+        ]
+
+
+class TestNameResumeSingleInstance:
+    """Single-instance mode (`CodexProvider()`, home=None): name binding
+    still requires environ confirmation, matching codex's own default-home
+    resolution rule (`CODEX_HOME` unset → `~/.codex`)."""
+
+    def _single_instance_home(self, tmp_path, monkeypatch):
+        """Point both `cfg.codex_home` (single-instance identity) and
+        `Path.home()` (codex's own default-home resolution, consulted when a
+        process's environ leaves `CODEX_HOME` unset) at the SAME directory,
+        so "unset" and "this identity's home" agree — exactly the relationship
+        that holds on a real single-codex-identity machine."""
+        home = tmp_path / ".codex"
+        monkeypatch.setattr(cfg, "codex_home", home)
+        monkeypatch.setattr("pathlib.Path.home", staticmethod(lambda: tmp_path))
+        return _codex_home(tmp_path, ".codex", sid=UUID_A)
+
+    def test_unset_codex_home_binds_via_the_default_home(self, tmp_path, monkeypatch):
+        home = self._single_instance_home(tmp_path, monkeypatch)
+        _write_index(home, {"id": UUID_A, "thread_name": "my-thread"})
+        record = ProcCli(
+            pid=900, argv=("codex", "resume", "my-thread"), starttime="100", env={}
+        )
+
+        scan = CodexProvider().discover(
+            ProcCliInventory(records=(record,)), frozenset()
+        )
+
+        (row,) = scan.sessions
+        assert row.alive and row.pid == 900
+
+    def test_codex_home_equal_to_default_binds(self, tmp_path, monkeypatch):
+        home = self._single_instance_home(tmp_path, monkeypatch)
+        _write_index(home, {"id": UUID_A, "thread_name": "my-thread"})
+        record = ProcCli(
+            pid=900,
+            argv=("codex", "resume", "my-thread"),
+            starttime="100",
+            env={"CODEX_HOME": str(home)},
+        )
+
+        scan = CodexProvider().discover(
+            ProcCliInventory(records=(record,)), frozenset()
+        )
+
+        (row,) = scan.sessions
+        assert row.alive and row.pid == 900
+
+    def test_codex_home_pointing_elsewhere_stays_unbound(self, tmp_path, monkeypatch):
+        home = self._single_instance_home(tmp_path, monkeypatch)
+        _write_index(home, {"id": UUID_A, "thread_name": "my-thread"})
+        other = tmp_path / "other-home"
+        record = ProcCli(
+            pid=900,
+            argv=("codex", "resume", "my-thread"),
+            starttime="100",
+            env={"CODEX_HOME": str(other)},
+        )
+
+        scan = CodexProvider().discover(
+            ProcCliInventory(records=(record,)), frozenset()
+        )
+
+        (row,) = scan.sessions
+        assert not row.alive
 
 
 # --- commands state their identity -------------------------------------------

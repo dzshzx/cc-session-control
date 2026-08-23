@@ -29,7 +29,7 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 
@@ -202,28 +202,60 @@ def _read_env_file(path: Path) -> dict[str, str]:
     return result
 
 
-def sid_extractor(name_to_sid: Mapping[str, str]) -> ArgvExtractor:
+def sid_extractor(
+    name_to_sid: Mapping[str, str],
+    confirms_home: Callable[[ProcCli], bool],
+) -> ArgvExtractor:
     """THE codex argv→sid binding rule. Both consumers — the generation scan
     (`scan_non_claude`) and the execution-time takeover resolver
     (`resolve_argv_execution`) — reach it via `discover`, so argv evidence
     turns into a sid in exactly one place.
 
     A UUID target binds directly ("UUIDs take precedence if it parses" —
-    upstream help); any other target is a thread name, bound only through
-    the unique-name view of the index (`_name_index`). Unknown and ambiguous
-    names bind nothing: a wrong guess would aim `s`/takeover SIGTERM at the
-    wrong process, so the blind spot is kept instead (fail closed).
+    upstream help) — no `confirms_home` check, because a UUID only ever
+    resolves against the home whose OWN rollout tree records it (`_project`
+    looks it up there), so a cross-home false bind is structurally
+    impossible even when environ evidence is missing.
+
+    Any other target is a thread name, bound only through the unique-name
+    view of the index (`_name_index`) — but `session_index.jsonl` files are
+    per-home artifacts with no cross-home uniqueness guarantee: two
+    identities can each mint one unambiguous rollout under the SAME thread
+    name, and only `record.env`'s `CODEX_HOME` (via `confirms_home`) tells
+    them apart (2026-08-23 amendment — see ADR-0008). Unknown names, names
+    the mapping does not own, and names on a process `confirms_home` cannot
+    positively confirm ALL bind nothing: a wrong guess would aim `s`/
+    takeover SIGTERM at the wrong process (possibly another identity's), so
+    the blind spot is kept instead (fail closed).
     """
 
-    def extract(argv: tuple[str, ...]) -> str | None:
-        target = extract_resume_target(argv)
+    def extract(record: ProcCli) -> str | None:
+        target = extract_resume_target(record.argv)
         if target is None:
             return None
         if _UUID_RE.match(target):
             return target.lower()
-        return name_to_sid.get(target)
+        sid = name_to_sid.get(target)
+        if sid is None or not confirms_home(record):
+            return None
+        return sid
 
     return extract
+
+
+def _declared_home(env: Mapping[str, str] | None) -> Path | None:
+    """PURE: the codex home a process's environ evidence resolves to, or
+    None when the environ itself could not be read (`env is None`) — kept
+    distinct from "read but `CODEX_HOME` unset", which resolves to codex's
+    own default home (`codex_default_home()`) exactly like a real codex
+    process would. Shared by `owns_process` (permissive: unreadable proves
+    nothing) and `_confirms_home` (strict: unreadable confirms nothing) so
+    the home-resolution rule itself lives in exactly one place."""
+    if env is None:
+        return None
+    declared = env.get("CODEX_HOME")
+    home = Path(declared).expanduser() if declared else codex_default_home()
+    return Path(os.path.normpath(home))
 
 
 def _issue(source: str, path: str, detail: str) -> InventoryIssue:
@@ -448,21 +480,37 @@ class CodexProvider:
         held" marker costs one extra confirmation while a missing one loses
         a double-open warning — so no evidence must fail toward warning.
 
-        Deliberately NOT applied to liveness: argv/metadata bindings are the
-        kill targets, and they are already identity-safe (a sid resolves
-        only against the home whose rollout tree records it, and dispatch
-        metadata carries the instance key). Filtering them on environ would
-        instead DROP real bindings whenever `/proc`环境 is unreadable.
+        Deliberately NOT applied to argv/UUID liveness: those bindings are
+        the kill targets, and a UUID target is already identity-safe (it
+        resolves only against the home whose rollout tree records it, and
+        dispatch metadata carries the instance key). Filtering them on
+        environ would instead DROP real bindings whenever `/proc` environ is
+        unreadable. `_confirms_home` below is the STRICT twin this method
+        deliberately is not, used only where a wrong guess would aim a
+        SIGTERM at another identity's process (name-resume binding).
         """
-        if record.env is None:
-            return True
-        declared = record.env.get("CODEX_HOME")
-        home = (
-            Path(os.path.normpath(Path(declared).expanduser()))
-            if declared
-            else codex_default_home()
+        declared_home = _declared_home(record.env)
+        return declared_home is None or declared_home == Path(
+            os.path.normpath(self.home)
         )
-        return home == Path(os.path.normpath(self.home))
+
+    def _confirms_home(self, record: ProcCli) -> bool:
+        """PURE: does environ evidence POSITIVELY CONFIRM this process
+        belongs to THIS identity? Unlike `owns_process` (env=None → True,
+        "possibly held", feeds only the unbound-live hint), this is the
+        strict twin `sid_extractor` uses to gate resume-by-NAME binding: a
+        name is only unique WITHIN one home's `session_index.jsonl`, so two
+        identities can each mint an unambiguous name-owning sid, and
+        binding the wrong one aims `s`/takeover SIGTERM at another
+        identity's process. An unreadable environ (`env is None`) therefore
+        proves nothing and must NOT bind — fail closed, the opposite
+        direction from `owns_process` (2026-08-23 amendment, ADR-0008).
+        UUID targets never call this: `sid_extractor` binds them directly,
+        since a UUID is already identity-safe without environ evidence."""
+        declared_home = _declared_home(record.env)
+        return declared_home is not None and declared_home == Path(
+            os.path.normpath(self.home)
+        )
 
     def discover(
         self,
@@ -472,11 +520,15 @@ class CodexProvider:
     ) -> ProviderScan:
         issues: list[InventoryIssue] = []
         names = _read_index(self.home, self._source, issues)
-        extract = sid_extractor(_name_index(names))
+        extract = sid_extractor(_name_index(names), self._confirms_home)
         live = build_live_index(
-            # Liveness consumes EVERY codex process: bindings are already
-            # identity-safe, and dropping records on environ evidence would
-            # lose real kill targets when it is unreadable (see owns_process).
+            # Liveness consumes EVERY codex process, not just this
+            # identity's: a UUID-target binding is identity-safe on its own
+            # (see `sid_extractor`), and dropping records on environ
+            # evidence would lose real kill targets when it is unreadable
+            # (see `owns_process`). A name-target binding stays safe too —
+            # `extract` (via `_confirms_home`) refuses it outright unless
+            # THIS record's environ confirms THIS identity.
             cli_inventory.records,
             extract,
             cur,

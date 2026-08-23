@@ -73,27 +73,56 @@ class TestResumeTargetGrammar:
         assert extract_resume_target(("kimi", "resume", UUID1)) is None
 
 
+def _rec(*argv: str) -> ProcCli:
+    """A bare argv-only record for the pure `sid_extractor` seam — `env` is
+    irrelevant here since these tests drive `confirms_home` directly."""
+    return ProcCli(pid=1, argv=argv, starttime="1")
+
+
 class TestSidExtractor:
-    """Binding seam: raw target → sid, via UUID or the unique-name mapping."""
+    """Binding seam: raw target → sid, via UUID or the unique-name mapping.
+
+    `confirms_home` gates non-UUID (name) targets only (2026-08-23
+    amendment, ADR-0008): a name is unique only WITHIN one codex identity's
+    `session_index.jsonl`, so binding it also needs THIS record's environ to
+    positively confirm THIS identity — unlike a UUID, which is already
+    identity-safe on its own.
+    """
 
     def test_uuid_binds_lowercased_without_any_index(self):
-        assert sid_extractor({})(("codex", "resume", UUID1.upper())) == UUID1
+        extract = sid_extractor({}, lambda record: True)
+        assert extract(_rec("codex", "resume", UUID1.upper())) == UUID1
 
-    def test_name_binds_only_through_the_mapping(self):
-        extract = sid_extractor({"my-thread": UUID1})
-        assert extract(("codex", "resume", "my-thread")) == UUID1
-        assert extract(("codex", "resume", "ghost")) is None
+    def test_uuid_binds_even_when_home_is_not_confirmed(self):
+        # UUID targets never consult confirms_home — fail-open by design,
+        # since a UUID is identity-safe without environ evidence.
+        extract = sid_extractor({}, lambda record: False)
+        assert extract(_rec("codex", "resume", UUID1.upper())) == UUID1
+
+    def test_name_binds_only_through_the_mapping_when_home_confirmed(self):
+        extract = sid_extractor({"my-thread": UUID1}, lambda record: True)
+        assert extract(_rec("codex", "resume", "my-thread")) == UUID1
+        assert extract(_rec("codex", "resume", "ghost")) is None
 
     def test_name_without_mapping_stays_unbound(self):
-        assert sid_extractor({})(("codex", "resume", "not-a-uuid")) is None
+        extract = sid_extractor({}, lambda record: True)
+        assert extract(_rec("codex", "resume", "not-a-uuid")) is None
+
+    def test_name_stays_unbound_without_confirmed_home(self):
+        # A wrong guess here would aim SIGTERM at another identity's process
+        # (the ADR-0008 cross-home leak this amendment closes) — fail closed.
+        extract = sid_extractor({"my-thread": UUID1}, lambda record: False)
+        assert extract(_rec("codex", "resume", "my-thread")) is None
 
     def test_exec_prompt_uuid_never_binds(self):
-        extract = sid_extractor({})
-        assert extract(("codex", "exec", "fix", "resume", "bug", UUID1)) is None
+        extract = sid_extractor({}, lambda record: True)
+        assert extract(_rec("codex", "exec", "fix", "resume", "bug", UUID1)) is None
 
 
-def _proc(pid: int, *argv: str, starttime: str = "100") -> ProcCli:
-    return ProcCli(pid=pid, argv=tuple(argv), starttime=starttime)
+def _proc(
+    pid: int, *argv: str, starttime: str = "100", env: dict | None = None
+) -> ProcCli:
+    return ProcCli(pid=pid, argv=tuple(argv), starttime=starttime, env=env)
 
 
 @pytest.fixture
@@ -173,9 +202,37 @@ class TestDiscoverArgvBinding:
     def test_name_resume_binds_via_unique_index(self, codex_home):
         _write_rollout(codex_home, f"rollout-a-{UUID1}.jsonl", UUID1)
         _write_index(codex_home, {"id": UUID1, "thread_name": "my-thread"})
-        scan = _discover(_proc(42, "codex", "resume", "my-thread", starttime="777"))
+        env = {"CODEX_HOME": str(codex_home)}
+        scan = _discover(
+            _proc(42, "codex", "resume", "my-thread", starttime="777", env=env)
+        )
         (row,) = scan.sessions
         assert row.alive and row.pid == 42 and row.proc_start == "777"
+
+    def test_name_resume_without_confirmed_home_stays_unbound(self, codex_home):
+        # Environ evidence must POSITIVELY confirm this home (2026-08-23
+        # amendment, ADR-0008): an unreadable environ (env=None) proves
+        # nothing about identity and must not bind — a wrong guess would aim
+        # SIGTERM at another codex identity's process.
+        _write_rollout(codex_home, f"rollout-a-{UUID1}.jsonl", UUID1)
+        _write_index(codex_home, {"id": UUID1, "thread_name": "my-thread"})
+        scan = _discover(_proc(42, "codex", "resume", "my-thread", env=None))
+        (row,) = scan.sessions
+        assert not row.alive
+
+    def test_name_resume_pointing_at_another_home_stays_unbound(
+        self, codex_home, tmp_path
+    ):
+        # The exact leak this amendment closes: a same-named thread process
+        # whose OWN CODEX_HOME points elsewhere must not bind here either.
+        _write_rollout(codex_home, f"rollout-a-{UUID1}.jsonl", UUID1)
+        _write_index(codex_home, {"id": UUID1, "thread_name": "my-thread"})
+        other = tmp_path / "other-home"
+        scan = _discover(
+            _proc(42, "codex", "resume", "my-thread", env={"CODEX_HOME": str(other)})
+        )
+        (row,) = scan.sessions
+        assert not row.alive
 
     def test_duplicate_thread_name_binds_nothing(self, codex_home):
         # One name owned by two sids: a guess would aim SIGTERM at one of
@@ -187,12 +244,14 @@ class TestDiscoverArgvBinding:
             {"id": UUID1, "thread_name": "my-thread"},
             {"id": UUID2, "thread_name": "my-thread"},
         )
-        scan = _discover(_proc(42, "codex", "resume", "my-thread"))
+        env = {"CODEX_HOME": str(codex_home)}
+        scan = _discover(_proc(42, "codex", "resume", "my-thread", env=env))
         assert all(not row.alive for row in scan.sessions)
 
     def test_unknown_name_binds_nothing(self, codex_home):
         _write_rollout(codex_home, f"rollout-a-{UUID1}.jsonl", UUID1)
-        scan = _discover(_proc(42, "codex", "resume", "ghost"))
+        env = {"CODEX_HOME": str(codex_home)}
+        scan = _discover(_proc(42, "codex", "resume", "ghost", env=env))
         (row,) = scan.sessions
         assert not row.alive
 
@@ -205,9 +264,10 @@ class TestDiscoverArgvBinding:
             {"id": UUID1, "thread_name": "old-name"},
             {"id": UUID1, "thread_name": "new-name"},
         )
-        (row,) = _discover(_proc(42, "codex", "resume", "old-name")).sessions
+        env = {"CODEX_HOME": str(codex_home)}
+        (row,) = _discover(_proc(42, "codex", "resume", "old-name", env=env)).sessions
         assert not row.alive
-        (row,) = _discover(_proc(42, "codex", "resume", "new-name")).sessions
+        (row,) = _discover(_proc(42, "codex", "resume", "new-name", env=env)).sessions
         assert row.alive and row.pid == 42
 
 
@@ -231,7 +291,14 @@ class TestNameResumeExecutionTakeover:
             "scan_cli_argv_inventory",
             lambda basenames, env_keys=frozenset(): ProcCliInventory(
                 records=(
-                    _proc(999999, "codex", "resume", "my-thread", starttime="88"),
+                    _proc(
+                        999999,
+                        "codex",
+                        "resume",
+                        "my-thread",
+                        starttime="88",
+                        env={"CODEX_HOME": str(codex_home)},
+                    ),
                 ),
             ),
         )

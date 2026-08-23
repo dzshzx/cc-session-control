@@ -101,6 +101,13 @@ def extract_sid(argv: tuple[str, ...]) -> str | None:
     return None
 
 
+def _extract(record: ProcCli) -> str | None:
+    """Adapts `extract_sid` (argv-only — kimi never needs environ evidence)
+    to the shared `ArgvExtractor` contract, which passes the full record so
+    codex's name-resume binding can also see `record.env`."""
+    return extract_sid(record.argv)
+
+
 def is_provider_process(record: ProcCli) -> bool:
     """PURE: Kimi Code process identity (C1). argv0 basename alone stopped
     sufficing on 0.31.1 — the runtime rewrites its own title, collapsing
@@ -438,7 +445,7 @@ class KimiProvider:
         issues.extend(registry_issues)
         live = build_live_index(
             cli_inventory.records,
-            extract_sid,
+            _extract,
             cur,
             panes=panes,
             provider_key=self.key,
@@ -455,7 +462,7 @@ class KimiProvider:
             (self._project(sid, entry, live, issues) for sid, entry in entries.items()),
             unbound_live_cwds(
                 cli_inventory.records,
-                extract_sid,
+                _extract,
                 is_tui_process,
                 bound_pids(live),
             ),

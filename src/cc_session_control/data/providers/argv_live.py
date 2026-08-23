@@ -35,8 +35,13 @@ from ..proc import AncestorProbe, ProcCli
 from ..tmux_outcomes import PaneInventory
 
 #: PURE per-provider argv matcher: the session id this process is running,
-#: or None when the argv does not prove one.
-ArgvExtractor = Callable[[tuple[str, ...]], str | None]
+#: or None when the argv (and, for codex name targets, environ evidence on
+#: the SAME record) does not prove one. Takes the full `ProcCli` — not just
+#: `record.argv` — because a resume-by-NAME binding (codex) additionally
+#: needs that record's `env` to confirm which identity's process this is
+#: (2026-08-23 amendment); kimi/opencode extractors still only look at
+#: `record.argv` and stay unaffected, they just receive it via the record.
+ArgvExtractor = Callable[[ProcCli], str | None]
 
 #: PURE per-provider process predicate: does this /proc record look like a
 #: session-holding interactive TUI of the provider's CLI (process identity
@@ -74,7 +79,7 @@ def build_argv_index(
     """
     index: dict[str, ArgvMatch] = {}
     for record in records:
-        sid = extract(record.argv)
+        sid = extract(record)
         if not sid:
             continue
         index[sid] = ArgvMatch(
@@ -217,7 +222,7 @@ def unbound_live_cwds(
         for record in records
         if record.cwd
         and record.pid not in bound
-        and extract(record.argv) is None
+        and extract(record) is None
         and is_tui_process(record)
     )
 
