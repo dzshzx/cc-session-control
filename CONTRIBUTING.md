@@ -18,24 +18,16 @@ uv run csctl --version
 ## Development
 
 - Run TUI: `csctl`
-- Run the complete local quality gate:
+- Run the complete local quality gate — the same script CI runs:
 
 ```bash
-uv run --extra dev ruff check src tests scripts
-uv run --extra dev ruff format --check src tests scripts
-uv run --extra dev mypy src/
-uv run --extra dev pytest tests/ \
-  --cov=cc_session_control --cov-branch \
-  --cov-report=term-missing --cov-report=json
-uv run --extra dev python scripts/check_coverage.py coverage.json
-if grep -rn --include='*.py' '/home/' src/; then
-  exit 1
-fi
+scripts/check.sh
 ```
 
-The coverage ratchet independently requires at least 92% statement coverage
-and 82% branch coverage. Remove `.coverage` and `coverage.json` after local
-inspection; both are ignored by Git.
+It runs Ruff lint and format checks, mypy, the hardcoded-`/home/` path guard,
+the test suite with branch coverage, and the coverage ratchet (independent
+statement and branch floors held in `scripts/check_coverage.py`). Remove
+`.coverage` and `coverage.json` after local inspection; both are ignored by Git.
 
 ## Pull Requests
 
