@@ -1,11 +1,13 @@
 """Sessions `d` delegates dead codex rows to the official `codex delete` (B8).
 
-The interaction contract mirrors the Claude `d` contract exactly: single key
-(no confirm modal), off-loop R10 ancestor probe at the view, execution-time
-fresh-evidence revalidation in the data layer, Chinese notice + refresh.
-The only difference is the executor: instead of csctl's own removal seam the
-owning CLI runs its official `codex delete <SESSION>` ("Permanently delete a
-saved session by id or session name" — `codex delete --help`, 0.146.0).
+The interaction contract mirrors the Claude `d` contract exactly: off-loop
+R10 ancestor probe at the view, THEN a confirm modal (2026-08-23 裁定:
+irreversible delete joined the kill-confirm club — `d` is no longer a bare
+single key), execution-time fresh-evidence revalidation in the data layer,
+Chinese notice + refresh. The only difference is the executor: instead of
+csctl's own removal seam the owning CLI runs its official
+`codex delete <SESSION>` ("Permanently delete a saved session by id or
+session name" — `codex delete --help`, 0.146.0).
 `cleanup.remove_session` keeps refusing non-Claude rows — the delegation is
 a bypass BESIDE that boundary, never a relaxation of it. kimi 0.31.1 has no
 delete subcommand, so its refusal stays and now names the upstream gap.
@@ -369,7 +371,9 @@ class TestViewKeyD:
     def test_dead_codex_d_mirrors_the_claude_contract_end_to_end(
         self, monkeypatch, codex_home
     ):
-        """Single key: probe → worker → notice → refresh; no confirm modal."""
+        """probe → confirm (names the delegated `codex delete` argv) →
+        worker → notice → refresh (2026-08-23: `d` now confirms like a
+        kill)."""
         _write_active(codex_home, UUID1)
         _stub_evidence(monkeypatch)
         calls = _stub_run(monkeypatch, returncode=0)
@@ -380,12 +384,36 @@ class TestViewKeyD:
 
         view._key_delete(s)
 
+        assert app._submitted_actions == []
+        assert app._confirm_messages == [
+            f"删除会话「旧任务」？将调用 codex delete {UUID1} 删除该线程。"
+        ]
+        assert app._notifications == []
+
+        app._last_confirm()
+
         assert app._submitted_actions == ["session.delete"]
-        assert app._confirm_messages == []
         assert app._notifications == ["已删除"]
         assert refreshed == [True]
         ((argv, _kwargs),) = calls
         assert argv == ["codex", "delete", UUID1]
+
+    def test_dead_codex_d_cancel_leaves_the_row_undeleted(
+        self, monkeypatch, codex_home
+    ):
+        """`n`/Esc (never invoking the captured on_yes) must not delete."""
+        _write_active(codex_home, UUID1)
+        _stub_evidence(monkeypatch)
+        _forbid_run(monkeypatch)
+        s = _codex_session()
+        app, view = self._view(s)
+
+        view._key_delete(s)
+
+        assert app._confirm_messages
+        assert app._submitted_actions == []
+        # Simulated cancel: just never call app._last_confirm().
+        assert app._submitted_actions == []
 
     def test_codex_d_r10_degraded_refuses_at_the_probe(self, monkeypatch):
         _set_proc_complete(monkeypatch, proc, False)
@@ -438,5 +466,11 @@ class TestViewKeyD:
         s = make_session(sid="c1", label="cl")
         app, view = self._view(s)
         view._key_delete(s)
+
+        assert app._submitted_actions == []
+        assert app._confirm_messages == ["删除会话「cl」？将不可恢复地删除其记录。"]
+
+        app._last_confirm()
+
         assert app._submitted_actions == ["session.delete"]
         assert seen == ["c1"]

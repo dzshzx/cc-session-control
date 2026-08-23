@@ -70,6 +70,7 @@ __all__ = [
     "resolve_argv_execution",
     "find_non_claude_session",
     "unarchive_argv",
+    "delete_argv",
     "execute_cli_delete",
 ]
 
@@ -272,6 +273,19 @@ def unarchive_argv(key: str, sid: str) -> list[str]:
     if not isinstance(provider, ArchiveVerbs):
         raise TypeError(f"provider {key!r} has no archive verbs")
     return provider.unarchive_argv(sid)
+
+
+def delete_argv(key: str, sid: str) -> list[str]:
+    """THE delegated-delete argv dispatch (`_confirm.delete_message` reads it
+    to render Sessions `d`'s confirm 文案, `execute_cli_delete` reads it to
+    actually invoke — one source, so the modal and the run can never drift):
+    loud on a provider without delete verbs — only `DeleteVerbs` providers
+    ever reach the delegated branch, so a mismatch is a programming error,
+    not renderable uncertainty."""
+    provider = get(key)
+    if not isinstance(provider, DeleteVerbs):
+        raise TypeError(f"provider {key!r} has no delete verbs")
+    return provider.delete_argv(sid)
 
 
 def _delete_refusal(stage: CliDeleteStage, detail: str) -> CliDeleteResult:

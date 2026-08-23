@@ -120,6 +120,8 @@ def test_delete_honest_feedback_true_then_false(monkeypatch):
     removed = CleanupExecution(completed=["sid"])
     monkeypatch.setattr(sv_mod.tui_actions.cleanup, "remove_session", lambda s: removed)
     view.handle_key("d")
+    assert app._confirm_messages  # 2026-08-23: `d` confirms before deleting
+    app._last_confirm()
     assert app._submitted_actions == ["session.delete"]
     assert app._notifications[-1] == "已删除"
 
@@ -129,6 +131,7 @@ def test_delete_honest_feedback_true_then_false(monkeypatch):
         lambda s: CleanupExecution(),
     )
     view.handle_key("d")
+    app._last_confirm()
     assert app._notifications[-1] == "无可删除内容"
 
 
@@ -155,6 +158,7 @@ def test_delete_failure_does_not_claim_success(monkeypatch, tmp_path):
     _focus_dead_session(view)
 
     view.handle_key("d")
+    app._last_confirm()
 
     assert "失败" in app._notifications[-1]
     assert "已删除" not in app._notifications[-1]
@@ -186,6 +190,7 @@ def test_delete_partial_failure_mentions_removed_path(monkeypatch, tmp_path):
     _focus_dead_session(view)
 
     view.handle_key("d")
+    app._last_confirm()
 
     notice = app._notifications[-1]
     assert "部分失败" in notice

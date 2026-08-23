@@ -224,6 +224,12 @@ def test_dead_delete_prepares_off_loop_before_worker_mutation(
 
     ready.clear()
     assert app._on_action_pipe(b"prepared") is True
+    # 2026-08-23: the R10 probe completing only surfaces the confirm modal —
+    # deletion is now gated the same as a kill, so nothing has run yet.
+    assert delete_threads == []
+    assert app._confirm_yes is not None
+
+    app._input("y")
     assert delete_started.wait(1)
     assert delete_threads[0] != main_thread
     assert ready.wait(1)

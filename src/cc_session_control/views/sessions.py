@@ -18,8 +18,8 @@ from ..data.cleanup import CleanupPlan
 from ..models import InventoryIssue, Session
 from ._base import ListTabView
 from ._confirm import (
-    accept_ancestor_probe,
     archived_notice,
+    confirm_delete,
     confirm_stop,
     confirm_takeover,
     confirm_tmux_takeover,
@@ -100,7 +100,7 @@ class SessionsView(CleanupMixin, ListTabView):
             "d 删除",
             "_key_delete",
             section="会话操作:",
-            help_lines=("  d      删除已结束的会话记录",),
+            help_lines=("  d      删除已结束的会话记录（不可逆，需二次确认）",),
         ),
         Key(
             ("y",),
@@ -333,6 +333,13 @@ class SessionsView(CleanupMixin, ListTabView):
             lambda: tui_actions.stop_session(s),
         )
 
+    def _do_delete(self, s: Session) -> None:
+        """Delete body, run only after the y/n confirm accepts (2026-08-23)."""
+        self.app.submit_action(
+            "session.delete",
+            lambda: tui_actions.delete_session(s),
+        )
+
     def _do_relaunch(self, s: Session) -> None:
         """转后台 body (after confirm when it takes over a live one): spawn the
         resume window in the shared csctl tmux session, do NOT enter it — the
@@ -513,11 +520,11 @@ class SessionsView(CleanupMixin, ListTabView):
         evidence: proc.AncestorProbe,
         s: Session,
     ) -> None:
-        if not accept_ancestor_probe(self.app, evidence):
-            return
-        self.app.submit_action(
-            "session.delete",
-            lambda: tui_actions.delete_session(s),
+        confirm_delete(
+            self.app,
+            s,
+            lambda: self._do_delete(s),
+            evidence=evidence,
         )
 
     def _key_delete(self, s: Session) -> None:

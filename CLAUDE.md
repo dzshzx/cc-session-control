@@ -68,7 +68,7 @@ csctl resume --take-over <sid>                 # execution-time re-resolution + 
 
 - **UI 字符串是简体中文**（通知、状态、按键提示、帮助屏）。**CLI 子命令输出是英文。** 添加字符串时遵循这一点。
 - 可预期的外部失败由所属边界显式建模：允许降级的只读探测返回有类型的安全值；trust/settings、cleanup、refresh 和写操作保留 typed result、失败阶段与详情，并让 CLI/TUI 可见。不得用 broad `except Exception` 把 parser/invariant/编程错误伪装成空结果或成功。
-- 破坏性 cleanup 总是先 preview：`_enter_preview` 在一个 `Overlay` 中显示目标，`_confirm_cleanup` 在第二次 `Enter` 时执行。
+- 破坏性 cleanup 总是先 preview：`_enter_preview` 在一个 `Overlay` 中显示目标，`_confirm_cleanup` 在第二次 `Enter` 时执行。单条删除（`d`）先经 `confirm_delete` 弹 `App.confirm` 二次确认（2026-08-23 裁定）。
 - Config 是 `config.py` 中单一的全局 `cfg = Config()`；测试通过 monkeypatch `cfg` 属性来覆盖路径（例如 `cfg.claude_home`、`cfg.claude_json`）。
 - **不硬编码机器专属路径**：产品源码（`src/`）不得内联 `/home/...` 之类的绝对路径；CI 与本地预发布序列都跑 `grep -rn --include='*.py' '/home/' src/`（见 `## 命令`），必须返回空。
 - **架构不变量**（详见 `docs/architecture.md`）：

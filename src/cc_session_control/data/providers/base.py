@@ -203,6 +203,12 @@ class DeleteVerbs(Protocol):
     keeps the honest refusal — the verb is never emulated (ADR-0005).
     """
 
+    def delete_argv(self, sid: str) -> list[str]:
+        """The official argv deleting `sid` — the single source `d`'s confirm
+        文案 (`_confirm.delete_message`) and `delete_session_result` both read,
+        so the modal can never drift from what actually runs."""
+        ...
+
     def delete_session_result(self, sid: str) -> CliDeleteResult:
         """Run the official delete, bounded, keeping typed failure evidence."""
         ...

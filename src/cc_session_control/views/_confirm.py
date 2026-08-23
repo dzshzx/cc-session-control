@@ -1,11 +1,15 @@
-"""Kill-confirm policy — ONE home for the gate order and the confirm 文案.
+"""Destructive-confirm policy — ONE home for the gate order and the confirm 文案.
 
-Every op that terminates a live process confirms via the app-level modal
-(`App.confirm`); a takeover additionally consumes a prepared `/proc` probe and
-refuses incomplete evidence (R10) BEFORE confirming. The 文案 follows the one
+Every op that terminates a live process, or irreversibly deletes a session
+record (2026-08-23 裁定: Sessions `d` joined this club — it is no longer a
+bare single key), confirms via the app-level modal (`App.confirm`); a
+takeover additionally consumes a prepared `/proc` probe and refuses
+incomplete evidence (R10) BEFORE confirming. The 文案 follows the one
 template `{动词}{对象}「name」？{后果}`
-(接管类 "将先终止原进程。" / 停止类 "将终止其进程。"). Views call these
-helpers instead of re-inlining the degrade-gate → confirm → act sequence.
+(接管类 "将先终止原进程。" / 停止类 "将终止其进程。" / 删除类 "将不可恢复
+地删除其记录。"或委托 CLI 官方 delete 时的 "将调用 …… 删除该线程。"). Views
+call these helpers instead of re-inlining the degrade-gate → confirm → act
+sequence.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from ..actions.session_ops import (
     resume_cmd,
     would_take_over,
 )
-from ..data import proc
+from ..data import proc, providers
 from ._rows import CONFIRM_NAME_CELLS, truncate_cells
 
 if TYPE_CHECKING:
@@ -36,6 +40,21 @@ DEGRADED = "liveness 降级：破坏性操作已禁用"
 def stop_message(verb: str, name: str) -> str:
     """Confirm 文案 for a plain stop (kills the named thing's own process)."""
     return f"{verb}「{truncate_cells(name, CONFIRM_NAME_CELLS)}」？将终止其进程。"
+
+
+def delete_message(s: Session) -> str:
+    """Confirm 文案 for Sessions `d` (2026-08-23 裁定: 不可逆删除与 kill 同级,
+    不再单键直杀). csctl's own removal (claude, full transcript/session-env/
+    file-history/tasks/uploads/jobs wipe) states the irreversible wipe; a
+    delegated official-CLI delete (codex/opencode) names the actual command
+    it will run — `providers.delete_argv` is the same source
+    `execute_cli_delete` invokes, so the modal can never drift from what
+    actually runs."""
+    shown = truncate_cells(s.label, CONFIRM_NAME_CELLS)
+    if providers.get(s.provider).caps.cleanup:
+        return f"删除会话「{shown}」？将不可恢复地删除其记录。"
+    argv = providers.delete_argv(s.provider, s.sid)
+    return f"删除会话「{shown}」？将调用 {' '.join(argv)} 删除该线程。"
 
 
 def archived_notice(s: Session) -> str:
@@ -87,6 +106,32 @@ def confirm_stop(
         app.notify(f"不能停止当前{noun}")
         return
     app.confirm(stop_message(f"停止{noun}", name), on_yes)
+
+
+def confirm_delete(
+    app: App,
+    s: Session,
+    on_yes: Callable[[], None],
+    *,
+    gated: bool = True,
+    evidence: proc.AncestorProbe | None = None,
+) -> None:
+    """The `confirm_stop` twin for Sessions `d` (2026-08-23 裁定): degrade-gate
+    → confirm, 文案 from `delete_message`. `_key_delete` already refuses a
+    live, archived, or capability-less row BEFORE the off-loop probe is even
+    submitted, so this gate — like `confirm_stop`'s — only guards the
+    current-session R10 evidence; there is no separate alive/current check
+    here. ``gated=False`` is reserved the same way as `confirm_stop`'s: a
+    submitted mutation whose worker owns fresh typed process validation.
+    """
+    if gated:
+        if evidence is None:
+            raise RuntimeError(
+                "protected delete confirmation requires prepared evidence"
+            )
+        if not accept_ancestor_probe(app, evidence):
+            return
+    app.confirm(delete_message(s), on_yes)
 
 
 def confirm_takeover(
