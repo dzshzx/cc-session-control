@@ -203,19 +203,25 @@ def test_take_over_failed_on_signal_error(monkeypatch):
 
 
 def test_take_over_kills_settles_and_invalidates(monkeypatch):
+    # Pre-kill probe reports alive; the post-SIGTERM settle recheck sees the
+    # process die on its second poll — KILLED only after that recheck
+    # confirms it, and the settle loop stops polling as soon as it does.
     import cc_session_control.actions.session_ops as so
 
     calls = {"kill": None, "sleep": 0, "invalidate": 0}
+    probe_calls = {"n": 0}
+
+    def probe_pid(pid, start):
+        probe_calls["n"] += 1
+        # call 1: pre-kill check (alive). calls 2-3: settle recheck.
+        return so.proc.PidProbe(pid, probe_calls["n"] < 3)
+
     monkeypatch.setattr(
         so.proc,
         "probe_current_ancestors",
         lambda: so.proc.AncestorProbe(frozenset({999})),
     )
-    monkeypatch.setattr(
-        so.proc,
-        "probe_pid",
-        lambda pid, start: so.proc.PidProbe(pid, True),
-    )
+    monkeypatch.setattr(so.proc, "probe_pid", probe_pid)
     monkeypatch.setattr(
         so.os, "kill", lambda pid, sig: calls.__setitem__("kill", (pid, sig))
     )
@@ -229,8 +235,91 @@ def test_take_over_kills_settles_and_invalidates(monkeypatch):
     )
     assert so.take_over_result(4242, "999").state is so.TakeOverState.KILLED
     assert calls["kill"] == (4242, so.signal.SIGTERM)
-    assert calls["sleep"] == 1
+    # Two settle polls (died on the second) — well under the ~30-poll cap —
+    # proves the recheck returns as soon as death is confirmed instead of
+    # always paying the full settle window.
+    assert calls["sleep"] == 2
+    assert probe_calls["n"] == 3
     assert calls["invalidate"] == 1
+
+
+def test_take_over_survived_when_process_ignores_sigterm(monkeypatch):
+    # A CLI that pops a save-confirmation modal on SIGTERM never exits: the
+    # settle recheck must keep reporting it alive through the whole window
+    # and the primitive must report SURVIVED (not KILLED) so callers never
+    # resume/spawn a duplicate against the still-live process.
+    import cc_session_control.actions.session_ops as so
+
+    calls = {"kill": 0, "sleep": 0, "invalidate": 0}
+    monkeypatch.setattr(
+        so.proc,
+        "probe_current_ancestors",
+        lambda: so.proc.AncestorProbe(frozenset({999})),
+    )
+    monkeypatch.setattr(
+        so.proc,
+        "probe_pid",
+        lambda pid, start: so.proc.PidProbe(pid, True),
+    )
+    monkeypatch.setattr(
+        so.os, "kill", lambda *_a: calls.__setitem__("kill", calls["kill"] + 1)
+    )
+    monkeypatch.setattr(
+        so.time, "sleep", lambda *_: calls.__setitem__("sleep", calls["sleep"] + 1)
+    )
+    monkeypatch.setattr(
+        so,
+        "invalidate_cache",
+        lambda: calls.__setitem__("invalidate", calls["invalidate"] + 1),
+    )
+    outcome = so.take_over_result(4242, "999")
+    assert outcome.state is so.TakeOverState.SURVIVED
+    assert outcome.success is False
+    assert "4242" in outcome.detail
+    assert "still alive" in outcome.detail
+    assert calls["kill"] == 1
+    # Bounded settle window, not an unbounded/one-shot wait.
+    assert 0 < calls["sleep"] <= 30
+    assert calls["invalidate"] == 0
+
+
+def test_take_over_settle_recheck_proc_unavailable_is_refused_not_killed(monkeypatch):
+    # /proc going unavailable mid-settle must not be collapsed into KILLED —
+    # that would let a required takeover proceed while the target process's
+    # true state is unknown.
+    import cc_session_control.actions.session_ops as so
+
+    probe_calls = {"n": 0}
+    unavailable_issue = so.proc.ProcIssue(
+        "process stat", "/proc/4242/stat", "unavailable"
+    )
+
+    def probe_pid(pid, start):
+        probe_calls["n"] += 1
+        if probe_calls["n"] == 1:
+            return so.proc.PidProbe(pid, True)  # pre-kill check: alive
+        return so.proc.PidProbe(pid, None, issue=unavailable_issue)
+
+    monkeypatch.setattr(
+        so.proc,
+        "probe_current_ancestors",
+        lambda: so.proc.AncestorProbe(frozenset({999})),
+    )
+    monkeypatch.setattr(so.proc, "probe_pid", probe_pid)
+    monkeypatch.setattr(so.os, "kill", lambda *_a: None)
+    monkeypatch.setattr(so.time, "sleep", lambda *_: None)
+    invalidated = {"n": 0}
+    monkeypatch.setattr(
+        so,
+        "invalidate_cache",
+        lambda: invalidated.__setitem__("n", invalidated["n"] + 1),
+    )
+
+    outcome = so.take_over_result(4242, "999")
+    assert outcome.state is so.TakeOverState.REFUSED
+    assert outcome.success is False
+    assert "/proc/4242/stat" in outcome.detail
+    assert invalidated["n"] == 0
 
 
 # --- tmux-first dispatch: tmux resume / attach (ADR-0001) ---
@@ -375,6 +464,7 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
     from cc_session_control.actions import execution_target
 
     calls = {"kill": [], "spawn": []}
+    probe_calls = {"n": 0}
     monkeypatch.setattr(so.os, "kill", lambda pid, sig: calls["kill"].append(pid))
     monkeypatch.setattr(so.time, "sleep", lambda *_: None)
     monkeypatch.setattr(so, "invalidate_cache", lambda: None)
@@ -383,11 +473,13 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
         "probe_current_ancestors",
         lambda: so.proc.AncestorProbe(frozenset({999})),
     )
-    monkeypatch.setattr(
-        so.proc,
-        "probe_pid",
-        lambda pid, start: so.proc.PidProbe(pid, True),
-    )
+
+    def probe_pid(pid, start):
+        probe_calls["n"] += 1
+        # call 1: pre-kill check (alive). call 2: settle recheck — dead.
+        return so.proc.PidProbe(pid, probe_calls["n"] < 2)
+
+    monkeypatch.setattr(so.proc, "probe_pid", probe_pid)
     monkeypatch.setattr(
         so.tmux,
         "run_in_tmux_result",

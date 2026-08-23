@@ -54,13 +54,13 @@ def test_resume_take_over_re_resolves_execution_time_identity(
         lambda: session_ops.proc.AncestorProbe(frozenset({111})),
     )
     probes, killed, changed, executed = [], [], [], []
-    monkeypatch.setattr(
-        session_ops.proc,
-        "probe_pid",
-        lambda pid, start: (
-            probes.append((pid, start)) or session_ops.proc.PidProbe(pid, True)
-        ),
-    )
+
+    def probe_pid(pid, start):
+        probes.append((pid, start))
+        # call 1: pre-kill check (alive). call 2: settle recheck — dead.
+        return session_ops.proc.PidProbe(pid, len(probes) < 2)
+
+    monkeypatch.setattr(session_ops.proc, "probe_pid", probe_pid)
     monkeypatch.setattr(session_ops.os, "kill", lambda pid, _sig: killed.append(pid))
     monkeypatch.setattr(session_ops.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(session_ops.os, "chdir", lambda cwd: changed.append(cwd))
@@ -72,7 +72,10 @@ def test_resume_take_over_re_resolves_execution_time_identity(
 
     assert cli.main(["resume", "--take-over", "stable-sid"]) == 0
     assert capsys.readouterr().err == ""
-    assert probes == [(9002, "new-start")]
+    # First probe is the pre-kill liveness check; the second is the
+    # post-SIGTERM settle recheck that confirms death — both against the
+    # execution-time-resolved pid, never the stale display-time one.
+    assert probes == [(9002, "new-start"), (9002, "new-start")]
     assert killed == [9002]
     assert changed == [str(tmp_path)]
     assert executed == [("claude", ["claude", "--resume", "stable-sid"])]

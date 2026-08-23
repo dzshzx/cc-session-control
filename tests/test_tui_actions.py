@@ -147,6 +147,17 @@ def test_stop_session_preserves_refusal_and_failure(monkeypatch) -> None:
     failed = tui_actions.stop_session(session)
     assert failed.message == "停止失败"
 
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "take_over_result",
+        lambda *_: tui_actions.session_ops.TakeOverOutcome(
+            tui_actions.session_ops.TakeOverState.SURVIVED,
+            "pid 42 still alive 3s after SIGTERM",
+        ),
+    )
+    survived = tui_actions.stop_session(session)
+    assert survived.message == "停止失败：pid 42 still alive 3s after SIGTERM"
+
 
 def test_stop_session_refuses_unknown_proc_probe_without_signal(monkeypatch) -> None:
     session = _session()
@@ -225,6 +236,14 @@ def test_dead_background_session_skips_liveness_and_reaches_tmux(monkeypatch) ->
                 "permission denied",
             ),
             "转入后台失败：permission denied",
+            [],
+        ),
+        (
+            tui_actions.session_ops.TakeOverOutcome(
+                tui_actions.session_ops.TakeOverState.SURVIVED,
+                "pid 4242 still alive 3s after SIGTERM",
+            ),
+            "转入后台失败：pid 4242 still alive 3s after SIGTERM",
             [],
         ),
         (

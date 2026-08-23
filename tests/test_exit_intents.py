@@ -299,6 +299,18 @@ def test_tui_terminal_resume_r10_refusal_exits_nonzero_on_stderr(
             ("Terminal resume did not occur for session resume: permission denied.\n"),
         ),
         (
+            session_ops.TakeOverOutcome(
+                session_ops.TakeOverState.SURVIVED,
+                "pid 4242 still alive 3s after SIGTERM",
+            ),
+            1,
+            [],
+            (
+                "Terminal resume did not occur for session resume: "
+                "pid 4242 still alive 3s after SIGTERM.\n"
+            ),
+        ),
+        (
             session_ops.TakeOverOutcome(session_ops.TakeOverState.KILLED),
             0,
             ["chdir:/project", "exec:claude"],
@@ -311,7 +323,7 @@ def test_tui_terminal_resume_r10_refusal_exits_nonzero_on_stderr(
             "",
         ),
     ],
-    ids=["refused", "sigterm-permission-error", "killed", "gone"],
+    ids=["refused", "sigterm-permission-error", "survived", "killed", "gone"],
 )
 def test_tui_live_terminal_resume_requires_successful_takeover_before_exec(
     takeover: session_ops.TakeOverOutcome,
@@ -352,6 +364,38 @@ def test_tui_live_terminal_resume_requires_successful_takeover_before_exec(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == expected_error
+
+
+def test_live_tmux_resume_requires_successful_takeover_before_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A process that survives SIGTERM (e.g. a CLI holding a save-confirm
+    # modal open) must never let the tmux resume path spawn a second copy
+    # of the same session — that is exactly the double-open R10 guards
+    # against.
+    session = _install_execution_session(
+        monkeypatch,
+        _session(alive=True, pid=4242),
+    )
+    monkeypatch.setattr(
+        session_ops,
+        "take_over_result",
+        lambda *_args: session_ops.TakeOverOutcome(
+            session_ops.TakeOverState.SURVIVED,
+            "pid 4242 still alive 3s after SIGTERM",
+        ),
+    )
+    monkeypatch.setattr(session_ops.os.path, "isdir", lambda _path: True)
+    monkeypatch.setattr(tmux, "run_in_tmux_result", _must_not_spawn)
+
+    assert session_ops.TmuxResumeIntent(session).run() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "Failed to resume the session inside tmux: "
+        "pid 4242 still alive 3s after SIGTERM.\n"
+    )
 
 
 def test_live_terminal_resume_uses_execution_time_session_generation(

@@ -29,6 +29,7 @@ class TakeOverState(StrEnum):
     GONE = "gone"
     REFUSED = "refused"
     FAILED = "failed"
+    SURVIVED = "survived"
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,12 @@ class TakeOverOutcome:
         return self.state in {TakeOverState.KILLED, TakeOverState.GONE}
 
 
+#: Recheck cadence after SIGTERM: short polls, bounded total wait — early
+#: death returns immediately instead of always paying a fixed 1s tax.
+_SETTLE_POLL_INTERVAL_S = 0.1
+_SETTLE_POLL_TIMEOUT_S = 3.0
+
+
 def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
     """THE kill primitive behind every takeover/stop: R10 gate → kill-time
     liveness recheck → SIGTERM → settle → invalidate the liveness cache.
@@ -48,11 +55,16 @@ def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
     across the resume/terminate/stop variants. The recheck (`proc.probe_pid`
     against `proc_start`; mere existence when the start is unknown) closes
     the pid-reuse window — a confirm modal can sit open for minutes, and a
-    recycled pid must never be SIGTERMed. Results: "killed" (signalled +
-    settled), "gone" (already dead / recycled — nothing to kill), "refused"
-    (R10: current undeterminable), "failed" (signal error). A required
-    takeover may continue only after "killed" or "gone"; "refused" and
-    "failed" both fail closed."""
+    recycled pid must never be SIGTERMed. Results: "killed" (signalled AND
+    re-probed gone/recycled — a process that ignores SIGTERM, e.g. a CLI
+    popping a save-confirm modal, is never reported killed), "gone" (already
+    dead / recycled — nothing to kill), "survived" (signalled but still
+    alive after the settle window — the process caught or ignored the
+    signal), "refused" (R10: current, or liveness, undeterminable — including
+    mid-settle `/proc` becoming unavailable), "failed" (signal error). A
+    required takeover may continue only after "killed" or "gone"; "refused",
+    "failed", and "survived" all fail closed (no SIGKILL escalation — the
+    operator can retry)."""
     ancestors = proc.probe_current_ancestors()
     if not ancestors.complete:
         return TakeOverOutcome(
@@ -83,9 +95,30 @@ def take_over_result(pid: int, proc_start: str = "") -> TakeOverOutcome:
         return TakeOverOutcome(TakeOverState.GONE)
     except OSError as exc:
         return TakeOverOutcome(TakeOverState.FAILED, str(exc))
-    time.sleep(1)
-    invalidate_cache()
-    return TakeOverOutcome(TakeOverState.KILLED)
+    return _settle_after_signal(pid, proc_start)
+
+
+def _settle_after_signal(pid: int, proc_start: str) -> TakeOverOutcome:
+    """Poll `proc.probe_pid` until the signalled pid is confirmed gone (or
+    recycled), or the settle window elapses. Never collapses a mid-poll
+    `/proc` outage into "killed" — that would let a resume proceed against a
+    process that might still be alive."""
+    steps = int(_SETTLE_POLL_TIMEOUT_S / _SETTLE_POLL_INTERVAL_S)
+    for _ in range(steps):
+        time.sleep(_SETTLE_POLL_INTERVAL_S)
+        recheck = proc.probe_pid(pid, proc_start)
+        if recheck.alive is None:
+            issue = recheck.issue
+            if issue is None:
+                raise AssertionError("unknown pid probe must carry an issue")
+            return TakeOverOutcome(TakeOverState.REFUSED, issue_detail((issue,)))
+        if not recheck.alive:
+            invalidate_cache()
+            return TakeOverOutcome(TakeOverState.KILLED)
+    return TakeOverOutcome(
+        TakeOverState.SURVIVED,
+        f"pid {pid} still alive {_SETTLE_POLL_TIMEOUT_S:g}s after SIGTERM",
+    )
 
 
 def _resume_plan(s: Session, fork: bool = False) -> tuple[str, list[str], bool]:
