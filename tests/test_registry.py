@@ -68,13 +68,15 @@ def test_read_session_procs_missing_dir(tmp_path, monkeypatch):
     assert registry.read_session_procs(max_age=0.0) == []
 
 
-def test_scan_session_procs_reports_issue_when_sessions_dir_missing_but_claude_home_exists(
+def test_scan_session_procs_reports_issue_when_sessions_dir_missing_but_transcripts_exist(
     tmp_path, monkeypatch
 ):
-    # `~/.claude` (claude_home) exists — Claude Code is installed — but its
-    # `sessions/` dir does not: an upstream rename/migration, not "provider
-    # not installed". This must NOT read as "zero live sessions".
+    # `projects/` holds transcripts — sessions have run here — but the
+    # per-pid `sessions/` registry dir does not exist: an upstream
+    # rename/migration, not "provider not installed". This must NOT read as
+    # "zero live sessions".
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    (tmp_path / "projects").mkdir()
     registry.invalidate_cache()
 
     result = registry.scan_session_procs(max_age=0.0)
@@ -86,6 +88,21 @@ def test_scan_session_procs_reports_issue_when_sessions_dir_missing_but_claude_h
     assert issue.source == "session registry"
     assert issue.path == os.fspath(tmp_path / "sessions")
     assert "missing" in issue.detail
+
+
+def test_scan_session_procs_no_issue_when_no_session_ever_ran(tmp_path, monkeypatch):
+    # `~/.claude` exists but holds no `projects/`: only non-session commands
+    # ran here (the Tier 1 probe footprint is `backups/` + `.claude.json`), so
+    # an absent registry dir is the legitimate empty state, not lost evidence.
+    monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    (tmp_path / "backups").mkdir()
+    registry.invalidate_cache()
+
+    result = registry.scan_session_procs(max_age=0.0)
+
+    assert result.records == ()
+    assert result.complete is True
+    assert result.issues == ()
 
 
 def test_scan_session_procs_no_issue_when_claude_home_itself_is_absent(

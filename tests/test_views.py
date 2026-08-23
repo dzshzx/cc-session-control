@@ -504,7 +504,7 @@ def test_sessions_s_key_confirms_then_terminates(monkeypatch):
     monkeypatch.setattr(
         sv_mod.tui_actions.session_ops,
         "session_for_execution",
-        lambda s, fork: ExecutionSessionResolution(
+        lambda s, fork, **_kw: ExecutionSessionResolution(
             ExecutionSessionState.RESOLVED, session=s
         ),
     )

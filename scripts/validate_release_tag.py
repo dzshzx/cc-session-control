@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import runpy
 import subprocess
@@ -16,7 +17,13 @@ _REMOTE_OWNER_REPO = re.compile(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$")
 
 
 def _origin_owner_repo() -> tuple[str, str] | None:
-    """Parse ``owner/repo`` out of the ``origin`` remote URL (SSH or HTTPS)."""
+    """``owner/repo`` for the ``gh`` query: Actions' own ``GITHUB_REPOSITORY``
+    when set, otherwise parsed from the ``origin`` remote URL (SSH or HTTPS)
+    for the local pre-tag run."""
+    from_actions = os.environ.get("GITHUB_REPOSITORY", "")
+    if from_actions.count("/") == 1:
+        owner, repo = from_actions.split("/")
+        return owner, repo
     remote = subprocess.run(
         ["git", "remote", "get-url", "origin"],
         capture_output=True,

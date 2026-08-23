@@ -43,6 +43,18 @@ from ..tmux_outcomes import PaneInventory
 #: `record.argv` and stay unaffected, they just receive it via the record.
 ArgvExtractor = Callable[[ProcCli], str | None]
 
+
+def argv_only(extract_sid: Callable[[tuple[str, ...]], str | None]) -> ArgvExtractor:
+    """Adapt an argv-only sid rule to the record-level `ArgvExtractor`
+    contract — for providers (kimi, opencode) whose binding never needs the
+    record's environ evidence."""
+
+    def extract(record: ProcCli) -> str | None:
+        return extract_sid(record.argv)
+
+    return extract
+
+
 #: PURE per-provider process predicate: does this /proc record look like a
 #: session-holding interactive TUI of the provider's CLI (process identity
 #: via argv0/comm/exe PLUS a non-daemon argv shape)? Daemons and utility

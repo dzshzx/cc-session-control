@@ -52,8 +52,16 @@ class ExecutionSessionResolution:
         return self.state is ExecutionSessionState.RESOLVED
 
 
-def resolve_execution_session(sid: str) -> ExecutionSessionResolution:
-    """Resolve one stable SID against one fresh liveness/transcript generation."""
+def resolve_execution_session(
+    sid: str,
+    *,
+    require_cwd: bool = True,
+) -> ExecutionSessionResolution:
+    """Resolve one stable SID against one fresh liveness/transcript generation.
+
+    `require_cwd=False` is for verbs that never `cd` into the session
+    (stop): a live session whose cwd has since been deleted is still a
+    legitimate kill target, only not a resumable one."""
     evidence = liveness.liveness_inputs()
     if not evidence.complete:
         return ExecutionSessionResolution(
@@ -85,7 +93,7 @@ def resolve_execution_session(sid: str) -> ExecutionSessionResolution:
             ExecutionSessionState.REFUSED,
             detail=f"session {sid!r} is the current session",
         )
-    if not target.cwd or not os.path.isdir(target.cwd):
+    if require_cwd and (not target.cwd or not os.path.isdir(target.cwd)):
         return ExecutionSessionResolution(
             ExecutionSessionState.REFUSED,
             detail=f"session {sid!r} has no usable execution-time cwd: {target.cwd!r}",
@@ -113,6 +121,8 @@ def resolve_execution_session(sid: str) -> ExecutionSessionResolution:
 def session_for_execution(
     session: Session,
     fork: bool,
+    *,
+    require_cwd: bool = True,
 ) -> ExecutionSessionResolution:
     base_provider = session.provider.split(":", 1)[0]
     # A Codex row can become app-server-hosted after the rendered generation.
@@ -132,6 +142,7 @@ def session_for_execution(
         argv_resolution = providers.resolve_argv_execution(
             session.provider,
             session.sid,
+            require_cwd=require_cwd,
         )
         if not argv_resolution.success:
             return ExecutionSessionResolution(
@@ -149,4 +160,4 @@ def session_for_execution(
             ExecutionSessionState.RESOLVED,
             session=argv_resolution.session,
         )
-    return resolve_execution_session(session.sid)
+    return resolve_execution_session(session.sid, require_cwd=require_cwd)

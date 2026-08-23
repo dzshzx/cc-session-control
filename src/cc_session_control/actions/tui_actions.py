@@ -43,7 +43,11 @@ def stop_session(session: Session) -> ActionResult:
     # English detail) — not the same judgment made twice.
     if refusal := _hosted_refusal(session):
         return refusal
-    resolution = session_ops.session_for_execution(session, fork=False)
+    # Stop never `cd`s into the session: a live process whose cwd was deleted
+    # is still a legitimate kill target, only not a resumable one.
+    resolution = session_ops.session_for_execution(
+        session, fork=False, require_cwd=False
+    )
     if not resolution.success or resolution.session is None:
         detail = resolution.detail or "执行时会话证据不完整"
         return ActionResult(f"停止失败：{detail}", needs_refresh=True)

@@ -165,11 +165,7 @@ def _load_for_write(path: Path) -> dict[str, Any] | CurationWriteResult:
     if invalid is not None:
         return _failure(path, CurationWriteFailure.INVALID, invalid)
     if not isinstance(document, dict):
-        # _validate() already rejects non-dict documents above — this is an
-        # isinstance narrowing for the type checker, not a new runtime path.
-        return _failure(
-            path, CurationWriteFailure.INVALID, "top-level JSON value is not an object"
-        )
+        raise AssertionError("_validate accepted a non-object document")
     return document
 
 

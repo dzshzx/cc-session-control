@@ -44,6 +44,7 @@ from ..tmux_outcomes import PaneInventory
 from .argv_live import (
     ArgvMatch,
     apply_unbound_hints,
+    argv_only,
     bound_pids,
     build_live_index,
     flag_value,
@@ -115,13 +116,6 @@ def extract_sid(argv: tuple[str, ...]) -> str | None:
     if value and not value.startswith("-"):
         return value
     return None
-
-
-def _extract(record: ProcCli) -> str | None:
-    """Adapts `extract_sid` (argv-only — opencode never needs environ
-    evidence) to the shared `ArgvExtractor` contract, which passes the full
-    record so codex's name-resume binding can also see `record.env`."""
-    return extract_sid(record.argv)
 
 
 def is_provider_process(record: ProcCli) -> bool:
@@ -302,7 +296,7 @@ class OpencodeProvider:
     ) -> ProviderScan:
         live = build_live_index(
             cli_inventory.records,
-            _extract,
+            argv_only(extract_sid),
             cur,
             panes=panes,
             provider_key=self.key,
@@ -321,7 +315,7 @@ class OpencodeProvider:
             ),
             unbound_live_cwds(
                 cli_inventory.records,
-                _extract,
+                argv_only(extract_sid),
                 is_tui_process,
                 bound_pids(live),
             ),

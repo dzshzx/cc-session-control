@@ -226,7 +226,7 @@ def test_take_over_survived_when_process_ignores_sigterm(monkeypatch):
     assert calls["kill"] == 1
     # Bounded settle window, not an unbounded/one-shot wait.
     assert 0 < calls["sleep"] <= 30
-    assert calls["invalidate"] == 0
+    assert calls["invalidate"] == 1  # a signal went out: cached world is stale
 
 
 def test_take_over_settle_recheck_proc_unavailable_is_refused_not_killed(monkeypatch):
@@ -265,7 +265,7 @@ def test_take_over_settle_recheck_proc_unavailable_is_refused_not_killed(monkeyp
     assert outcome.state is so.TakeOverState.REFUSED
     assert outcome.success is False
     assert "/proc/4242/stat" in outcome.detail
-    assert invalidated["n"] == 0
+    assert invalidated["n"] == 1  # signal already sent before /proc vanished
 
 
 # --- tmux-first dispatch: tmux resume / attach (ADR-0001) ---
@@ -426,6 +426,7 @@ def test_do_tmux_resume_kills_live_non_current(monkeypatch):
 
     def resolve_execution_session(
         sid: str,
+        **_kw: object,
     ) -> execution_target.ExecutionSessionResolution:
         assert sid == s.sid
         return execution_target.ExecutionSessionResolution(

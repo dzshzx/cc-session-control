@@ -441,7 +441,12 @@ class ArgvResolution:
         return self.session is not None
 
 
-def resolve_argv_execution(provider_key: str, sid: str) -> ArgvResolution:
+def resolve_argv_execution(
+    provider_key: str,
+    sid: str,
+    *,
+    require_cwd: bool = True,
+) -> ArgvResolution:
     """Re-resolve one non-Claude sid against fresh disk + `/proc` + tmux
     dispatch-metadata evidence (both liveness sources, argv first — C1).
 
@@ -462,7 +467,7 @@ def resolve_argv_execution(provider_key: str, sid: str) -> ArgvResolution:
     target = resolution.session
     if target is None:
         raise AssertionError("successful fresh resolution must carry a Session")
-    if not target.cwd or not os.path.isdir(target.cwd):
+    if require_cwd and (not target.cwd or not os.path.isdir(target.cwd)):
         return ArgvResolution(
             detail=f"session {sid!r} has no usable execution-time cwd: {target.cwd!r}",
         )

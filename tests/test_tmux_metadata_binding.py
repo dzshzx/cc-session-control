@@ -241,7 +241,7 @@ class TestSessionOpsPassMetadata:
         monkeypatch.setattr(
             session_ops,
             "session_for_execution",
-            lambda _session, _fork: providers.ArgvResolution(session=s),
+            lambda _session, _fork, **_kw: providers.ArgvResolution(session=s),
         )
 
         outcome = session_ops.do_tmux_resume_result(s, fork=True)

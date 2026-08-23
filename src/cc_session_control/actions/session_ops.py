@@ -111,10 +111,12 @@ def _settle_after_signal(pid: int, proc_start: str) -> TakeOverOutcome:
             issue = recheck.issue
             if issue is None:
                 raise AssertionError("unknown pid probe must carry an issue")
+            invalidate_cache()  # a signal went out — the cached world is stale
             return TakeOverOutcome(TakeOverState.REFUSED, issue_detail((issue,)))
         if not recheck.alive:
             invalidate_cache()
             return TakeOverOutcome(TakeOverState.KILLED)
+    invalidate_cache()  # signalled but alive: it may still be exiting
     return TakeOverOutcome(
         TakeOverState.SURVIVED,
         f"pid {pid} still alive {_SETTLE_POLL_TIMEOUT_S:g}s after SIGTERM",

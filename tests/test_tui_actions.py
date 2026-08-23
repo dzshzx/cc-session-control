@@ -72,7 +72,7 @@ def test_copy_resume_command_notes_no_takeover_for_non_claude_live(
     monkeypatch.setattr(
         tui_actions.session_ops,
         "session_for_execution",
-        lambda _session, fork: execution_target.ExecutionSessionResolution(
+        lambda _session, fork, **_kw: execution_target.ExecutionSessionResolution(
             execution_target.ExecutionSessionState.RESOLVED,
             session=session,
         ),
@@ -112,7 +112,7 @@ def test_copy_codex_command_refreshes_and_refuses_new_hosting(monkeypatch) -> No
     monkeypatch.setattr(
         tui_actions.session_ops,
         "session_for_execution",
-        lambda _session, fork: execution_target.ExecutionSessionResolution(
+        lambda _session, fork, **_kw: execution_target.ExecutionSessionResolution(
             execution_target.ExecutionSessionState.REFUSED,
             detail="session is app-server hosted and read-only",
         ),
@@ -235,6 +235,39 @@ def test_stop_session_uses_execution_time_session_generation(
     assert takeovers == [(9002, "fresh-start")]
 
 
+def test_stop_session_kills_even_when_cwd_no_longer_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stop never `cd`s: the resume family's "usable cwd" precondition must
+    not leak into the kill path, or a live session whose directory was
+    deleted becomes unkillable."""
+    stale = _session()
+    fresh = replace(stale, cwd="/deleted-project", pid=9002, proc_start="fresh-start")
+    _install_execution_session(monkeypatch, fresh)
+    monkeypatch.setattr(
+        execution_target.liveness,
+        "liveness_inputs",
+        lambda: execution_target.liveness.LivenessSnapshot(),
+    )
+    monkeypatch.setattr(tui_actions.session_ops.os.path, "isdir", lambda _path: False)
+    takeovers: list[tuple[int, str]] = []
+    monkeypatch.setattr(
+        tui_actions.session_ops,
+        "take_over_result",
+        lambda pid, start: (
+            takeovers.append((pid, start))
+            or tui_actions.session_ops.TakeOverOutcome(
+                tui_actions.session_ops.TakeOverState.KILLED
+            )
+        ),
+    )
+
+    result = tui_actions.stop_session(stale)
+
+    assert result.message == "已停止"
+    assert takeovers == [(9002, "fresh-start")]
+
+
 def test_stop_session_refused_by_execution_time_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -244,7 +277,7 @@ def test_stop_session_refused_by_execution_time_resolution(
     monkeypatch.setattr(
         tui_actions.session_ops,
         "session_for_execution",
-        lambda _session, fork: execution_target.ExecutionSessionResolution(
+        lambda _session, fork, **_kw: execution_target.ExecutionSessionResolution(
             execution_target.ExecutionSessionState.REFUSED,
             detail="session is app-server hosted and read-only",
         ),

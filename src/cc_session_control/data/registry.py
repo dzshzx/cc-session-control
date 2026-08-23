@@ -132,22 +132,26 @@ def scan_session_procs(max_age: float = 5.0) -> RegistryScan[SessionProc]:
         "session registry",
         lambda entry: entry.name.endswith(".json") and entry.is_file(),
     )
-    if root_issue is None and not os.path.isdir(root) and cfg.claude_home.is_dir():
-        # `~/.claude` exists (Claude Code is installed) but its `sessions/`
-        # dir does not — an upstream rename/migration, not "provider absent".
-        # `_root_paths` alone can't tell the two apart (both surface as an
-        # empty `paths` list via the same swallowed FileNotFoundError), so a
-        # vanished registry directory would otherwise silently read as "zero
-        # live sessions" and let a live session's row show as dead — Enter
-        # would resume it directly instead of routing through takeover
-        # (double-open), and it would fall into prune candidates. Reporting
-        # an issue here makes `LivenessSnapshot.complete` False (it folds in
+    if root_issue is None and not os.path.isdir(root) and cfg.projects_root.is_dir():
+        # Sessions have run on this machine (`projects/` holds transcripts)
+        # yet the per-pid registry dir is gone — an upstream rename/migration,
+        # not "provider absent". `_root_paths` alone can't tell the two apart
+        # (both surface as an empty `paths` list via the same swallowed
+        # FileNotFoundError), so a vanished registry directory would
+        # otherwise silently read as "zero live sessions" and let a live
+        # session's row show as dead — Enter would resume it directly instead
+        # of routing through takeover (double-open), and it would fall into
+        # prune candidates. Reporting an issue here makes
+        # `LivenessSnapshot.complete` False (it folds in
         # `scan_session_procs().issues`), which fails destructive verbs
-        # closed the same way an unreadable `/proc` does (R10).
+        # closed the same way an unreadable `/proc` does (R10). A `~/.claude`
+        # that only ever ran non-session commands (`claude --version`,
+        # `agents --json` — the Tier 1 probe footprint) has no `projects/`
+        # and stays a plain empty registry.
         root_issue = RegistryIssue(
             "session registry",
             root,
-            "sessions directory is missing though ~/.claude exists",
+            "sessions directory is missing though projects/ holds transcripts",
         )
     if root_issue is not None:
         result = RegistryScan[SessionProc](issues=(root_issue,))

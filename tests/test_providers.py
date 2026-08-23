@@ -125,7 +125,7 @@ class TestActionDispatch:
         fresh = _session(provider="codex", alive=True, pid=5555, proc_start="77")
         seen: list[tuple[str, str]] = []
 
-        def fake_resolve(provider_key, sid):
+        def fake_resolve(provider_key, sid, **_kw):
             seen.append((provider_key, sid))
             return providers.ArgvResolution(session=fresh)
 
@@ -147,7 +147,7 @@ class TestActionDispatch:
         monkeypatch.setattr(
             execution_target.providers,
             "resolve_argv_execution",
-            lambda provider_key, sid: providers.ArgvResolution(detail="nope"),
+            lambda provider_key, sid, **_kw: providers.ArgvResolution(detail="nope"),
         )
         resolution = session_ops.session_for_execution(s, fork=False)
         assert not resolution.success
@@ -160,7 +160,7 @@ class TestActionDispatch:
         monkeypatch.setattr(
             execution_target.providers,
             "resolve_argv_execution",
-            lambda provider_key, sid: (
+            lambda provider_key, sid, **_kw: (
                 seen.append((provider_key, sid))
                 or providers.ArgvResolution(session=fresh)
             ),
@@ -176,7 +176,7 @@ class TestActionDispatch:
         monkeypatch.setattr(
             execution_target.providers,
             "resolve_argv_execution",
-            lambda _provider_key, _sid: providers.ArgvResolution(session=fresh),
+            lambda _provider_key, _sid, **_kw: providers.ArgvResolution(session=fresh),
         )
 
         resolution = session_ops.session_for_execution(s, fork=False)

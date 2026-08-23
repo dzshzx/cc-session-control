@@ -591,6 +591,7 @@ def test_liveness_inputs_incomplete_when_sessions_dir_vanishes(tmp_path, monkeyp
     # live sessions" (that would double-open a still-running session and let
     # it fall into prune candidates).
     monkeypatch.setattr(cfg, "claude_home", tmp_path)
+    (tmp_path / "projects").mkdir()  # sessions have run: registry dir expected
     registry.invalidate_cache()
     liveness.invalidate_cache()
     completed = subprocess.CompletedProcess([], 0, stdout="[]", stderr="")
