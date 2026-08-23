@@ -85,25 +85,17 @@ the candidate Claude Code version differs from the last semantic verification,
 or when any command/schema evidence changes. Record the version, date, exit
 statuses, and anything not proved.
 
-Then run the local quality gate:
+Then run the local quality gate (the same script CI runs), followed by the
+build smoke test:
 
 ```bash
-uv run --extra dev ruff check src tests scripts
-uv run --extra dev ruff format --check src tests scripts
-uv run --extra dev mypy src/
-uv run --extra dev pytest tests/ \
-  --cov=cc_session_control --cov-branch \
-  --cov-report=term-missing --cov-report=json
-uv run --extra dev python scripts/check_coverage.py coverage.json
-if grep -rn --include='*.py' '/home/' src/; then
-  exit 1
-fi
+scripts/check.sh
 uv build --no-sources
 uv run --isolated --no-project --with dist/*.whl csctl --version
 uv run --isolated --no-project --with dist/*.tar.gz csctl --version
 ```
 
-If `grep` prints any product-code path under `/home/`, fix it before release.
+If the gate reports a product-code path under `/home/`, fix it before release.
 GitHub runs the same gate from `.github/workflows/quality-gate.yml` before CI
 builds and before either PyPI publish workflow can build or upload artifacts.
 

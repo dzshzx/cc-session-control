@@ -25,31 +25,5 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Run Ruff lint
-        run: uv run --extra dev ruff check src tests scripts
-
-      - name: Check Ruff formatting
-        run: uv run --extra dev ruff format --check src tests scripts
-
-      - name: Run mypy
-        run: uv run --extra dev mypy src/
-
-      - name: Check for hardcoded home paths
-        run: |
-          if grep -rn --include='*.py' '/home/' src/; then
-            exit 1
-          fi
-
-      - name: Run tests with branch coverage
-        run: >
-          uv run --extra dev pytest tests/
-          --cov=cc_session_control
-          --cov-branch
-          --cov-report=term-missing
-          --cov-report=json
-
-      - name: Enforce coverage floors
-        run: >
-          uv run --extra dev python scripts/check_coverage.py coverage.json
-          --statement-floor 92
-          --branch-floor 82
+      - name: Run the quality gate
+        run: scripts/check.sh
