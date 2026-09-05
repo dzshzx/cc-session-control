@@ -17,7 +17,7 @@ uv run csctl --version
 
 ## Development
 
-- Run TUI: `csctl`
+- Run the development TUI: `uv run csctl`
 - Run the complete local quality gate — the same script CI runs:
 
 ```bash

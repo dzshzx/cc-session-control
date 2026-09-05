@@ -1,8 +1,10 @@
 # Claude Code compatibility verification
 
 csctl parses local state and command output owned by Claude Code. Treat those
-shapes as an upstream compatibility contract and rerun this checklist before
-each release; unit fixtures prove csctl's response to known shapes, not that a
+shapes as an upstream compatibility contract. Before release, review the recorded
+evidence and re-run affected probes when the provider version, relevant adapter
+code, configuration, or evidence assumptions changed. Otherwise cite the existing
+version and date. Unit fixtures prove csctl's response to known shapes, not that a
 new Claude Code version still emits them.
 
 ## Last recorded evidence
@@ -144,8 +146,9 @@ unverified item explicitly.
 ## Non-Claude provider contracts (ADR-0005)
 
 The provider layer parses Codex CLI and Kimi Code on-disk state and resume
-argv shapes. Treat these as the same class of upstream contract and re-verify
-per release (read-only probes; never write into a CLI's real home):
+argv shapes. Treat these as the same class of upstream contract: re-verify affected
+probes when their inputs change, and reuse unchanged evidence at release time
+(read-only probes; never write into a CLI's real home):
 
 | Scope | Version | Date | Evidence |
 |---|---:|---:|---|
@@ -175,7 +178,8 @@ Re-verify with the same read-only probes (`--help` outputs, first-line
 samples, `/proc` fd/cmdline/comm/exe checks against a live TUI). The
 tmux window-metadata binding (`@csctl_sid`/`@csctl_provider`, ADR-0005 C1
 amendment) and kimi's process-identity set (comm `kimi-code` / exe basename
-`kimi`) key on the title-rewrite observation above — re-verify it per
-release. A provider whose contract breaks degrades to typed provider issues
+`kimi`) key on the title-rewrite observation above — re-verify it when the
+provider version, launch configuration, binding code, or evidence assumptions
+change. A provider whose contract breaks degrades to typed provider issues
 in the Sessions status line — it must never blank the Claude view; adapt
 the owning provider module with new fixtures before release.

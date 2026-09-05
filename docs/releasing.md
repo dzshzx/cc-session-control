@@ -79,12 +79,14 @@ path.
 
 ## Pre-Release Checks
 
-Complete the
-[Claude Code compatibility checklist](claude-code-compatibility.md) before
-tagging. Tier 1 is required for every release. Tier 2 is also required when
-the candidate Claude Code version differs from the last semantic verification,
-or when any command/schema evidence changes. Record the version, date, exit
-statuses, and anything not proved.
+Before tagging, review the
+[provider compatibility evidence](claude-code-compatibility.md). Reuse recorded
+results when the provider version, relevant adapter code, configuration, and
+evidence assumptions are unchanged. Re-run the affected Tier 1 or provider
+probes when any of those inputs changes; Tier 2 is required when the candidate
+Claude Code version differs from the last semantic verification or command/schema
+evidence changes. Record the reused evidence reference or new version, date,
+exit statuses, and anything not proved.
 
 Then run the local quality gate (the same script CI runs), followed by the
 build smoke test:
