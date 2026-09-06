@@ -1,80 +1,10 @@
-# CLAUDE.md
+# 项目契约
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## 这是什么
-
-`cc-session-control`（CLI：`csctl`）是面向本机 **agent CLI**（Claude Code / Codex CLI / Kimi Code / opencode——ADR-0005 多 CLI provider 层）sessions 的机器级操作员工作台：它读各 CLI 自己的磁盘状态、遍历 `/proc`、shell 调用各 CLI 与 `tmux`——是*面向*这些 agent CLI 的操作员工具，不是通用 app。
-
-- **读什么**：Claude `~/.claude/projects/*/*.jsonl` transcripts、`~/.claude/sessions/*.json` 注册表、`~/.claude.json`；Codex `~/.codex/sessions/**/rollout-*.jsonl` 首行 `session_meta` + `session_index.jsonl`，外加平铺的 `~/.codex/archived_sessions/`（行打 `archived` 标记）；Kimi `~/.kimi-code/session_index.jsonl` + per-session `state.json`；opencode `~/.local/share/opencode/opencode.db`（SQLite，随 `XDG_DATA_HOME` 迁移）的 `session` 表根行。尊重官方 `CODEX_HOME`/`KIMI_CODE_HOME`——但一旦 `~/.config/csctl/providers.json` 声明 `codex_homes`，那份清单就是完整的 codex 身份集，继承来的 `CODEX_HOME` 不再参与（ADR-0008）；声明的身份可带 launch-only `env_file`（ADR-0012）。
-- **tmux-first**：自 0.7.0 起是 tmux-first 调度中心（ADR-0001）；ADR-0006 把 csctl 派发的所有 agent sessions 统一放入 `csctl` tmux session，window 只以 CLI 裸名命名（`claude`/`codex`/`kimi`/`opencode`，声明的 codex 身份为 `codex-<label>`；2026-08-23 修订，不再带项目名或 sid），session 默认能在终端/SSH 断连后存活、跨项目切换不跨 tmux session；已驻留在旧或用户自建 tmux session 的会话原地接入，不迁移。
-- **两个 tab**，按 launcher 优先排序：**项目（Projects——启动 tab：多 CLI 新建 session 的 launcher（Enter=CLI 选择器，仅列已启用 provider、默认焦点 claude——Enter-Enter 即新建 claude；x=codex / k=kimi / O=opencode 直达）+ 成员取舍（p/h/H））**、**会话（Sessions——各 CLI 身份的统一列表，CLI 列 cc/cx/km/oc，多 codex 身份各用自己的 label 如 cx2）**；cleanup 是 Sessions 内的子菜单，不是一个 tab，且只建模 Claude 状态。
-
-ADR-0010/0011 再补两条现行事实：Codex app-server 只凭同身份进程 fd 表里**精确的 active rollout 路径**标记 `Session.hosted`，该态不冒充 `alive`、没有 session pid、所有接回/分叉/停止/删除/复制命令路径都拒绝；统一 `csctl` tmux session 的有效 `prefix2` 为 `None` 时，csctl 只给该 session 设 `C-a`，手机端可从任一 provider TUI 用 `C-a s` 打开 `choose-tree -Zs`，已有第二前缀、主前缀和全局 tmux 配置不改。
-
-`CONTEXT.md` 是本代码库的 **领域词汇表 / ubiquitous language**——先读它，再读 `docs/adr/index.md`（12 条 ADR 的导航表与决策链），了解 *Live Session*、*Bridge Environment* 的精确定义（以及 `_Avoid_:` 反例），尤其是下文架构所依赖的 *Session Remote Control* 的定义（*Project RC Server* 与后台 agents 已随 ADR-0009 从模型中移除）。
-
-## 命令
-
-```bash
-# csctl is a uv tool (~/.local/bin/csctl) tracking the PyPI release — NOT mise-managed
-# (no mise pin; `mise install`/`mise uninstall …pipx…` are no-ops). Install / upgrade /
-# GitHub-HEAD escape hatch: README.md "Installation"; post-release upgrade cache
-# gotchas: docs/releasing.md "Post-Release Verification". Verify: csctl --version
-csctl                                                                           # the installed TUI
-
-# Dev/test ONLY — uv manages a transient .venv here; it is NOT the csctl you run day-to-day
-uv run --extra dev pytest tests/                                                # all
-uv run --extra dev pytest tests/test_views.py::test_sessions_view_filter_logic  # single test
-uv run csctl                                                                    # exercise local source changes
-```
-
-`csctl` 不只是 TUI——不带子命令运行会启动 TUI，`cli.py` 还暴露一个**面向 agent 的最小 headless CLI**（0.8 起只剩 `resume`；`agents` 随 0.8.8 移除——ADR-0004/0009。RC 管理已随 0.8.8 整体移除；cleanup 是 TUI 专属表面，`prune`/`env`/`skill`/`rc`/`agents` 子命令已移除。子命令输出为英文；见 Conventions 说明）：
-
-```bash
-csctl resume [keyword] [--page N] [--limit N] [--all]  # cross-directory resume commands for ALL providers (incl. hidden sessions; body-search fallback; non-Claude rows tagged [codex]/[kimi], unbound-live rows flagged [live?], archived rows flagged (archived))
-csctl resume --take-over <sid>                 # execution-time re-resolution + guarded live takeover (Claude sids only)
-```
-
-会话接回行为以 `csctl resume` / TUI 为权威。
-
-`CONTRIBUTING.md` 的约束：文件体量当作**设计信号**判断（按职责内聚与可导航性拆分，不设行数门槛——见其 Code Style 一节），使用 type hints，不硬编码路径。
-
-## 架构
-
-完整架构参考（模块 DAG、view contract、并发/刷新模型、resume/tmux 语义、liveness 权威、cleanup 策略）见 `docs/architecture.md`；此处只做导航，跨改动必须遵守的不变量摘要见下方「约定」。
-
-- **`src/cc_session_control/data/`**——唯一触碰外部状态（文件系统/`/proc`/tmux/CLI 子进程）的层，内部是 bottom→top 单向 DAG（`proc`/`transcripts`/`registry`/`tmux` → `liveness`/`cleanup` → `sessions`/`membership`/`providers` → `snapshot`）。
-- **`actions/`**——不属于 `data/` 的操作（resume/take-over/cleanup 执行/剪贴板），只消费 `data/` 产出的 typed 结果。
-- **`views/`**——每个 tab 一组 urwid widget，共享 `_base.py::ListTabView` 的 walker/overlay/footer 管道（详见架构文档「view contract」）。
-- **异步刷新**——单个 daemon 线程每代计算一份 `WorldSnapshot`，经 pipe 通知 main loop；TUI action 经 `ActionRunner` 单飞（详见架构文档「Async refresh」）。
-- **resume/tmux**——脱离 UI loop 的 `ExitIntent` 边界（进程替换/`exec`），tmux-first 调度（ADR-0001/0006，详见架构文档「Resume」）。
-- **liveness**——`data/liveness.py` 是唯一权威（详见架构文档「Liveness 与身份」）。
-- **membership/cleanup**——ADR-0007 证据分层成员资格；cleanup 两种 key 语义（session-keyed / age-keyed），plan 冻结 + preview 优先（详见架构文档相应小节）。
-
-## 约定
-
-- **UI 字符串是简体中文**（通知、状态、按键提示、帮助屏）。**CLI 子命令输出是英文。** 添加字符串时遵循这一点。
-- 可预期的外部失败由所属边界显式建模：允许降级的只读探测返回有类型的安全值；trust/settings、cleanup、refresh 和写操作保留 typed result、失败阶段与详情，并让 CLI/TUI 可见。不得用 broad `except Exception` 把 parser/invariant/编程错误伪装成空结果或成功。
-- 破坏性 cleanup 总是先 preview：`_enter_preview` 在一个 `Overlay` 中显示目标，`_confirm_cleanup` 在第二次 `Enter` 时执行。单条删除（`d`）先经 `confirm_delete` 弹 `App.confirm` 二次确认（2026-08-23 裁定）。
-- Config 是 `config.py` 中单一的全局 `cfg = Config()`；测试通过 monkeypatch `cfg` 属性来覆盖路径（例如 `cfg.claude_home`、`cfg.claude_json`）。
-- **不硬编码机器专属路径**：产品源码（`src/`）不得内联 `/home/...` 之类的绝对路径；`scripts/check.sh` 跑 `grep -rn --include='*.py' '/home/' src/` 守卫此项，必须返回空。
-- **架构不变量**（详见 `docs/architecture.md`）：
-  - Import 方向：`views` 只从 `data`/`actions` import；`data`/`actions` 绝不向上 import；`data/` 内部的 bottom→top DAG 单向、无环。
-  - `config.py` 的全局 `cfg` 是唯一的路径权威——绝不在别处内联拼接 `claude_home / "..."` 之类路径。
-  - 绝不从 worker 线程改动 urwid widget；widget 变更只在 main loop（`apply_refresh`/`_on_pipe`）上进行。
-  - 主键是 `sessionId`，绝非 pid；current session（启动了 csctl 的那个 session）受保护，不能被 resume/terminate/prune。
-  - 无法确定 current 时（无 `/proc`，R10 降级），破坏性操作（terminate/delete/clean/stop/remove）一律拒绝，不得冒险执行。
-  - Cleanup 删除 ⊆ preview：`execute_*` 只能删除 `build_plan` 冻结的候选，且执行时必须对每一项用新鲜保护数据重新校验。
-  - 任何 operator contract 都不得教人保存或执行针对快照 PID 的裸终止命令；接管统一走 `session_ops.take_over_result`。
-
-## 发布与 CI
-
-完整维护者指南：`docs/releasing.md`。不那么显然的点：
-
-- **版本号单一来源**于 `src/cc_session_control/__init__.py`（`pyproject.toml` 经 setuptools dynamic 派生它）。只能通过 `python scripts/bump_version.py {patch|minor|major}` 或 `--set X.Y.Z` 步进——它只编辑那一个文件。然后加一条 `CHANGELOG.md` 条目。
-- **候选先过 CI，tag 后发布。** 版本提交先进入 `origin/master`，等该同一 SHA 的 `CI` 成功后，才创建并单独推送匹配 `__version__` 的带注解 `vX.Y.Z` tag。tag 会触发 `.github/workflows/release.yml` 再跑检查、构建及 wheel/sdist smoke，并**经 Trusted Publishing 发布到 PyPI**（GitHub environment `pypi`，OIDC——不存储 API token）。发布 tag 不移动、不复用；失败修复使用下一个 patch。PyPI trusted publisher 已配置（owner `dzshzx`，repo `cc-session-control`，workflow `release.yml`，env `pypi`）。
-- **`scripts/validate_release_tag.py` 不再只信自己**：它还用 `gh run list --workflow CI --commit <sha>` 反查该 SHA 的 `CI` 成功与否（pending/failure/查不到一律拒绝），并校验 `CHANGELOG.md` 顶部 `## X.Y.Z` 标题与 `__version__` 一致——早 tag 一次不再能绕过 CI 矩阵或漏写 changelog 就直发 PyPI。
-- **CI**（`.github/workflows/ci.yml`）在每次推送到 `master` 和 PR 时运行相同的 测试 + 路径硬编码检查（见 `## 约定`）+ 构建 + smoke 关卡；`quality-gate` job 已经在 3.12 上跑过带覆盖率的 pytest，矩阵 job（`.github/workflows/test-matrix.yml`，`workflow_call` 复用）只再跑 3.13/3.14，`release.yml` 的 `publish` 同样 `needs` 这个矩阵 job，tag 触发链不再只靠 3.12 的 quality-gate 把关。
-- **TestPyPI dry run**（`.github/workflows/release-testpypi.yml`）是一个手动 `workflow_dispatch`，发布到 TestPyPI（env `testpypi`）而不触碰真实索引——真正打 tag 前的可选彩排。
-- **Gotchas：** 已发布的版本是不可变的——绝不覆盖它，而是 bump 到下一个 patch。`dist/` 被 gitignore。本地预发布序列（`scripts/check.sh` + 构建 + wheel/sdist smoke）见 `docs/releasing.md`「Pre-Release Checks」；发布后 `uv tool upgrade` 因 PyPI simple index CDN 延迟 + `uv` 自身索引缓存而报 `Nothing to upgrade` 的处理（`--reinstall --no-cache`，绝不用 `==X.Y.Z` 固定版本绕过）见同文件「Post-Release Verification」。
+- csctl 是 Linux/WSL 本地多 CLI session 操作员 TUI。路径由 `config.py::cfg` 统一解析；架构接缝与 provider 身份证据见 `docs/architecture.md`，上游兼容变化见 `docs/claude-code-compatibility.md`。
+- 保持 tmux-first：新派发会话进入 `csctl` tmux session，window 用 CLI 裸名或声明的 Codex 身份；既有会话原地接入。tmux 调用归 `data/tmux.py`。
+- session-id、进程身份和当前 session 保护必须有证据；缺少 /proc 或绑定不确定时拒绝破坏性操作。Codex app-server 的 rollout fd 只产生 `hosted` 只读态，不授予 kill、接管或删除权限。
+- cleanup 仅处理 Claude 状态：先预览精确候选，执行时重查保护条件，只处理批准子集。测试用 `tmp_path`、`monkeypatch`，不触碰实时 agent 目录或 tmux。
+- 探测失败向操作员暴露降级原因；写操作保留 typed result、失败阶段与详情。不得新增兜底式 `except Exception` 把错误转为空成功。
+- `views/` 消费 `data/` 与 `actions/`；urwid widget 只在 main loop 修改。使用 type hints，禁止硬编码机器路径。UI 中文、CLI 英文。
+- 提交前运行 `scripts/check.sh`（与 CI 共用）。开发与架构资料按改动读取 `CONTRIBUTING.md`、`docs/architecture.md`。
+- 唯一版本源是 `src/cc_session_control/__init__.py`。发布时按 `docs/releasing.md`：候选在 origin/master 且同一 SHA 的 CI 成功后推匹配 annotated tag；远端 tag 不移动、不复用。
