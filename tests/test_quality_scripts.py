@@ -1,9 +1,14 @@
 import importlib.util
 import json
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import cast
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+
+from version_approval import VersionPlan  # noqa: E402
 
 
 def _load_script(script_name: str) -> ModuleType:
@@ -56,7 +61,7 @@ def test_coverage_ratchet_reports_each_failed_metric(tmp_path: Path, capsys) -> 
     )
 
 
-def test_bump_version_suggests_an_annotated_release_tag(
+def test_bump_version_points_to_the_gated_release_process(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -65,13 +70,17 @@ def test_bump_version_suggests_an_annotated_release_tag(
     init.write_text('__version__ = "1.2.3"\n', encoding="utf-8")
     module = _load_script("bump_version")
     monkeypatch.setattr(module, "INIT", init)
+    monkeypatch.setattr(
+        module,
+        "build_version_plan",
+        lambda target: VersionPlan("example/repo", "v", "1.2.3", target),
+    )
 
     assert module.main(["patch"]) == 0
 
     assert init.read_text(encoding="utf-8") == '__version__ = "1.2.4"\n'
-    assert capsys.readouterr() == (
-        "1.2.3 -> 1.2.4\n"
-        "next: git commit -am 'chore: bump version to 1.2.4' && "
-        "git tag -a v1.2.4 -m 'v1.2.4'\n",
-        "",
-    )
+    captured = capsys.readouterr()
+    assert "authorization=patch\n" in captured.out
+    assert "1.2.3 -> 1.2.4\n" in captured.out
+    assert "follow docs/releasing.md" in captured.out
+    assert captured.err == ""

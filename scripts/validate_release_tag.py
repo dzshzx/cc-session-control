@@ -11,6 +11,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from version_approval import (
+    build_version_plan,
+    print_version_plan,
+    tag_approval_summary,
+    validate_execution,
+)
+
 VERSION_FILE = Path("src/cc_session_control/__init__.py")
 CHANGELOG_FILE = Path("CHANGELOG.md")
 _REMOTE_OWNER_REPO = re.compile(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$")
@@ -70,6 +77,14 @@ def main() -> int:
             f"release tag {tag} does not match package version {version}",
             file=sys.stderr,
         )
+        return 1
+
+    try:
+        version_plan = build_version_plan(version)
+        print_version_plan(version_plan, version)
+        validate_execution(version_plan, tag_approval_summary(tag))
+    except ValueError as error:
+        print(f"version approval failed: {error}", file=sys.stderr)
         return 1
 
     changelog_text = CHANGELOG_FILE.read_text(encoding="utf-8")

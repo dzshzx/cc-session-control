@@ -5,6 +5,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+
+from version_approval import VersionPlan
+
 ROOT = Path(__file__).parents[1]
 VALIDATOR = ROOT / "scripts" / "validate_release_tag.py"
 
@@ -33,7 +37,10 @@ def _commit(repo: Path, message: str) -> None:
     )
 
 
-def _annotated_tag(repo: Path, tag: str) -> None:
+def _annotated_tag(repo: Path, tag: str, approval: str | None = None) -> None:
+    messages = ["-m", tag]
+    if approval is not None:
+        messages.extend(["-m", f"Version-Approval: {approval}"])
     _git(
         repo,
         "-c",
@@ -43,8 +50,7 @@ def _annotated_tag(repo: Path, tag: str) -> None:
         "tag",
         "-a",
         tag,
-        "-m",
-        tag,
+        *messages,
     )
 
 
@@ -79,10 +85,13 @@ def _make_repo(
         )
     _git(repo, "init", "--quiet")
     _git(repo, "branch", "-M", "master")
-    _git(repo, "remote", "add", "origin", "https://github.com/example/repo.git")
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "init", "--bare", "--quiet", str(origin))
+    _git(repo, "remote", "add", "origin", str(origin))
     _git(repo, "add", ".")
     _commit(repo, "initial")
-    _git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _annotated_tag(repo, "v1.2.2")
+    _git(repo, "push", "--quiet", "origin", "master", "refs/tags/v1.2.2")
     return repo
 
 
@@ -124,6 +133,7 @@ def _run_validator(
     repo: Path, tag: str, *, path: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
+    env["GITHUB_REPOSITORY"] = "example/repo"
     if path is not None:
         env["PATH"] = path
     return subprocess.run(
@@ -147,6 +157,85 @@ def test_matching_annotated_tag_passes(tmp_path: Path) -> None:
     result = _run_validator(repo, "v1.2.3", path=path)
 
     assert result.returncode == 0, result.stderr
+
+
+def test_minor_tag_requires_matching_version_approval(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, version="1.3.0")
+    _annotated_tag(repo, "v1.3.0")
+    path = _fake_bin_dir(
+        tmp_path,
+        include_gh=True,
+        gh_json='[{"status": "completed", "conclusion": "success"}]',
+    )
+
+    blocked = _run_validator(repo, "v1.3.0", path=path)
+    assert blocked.returncode != 0
+    assert "requires explicit approval" in blocked.stderr
+
+    _git(repo, "tag", "-d", "v1.3.0")
+    summary = VersionPlan("example/repo", "v", "1.2.2", "1.3.0").summary()
+    _annotated_tag(repo, "v1.3.0", summary)
+
+    accepted = _run_validator(repo, "v1.3.0", path=path)
+    assert accepted.returncode == 0, accepted.stderr
+
+
+def test_patch_tag_rejects_malformed_version_approval(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    _annotated_tag(repo, "v1.2.3", "not-a-digest")
+
+    result = _run_validator(repo, "v1.2.3")
+
+    assert result.returncode != 0
+    assert "malformed Version-Approval trailer" in result.stderr
+
+
+def test_remote_target_tag_is_not_its_own_approval(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, version="1.3.0")
+    _annotated_tag(repo, "v1.3.0")
+    _git(repo, "push", "--quiet", "origin", "refs/tags/v1.3.0")
+
+    result = _run_validator(repo, "v1.3.0")
+
+    assert result.returncode != 0
+    assert "requires explicit approval" in result.stderr
+    assert '"baseline":"1.2.2"' in result.stdout
+
+
+def test_confirmed_remote_tag_retry_passes_and_detects_baseline_drift(
+    tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path, version="1.3.0")
+    summary = VersionPlan("example/repo", "v", "1.2.2", "1.3.0").summary()
+    _annotated_tag(repo, "v1.3.0", summary)
+    _git(repo, "push", "--quiet", "origin", "refs/tags/v1.3.0")
+    original_tag = _git(repo, "rev-parse", "refs/tags/v1.3.0").stdout
+    path = _fake_bin_dir(
+        tmp_path,
+        include_gh=True,
+        gh_json='[{"status": "completed", "conclusion": "success"}]',
+    )
+
+    retry = _run_validator(repo, "v1.3.0", path=path)
+    assert retry.returncode == 0, retry.stderr
+
+    _annotated_tag(repo, "v1.2.3")
+    _git(repo, "push", "--quiet", "origin", "refs/tags/v1.2.3")
+    drifted = _run_validator(repo, "v1.3.0", path=path)
+    assert drifted.returncode != 0
+    assert "does not match" in drifted.stderr
+    assert _git(repo, "rev-parse", "refs/tags/v1.3.0").stdout == original_tag
+
+
+def test_duplicate_approval_trailer_is_rejected(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    summary = VersionPlan("example/repo", "v", "1.2.2", "1.2.3").summary()
+    _annotated_tag(repo, "v1.2.3", summary + "\nVersion-Approval: invalid")
+
+    result = _run_validator(repo, "v1.2.3")
+
+    assert result.returncode != 0
+    assert "more than one Version-Approval" in result.stderr
 
 
 def test_lightweight_tag_fails(tmp_path: Path) -> None:

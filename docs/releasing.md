@@ -108,10 +108,28 @@ builds and before either PyPI publish workflow can build or upload artifacts.
 The version lives in one place:
 
 ```bash
+python scripts/bump_version.py patch --plan
 python scripts/bump_version.py patch
-# or
-python scripts/bump_version.py --set 0.4.1
 ```
+
+The plan is calculated from the stable `vMAJOR.MINOR.PATCH` records on the
+`origin` remote and excludes the target tag itself. It binds the normalized
+`owner/repository`, tag namespace, remote baseline, and target into a canonical
+JSON document and prints its `sha256:<digest>` identity. An exact next patch is
+allowed under the existing release authorization. A minor, major, skipped
+version, or corrected version needs explicit approval for that exact plan; then
+pass the approved identity without changing the target:
+
+```bash
+python scripts/bump_version.py minor --plan
+python scripts/bump_version.py minor \
+  --confirmed-version-plan sha256:<approved-plan-digest>
+```
+
+`--set X.Y.Z` follows the same check. A missing remote baseline, a changed
+baseline or target, a stale digest, and any downgrade stop before the version
+file is written. If the baseline or target changed after approval, preview the
+new plan and obtain approval for that plan before continuing.
 
 Commit the version bump and any release notes as one release candidate. Put
 that exact commit on `origin/master`, then wait for the `CI` workflow for that
@@ -134,13 +152,29 @@ if git ls-remote --exit-code --tags origin refs/tags/v0.4.1; then
   exit 1
 fi
 git tag -a v0.4.1 -m "v0.4.1"
+```
+
+Alternatively, for an approved non-patch plan, preserve the same digest in the annotated tag
+so the release workflow can independently recompute and verify it:
+
+```bash
+git tag -a v0.4.1 -m "v0.4.1" \
+  -m "Version-Approval: sha256:<approved-plan-digest>"
+```
+
+Choose exactly one tag command above, then push that annotated tag:
+
+```bash
 git push origin refs/tags/v0.4.1
 ```
 
 The `Release` workflow runs on `v*` tags. After the shared quality gate passes,
 it also verifies that the triggering tag is an exact `vMAJOR.MINOR.PATCH`
 annotated tag, matches the package version, and points to the checked-out
-commit. `scripts/validate_release_tag.py` additionally queries
+commit. It also recomputes the version plan from remote tags while excluding
+the triggering target tag. Exact next patches need no tag trailer; every other
+allowed increase requires one matching `Version-Approval` trailer. Malformed,
+duplicate, incomplete, or stale trailers fail closed. `scripts/validate_release_tag.py` additionally queries
 `gh run list --workflow CI --commit <sha>` and rejects the tag unless that
 SHA's `CI` workflow run is `completed`/`success` (pending, failing, or missing
 all fail closed), and checks that `CHANGELOG.md`'s top `## X.Y.Z` heading

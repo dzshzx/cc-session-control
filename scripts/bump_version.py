@@ -10,6 +10,7 @@ Usage:
     python scripts/bump_version.py minor       # 0.2.1 -> 0.3.0
     python scripts/bump_version.py major       # 0.2.1 -> 1.0.0
     python scripts/bump_version.py --set 1.2.3 # explicit version
+    python scripts/bump_version.py minor --plan # read-only authorization plan
     python scripts/bump_version.py --show      # print current version, no change
 """
 
@@ -18,6 +19,13 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
+
+from version_approval import (
+    Version,
+    build_version_plan,
+    print_version_plan,
+    validate_execution,
+)
 
 INIT = (
     Path(__file__).resolve().parent.parent
@@ -66,6 +74,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--show", action="store_true", help="print the current version and exit"
     )
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="print the version and authorization plan without changing files",
+    )
+    parser.add_argument(
+        "--confirmed-version-plan",
+        metavar="SHA256",
+        help="approved digest printed by --plan for a non-patch version change",
+    )
     args = parser.parse_args(argv)
 
     text = INIT.read_text(encoding="utf-8")
@@ -82,14 +100,28 @@ def main(argv: list[str] | None = None) -> int:
     else:
         parser.error("specify a part (major/minor/patch) or --set X.Y.Z")
 
+    try:
+        if Version.parse(new) < Version.parse(current):
+            raise ValueError(f"version downgrade is not allowed: {current} -> {new}")
+        plan = build_version_plan(new)
+        print_version_plan(plan, new)
+        if args.plan:
+            return 0
+        validate_execution(
+            plan,
+            args.confirmed_version_plan,
+            no_change=current == new,
+        )
+    except ValueError as error:
+        parser.error(str(error))
+
     INIT.write_text(
         _PATTERN.sub(f'__version__ = "{new}"', text, count=1), encoding="utf-8"
     )
     print(f"{current} -> {new}")
-    print(
-        f"next: git commit -am 'chore: bump version to {new}' && "
-        f"git tag -a v{new} -m 'v{new}'"
-    )
+    print("next: commit the version and release notes, then follow docs/releasing.md")
+    if args.confirmed_version_plan:
+        print(f"annotated tag trailer: Version-Approval: {args.confirmed_version_plan}")
     return 0
 
 
