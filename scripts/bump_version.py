@@ -103,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if Version.parse(new) < Version.parse(current):
             raise ValueError(f"version downgrade is not allowed: {current} -> {new}")
-        plan = build_version_plan(new)
+        plan = build_version_plan(new, repo_root=INIT.parents[2])
         print_version_plan(plan, new)
         if args.plan:
             return 0

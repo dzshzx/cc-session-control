@@ -73,7 +73,7 @@ def test_bump_version_points_to_the_gated_release_process(
     monkeypatch.setattr(
         module,
         "build_version_plan",
-        lambda target: VersionPlan("example/repo", "v", "1.2.3", target),
+        lambda target, **kwargs: VersionPlan("example/repo", "v", "1.2.3", target),
     )
 
     assert module.main(["patch"]) == 0

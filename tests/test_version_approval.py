@@ -275,3 +275,22 @@ def test_no_change_does_not_accept_stale_confirmation() -> None:
     plan = VersionPlan("dzshzx/example", "v", "1.2.3", "1.3.0")
     with pytest.raises(ValueError, match="does not match"):
         validate_execution(plan, "sha256:" + "0" * 64, no_change=True)
+
+
+def test_absolute_bump_invocation_reads_its_own_repository(tmp_path: Path) -> None:
+    repo = _make_bump_repo(tmp_path)
+    env = dict(os.environ, GITHUB_REPOSITORY="dzshzx/example")
+
+    result = subprocess.run(
+        [sys.executable, str(repo / "scripts" / "bump_version.py"), "patch"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert '"baseline":"1.2.3"' in result.stdout
+    assert '__version__ = "1.2.4"' in (
+        repo / "src" / "cc_session_control" / "__init__.py"
+    ).read_text(encoding="utf-8")

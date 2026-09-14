@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 SEMVER_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 REPOSITORY_PATTERN = re.compile(r"(?:^|[:/])([^/:]+)/([^/]+?)(?:\.git)?$")
@@ -61,7 +62,7 @@ class VersionPlan:
         return f"sha256:{digest}"
 
 
-def repository_identity() -> str:
+def repository_identity(repo_root: Path | None = None) -> str:
     github_repository = os.environ.get("GITHUB_REPOSITORY", "")
     if github_repository.count("/") == 1:
         owner, repository = github_repository.split("/", 1)
@@ -70,6 +71,7 @@ def repository_identity() -> str:
 
     result = subprocess.run(
         ["git", "remote", "get-url", "origin"],
+        cwd=repo_root,
         capture_output=True,
         text=True,
     )
@@ -81,9 +83,12 @@ def repository_identity() -> str:
     return f"{match.group(1)}/{match.group(2)}".lower()
 
 
-def remote_versions(namespace: str = TAG_NAMESPACE) -> list[Version]:
+def remote_versions(
+    namespace: str = TAG_NAMESPACE, repo_root: Path | None = None
+) -> list[Version]:
     result = subprocess.run(
         ["git", "ls-remote", "--tags", "origin", f"refs/tags/{namespace}*"],
+        cwd=repo_root,
         capture_output=True,
         text=True,
     )
@@ -108,16 +113,18 @@ def remote_versions(namespace: str = TAG_NAMESPACE) -> list[Version]:
 
 
 def build_version_plan(
-    target: str, namespace: str = TAG_NAMESPACE
+    target: str, namespace: str = TAG_NAMESPACE, *, repo_root: Path | None = None
 ) -> VersionPlan | None:
     target_version = Version.parse(target)
     candidates = [
-        version for version in remote_versions(namespace) if version != target_version
+        version
+        for version in remote_versions(namespace, repo_root)
+        if version != target_version
     ]
     if not candidates:
         return None
     return VersionPlan(
-        repository=repository_identity(),
+        repository=repository_identity(repo_root),
         namespace=namespace,
         baseline=str(max(candidates)),
         target=target,
