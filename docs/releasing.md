@@ -123,7 +123,7 @@ pass the approved identity without changing the target:
 ```bash
 python scripts/bump_version.py minor --plan
 python scripts/bump_version.py minor \
-  --confirmed-version-plan sha256:<approved-plan-digest>
+  --confirmed-version-plan 'sha256:<approved-plan-digest>'
 ```
 
 `--set X.Y.Z` follows the same check. A missing remote baseline, a changed
