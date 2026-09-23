@@ -1,5 +1,9 @@
 # cc-session-control
 
+> **Archived:** This project is no longer maintained. `csctl` was retired from
+> this host in September 2026. The source, releases, and compatibility records
+> remain available for historical reference.
+
 tmux-first workbench (TUI + headless CLI) for the agent CLIs on one machine
 — [Claude Code](https://claude.ai/code), [Codex CLI](https://github.com/openai/codex),
 [Kimi Code](https://github.com/MoonshotAI/kimi-code), and
